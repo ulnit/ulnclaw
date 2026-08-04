@@ -1019,6 +1019,7 @@ axum 路由表（供 `serve` 与测试使用）。
 | GET | `/api/model/options` | 是 | 供选择器使用的 provider/模型清单（已配置的 provider 行） |
 | GET | `/v1/capabilities` | 是 | 机器可读的端点目录 |
 | GET | `/metrics` | 是 | Prometheus 文本格式计数器与量表（ulnclaw 运维扩展） |
+| GET | `/api/usage?limit=N` | 是 | 令牌核算：网关启动以来的进程计数器 + 会话库全时总量 + 最近会话明细（ulnclaw 运维扩展） |
 | POST | `/v1/chat/completions` | 是 | OpenAI Chat Completions；经 `X-Ulnclaw-Session-Id` 会话续接（兼容 `X-Hermes-Session-Id`）；id 回显于响应头；`stream: true` → SSE `chat.completion.chunk` |
 | POST | `/v1/responses` | 是 | OpenAI Responses 格式；`input` 为字符串或消息数组；经 `previous_response_id` 链式续接；`stream: true` → Responses-API SSE 事件 |
 | GET | `/v1/responses/:id` | 是 | 取回已存储的 response |
@@ -1204,6 +1205,14 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
 `ulnclaw_tokens_total{direction}`（prompt/completion）、`ulnclaw_tool_calls_total`。
 与其他 API 路由一样需要 Bearer 令牌；hermes api_server 无对应端点——
 此为 ulnclaw 运维扩展。
+
+**用量**（`GET /api/usage?limit=N`）：JSON 格式的令牌核算。
+`process` —— 本网关进程启动以来的计数器：prompt/completion 令牌、
+工具调用数、按端点统计的请求数（chat_completions/responses/session_chats）、
+按结果统计的运行数（started/completed/failed）。`store` —— 会话数据库的
+全时总量（会话数、消息数、输入/输出令牌）。`sessions` —— 最近 `limit` 条
+会话明细（默认 20，上限 200）及各会话令牌计数。与 `/metrics` 一样，
+属于 ulnclaw 运维扩展——hermes api_server 无对应端点。
 
 **发现端点**：`GET /v1/skills` 返回
 `{"object":"list","data":[{name, description, category, path}]}`，

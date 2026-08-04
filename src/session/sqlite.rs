@@ -556,6 +556,19 @@ impl SqliteSessionStore {
         Ok(sessions)
     }
 
+    /// All-time totals across every stored session:
+    /// `(session_count, input_tokens, output_tokens)`.
+    pub fn token_totals(&self) -> Result<(i64, i64, i64)> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+             FROM sessions",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|e| AgentError::session(e.to_string()))
+    }
+
     /// Mark a session ended.
     pub fn end_session(&self, session_id: &str, reason: &str) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;

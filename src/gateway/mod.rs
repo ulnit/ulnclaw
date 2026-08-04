@@ -468,6 +468,78 @@ ulnclaw_tool_calls_total {tool_calls}
         .into_response()
 }
 
+/// Query parameters for `GET /api/usage`.
+#[derive(Debug, Deserialize)]
+struct UsageQuery {
+    /// Number of per-session rows to include (default 20, max 200).
+    limit: Option<usize>,
+}
+
+/// `GET /api/usage` — token accounting across the gateway process
+/// (since startup) and the session store (all time), plus the most
+/// recent per-session rows. An ulnclaw ops extension — hermes'
+/// api_server has no usage endpoint.
+async fn usage(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<UsageQuery>,
+) -> Json<Value> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let m = &state.metrics;
+    let prompt = m.prompt_tokens.load(Relaxed);
+    let completion = m.completion_tokens.load(Relaxed);
+    let (store_sessions, store_input, store_output) =
+        state.store.token_totals().unwrap_or((0, 0, 0));
+    let messages = state.store.count_messages().unwrap_or(0);
+    let limit = query.limit.unwrap_or(20).min(200);
+    let sessions: Vec<Value> = state
+        .store
+        .list_session_rows(limit)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.id,
+                "source": row.source,
+                "model": row.model,
+                "title": row.title,
+                "started_at": row.started_at,
+                "ended_at": row.ended_at,
+                "end_reason": row.end_reason,
+                "message_count": row.message_count,
+                "input_tokens": row.input_tokens,
+                "output_tokens": row.output_tokens,
+                "total_tokens": row.input_tokens + row.output_tokens,
+            })
+        })
+        .collect();
+    Json(json!({
+        "process": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "tool_calls": m.tool_calls.load(Relaxed),
+            "requests": {
+                "chat_completions": m.chat_completions.load(Relaxed),
+                "responses": m.responses_requests.load(Relaxed),
+                "session_chats": m.session_chats.load(Relaxed),
+            },
+            "runs": {
+                "started": m.runs_started.load(Relaxed),
+                "completed": m.runs_completed.load(Relaxed),
+                "failed": m.runs_failed.load(Relaxed),
+            },
+        },
+        "store": {
+            "sessions": store_sessions,
+            "messages": messages,
+            "input_tokens": store_input,
+            "output_tokens": store_output,
+            "total_tokens": store_input + store_output,
+        },
+        "sessions": sessions,
+    }))
+}
+
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
     Router::new()
@@ -478,6 +550,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model/options", get(model_options))
         .route("/v1/capabilities", get(capabilities))
         .route("/metrics", get(metrics))
+        .route("/api/usage", get(usage))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(create_response))
         .route(
@@ -751,6 +824,7 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "session_model_lock": true,
             "session_recap": true,
             "metrics": true,
+            "usage": true,
             "streaming": true,
         },
     }))
@@ -3617,5 +3691,37 @@ mod tests {
         let (status, body) = get_text(app, "/metrics", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("ulnclaw_http_requests_total{endpoint=\"chat_completions\"} 1"));
+    }
+
+    #[tokio::test]
+    async fn test_usage_endpoint_requires_auth_and_reports() {
+        let state = test_state();
+        let app = router(state.clone());
+        let (status, _) = get_json(app, "/api/usage", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Seed a session with usage so store totals are non-zero.
+        let session_id = state.store.create_session("cli", Some("test-model"), None).unwrap();
+        state.store.update_usage(&session_id, 120, 45, 3).unwrap();
+
+        let app = router(state.clone());
+        let (status, body) = get_json(app, "/api/usage", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["store"]["sessions"], json!(1));
+        assert_eq!(body["store"]["input_tokens"], json!(120));
+        assert_eq!(body["store"]["output_tokens"], json!(45));
+        assert_eq!(body["store"]["total_tokens"], json!(165));
+        assert_eq!(body["process"]["total_tokens"], json!(0));
+        let sessions = body["sessions"].as_array().expect("sessions array");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["id"], json!(session_id));
+        assert_eq!(sessions[0]["total_tokens"], json!(165));
+
+        // limit=0 yields no per-session rows but keeps the totals.
+        let app = router(state.clone());
+        let (status, body) = get_json(app, "/api/usage?limit=0", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["sessions"].as_array().unwrap().is_empty());
+        assert_eq!(body["store"]["sessions"], json!(1));
     }
 }

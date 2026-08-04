@@ -1020,6 +1020,7 @@ Binds and serves until interrupted.
 | GET | `/api/model/options` | yes | Provider/model inventory for pickers (configured provider row) |
 | GET | `/v1/capabilities` | yes | Machine-readable endpoint catalog |
 | GET | `/metrics` | yes | Prometheus text-format counters and gauges (ulnclaw ops extension) |
+| GET | `/api/usage?limit=N` | yes | Token accounting: process counters since gateway start + all-time store totals + recent per-session rows (ulnclaw ops extension) |
 | POST | `/v1/chat/completions` | yes | OpenAI Chat Completions; session continuity via `X-Ulnclaw-Session-Id` (also accepts `X-Hermes-Session-Id`); id echoed back in the response header; `stream: true` → SSE `chat.completion.chunk` |
 | POST | `/v1/responses` | yes | OpenAI Responses format; `input` string or message array; chain turns with `previous_response_id`; `stream: true` → Responses-API SSE events |
 | GET | `/v1/responses/:id` | yes | Retrieve a stored response |
@@ -1213,6 +1214,16 @@ Gauges: `ulnclaw_uptime_seconds`, `ulnclaw_build_info{version,provider,model}`,
 `ulnclaw_tokens_total{direction}` (prompt/completion), `ulnclaw_tool_calls_total`.
 Requires the bearer token like every API route; hermes' api_server has no
 equivalent — this is an ulnclaw operations extension.
+
+**Usage** (`GET /api/usage?limit=N`): token accounting in JSON.
+`process` — counters since this gateway process started: prompt/completion
+tokens, tool calls, requests by endpoint (chat_completions/responses/
+session_chats), runs by outcome (started/completed/failed). `store` —
+all-time totals from the session database (sessions, messages,
+input/output tokens). `sessions` — the newest `limit` session rows
+(default 20, max 200) with their per-session token counts. Like
+`/metrics`, an ulnclaw operations extension — hermes' api_server has no
+equivalent.
 
 **Discovery endpoints**: `GET /v1/skills` returns
 `{"object":"list","data":[{name, description, category, path}]}` from the
