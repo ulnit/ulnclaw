@@ -258,6 +258,11 @@ async fn terminal_exec(
     let mut cmd = shell_command(&effective);
     if backend == crate::environments::TerminalBackend::Local {
         cmd.current_dir(&cwd);
+        // Sandbox env scrub: provider credentials and venv markers never
+        // enter the child environment (hermes local.py semantics).
+        let allowlist = ctx.env_passthrough_snapshot();
+        cmd.env_clear();
+        cmd.envs(crate::env_guard::scrubbed_env(&allowlist));
     }
     let mut child = match cmd.spawn() {
         Ok(child) => child,
@@ -344,6 +349,9 @@ async fn spawn_background(
     let mut cmd = shell_command(&effective);
     if *backend == crate::environments::TerminalBackend::Local {
         cmd.current_dir(&cwd);
+        let allowlist = ctx.env_passthrough_snapshot();
+        cmd.env_clear();
+        cmd.envs(crate::env_guard::scrubbed_env(&allowlist));
     }
     let child = match cmd.spawn() {
         Ok(child) => child,
@@ -648,5 +656,34 @@ mod tests {
         assert_eq!(result["success"], json!(true));
         let output = result["output"].as_str().unwrap();
         assert_eq!(output, "red plain");
+    }
+
+    #[tokio::test]
+    async fn test_child_env_scrubs_credentials_but_keeps_passthrough() {
+        let prev_key = std::env::var("OPENAI_API_KEY").ok();
+        let prev_pt = std::env::var("ULNCLAW_TEST_PT_VAR").ok();
+        std::env::set_var("OPENAI_API_KEY", "scrub-secret-xyz");
+        std::env::set_var("ULNCLAW_TEST_PT_VAR", "passme-123");
+
+        let ctx = Arc::new(ToolContext::new());
+        ctx.register_env_passthrough(&["ULNCLAW_TEST_PT_VAR".to_string()]);
+        let result = terminal_exec(ctx, "env".into(), false, 10, None, false)
+            .await
+            .unwrap();
+        let output = result["output"].as_str().unwrap().to_string();
+
+        // Restore before asserting so a failure doesn't leak test env.
+        match prev_key {
+            Some(v) => std::env::set_var("OPENAI_API_KEY", v),
+            None => std::env::remove_var("OPENAI_API_KEY"),
+        }
+        match prev_pt {
+            Some(v) => std::env::set_var("ULNCLAW_TEST_PT_VAR", v),
+            None => std::env::remove_var("ULNCLAW_TEST_PT_VAR"),
+        }
+
+        assert!(!output.contains("scrub-secret-xyz"), "credential leaked into child env");
+        assert!(output.contains("ULNCLAW_TEST_PT_VAR=passme-123"), "passthrough var missing");
+        assert!(output.contains("PATH="), "PATH must survive the scrub");
     }
 }

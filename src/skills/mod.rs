@@ -76,6 +76,40 @@ pub fn list_skills(skills_dir: &Path) -> Vec<Skill> {
     skills
 }
 
+/// Parse `required_environment_variables` from SKILL.md frontmatter.
+///
+/// Accepts a comma-separated string (`VAR1, VAR2`) or an inline YAML
+/// list (`[VAR1, VAR2]`). Skills declare the env vars their scripts
+/// need; `skill_view` registers them as sandbox passthrough (provider
+/// credentials are refused — hermes GHSA-rhgp-j443-p4rf).
+pub fn required_env_vars(content: &str) -> Vec<String> {
+    let trimmed = content.trim_start();
+    let Some(rest) = trimmed.strip_prefix("---") else {
+        return Vec::new();
+    };
+    for line in rest.lines() {
+        let line = line.trim();
+        if line == "---" {
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else { continue };
+        if key.trim() != "required_environment_variables" {
+            continue;
+        }
+        let value = value.trim();
+        let inner = value
+            .strip_prefix('[')
+            .and_then(|v| v.strip_suffix(']'))
+            .unwrap_or(value);
+        return inner
+            .split(',')
+            .map(|item| item.trim().trim_matches('"').trim_matches('\'').trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect();
+    }
+    Vec::new()
+}
+
 /// Find a skill by name (case-insensitive).
 pub fn find_skill(skills_dir: &Path, name: &str) -> Option<Skill> {
     list_skills(skills_dir)
@@ -130,5 +164,25 @@ mod tests {
 
         assert!(find_skill(dir.path(), "DEPLOY-helper").is_some());
         assert!(find_skill(dir.path(), "nope").is_none());
+    }
+
+    #[test]
+    fn test_required_env_vars_parsing() {
+        // Comma-separated string form.
+        let content = "---\nname: x\ndescription: d\nrequired_environment_variables: TENOR_API_KEY, NOTION_TOKEN\n---\nbody";
+        assert_eq!(
+            required_env_vars(content),
+            vec!["TENOR_API_KEY".to_string(), "NOTION_TOKEN".to_string()]
+        );
+        // Inline YAML list form.
+        let content = "---\nrequired_environment_variables: [A_KEY, B_KEY]\n---\n";
+        assert_eq!(
+            required_env_vars(content),
+            vec!["A_KEY".to_string(), "B_KEY".to_string()]
+        );
+        // Absent.
+        assert_eq!(required_env_vars("---\nname: x\n---\n"), Vec::<String>::new());
+        // No frontmatter.
+        assert_eq!(required_env_vars("plain body"), Vec::<String>::new());
     }
 }

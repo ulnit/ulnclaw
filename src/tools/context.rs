@@ -70,6 +70,9 @@ pub struct ToolContext {
     tool_definitions: Arc<std::sync::RwLock<Vec<crate::tools::ToolDefinition>>>,
     /// Transparent filesystem checkpoints (lazily built from config).
     checkpoints: Arc<std::sync::RwLock<Option<Arc<crate::checkpoint::CheckpointManager>>>>,
+    /// Env vars allowed through the sandbox scrub (skill declarations +
+    /// `[terminal] env_passthrough`); see `env_guard`.
+    env_passthrough: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl Default for ToolContext {
@@ -89,6 +92,7 @@ impl Default for ToolContext {
             provider: None,
             tool_definitions: Arc::new(std::sync::RwLock::new(Vec::new())),
             checkpoints: Arc::new(std::sync::RwLock::new(None)),
+            env_passthrough: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
     }
 }
@@ -166,6 +170,27 @@ impl ToolContext {
     /// Get the cron runner if wired.
     pub fn cron_runner(&self) -> Option<Arc<dyn CronRunner>> {
         self.cron_runner.read().ok().and_then(|g| g.clone())
+    }
+
+    /// Seed the sandbox env-passthrough allowlist (user config
+    /// `[terminal] env_passthrough`). Protected credentials are refused
+    /// (hermes GHSA-rhgp-j443-p4rf).
+    pub fn with_env_passthrough(self, names: &[String]) -> Self {
+        self.register_env_passthrough(names);
+        self
+    }
+
+    /// Register env vars as allowed in sandboxed child environments
+    /// (skill `required_environment_variables` or user config). Returns
+    /// the accepted names; provider credentials are refused.
+    pub fn register_env_passthrough(&self, names: &[String]) -> Vec<String> {
+        let mut guard = self.env_passthrough.lock().unwrap();
+        crate::env_guard::register_env_passthrough(&mut guard, names)
+    }
+
+    /// Snapshot of the current passthrough allowlist.
+    pub fn env_passthrough_snapshot(&self) -> std::collections::HashSet<String> {
+        self.env_passthrough.lock().unwrap().clone()
     }
 
     pub fn with_provider(mut self, provider: Arc<dyn Provider>) -> Self {

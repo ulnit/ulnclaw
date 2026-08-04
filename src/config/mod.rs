@@ -262,6 +262,10 @@ pub struct TerminalConfig {
     /// SSH port (backend="ssh").
     #[serde(default)]
     pub ssh_port: Option<u16>,
+    /// Env vars explicitly allowed through the sandbox credential scrub
+    /// (hermes `terminal.env_passthrough`).
+    #[serde(default)]
+    pub env_passthrough: Vec<String>,
     /// SSH identity file (backend="ssh").
     #[serde(default)]
     pub ssh_identity: Option<String>,
@@ -287,6 +291,7 @@ impl Default for TerminalConfig {
             ssh_user: None,
             ssh_port: None,
             ssh_identity: None,
+            env_passthrough: Vec::new(),
         }
     }
 }

@@ -88,6 +88,8 @@ async fn run_python(ctx: &Arc<ToolContext>, code: &str) -> Result<serde_json::Va
             .current_dir(&cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .env_clear()
+            .envs(crate::env_guard::scrubbed_env(&ctx.env_passthrough_snapshot()))
             .output(),
     )
     .await;

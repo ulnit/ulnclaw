@@ -444,6 +444,7 @@ async fn make_agent(
     let mut context = ToolContext::new()
         .with_home(home)
         .with_config(config.clone())
+        .with_env_passthrough(&config.terminal.env_passthrough)
         .with_store(store.clone())
         .with_provider(provider.clone());
 

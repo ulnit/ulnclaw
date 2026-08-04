@@ -112,13 +112,22 @@ fn skill_view_tool() -> crate::tools::Tool {
                 }
             } else {
                 let content = std::fs::read_to_string(skill.path.join("SKILL.md")).unwrap_or_default();
-                Ok(json!({
+                // Skill-declared env vars join the sandbox passthrough
+                // allowlist (hermes env_passthrough semantics; provider
+                // credentials are refused).
+                let declared = skills::required_env_vars(&content);
+                let accepted = ctx.register_env_passthrough(&declared);
+                let mut result = json!({
                     "success": true,
                     "skill": skill.name,
                     "description": skill.description,
                     "content": content,
                     "linked_files": skills::linked_files(&skill.path),
-                }))
+                });
+                if !declared.is_empty() {
+                    result["registered_environment_variables"] = json!(accepted);
+                }
+                Ok(result)
             }
         })
         .toolset("skills")

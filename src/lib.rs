@@ -80,6 +80,7 @@ pub mod config;
 pub mod context;
 pub mod cron;
 pub mod desktop;
+pub mod env_guard;
 pub mod env_probe;
 pub mod environments;
 pub mod error;
