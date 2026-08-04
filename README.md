@@ -36,6 +36,8 @@ full feature-by-feature mapping.
 - **🖥️ Desktop bridge tools** — `close_terminal` / `read_terminal` / `focus_pane` / `open_preview` for GUI hosts: gated on `ULNCLAW_DESKTOP=1`, routed through the `desktop` bridge (host-installed emitter receives `terminal.close` / `pane.reveal` / `preview.open` events per UI session); never kill processes, report "desktop only" without a wired host
 - **🧹 ANSI stripping** — terminal/execute_code output is cleaned of ECMA-48 escape sequences (colors, cursor moves, OSC titles, 8-bit C1) before it reaches the model, so escapes never leak into context or file writes
 - **🔒 Sandbox credential scrub** — terminal/execute_code child processes run with provider & tool credentials stripped from their environment (hermes GHSA-rhgp-j443-p4rf semantics); skills' `required_environment_variables` and `[terminal] env_passthrough` allowlist the rest — provider credentials can never be allowlisted
+- **🛡️ Web 工具 SSRF 防护** —— `web_extract` 拦截私有/内网目标（环回、RFC1918、CGNAT、ULA、IPv4 映射 IPv6），并拒绝在 URL 中嵌入凭证；云元数据端点（169.254.169.254 等）永远拦截，重定向逐跳重验；可用 `[security] allow_private_urls` 或 `ULNCLAW_ALLOW_PRIVATE_URLS=true` 放开
+- **🛡️ SSRF guard for web tools** — `web_extract` blocks private/internal targets (loopback, RFC1918, CGNAT, ULA, IPv4-mapped IPv6) and refuses URLs embedding credentials; cloud metadata endpoints (169.254.169.254 etc.) are always blocked, redirects are re-validated hop by hop; opt out with `[security] allow_private_urls` or `ULNCLAW_ALLOW_PRIVATE_URLS=true`
 - **🚫 Binary guard** — `read_file` refuses ~80 binary extensions (images, archives, executables, fonts, bytecode, databases) with a pointer to vision_analyze/terminal; `.pdf` stays readable
 - **📏 Configurable output limits** — `[tool_output] max_bytes/max_lines/max_line_length` tune terminal truncation, read_file pagination, and per-line clamping without patching source
 - **🕵️ Secret redaction** — ~55 vendor key prefixes, JWTs, private keys, DB connstrings, auth headers, and env-dump `KEY=value` pairs are masked before output reaches the model; file content gets non-reusable sentinels so truncated keys are never written back
@@ -125,6 +127,11 @@ port = 8642
 # max_lines = 2000          # read_file pagination cap
 # max_line_length = 2000    # per-line clamp ('... [truncated]')
 
+# [security]
+# allow_private_urls = false  # true lets web tools fetch private/internal IPs
+#                             # (cloud metadata endpoints stay blocked either way;
+#                             #  env ULNCLAW_ALLOW_PRIVATE_URLS also works)
+
 # [checkpoints]
 # enabled = true        # transparent snapshots before write_file/patch
 
@@ -181,7 +188,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 257 tests
+cargo test                     # 273 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -304,7 +311,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 257 个测试
+cargo test                     # 273 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

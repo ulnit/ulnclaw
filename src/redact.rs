@@ -121,6 +121,35 @@ fn has_known_prefix_substring(text: &str) -> bool {
     PREFIX_SUBSTRINGS.iter().any(|p| text.contains(p))
 }
 
+fn is_identifier_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
+
+/// True when `text` contains what appears to be a vendor token prefix.
+/// Emulates hermes `_PREFIX_RE` incl. its lookarounds: the characters
+/// adjacent to the prefix must not be identifier chars (`[A-Za-z0-9_-]`),
+/// so ordinary words that merely contain a prefix substring do not match.
+/// Used to block URLs that embed secrets (hermes `web_tools` pre-check).
+pub fn contains_token_prefix(text: &str) -> bool {
+    if !has_known_prefix_substring(text) {
+        return false;
+    }
+    for m in prefix_re().find_iter(text) {
+        let before_ok = text[..m.start()]
+            .chars()
+            .next_back()
+            .map_or(true, |c| !is_identifier_char(c));
+        let after_ok = text[m.end()..]
+            .chars()
+            .next()
+            .map_or(true, |c| !is_identifier_char(c));
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
 /// Non-reusable sentinel: keeps only the vendor prefix label, never any
 /// secret bytes (hermes `_mask_token_nonreusable`).
 fn mask_token_nonreusable(token: &str) -> String {

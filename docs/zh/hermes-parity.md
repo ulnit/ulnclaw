@@ -17,6 +17,7 @@
 | 二进制扩展守卫（`binary_extensions.py`） | ✅ | `read_file` 以纯字符串检查（无 I/O）拒绝约 80 种二进制扩展，并提示改用 vision_analyze/terminal；`.pdf` 保持可读（文本类） |
 | `read_file`, `write_file`, `patch`, `search_files` | ✅ 完整 | 带行号读取与 `next_offset` 分页、模糊替换（容忍空白/缩进差异）、V4A 多文件补丁、unified diff、ripgrep 风格搜索 |
 | `web_search`, `web_extract` | ✅ 完整 | 可插拔后端：Tavily / Brave / SearXNG / 内置 DuckDuckGo；HTML→文本抽取 |
+| URL 安全 / SSRF 防护（`tools/url_safety.py`） | ✅ 核心 | `url_safety` 模块：拦截对私有/内网地址的 web 拉取（环回、RFC1918、链路本地、CGNAT 100.64/10、基准 198.18/15、ULA、IPv4 映射 IPv6）；云元数据端点（169.254.169.254、metadata.google.internal、ECS 任务元数据…）**永远**拦截；接入 `web_extract`（逐 URL 检查 + 经 reqwest 重定向策略逐跳重验 + 拒绝嵌入凭证的 URL：令牌前缀与敏感查询参数拦截），可通过 `[security] allow_private_urls` / `ULNCLAW_ALLOW_PRIVATE_URLS` 放开；DNS 失败默认拦截，配置代理时委托代理解析（hermes 语义） |
 | `memory` | ✅ 完整 | `MEMORY.md` + `USER.md`，原子批量 `operations`，字符上限（2200/1375），每轮注入系统提示词 |
 | `todo` | ✅ 完整 | 会话任务列表、merge 模式、强制单一 `in_progress` |
 | `session_search` | ✅ 完整 | SQLite FTS5 检索 + 会话内滚动，会话血缘 |

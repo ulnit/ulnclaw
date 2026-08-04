@@ -95,6 +95,7 @@ pub mod session;
 pub mod skills;
 pub mod tools;
 pub mod toolsets;
+pub mod url_safety;
 
 // Re-export core types for convenience
 pub use agent::{Agent, AgentCallbacks, AgentConfig, RunResult, ToolCallRecord};

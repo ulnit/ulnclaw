@@ -22,6 +22,19 @@ fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("Mozilla/5.0 (X11; Linux x86_64) ulnclaw/0.2")
+        // SSRF: re-validate every redirect target (hermes httpx event-hook
+        // semantics via url_safety) so a public URL cannot redirect the
+        // fetch onto a private/internal address.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let target = attempt.url().to_string();
+            if crate::url_safety::is_safe_url_sync(&target) {
+                attempt.follow()
+            } else {
+                attempt.error(format!(
+                    "blocked redirect to private/internal address: {target}"
+                ))
+            }
+        }))
         .build()
         .unwrap_or_default()
 }
@@ -407,12 +420,45 @@ fn web_extract_tool() -> crate::tools::Tool {
             if urls.len() > 5 {
                 return Ok(json!({"success": false, "error": "web_extract: at most 5 URLs per call"}));
             }
+            // ── URL safety (hermes url_safety wiring) ──────────────────
+            // Normalize IRIs / scheme-whitespace artifacts, then refuse the
+            // whole call when a URL appears to embed credentials.
+            let mut normalized_urls: Vec<String> = Vec::with_capacity(urls.len());
+            for url in &urls {
+                let normalized = crate::url_safety::normalize_url_for_request(url);
+                let decoded_raw = urlencoding_decode(url);
+                let decoded_normalized = urlencoding_decode(&normalized);
+                if crate::redact::contains_token_prefix(url)
+                    || crate::redact::contains_token_prefix(&decoded_raw)
+                    || crate::redact::contains_token_prefix(&normalized)
+                    || crate::redact::contains_token_prefix(&decoded_normalized)
+                {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "Blocked: URL contains what appears to be an API key or token. Secrets must not be sent in URLs."
+                    }));
+                }
+                if let Some(key) = crate::url_safety::sensitive_query_param_name(&normalized) {
+                    return Ok(json!({
+                        "success": false,
+                        "error": format!(
+                            "Blocked: URL contains a credential-like query parameter ({key}). Remove the sensitive query parameter before extracting."
+                        )
+                    }));
+                }
+                normalized_urls.push(normalized);
+            }
+
             let max_chars = args.get("max_chars").and_then(|v| v.as_u64()).unwrap_or(20000) as usize;
             let client = http_client();
             let mut data = Vec::new();
-            for url in urls {
-                if !(url.starts_with("http://") || url.starts_with("https://")) {
-                    data.push(json!({"url": url, "error": "unsupported scheme (use http/https)"}));
+            for url in normalized_urls {
+                // ── SSRF protection: block private/internal targets ─────
+                if !crate::url_safety::is_safe_url(&url).await {
+                    data.push(json!({
+                        "url": url,
+                        "error": "Blocked: URL targets a private or internal network address"
+                    }));
                     continue;
                 }
                 match client.get(&url).send().await {

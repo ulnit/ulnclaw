@@ -603,6 +603,19 @@ pub struct UlncLawConfig {
     /// Tool-output truncation limits (hermes `tool_output:`).
     #[serde(default)]
     pub tool_output: ToolOutputConfig,
+    /// URL/SSRF safety settings (hermes `security:`).
+    #[serde(default)]
+    pub security: SecurityConfig,
+}
+
+/// `[security]` — URL safety toggles (port of hermes `security.*`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SecurityConfig {
+    /// Allow web tools to fetch private/internal addresses (disables the
+    /// SSRF block). Cloud metadata endpoints remain blocked regardless
+    /// (hermes `security.allow_private_urls`).
+    pub allow_private_urls: bool,
 }
 
 /// `[tool_output]` — configurable tool-output truncation limits (port of

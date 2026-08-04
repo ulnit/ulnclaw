@@ -18,6 +18,7 @@ performance and a single static binary.
 | Binary extension guard (`binary_extensions.py`) | ✅ | `read_file` rejects ~80 binary extensions by pure string check (no I/O), pointing at vision_analyze/terminal; `.pdf` stays readable (text-based) |
 | `read_file`, `write_file`, `patch`, `search_files` | ✅ full | line-numbered reads with `next_offset` pagination, fuzzy replace (whitespace/indent tolerant), V4A multi-file patches, unified diffs, ripgrep-style search |
 | `web_search`, `web_extract` | ✅ full | pluggable backends: Tavily / Brave / SearXNG / built-in DuckDuckGo; HTML→text extraction |
+| URL safety / SSRF guard (`tools/url_safety.py`) | ✅ core | `url_safety` module: blocks web fetches to private/internal addresses (loopback, RFC1918, link-local, CGNAT 100.64/10, benchmark 198.18/15, ULA, IPv4-mapped IPv6); cloud metadata endpoints (169.254.169.254, metadata.google.internal, ECS task metadata…) are **always** blocked; wired into `web_extract` (per-URL check + redirect re-validation via reqwest policy + credential-bearing URL refusal: token-prefix and sensitive-query-param blocks), opt-out `[security] allow_private_urls` / `ULNCLAW_ALLOW_PRIVATE_URLS`; fail-closed on DNS errors with a proxy carve-out (hermes semantics) |
 | `memory` | ✅ full | `MEMORY.md` + `USER.md`, atomic batched `operations`, char limits (2200/1375), injected into every system prompt |
 | `todo` | ✅ full | session task list, merge mode, single `in_progress` enforcement |
 | `session_search` | ✅ full | SQLite FTS5 discovery + scroll shapes, session lineage |
