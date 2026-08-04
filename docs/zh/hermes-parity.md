@@ -75,7 +75,7 @@
 | 环境（`tools/environments/`） | ✅ 核心 | `terminal` 后端：local（默认）、docker（`ensure_docker_container` inspect→run）、ssh（BatchMode、identity 文件）；`[terminal] backend/container/image/ssh_host/...`；modal/daytona/vercel 暂缓 |
 | 检查点管理器（`checkpoint_manager.py`） | ✅ | v2 共享 shadow git 存储（`<home>/checkpoints/store`）：按项目 ref/index，编辑前透明快照（每轮 `write_file`/`patch` 前一次），list/restore/diff/prune CLI，容量上限、超大文件过滤、孤儿/过期自动清理 |
 | 浏览器监督器 | ✅ | `ULNCLAW_BROWSER_CDP=auto` 时自动启动受管 headless Chrome/Chromium |
-| Camofox 后端（`tools/browser_camofox.py`） | ✅ 核心 | `browser/camofox.rs`：`CAMOFOX_URL` REST 反检测浏览器（Camoufox）后端——全部 12 个 browser 工具经 REST 路由（标签页会话、带元素引用的可访问性快照、点击/输入/滚动/后退/按键、从快照提取图片、截图供视觉分析）；CDP 覆盖优先；`CAMOFOX_API_KEY` bearer 鉴权、`CAMOFOX_USER_ID`/`CAMOFOX_SESSION_KEY` 身份覆盖 + 已有标签页收养、Docker 环回 URL 重写（`CAMOFOX_REWRITE_LOOPBACK_URLS` + 别名）、从 `/health` 发现 VNC URL、读取操作的 SSRF 私有页面防护、console/原始 CDP/对话框明确报不支持；网关与 REPL browser status 报告后端 |
+| Camofox 后端（`tools/browser_camofox.py`） | ✅ 核心 | `browser/camofox.rs`：`CAMOFOX_URL` REST 反检测浏览器（Camoufox）后端——全部 12 个 browser 工具经 REST 路由（标签页会话、带元素引用的可访问性快照、点击/输入/滚动/后退/按键、从快照提取图片、截图供视觉分析）；CDP 覆盖优先；`CAMOFOX_API_KEY` bearer 鉴权、`CAMOFOX_USER_ID`/`CAMOFOX_SESSION_KEY` 身份覆盖 + 已有标签页收养、Docker 环回 URL 重写（`CAMOFOX_REWRITE_LOOPBACK_URLS` + 别名）、从 `/health` 发现 VNC URL、读取操作的 SSRF 私有页面防护、console/原始 CDP/对话框明确报不支持；`CAMOFOX_MANAGED_PERSISTENCE` 受管持久化（稳定的 UUIDv5 profile 级 userId，对应 hermes `browser.camofox.managed_persistence`）；网关与 REPL browser status 报告后端 |
 | CUA（computer-use） | ⬜ 暂缓 | 需要 computer-use 驱动 |
 
 ## 存储布局
@@ -104,8 +104,9 @@
   审批模式已移植；无人值守的运行默认 fail-closed，`cron_mode = "approve"`
   可放行。
 - 浏览器监督器直接启动本地 Chrome/Chromium；hermes 驱动外部 `agent-browser`
-  守护进程。Camofox REST 后端已移植；hermes 的 Camofox 受管持久化
-  （profile 级身份状态文件）与其他云浏览器 provider 未移植。
+  守护进程。Camofox REST 后端已移植（含受管持久化，以
+  `CAMOFOX_MANAGED_PERSISTENCE` 环境变量替代 hermes 的 config.yaml 开关）；
+  其他云浏览器 provider 未移植。
 - 网关实现了 api_server 平台的子集；多 profile 复用（`/p/<profile>/...`）
   未移植。任务 API 仅本地投递（`deliver="local"`）；hermes 的外部投递
   目标与 NAS/Chronos 触发 webhook（`/api/cron/fire`）未移植。

@@ -21,6 +21,10 @@
 //! - `CAMOFOX_REWRITE_LOOPBACK_URLS` — rewrite loopback page URLs for
 //!   Docker-hosted Camofox (`CAMOFOX_LOOPBACK_HOST_ALIAS`, default
 //!   `host.docker.internal`)
+//! - `CAMOFOX_MANAGED_PERSISTENCE` — stable profile-scoped userId
+//!   (UUIDv5 of the state dir) so the Camofox server reuses the same
+//!   persistent browser profile across restarts (hermes
+//!   `browser.camofox.managed_persistence`)
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -67,6 +71,50 @@ fn env_flag(name: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+/// Enable hermes-managed Camofox persistence: sessions use a stable
+/// profile-scoped userId so the Camofox server maps it to the same
+/// persistent browser profile across restarts. Hermes controls this via
+/// `browser.camofox.managed_persistence` in config.yaml; ulnclaw browser
+/// configuration is env-based (`ULNCLAW_BROWSER_CDP` precedent), so the
+/// knob is `CAMOFOX_MANAGED_PERSISTENCE`.
+pub fn managed_persistence_enabled() -> bool {
+    env_flag("CAMOFOX_MANAGED_PERSISTENCE").unwrap_or(false)
+}
+
+/// Profile-scoped root directory for Camofox persistence (hermes
+/// `get_camofox_state_dir`: `<home>/browser_auth/camofox`).
+pub fn state_dir() -> std::path::PathBuf {
+    crate::config::ulnclaw_home()
+        .join("browser_auth")
+        .join("camofox")
+}
+
+/// Stable managed Camofox identity for this profile (hermes
+/// `get_camofox_identity`). The user identity is profile-scoped (same
+/// home = same userId across restarts); the session key is scoped to the
+/// logical browser task so tabs within the same profile reuse the same
+/// identity contract.
+pub fn managed_identity(task_id: &str) -> (String, String) {
+    let scope_root = state_dir().display().to_string();
+    let logical_scope = if task_id.is_empty() { "default" } else { task_id };
+    let user_digest = uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_URL,
+        format!("camofox-user:{scope_root}").as_bytes(),
+    )
+    .simple()
+    .to_string();
+    let session_digest = uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_URL,
+        format!("camofox-session:{scope_root}:{logical_scope}").as_bytes(),
+    )
+    .simple()
+    .to_string();
+    (
+        format!("ulnclaw_{}", &user_digest[..10]),
+        format!("task_{}", &session_digest[..16]),
+    )
 }
 
 fn auth_header() -> Option<String> {
@@ -282,19 +330,28 @@ fn get_session(task_id: &str) -> CamofoxSession {
     if let Some(existing) = map.get(task_id) {
         return existing.clone();
     }
-    let session = match identity_override(task_id) {
-        Some((user_id, session_key)) => CamofoxSession {
+    let session = if let Some((user_id, session_key)) = identity_override(task_id) {
+        CamofoxSession {
             user_id,
             tab_id: None,
             session_key,
             adopt_existing_tab: env_flag("CAMOFOX_ADOPT_EXISTING_TAB").unwrap_or(false),
-        },
-        None => CamofoxSession {
+        }
+    } else if managed_persistence_enabled() {
+        let (user_id, session_key) = managed_identity(task_id);
+        CamofoxSession {
+            user_id,
+            tab_id: None,
+            session_key,
+            adopt_existing_tab: env_flag("CAMOFOX_ADOPT_EXISTING_TAB").unwrap_or(false),
+        }
+    } else {
+        CamofoxSession {
             user_id: format!("ulnclaw_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]),
             tab_id: None,
             session_key: format!("task_{}", &task_id[..task_id.len().min(16)]),
             adopt_existing_tab: false,
-        },
+        }
     };
     map.insert(task_id.to_string(), session.clone());
     session
@@ -312,9 +369,10 @@ fn drop_session(task_id: &str) -> Option<CamofoxSession> {
 
 /// Release the in-memory session without destroying the server-side context
 /// (hermes `camofox_soft_cleanup`): only meaningful with an identity
-/// override, where the browser profile must survive across tasks.
+/// override or managed persistence, where the browser profile (and its
+/// cookies) must survive across tasks.
 pub fn soft_cleanup(task_id: &str) -> bool {
-    if identity_override(task_id).is_some() {
+    if identity_override(task_id).is_some() || managed_persistence_enabled() {
         drop_session(task_id);
         true
     } else {
@@ -911,6 +969,7 @@ mod tests {
             "CAMOFOX_ADOPT_EXISTING_TAB",
             "CAMOFOX_REWRITE_LOOPBACK_URLS",
             "CAMOFOX_LOOPBACK_HOST_ALIAS",
+            "CAMOFOX_MANAGED_PERSISTENCE",
             "ULNCLAW_BROWSER_CDP",
         ] {
             std::env::remove_var(var);
@@ -1017,6 +1076,54 @@ mod tests {
         std::env::set_var("CAMOFOX_USER_ID", "shared-profile");
         assert!(soft_cleanup("task-abc"));
         assert!(sessions().get("task-abc").is_none());
+        clear_env();
+        sessions().clear();
+    }
+
+    #[test]
+    fn managed_identity_is_deterministic_and_scoped() {
+        let (user_a, session_a) = managed_identity("task-1");
+        let (user_a2, session_a2) = managed_identity("task-1");
+        assert_eq!(user_a, user_a2, "same profile + task = same identity");
+        assert_eq!(session_a, session_a2);
+        assert!(user_a.starts_with("ulnclaw_"));
+        assert!(session_a.starts_with("task_"));
+        assert_eq!(user_a.len(), "ulnclaw_".len() + 10);
+        assert_eq!(session_a.len(), "task_".len() + 16);
+
+        // Same profile, different task: same user, different session key.
+        let (user_b, session_b) = managed_identity("task-2");
+        assert_eq!(user_a, user_b);
+        assert_ne!(session_a, session_b);
+
+        // Empty task id maps to the "default" scope.
+        assert_eq!(managed_identity("").1, managed_identity("default").1);
+    }
+
+    #[test]
+    fn managed_persistence_sessions_and_soft_cleanup() {
+        let _guard = env_lock();
+        clear_env();
+        sessions().clear();
+        std::env::set_var("CAMOFOX_URL", "http://127.0.0.1:9377");
+        assert!(!managed_persistence_enabled());
+        assert!(!soft_cleanup("mp-task"));
+
+        std::env::set_var("CAMOFOX_MANAGED_PERSISTENCE", "true");
+        assert!(managed_persistence_enabled());
+
+        let session = get_session("mp-task");
+        let (expected_user, expected_key) = managed_identity("mp-task");
+        assert_eq!(session.user_id, expected_user);
+        assert_eq!(session.session_key, expected_key);
+
+        // Soft cleanup releases the local entry but keeps the profile.
+        assert!(soft_cleanup("mp-task"));
+        assert!(sessions().get("mp-task").is_none());
+        // Recreating the session yields the SAME stable identity.
+        let again = get_session("mp-task");
+        assert_eq!(again.user_id, expected_user);
+
         clear_env();
         sessions().clear();
     }

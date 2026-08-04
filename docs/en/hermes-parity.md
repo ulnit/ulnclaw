@@ -76,7 +76,7 @@ performance and a single static binary.
 | Environments (`tools/environments/`) | ✅ core | `terminal` backends: local (default), docker (`ensure_docker_container` inspect→run), ssh (BatchMode, identity file); `[terminal] backend/container/image/ssh_host/...`; modal/daytona/vercel deferred |
 | Checkpoint manager (`checkpoint_manager.py`) | ✅ | v2 shared shadow git store (`<home>/checkpoints/store`): per-project refs/indexes, transparent pre-edit snapshots (once per turn before `write_file`/`patch`), list/restore/diff/prune CLI, size caps, oversize-file filter, orphan/stale auto-prune |
 | Browser supervisor | ✅ | auto-launches managed headless Chrome/Chromium for `ULNCLAW_BROWSER_CDP=auto` |
-| Camofox backend (`tools/browser_camofox.py`) | ✅ core | `browser/camofox.rs`: `CAMOFOX_URL` REST anti-detect browser (Camoufox) backend — all 12 browser tools route through REST (tab sessions, accessibility snapshots with refs, click/type/scroll/back/press, image extraction from snapshots, screenshots for vision); CDP overrides take priority; `CAMOFOX_API_KEY` bearer auth, `CAMOFOX_USER_ID`/`CAMOFOX_SESSION_KEY` identity override + existing-tab adoption, Docker loopback URL rewriting (`CAMOFOX_REWRITE_LOOPBACK_URLS` + alias), VNC URL discovery from `/health`, SSRF private-page guard on reads, console/raw-CDP/dialogs report unsupported; gateway + REPL browser status report the backend |
+| Camofox backend (`tools/browser_camofox.py`) | ✅ core | `browser/camofox.rs`: `CAMOFOX_URL` REST anti-detect browser (Camoufox) backend — all 12 browser tools route through REST (tab sessions, accessibility snapshots with refs, click/type/scroll/back/press, image extraction from snapshots, screenshots for vision); CDP overrides take priority; `CAMOFOX_API_KEY` bearer auth, `CAMOFOX_USER_ID`/`CAMOFOX_SESSION_KEY` identity override + existing-tab adoption, Docker loopback URL rewriting (`CAMOFOX_REWRITE_LOOPBACK_URLS` + alias), VNC URL discovery from `/health`, SSRF private-page guard on reads, console/raw-CDP/dialogs report unsupported; managed persistence via `CAMOFOX_MANAGED_PERSISTENCE` (stable UUIDv5 profile-scoped userId, hermes `browser.camofox.managed_persistence`); gateway + REPL browser status report the backend |
 | computer-use CUA | ⬜ deferred | requires a computer-use driver |
 
 ## Storage layout
@@ -106,9 +106,9 @@ performance and a single static binary.
   (LLM guardian) and cron approval modes are ported; unattended runs fail
   closed unless `cron_mode = "approve"`.
 - Browser supervisor launches a local Chrome/Chromium directly; hermes drives
-  an external `agent-browser` daemon. The Camofox REST backend is ported;
-  hermes' managed Camofox persistence (profile-scoped identity state file)
-  and other cloud browser providers are not ported.
+  an external `agent-browser` daemon. The Camofox REST backend is ported
+  (incl. managed persistence, via `CAMOFOX_MANAGED_PERSISTENCE` instead of
+  hermes' config.yaml knob); other cloud browser providers are not ported.
 - The gateway implements the api_server platform subset; profile multiplexing
   (`/p/<profile>/...`) is not ported.  The jobs API delivers locally only
   (`deliver="local"`); hermes' external delivery targets and the NAS/Chronos
