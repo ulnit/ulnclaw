@@ -52,13 +52,14 @@
 | 环境探针（`tools/env_probe.py`） | ✅ | 终端后端为本地时，向系统提示注入一行确定性的 Python 工具链说明：python3/python 版本、pip 模块可用性、`pip`↔`python3` 版本错配、PEP 668 外部管理标记（有 uv 时不告警）；健康环境保持静默；进程级缓存由单一后台线程构建，调用方最多等 10 秒后放行；远端后端（docker/ssh）跳过探测；`[agent] environment_probe` 开关（默认开启） |
 | 上下文压缩（`conversation_compression.py`） | ✅ | 预算触发，中段对话经二次模型调用摘要，保留系统提示词 + 首条用户消息 + 最近尾部；摘要调用遵循 `[auxiliary.compression]` 路由 |
 | 流式思考块清洗（`agent/think_scrubber.py`） | ✅ | `think_scrubber.rs`：对流式增量中的 `<think>`/`<thinking>`/`<reasoning>`/`<thought>`/`<REASONING_SCRATCHPAD>` 块做有状态抑制 —— `call_with()` 中每个内容增量都经过状态机喂送（开标签可跨增量分片存活，未闭合开标签受块边界门控），流结束时冲刷暂留的部分标签尾部，非流式路径走完整字符串 `strip_think_blocks`；闭合对总是被抑制，开标签仅在块边界生效，因此仅提及标签名的正文不会被误剥离 |
+| 会话标题生成器（`agent/title_generator.py`） | ✅ | `title_generator.rs`：首轮交流后即发即忘的自动标题（后台任务，不增加回复延迟）—— 前 2 轮用户消息守卫、已有标题守卫、`[auxiliary.title_generation]` 路由（`language` 语言固定、`enabled` 开关，`is_truthy_value` 语义，默认 true）；500 字符摘要、答案先经推理块清洗、引号/"Title:" 前缀/首行/80 字符清理；`set_auto_title_if_empty` 原子持久化 —— 生成进行中手动设置的标题优先保留；可选标题回调与 portal/记账标签未移植（无对应实时 UI 面） |
 | 审批系统（`approval.py`） | ✅ | 命令归一化（反斜杠续行、`${IFS}`、注释剥离）、硬性底线（直接阻止）、可恢复但昂贵的操作（需确认）；REPL y/N 提示；网关运行审批（`POST /v1/runs/:id/approval`，once/session/always/deny，SSE `approval.request`）、fail-closed `[approvals] timeout`（默认 300s）、`always` 授权跨重启持久化；`[approvals] mode = manual|smart|off` —— smart 模式先询问辅助守护 LLM（防提示注入的提示词设计，运维 `smart_policy` 仅走可信通道），不确定时升级人工，`off` 在硬性底线以下自动放行；`cron_mode = deny|approve` 管控无人值守 cron 运行（deny = fail-closed 默认） |
 | 威胁模式扫描（`threat_patterns.py`） | ✅ 核心 | 对重新进入上下文的工具结果做提示注入扫描（建议性） |
 | 工具集（`toolsets.py`） | ✅ | 全部 33 个工具集定义，含组合（`includes`），默认 `coding` |
 | 工具注册表（`registry.py`） | ✅ | check_fn 门控、工具集分组、结果大小截断 |
 | Provider 抽象（`runtime_provider.py`） | ✅ | OpenAI 兼容（OpenAI/OpenRouter/DashScope/Ollama/llama.cpp）、原生 Anthropic Messages 传输（`anthropic_messages`：system 参数、tool_use/tool_result 块、SSE 流式、max_tokens 上限、OAuth bearer）、本地 provider 免密钥 |
 | Provider 回退链（`fallback_providers`、`try_activate_fallback`） | ✅ 核心 | `[model] fallbacks = ["provider:model", ...]`：模型调用失败时按序推进（每条目惰性构建客户端、密钥回退主运行时），激活的回退在本轮内保持生效，下一轮恢复主 provider（hermes `restore_primary_runtime`）；委派/cron 子代理继承配置 |
-| 辅助模型路由（`auxiliary_client.py`） | ✅ 核心 | `[auxiliary.<task>]` 按任务覆盖 provider/模型/base_url/api_key/key_env（`compression`、`vision`）；`"auto"`/留空继承主运行时；无覆盖时复用主客户端 |
+| 辅助模型路由（`auxiliary_client.py`） | ✅ 核心 | `[auxiliary.<task>]` 按任务覆盖 provider/模型/base_url/api_key/key_env（`compression`、`vision`、`title_generation`）；`"auto"`/留空继承主运行时；无覆盖时复用主客户端 |
 | models.dev 目录（`agent/models_dev.py`） | ✅ 核心 | `models_dev.rs`：拉取 `https://models.dev/api.json`，三级缓存——内存（1 小时 TTL，过期数据立即返回并由后台线程刷新）→ 磁盘（`$ULNCLAW_HOME/models_dev_cache.json`，任意陈旧度可用）→ 网络单飞获取（失败后进程级退避 5 分钟）；provider ID 映射 + 同名回退、上下文/能力查询（大小写不敏感、`:cloud`/`-cloud` 后缀回退）、agentic 目录过滤（噪声模式 + Google 隐藏清单）、`get_provider_info`/`get_model_info`；`ULNCLAW_MODELS_DEV_URL` 镜像覆盖（http(s)/file）、`ULNCLAW_MODELS_DEV_CACHE` 路径覆盖；网关 `/api/model/options` 目录增强 + `?refresh=true`；CLI `ulnclaw models providers\|list\|info\|refresh` |
 | 配置（`config.yaml`） | ✅ | `config.toml` + `.env` 文件、profiles、环境变量优先级 |
 | 技能系统 | ✅ | 发现、frontmatter、关联文件 |

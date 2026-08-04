@@ -45,7 +45,7 @@ full feature-by-feature mapping.
 - **🕵️ Secret redaction** — ~55 vendor key prefixes, JWTs, private keys, DB connstrings, auth headers, and env-dump `KEY=value` pairs are masked before output reaches the model; file content gets non-reusable sentinels so truncated keys are never written back
 - **📸 Checkpoints** — transparent git-backed snapshots before file edits (shared shadow store, per-project chains), `ulnclaw checkpoints list/restore/diff/prune`
 - **📝 Working diff** — `ulnclaw diff [--staged|--all]` shows what changed in a git worktree (untracked files included), REPL `/gitdiff`
-- **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
+- **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`, `[auxiliary.title_generation]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
 
 ### CLI Quick Start
 
@@ -149,6 +149,9 @@ port = 8642
 # model = "gpt-5.2-mini"
 # [auxiliary.vision]        # image analysis (vision_analyze / browser_vision)
 # model = "gpt-5.2"
+# [auxiliary.title_generation]  # session titles after the first exchange
+# enabled = true            # kill switch (is_truthy_value semantics)
+# language = ""             # pin title language; blank matches the user
 
 # Mixture of Agents: parallel reference fan-out + aggregator synthesis
 # [moa]
@@ -196,7 +199,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 346 tests
+cargo test                     # 356 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -244,7 +247,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🕵️ 密钥脱敏** —— 约 55 种厂商密钥前缀、JWT、私钥、数据库连接串、认证头与 env 转储的 `KEY=value` 在输出送达模型前脱敏；文件内容使用不可复用哨兵，截断密钥永不会被写回
 - **📸 检查点** —— 文件编辑前的透明 git 快照（共享 shadow 存储、按项目快照链），`ulnclaw checkpoints list/restore/diff/prune`
 - **📝 工作区 diff** —— `ulnclaw diff [--staged|--all]` 显示 git 工作区变更（含未跟踪文件），REPL `/gitdiff`
-- **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
+- **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`、`[auxiliary.title_generation]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
 
 ### CLI 快速开始
 
@@ -322,7 +325,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 346 个测试
+cargo test                     # 356 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

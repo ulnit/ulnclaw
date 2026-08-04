@@ -644,6 +644,23 @@ impl Agent {
             if let (Some(store), Some(sid)) = (self.store.as_ref(), session_id.as_ref()) {
                 store.append_message(sid, messages.last().unwrap()).ok();
                 store.end_session(sid, "complete").ok();
+
+                // Fire-and-forget session title after the first exchange
+                // (hermes maybe_auto_title) — background task, never adds
+                // latency to the user-facing reply.
+                let user_turns = messages
+                    .iter()
+                    .filter(|m| m.role == Role::User)
+                    .count();
+                crate::title_generator::maybe_auto_title(
+                    self.context.config.clone(),
+                    store.clone(),
+                    sid.clone(),
+                    user_message.to_string(),
+                    content.clone(),
+                    user_turns,
+                    self.provider.clone(),
+                );
             }
 
             return Ok(RunResult {

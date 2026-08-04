@@ -1079,6 +1079,42 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Current title of a session (`None` when the session exists but has
+    /// no title, or when the session id is unknown).
+    pub fn get_session_title(&self, session_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT title FROM sessions WHERE id = ?1")
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let mut rows = stmt
+            .query(params![session_id])
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        match rows.next().map_err(|e| AgentError::session(e.to_string()))? {
+            Some(row) => row
+                .get::<_, Option<String>>(0)
+                .map_err(|e| AgentError::session(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    /// Atomic "set the title only if it is still empty" (hermes
+    /// `set_auto_title_if_empty`): predicate + write in one statement, so a
+    /// manual title set while auto-generation was in flight is never
+    /// overwritten. Returns true when the title was written.
+    pub fn set_auto_title_if_empty(&self, session_id: &str, title: &str) -> Result<bool> {
+        if title.contains(['\r', '\n', '\0']) {
+            return Err(AgentError::session("invalid session title"));
+        }
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let changed = conn
+            .execute(
+                "UPDATE sessions SET title = ?2 WHERE id = ?1 AND (title IS NULL OR title = '')",
+                params![session_id, title],
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        Ok(changed > 0)
+    }
+
     /// Lock a session to a specific model (gateway model-lock API). The
     /// locked model is inherited by forks (via the `model` column) and
     /// survives `ensure_session` resumes.

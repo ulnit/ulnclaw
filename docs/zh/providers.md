@@ -697,6 +697,12 @@ model = "gpt-5.2-mini"
 # 未设置的值继承主 provider 的端点与密钥）
 [auxiliary.vision]
 model = "gpt-5.2"
+
+# Session titles after the first exchange (fire-and-forget background
+# task). Extra knobs: `enabled` kill switch (bool or "on"/"off"/...
+# spellings, default true) and `language` pin (blank = match the user).
+[auxiliary.title_generation]
+model = "gpt-5.2-mini"
 ```
 
 每个任务的字段：`provider`、`model`、`base_url`、`api_key`、`key_env`。

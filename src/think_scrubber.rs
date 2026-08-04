@@ -512,6 +512,7 @@ mod tests {
     fn unicode_passthrough() {
         let mut s = StreamingThinkScrubber::new();
         let visible = collect(&mut s, &["你好 <think>思考中…</think>世界 🌍"]);
+        assert_eq!(visible, "你好 世界 🌍");
     }
 
     #[test]

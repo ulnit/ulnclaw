@@ -321,13 +321,45 @@ impl Default for MemoryConfig {
     }
 }
 
+/// Lenient boolean toggle — accepts a real TOML boolean or one of the
+/// common string spellings (hermes `is_truthy_value`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum Truthiness {
+    Flag(bool),
+    Text(String),
+}
+
+impl Truthiness {
+    /// Resolve to a concrete bool; unrecognized text falls back to
+    /// `default` (hermes `is_truthy_value(value, default=...)`).
+    pub fn resolve(&self, default: bool) -> bool {
+        match self {
+            Truthiness::Flag(flag) => *flag,
+            Truthiness::Text(text) => {
+                match text.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" | "on" | "y" | "t" => true,
+                    "0" | "false" | "no" | "off" | "n" | "f" | "" => false,
+                    _ => default,
+                }
+            }
+        }
+    }
+}
+
 /// Per-task auxiliary provider override (port of hermes' `auxiliary.<task>`
 /// config consumed by `agent/auxiliary_client.py`).
 ///
 /// Tasks are auxiliary LLM calls such as `compression` (context
-/// summarization) and `vision` (image analysis). When an entry is present,
+/// summarization), `vision` (image analysis), and `title_generation`
+/// (session titles). When an entry is present,
 /// that task is routed through the configured provider/model instead of the
 /// main runtime. Blank values and `"auto"` inherit the main runtime.
+///
+/// `title_generation` additionally reads `enabled` (kill switch, default
+/// true) and `language` (pin the title language instead of matching the
+/// user's) — hermes `auxiliary.title_generation.{enabled,language}`.
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuxiliaryTaskConfig {
     /// Provider name ("openai", "anthropic", "ollama", ...); "auto"/blank
@@ -346,6 +378,15 @@ pub struct AuxiliaryTaskConfig {
     /// Environment variable holding the API key.
     #[serde(default)]
     pub key_env: Option<String>,
+    /// Task kill switch — only `title_generation` reads this (hermes
+    /// `auxiliary.title_generation.enabled`, default true).
+    #[serde(default)]
+    pub enabled: Option<Truthiness>,
+    /// Title language pin — only `title_generation` reads this (hermes
+    /// `auxiliary.title_generation.language`); blank matches the user's
+    /// language.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl AuxiliaryTaskConfig {
@@ -379,6 +420,18 @@ impl AuxiliaryTaskConfig {
             return Some(key);
         }
         Self::nonblank(self.key_env.as_ref()).and_then(|name| get_env_value(&name))
+    }
+
+    /// `title_generation` kill switch (hermes
+    /// `auxiliary.title_generation.enabled`); defaults to true.
+    pub fn enabled(&self) -> bool {
+        self.enabled.as_ref().map(|v| v.resolve(true)).unwrap_or(true)
+    }
+
+    /// `title_generation` language pin (hermes
+    /// `auxiliary.title_generation.language`); blank = match the user.
+    pub fn language(&self) -> Option<String> {
+        Self::nonblank(self.language.as_ref())
     }
 
     /// True when the entry carries no usable override at all.

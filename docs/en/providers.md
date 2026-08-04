@@ -700,6 +700,12 @@ model = "gpt-5.2-mini"
 # unset values inherit the main provider's endpoint and key)
 [auxiliary.vision]
 model = "gpt-5.2"
+
+# Session titles after the first exchange (fire-and-forget background
+# task). Extra knobs: `enabled` kill switch (bool or "on"/"off"/...
+# spellings, default true) and `language` pin (blank = match the user).
+[auxiliary.title_generation]
+model = "gpt-5.2-mini"
 ```
 
 Fields per task: `provider`, `model`, `base_url`, `api_key`, `key_env`.
