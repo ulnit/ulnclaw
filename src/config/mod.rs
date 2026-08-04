@@ -274,6 +274,60 @@ impl Default for MemoryConfig {
     }
 }
 
+
+/// HTTP gateway settings (`[gateway]`) — port of hermes' api_server platform.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    #[serde(default = "default_gateway_host")]
+    pub host: String,
+    #[serde(default = "default_gateway_port")]
+    pub port: u16,
+    /// Bearer token required on API routes (env ULNCLAW_GATEWAY_KEY wins).
+    #[serde(default)]
+    pub key: Option<String>,
+}
+
+fn default_gateway_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_gateway_port() -> u16 {
+    8642
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            host: default_gateway_host(),
+            port: default_gateway_port(),
+            key: None,
+        }
+    }
+}
+
+impl GatewayConfig {
+    /// Resolve effective settings with environment overrides.
+    pub fn resolved(&self) -> Self {
+        let mut config = self.clone();
+        if let Ok(host) = std::env::var("ULNCLAW_GATEWAY_HOST") {
+            if !host.trim().is_empty() {
+                config.host = host.trim().to_string();
+            }
+        }
+        if let Ok(port) = std::env::var("ULNCLAW_GATEWAY_PORT") {
+            if let Ok(port) = port.trim().parse() {
+                config.port = port;
+            }
+        }
+        if let Ok(key) = std::env::var("ULNCLAW_GATEWAY_KEY") {
+            if !key.trim().is_empty() {
+                config.key = Some(key.trim().to_string());
+            }
+        }
+        config
+    }
+}
+
 /// Root config — `~/.ulnclaw/config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UlncLawConfig {
@@ -301,6 +355,9 @@ pub struct UlncLawConfig {
     /// MCP server connections.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// HTTP gateway (OpenAI-compatible API server).
+    #[serde(default)]
+    pub gateway: GatewayConfig,
 }
 
 /// MCP configuration section ([[mcp.servers]]).

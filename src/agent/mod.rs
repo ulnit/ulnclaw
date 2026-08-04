@@ -179,6 +179,11 @@ impl Agent {
         self.context.clone()
     }
 
+    /// The attached SQLite store, if any.
+    pub fn store(&self) -> Option<Arc<SqliteSessionStore>> {
+        self.store.clone()
+    }
+
     /// Wire this agent as its own delegation + cron runner. Call once after
     /// wrapping the agent in an Arc.
     pub fn wire_runners(self: &Arc<Self>) {
@@ -212,6 +217,17 @@ impl Agent {
         user_message: &str,
         conversation_history: Option<Vec<Message>>,
     ) -> Result<RunResult> {
+        self.run_with_session(user_message, conversation_history, None).await
+    }
+
+    /// Run the agent, optionally resuming an existing session id instead of
+    /// creating a fresh one (used by the HTTP gateway for continuity).
+    pub async fn run_with_session(
+        &self,
+        user_message: &str,
+        conversation_history: Option<Vec<Message>>,
+        resume_session_id: Option<&str>,
+    ) -> Result<RunResult> {
         let mut messages = Vec::new();
         let mut total_usage = Usage::default();
         let mut tool_calls_made = Vec::new();
@@ -240,6 +256,7 @@ impl Agent {
         });
 
         // Persistence: create/resume a session row.
+        let resuming = resume_session_id.is_some();
         let session_id = if self.config.persist {
             if let Some(ref store) = self.store {
                 let model = self
@@ -247,11 +264,23 @@ impl Agent {
                     .model
                     .clone()
                     .unwrap_or_else(|| self.provider.model().to_string());
-                match store.create_session(&self.config.source, Some(&model), Some(&self.context.cwd().display().to_string())) {
-                    Ok(id) => Some(id),
-                    Err(e) => {
-                        warn!("session create failed: {}", e);
-                        None
+                if let Some(sid) = resume_session_id {
+                    if let Err(e) = store.ensure_session(
+                        sid,
+                        &self.config.source,
+                        Some(&model),
+                        Some(&self.context.cwd().display().to_string()),
+                    ) {
+                        warn!("session ensure failed: {}", e);
+                    }
+                    Some(sid.to_string())
+                } else {
+                    match store.create_session(&self.config.source, Some(&model), Some(&self.context.cwd().display().to_string())) {
+                        Ok(id) => Some(id),
+                        Err(e) => {
+                            warn!("session create failed: {}", e);
+                            None
+                        }
                     }
                 }
             } else {
@@ -261,7 +290,14 @@ impl Agent {
             None
         };
         if let Some(ref sid) = session_id {
-            for message in &messages {
+            // When resuming, history rows already exist in the store — only
+            // append the new user message (system prompt + history are known).
+            let start = if resuming {
+                messages.len().saturating_sub(1)
+            } else {
+                0
+            };
+            for message in &messages[start..] {
                 if let Some(ref store) = self.store {
                     store.append_message(sid, message).ok();
                 }

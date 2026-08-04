@@ -92,6 +92,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 );
 "#;
 
+/// One session row exposed by the gateway API.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionRow {
+    pub id: String,
+    pub source: String,
+    pub model: Option<String>,
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub started_at: f64,
+    pub ended_at: Option<f64>,
+    pub end_reason: Option<String>,
+    pub message_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+}
+
 /// A SQLite-backed session store.
 pub struct SqliteSessionStore {
     conn: Mutex<Connection>,
@@ -360,6 +377,90 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Ensure a session row exists (create it if missing). Used by the
+    /// gateway to resume a caller-supplied session id.
+    pub fn ensure_session(
+        &self,
+        id: &str,
+        source: &str,
+        model: Option<&str>,
+        cwd: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, cwd, started_at, last_activity_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(id) DO UPDATE SET last_activity_at = excluded.last_activity_at",
+            params![id, source, model, cwd, now_secs()],
+        )
+        .map_err(|e| AgentError::session(format!("ensure session: {}", e)))?;
+        Ok(())
+    }
+
+    /// One session row, if present.
+    pub fn get_session_row(&self, session_id: &str) -> Result<Option<SessionRow>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.query_row(
+            "SELECT id, source, model, title, cwd, parent_session_id, started_at,
+                    ended_at, end_reason, message_count, input_tokens, output_tokens
+             FROM sessions WHERE id = ?1",
+            params![session_id],
+            |row| {
+                Ok(SessionRow {
+                    id: row.get(0)?,
+                    source: row.get(1)?,
+                    model: row.get(2)?,
+                    title: row.get(3)?,
+                    cwd: row.get(4)?,
+                    parent_session_id: row.get(5)?,
+                    started_at: row.get(6)?,
+                    ended_at: row.get(7)?,
+                    end_reason: row.get(8)?,
+                    message_count: row.get(9)?,
+                    input_tokens: row.get(10)?,
+                    output_tokens: row.get(11)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| AgentError::session(e.to_string()))
+    }
+
+    /// Recent sessions, newest first.
+    pub fn list_session_rows(&self, limit: usize) -> Result<Vec<SessionRow>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, source, model, title, cwd, parent_session_id, started_at,
+                        ended_at, end_reason, message_count, input_tokens, output_tokens
+                 FROM sessions ORDER BY started_at DESC LIMIT ?1",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(SessionRow {
+                    id: row.get(0)?,
+                    source: row.get(1)?,
+                    model: row.get(2)?,
+                    title: row.get(3)?,
+                    cwd: row.get(4)?,
+                    parent_session_id: row.get(5)?,
+                    started_at: row.get(6)?,
+                    ended_at: row.get(7)?,
+                    end_reason: row.get(8)?,
+                    message_count: row.get(9)?,
+                    input_tokens: row.get(10)?,
+                    output_tokens: row.get(11)?,
+                })
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let mut sessions = Vec::new();
+        for row in rows {
+            sessions.push(row.map_err(|e| AgentError::session(e.to_string()))?);
+        }
+        Ok(sessions)
+    }
+
     /// Mark a session ended.
     pub fn end_session(&self, session_id: &str, reason: &str) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
@@ -496,6 +597,14 @@ impl SessionStore for SqliteSessionStore {
 
     fn delete_session(&self, session_id: &str) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        if self.has_fts {
+            conn.execute(
+                "DELETE FROM messages_fts WHERE rowid IN
+                 (SELECT id FROM messages WHERE session_id = ?1)",
+                params![session_id],
+            )
+            .ok();
+        }
         conn.execute("DELETE FROM messages WHERE session_id = ?1", params![session_id])
             .ok();
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])

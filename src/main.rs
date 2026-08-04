@@ -55,6 +55,15 @@ enum Commands {
         #[command(subcommand)]
         action: Option<CronAction>,
     },
+    /// Start the HTTP gateway (OpenAI-compatible API server)
+    Gateway {
+        /// Bind host (overrides [gateway] host / ULNCLAW_GATEWAY_HOST)
+        #[arg(long)]
+        host: Option<String>,
+        /// Bind port (overrides [gateway] port / ULNCLAW_GATEWAY_PORT)
+        #[arg(long)]
+        port: Option<u16>,
+    },
     /// Write a default config.toml
     Init,
 }
@@ -120,6 +129,31 @@ async fn main() {
     }
 }
 
+async fn gateway_cmd(
+    config: &UlncLawConfig,
+    host: Option<String>,
+    port: Option<u16>,
+) -> Result<(), String> {
+    let mut gateway = config.gateway.resolved();
+    if let Some(host) = host {
+        gateway.host = host;
+    }
+    if let Some(port) = port {
+        gateway.port = port;
+    }
+    let agent = make_agent(config, false).await?;
+    let state = ulnclaw::gateway::GatewayState::new(
+        agent,
+        config.model.model.clone(),
+        config.model.provider.clone(),
+        gateway.key.clone(),
+    )
+    .map_err(|e| e.to_string())?;
+    ulnclaw::gateway::serve(state, &gateway.host, gateway.port)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 fn init_logging(verbose: bool) {
     use tracing_subscriber::EnvFilter;
     let filter = if verbose {
@@ -147,6 +181,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Tools => tools_cmd(&config),
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
         Commands::Cron { action } => cron_cmd(action.unwrap_or(CronAction::List)).await,
+        Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Init => {
             let path = UlncLawConfig::write_default_if_missing().map_err(|e| e.to_string())?;
             println!("config written to {}", path.display());

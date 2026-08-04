@@ -25,6 +25,8 @@ full feature-by-feature mapping.
 - **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits
 - **⏰ Cron** — `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules with a poll scheduler
 - **🔌 MCP client** — stdio JSON-RPC: any MCP server's tools appear as `mcp__<server>__<tool>`
+- **🌍 Browser automation** — CDP WebSocket client: accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs (`ULNCLAW_BROWSER_CDP`)
+- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` with session continuity, async `/v1/runs`, sessions API, bearer auth
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp), keyless local providers
 
 ### CLI Quick Start
@@ -47,6 +49,16 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions search "auth refactor"
 ./ulnclaw skills list
 ./ulnclaw cron list
+
+# Browser automation: point browser_* tools at Chrome/Chromium remote debugging
+export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # or ws://.../devtools/browser/...
+
+# HTTP gateway (OpenAI-compatible API server, default 127.0.0.1:8642)
+./ulnclaw gateway --host 127.0.0.1 --port 8642
+curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \\
+     -H "Content-Type: application/json" \\
+     -d '{"messages":[{"role":"user","content":"Hello!"}]}' \\
+     http://127.0.0.1:8642/v1/chat/completions
 ```
 
 Example `~/.ulnclaw/config.toml`:
@@ -68,6 +80,11 @@ max_concurrent_children = 3
 # name = "filesystem"
 # command = "npx"
 # args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/me"]
+
+[gateway]
+host = "127.0.0.1"
+port = 8642
+# key = "sk-..."        # bearer token; env ULNCLAW_GATEWAY_KEY overrides
 ```
 
 ### Library Quick Start
@@ -135,6 +152,8 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🤝 委派** —— 并行子代理，隔离上下文，深度限制
 - **⏰ 定时任务** —— `30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划 + 轮询调度器
 - **🔌 MCP 客户端** —— stdio JSON-RPC：任意 MCP 服务器的工具以 `mcp__<server>__<tool>` 注册
+- **🌍 浏览器自动化** —— CDP WebSocket 客户端：带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框（`ULNCLAW_BROWSER_CDP`）
+- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（会话续接）、异步 `/v1/runs`、会话 API、Bearer 鉴权
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp），本地 provider 免密钥
 
 ### CLI 快速开始
@@ -157,6 +176,16 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions search "认证重构"
 ./ulnclaw skills list
 ./ulnclaw cron list
+
+# 浏览器自动化：将 browser_* 工具指向开启远程调试的 Chrome/Chromium
+export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # 或 ws://.../devtools/browser/...
+
+# HTTP 网关（OpenAI 兼容 API 服务器，默认 127.0.0.1:8642）
+./ulnclaw gateway --host 127.0.0.1 --port 8642
+curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \\
+     -H "Content-Type: application/json" \\
+     -d '{"messages":[{"role":"user","content":"你好！"}]}' \\
+     http://127.0.0.1:8642/v1/chat/completions
 ```
 
 ### 库用法快速开始

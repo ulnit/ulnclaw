@@ -717,16 +717,146 @@ fn register_browser(registry: &mut ToolRegistry) {
             tool(name)
                 .description(description)
                 .parameters(parameters)
-                .handler(move |_args, _ctx| {
-                    let name = name.to_string();
+                .handler(move |args, ctx| {
+                    let tool_name = name.to_string();
                     async move {
-                        Ok(json!({
-                            "success": false,
-                            "error": format!(
-                                "{}: the browser backend (CDP) is not implemented in this build. Set ULNCLAW_BROWSER_CDP and provide a CDP client integration.",
-                                name
-                            )
-                        }))
+                        use crate::browser::with_session;
+                        match tool_name.as_str() {
+                            "browser_navigate" => {
+                                let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                                if url.is_empty() {
+                                    return Ok(json!({"success": false, "error": "url is required"}));
+                                }
+                                with_session(move |session| async move {
+                                    session.navigate(&url).await?;
+                                    let info = session.page_info().await.unwrap_or(json!({}));
+                                    Ok(json!({
+                                        "success": true,
+                                        "url": info.get("url").cloned().unwrap_or(json!("")),
+                                        "title": info.get("title").cloned().unwrap_or(json!("")),
+                                        "hint": "call browser_snapshot to see interactive elements"
+                                    }))
+                                })
+                                .await
+                            }
+                            "browser_snapshot" => with_session(|session| async move {
+                                let (text, refs) = session.snapshot().await?;
+                                Ok(json!({
+                                    "success": true,
+                                    "snapshot": text,
+                                    "elements": refs.len(),
+                                    "hint": "interact via browser_click/browser_type with element refs like \"3\""
+                                }))
+                            })
+                            .await,
+                            "browser_click" => {
+                                let element = args.get("element").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                                if element.is_empty() {
+                                    return Ok(json!({"success": false, "error": "element is required"}));
+                                }
+                                with_session(move |session| async move {
+                                    let result = session.click(&element).await?;
+                                    Ok(json!({"success": true, "clicked": result.get("clicked").cloned()}))
+                                })
+                                .await
+                            }
+                            "browser_type" => {
+                                let element = args.get("element").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                                let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                if element.is_empty() {
+                                    return Ok(json!({"success": false, "error": "element is required"}));
+                                }
+                                with_session(move |session| async move {
+                                    session.type_text(&element, &text).await?;
+                                    Ok(json!({"success": true, "typed_chars": text.len(), "into": element}))
+                                })
+                                .await
+                            }
+                            "browser_scroll" => {
+                                let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down").to_string();
+                                let pixels = args.get("pixels").and_then(|v| v.as_u64()).unwrap_or(800);
+                                with_session(move |session| async move {
+                                    session.scroll(&direction, pixels).await?;
+                                    Ok(json!({"success": true, "direction": direction, "pixels": pixels}))
+                                })
+                                .await
+                            }
+                            "browser_back" => with_session(|session| async move {
+                                session.go_back().await?;
+                                let info = session.page_info().await.unwrap_or(json!({}));
+                                Ok(json!({"success": true, "url": info.get("url").cloned()}))
+                            })
+                            .await,
+                            "browser_press" => {
+                                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                                if key.is_empty() {
+                                    return Ok(json!({"success": false, "error": "key is required"}));
+                                }
+                                with_session(move |session| async move {
+                                    session.press(&key).await?;
+                                    Ok(json!({"success": true, "pressed": key}))
+                                })
+                                .await
+                            }
+                            "browser_get_images" => with_session(|session| async move {
+                                let images = session.get_images().await?;
+                                Ok(json!({"success": true, "images": images}))
+                            })
+                            .await,
+                            "browser_vision" => {
+                                let prompt = args
+                                    .get("prompt")
+                                    .and_then(|v| v.as_str())
+                                    .filter(|p| !p.trim().is_empty())
+                                    .unwrap_or("Describe what is visible in this screenshot.")
+                                    .to_string();
+                                let Some(provider) = ctx.provider.clone() else {
+                                    return Ok(json!({"success": false, "error": "no vision-capable provider configured"}));
+                                };
+                                with_session(move |session| async move {
+                                    let png = session.screenshot().await?;
+                                    let image_url = format!("data:image/png;base64,{}", png);
+                                    match provider.analyze_image(&prompt, &image_url).await {
+                                        Ok(analysis) => Ok(json!({"success": true, "analysis": analysis})),
+                                        Err(e) => Ok(json!({"success": false, "error": format!("vision provider: {}", e)})),
+                                    }
+                                })
+                                .await
+                            }
+                            "browser_console" => {
+                                let expression = args.get("expression").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                if expression.is_empty() {
+                                    return Ok(json!({"success": false, "error": "expression is required"}));
+                                }
+                                with_session(move |session| async move {
+                                    let value = session.evaluate(&expression, None).await?;
+                                    Ok(json!({"success": true, "result": value}))
+                                })
+                                .await
+                            }
+                            "browser_cdp" => {
+                                let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                                let params = args.get("params").cloned().unwrap_or(json!({}));
+                                if method.is_empty() {
+                                    return Ok(json!({"success": false, "error": "method is required"}));
+                                }
+                                with_session(move |session| async move {
+                                    let result = session.client().call(&method, params).await?;
+                                    Ok(json!({"success": true, "result": result}))
+                                })
+                                .await
+                            }
+                            "browser_dialog" => {
+                                let accept = args.get("action").and_then(|v| v.as_str()).unwrap_or("accept") != "dismiss";
+                                let prompt_text = args.get("prompt_text").and_then(|v| v.as_str()).map(String::from);
+                                with_session(move |session| async move {
+                                    let result = session.handle_dialog(accept, prompt_text.as_deref()).await?;
+                                    Ok(json!({"success": true, "dialog": result}))
+                                })
+                                .await
+                            }
+                            _ => Ok(json!({"success": false, "error": format!("unknown browser tool: {}", tool_name)})),
+                        }
                     }
                 })
                 .toolset("browser")

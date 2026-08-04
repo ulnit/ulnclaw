@@ -27,7 +27,7 @@ performance and a single static binary.
 | `text_to_speech` | ✅ full | OpenAI TTS or custom `ULNCLAW_TTS_ENDPOINT` |
 | `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service` | ✅ full | Home Assistant REST API, gated on `HASS_URL` + `HASS_TOKEN` |
 | `kanban_*` (12 tools) | ✅ full | local SQLite coordination board: create/list/show/complete/block/unblock/comment/heartbeat/link/attach/attach_url/attachments |
-| `browser_*` (12 tools) | 🟡 gated | registered with faithful schemas; require a CDP backend (`ULNCLAW_BROWSER_CDP`) — client integration pending |
+| `browser_*` (12 tools) | ✅ full | CDP WebSocket client (`browser` module): endpoint discovery, page session, accessibility snapshots with element refs, click/type/scroll/press/screenshot/evaluate/dialogs; gated on `ULNCLAW_BROWSER_CDP` (ws:// or http://host:port) |
 | `computer_use` | 🟡 gated | requires a computer-use driver (hermes: cua-driver) |
 | `discord`, `discord_admin`, `feishu_doc_read`, `spotify_*`, `yuanbao` | 🟡 gated | registered, gated on platform credentials; backends pending |
 | `x_search`, `video_analyze`, `video_generate`, `bfl_flux3_*` | ⬜ deferred | provider-specific (xAI/BFL); add when credentials are available |
@@ -51,7 +51,9 @@ performance and a single static binary.
 | MCP client (`mcp_tool.py`) | ✅ core | stdio JSON-RPC: initialize/tools/list/tools/call; `[[mcp.servers]]` config; tools registered as `mcp__<server>__<tool>` |
 | CLI (`hermes_cli/`) | ✅ core | chat REPL with slash commands, one-shot `run`, sessions/tools/skills/cron subcommands, `init` |
 | Delegation | ✅ | SubAgentRunner trait, depth limit, child sessions |
-| Gateway/TUI/web/app surfaces | ⬜ deferred | hermes ships Discord/Telegram/etc. gateways, a TUI and web apps; ulnclaw is a library + CLI today |
+| HTTP gateway (`gateway/platforms/api_server.py`) | ✅ core | `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` (session continuity via `X-Ulnclaw-Session-Id`), `/v1/models`, `/v1/capabilities`, `/v1/runs` (async runs + stop), `/api/sessions` CRUD + chat, bearer-token auth |
+| Messaging platforms (Telegram/WhatsApp/QQ/…) | ⬜ deferred | hermes' platform adapters are not ported; the HTTP gateway covers OpenAI-compatible frontends |
+| TUI/web/app surfaces | ⬜ deferred | hermes ships a TUI and web apps; ulnclaw is a library + CLI + HTTP gateway today |
 | Environments (docker/ssh/modal/daytona/vercel) | ⬜ deferred | terminal runs locally; remote backends pending |
 | Checkpoint manager, browser supervisor, computer-use CUA | ⬜ deferred | heavyweight subsystems |
 
@@ -74,7 +76,8 @@ performance and a single static binary.
 ## Known differences
 
 - Approval UX is a terminal y/N prompt (hermes has richer platform-specific flows).
-- Browser tools are schema-faithful stubs until a CDP client is integrated.
+- Browser tools need a reachable Chrome/Chromium with remote debugging (`ULNCLAW_BROWSER_CDP`); there is no managed browser launch yet (hermes' browser supervisor).
+- The gateway implements the api_server platform subset; SSE run events, `/v1/responses`, and profile multiplexing are not ported.
 - Compression uses a char/4 token estimate instead of a tokenizer.
 - `patch` fuzzy chain implements the 4 deterministic hermes strategies
   (exact → line-trimmed → whitespace-normalized → indent-flexible); the two
