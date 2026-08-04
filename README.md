@@ -49,7 +49,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw tools            # list toolsets and enabled tools
 ./ulnclaw sessions list    # recent sessions from state.db
 ./ulnclaw sessions search "auth refactor"
-./ulnclaw sessions export <session-id> --out ./exports   # verified Markdown
+./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw skills list
 ./ulnclaw cron list
 ./ulnclaw checkpoints list   # filesystem snapshots ([checkpoints] enabled = true)
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 129 tests
+cargo test                     # 131 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -193,7 +193,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw tools            # 列出工具集与已启用工具
 ./ulnclaw sessions list    # state.db 中的最近会话
 ./ulnclaw sessions search "认证重构"
-./ulnclaw sessions export <session-id> --out ./exports   # 可校验的 Markdown
+./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw skills list
 ./ulnclaw cron list
 ./ulnclaw checkpoints list   # 文件系统快照（[checkpoints] enabled = true）
@@ -245,7 +245,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 129 个测试
+cargo test                     # 131 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

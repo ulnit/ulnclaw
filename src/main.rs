@@ -88,6 +88,9 @@ enum SessionAction {
         /// Output directory (default: <home>/exports)
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Export format: md or html
+        #[arg(long, default_value = "md")]
+        format: String,
         /// Skip the SHA256 verification footer
         #[arg(long)]
         no_verification: bool,
@@ -687,7 +690,7 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
                 println!("[{}] {}", session_id, snippet);
             }
         }
-        SessionAction::Export { id, out, no_verification } => {
+        SessionAction::Export { id, out, format, no_verification } => {
             let row = store
                 .get_session_row(&id)
                 .map_err(|e| e.to_string())?
@@ -706,14 +709,16 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
                 messages,
             };
             if no_verification {
-                let body = ulnclaw::session::export::render_session_markdown(&session, false);
+                let body = match format.as_str() {
+                    "html" => ulnclaw::session::export::render_session_html(&session, false),
+                    _ => ulnclaw::session::export::render_session_markdown(&session, false),
+                };
                 println!("{}", body);
                 return Ok(());
             }
             let dir = out.unwrap_or_else(|| home.join("exports"));
-            let path =
-                ulnclaw::session::export::write_session_markdown(&dir, &session)
-                    .map_err(|e| e.to_string())?;
+            let path = ulnclaw::session::export::write_session_export(&dir, &session, &format)
+                .map_err(|e| e.to_string())?;
             println!("✅ Exported {} messages to {}", session.messages.len(), path.display());
         }
         SessionAction::Recap { id } => {

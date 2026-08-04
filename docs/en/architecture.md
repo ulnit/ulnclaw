@@ -151,8 +151,9 @@ Conversation persistence with lineage tracking for compression scenarios.
 - `Session` - Conversation state with metadata
 - `SessionMetadata` - User ID, platform, model info
 - `export` - verifiable Markdown session export (hermes
-  `session_export_md.py` port): frontmatter + message headings +
-  tool-call blocks + SHA256 verification footer + `manifest.jsonl`
+  `session_export_md.py` / `session_export_html.py` port): frontmatter +
+  message headings + tool-call blocks + SHA256 verification footer, or a
+  standalone styled HTML document — both with `manifest.jsonl` entries
 - `recap` - instant local-only session recap (hermes `session_recap.py`
   port): recent-window turn counts, tool-usage top list, files touched,
   last ask/reply previews; ANSI/control-char sanitized

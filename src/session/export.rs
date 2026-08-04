@@ -2,6 +2,10 @@
 //! session as a verifiable Markdown document (frontmatter + message
 //! headings + tool-call blocks + SHA256 export verification) and keeps a
 //! `manifest.jsonl` alongside the exports.
+//!
+//! Also renders standalone HTML (`session_export_html.py` counterpart):
+//! the same session data with inline styling, message cards, and
+//! HTML-escaped content.
 
 use crate::error::{AgentError, Result};
 use crate::provider::Message;
@@ -172,6 +176,176 @@ pub fn render_session_markdown_at(
     pending_body.replace("SHA256 of exported body: `pending`", &format!("SHA256 of exported body: `{}`", digest))
 }
 
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn html_role_class(message: &Message) -> &'static str {
+    match message.role {
+        crate::provider::Role::System => "system",
+        crate::provider::Role::User => "user",
+        crate::provider::Role::Assistant => "assistant",
+        crate::provider::Role::Tool => "tool",
+    }
+}
+
+fn html_role_label(message: &Message) -> String {
+    if message.role == crate::provider::Role::Tool {
+        match message.name.as_deref().filter(|n| !n.is_empty()) {
+            Some(name) => format!("Tool — {}", name),
+            None => "Tool".to_string(),
+        }
+    } else {
+        match message.role {
+            crate::provider::Role::System => "System".to_string(),
+            crate::provider::Role::User => "User".to_string(),
+            crate::provider::Role::Assistant => "Assistant".to_string(),
+            crate::provider::Role::Tool => "Tool".to_string(),
+        }
+    }
+}
+
+/// Render the session as a standalone HTML document (hermes
+/// `session_export_html.py` counterpart): inline CSS, one card per
+/// message, tool calls in code blocks, verification footer.
+pub fn render_session_html(session: &ExportSession, include_verification: bool) -> String {
+    let exported_at = now_secs();
+    render_session_html_at(session, exported_at, include_verification)
+}
+
+/// Render HTML at an explicit export timestamp (tests use a fixed value).
+pub fn render_session_html_at(
+    session: &ExportSession,
+    exported_at: f64,
+    include_verification: bool,
+) -> String {
+    let title = session
+        .title
+        .clone()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| session.id.clone());
+    let exported_iso = iso_timestamp(exported_at);
+    let message_count = session.messages.len();
+
+    let mut html = String::new();
+    html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
+    html.push_str(&format!(
+        "<title>{}</title>\n",
+        html_escape(&format!("Session {} — {}", session.id, title))
+    ));
+    html.push_str(
+        "<style>\n\
+         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem auto; max-width: 860px; padding: 0 1rem; color: #1f2328; background: #ffffff; }\n\
+         h1 { font-size: 1.4rem; border-bottom: 1px solid #d0d7de; padding-bottom: .5rem; }\n\
+         .meta { color: #57606a; font-size: .9rem; margin-bottom: 1.5rem; }\n\
+         .meta dt { font-weight: 600; display: inline; }\n\
+         .meta dd { display: inline; margin: 0 1rem 0 .25rem; }\n\
+         .meta div { margin: .15rem 0; }\n\
+         .message { border: 1px solid #d0d7de; border-radius: 8px; margin: .9rem 0; overflow: hidden; }\n\
+         .message .head { padding: .4rem .8rem; font-size: .85rem; font-weight: 600; border-bottom: 1px solid #d0d7de; background: #f6f8fa; }\n\
+         .message.user .head { background: #ddf4ff; }\n\
+         .message.assistant .head { background: #dafbe1; }\n\
+         .message.tool .head { background: #fff8c5; }\n\
+         .message.system .head { background: #f6f8fa; color: #57606a; }\n\
+         .message .body { padding: .6rem .8rem; white-space: pre-wrap; word-wrap: break-word; }\n\
+         .message pre { background: #f6f8fa; border-radius: 6px; padding: .6rem; overflow-x: auto; margin: .4rem 0 0; }\n\
+         .empty { color: #57606a; font-style: italic; }\n\
+         footer { margin-top: 2rem; color: #57606a; font-size: .85rem; border-top: 1px solid #d0d7de; padding-top: .75rem; }\n\
+         </style>\n",
+    );
+    html.push_str("</head>\n<body>\n");
+    html.push_str(&format!("<h1>{}</h1>\n", html_escape(&title)));
+    html.push_str("<dl class=\"meta\">\n");
+    html.push_str(&format!(
+        "<div><dt>Session ID:</dt><dd><code>{}</code></dd></div>\n",
+        html_escape(&session.id)
+    ));
+    if !session.source.is_empty() {
+        html.push_str(&format!(
+            "<div><dt>Source:</dt><dd><code>{}</code></dd></div>\n",
+            html_escape(&session.source)
+        ));
+    }
+    if let Some(ref model) = session.model {
+        html.push_str(&format!(
+            "<div><dt>Model:</dt><dd><code>{}</code></dd></div>\n",
+            html_escape(model)
+        ));
+    }
+    if let Some(ref cwd) = session.cwd {
+        if !cwd.is_empty() {
+            html.push_str(&format!(
+                "<div><dt>Working directory:</dt><dd><code>{}</code></dd></div>\n",
+                html_escape(cwd)
+            ));
+        }
+    }
+    html.push_str(&format!(
+        "<div><dt>Started:</dt><dd>{}</dd></div>\n",
+        html_escape(&iso_timestamp(session.started_at))
+    ));
+    if let Some(ended) = session.ended_at {
+        html.push_str(&format!(
+            "<div><dt>Ended:</dt><dd>{}</dd></div>\n",
+            html_escape(&iso_timestamp(ended))
+        ));
+    }
+    html.push_str(&format!(
+        "<div><dt>Messages:</dt><dd>{}</dd></div>\n",
+        message_count
+    ));
+    html.push_str("</dl>\n");
+
+    if session.messages.is_empty() {
+        html.push_str("<p class=\"empty\">No messages in this session.</p>\n");
+    }
+    for (timestamp, message) in &session.messages {
+        html.push_str(&format!(
+            "<div class=\"message {}\">\n",
+            html_role_class(message)
+        ));
+        html.push_str(&format!(
+            "<div class=\"head\">{} · {}</div>\n",
+            html_escape(&html_role_label(message)),
+            html_escape(&iso_timestamp(*timestamp))
+        ));
+        html.push_str("<div class=\"body\">");
+        let content = render_content(message);
+        if content.is_empty() {
+            html.push_str("<span class=\"empty\">(no content)</span>");
+        } else {
+            html.push_str(&html_escape(&content));
+        }
+        if let Some(tool_calls) = message.tool_calls.as_ref().filter(|calls| !calls.is_empty()) {
+            let pretty =
+                serde_json::to_string_pretty(tool_calls).unwrap_or_else(|_| "[]".to_string());
+            html.push_str(&format!(
+                "<pre><code>{}</code></pre>",
+                html_escape(&pretty)
+            ));
+        }
+        html.push_str("</div>\n</div>\n");
+    }
+
+    if include_verification {
+        html.push_str("<footer>\n");
+        html.push_str(&format!(
+            "<div>Exported {} · {} message{} · {}</div>\n",
+            html_escape(&exported_iso),
+            message_count,
+            if message_count != 1 { "s" } else { "" },
+            html_escape(EXPORTER_VERSION)
+        ));
+        html.push_str("</footer>\n");
+    }
+    html.push_str("</body>\n</html>\n");
+    html
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -192,7 +366,7 @@ pub fn verify_export_content(content: &str) -> (bool, String) {
 }
 
 /// Deterministic path-safe filename (hermes `safe_session_filename`).
-pub fn safe_session_filename(session_id: &str, title: Option<&str>) -> String {
+pub fn safe_session_filename(session_id: &str, title: Option<&str>, fmt: &str) -> String {
     let slug_source = title.filter(|t| !t.is_empty()).unwrap_or("session");
     let mut slug: String = slug_source
         .chars()
@@ -212,16 +386,35 @@ pub fn safe_session_filename(session_id: &str, title: Option<&str>) -> String {
     if slug.len() > 60 {
         slug.truncate(60);
     }
-    format!("{}-{}.md", session_id, slug)
+    format!("{}-{}.{}", session_id, slug, fmt)
 }
 
 /// Write the export file and append a `manifest.jsonl` entry next to it
 /// (hermes `write_session_markdown` + `append_manifest_entry`).
 pub fn write_session_markdown(output_dir: &Path, session: &ExportSession) -> Result<PathBuf> {
+    write_session_export(output_dir, session, "md")
+}
+
+/// Write the export file in the given format (`md` or `html`) and append a
+/// `manifest.jsonl` entry next to it.
+pub fn write_session_export(
+    output_dir: &Path,
+    session: &ExportSession,
+    fmt: &str,
+) -> Result<PathBuf> {
+    let body = match fmt {
+        "md" => render_session_markdown(session, true),
+        "html" => render_session_html(session, true),
+        other => {
+            return Err(AgentError::session(format!(
+                "unsupported export format: {}",
+                other
+            )))
+        }
+    };
     std::fs::create_dir_all(output_dir)
         .map_err(|e| AgentError::session(format!("create export dir: {}", e)))?;
-    let body = render_session_markdown(session, true);
-    let path = output_dir.join(safe_session_filename(&session.id, session.title.as_deref()));
+    let path = output_dir.join(safe_session_filename(&session.id, session.title.as_deref(), fmt));
     std::fs::write(&path, &body)
         .map_err(|e| AgentError::session(format!("write export: {}", e)))?;
 
@@ -229,7 +422,7 @@ pub fn write_session_markdown(output_dir: &Path, session: &ExportSession) -> Res
         "session_id": session.id,
         "lineage_session_ids": [session.id],
         "path": path.display().to_string(),
-        "format": "md",
+        "format": fmt,
         "message_count": session.messages.len(),
         "sha256": sha256_hex(body.as_bytes()),
         "exported_at": now_secs(),
@@ -340,13 +533,17 @@ mod tests {
     #[test]
     fn test_safe_filename() {
         assert_eq!(
-            safe_session_filename("abc", Some("My Cool Session!")),
+            safe_session_filename("abc", Some("My Cool Session!"), "md"),
             "abc-my-cool-session.md"
         );
-        assert_eq!(safe_session_filename("abc", None), "abc-session.md");
-        assert_eq!(safe_session_filename("abc", Some("///")), "abc-session.md");
+        assert_eq!(safe_session_filename("abc", None, "md"), "abc-session.md");
+        assert_eq!(safe_session_filename("abc", Some("///"), "md"), "abc-session.md");
+        assert_eq!(
+            safe_session_filename("abc", Some("My Cool Session!"), "html"),
+            "abc-my-cool-session.html"
+        );
         let long_title = "x".repeat(100);
-        let name = safe_session_filename("id", Some(&long_title));
+        let name = safe_session_filename("id", Some(&long_title), "md");
         assert!(name.len() <= "id-".len() + 60 + 3);
     }
 
@@ -365,5 +562,48 @@ mod tests {
         assert_eq!(entry["format"], "md");
         assert_eq!(entry["message_count"], 3);
         assert_eq!(entry["sha256"].as_str().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn test_render_html_structure_and_escaping() {
+        let mut session = sample_session();
+        // Inject markup that must be escaped.
+        session.messages.push((
+            1_750_000_040.0,
+            Message {
+                role: Role::User,
+                content: Some("<script>alert('x')</script>".into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ));
+        let html = render_session_html_at(&session, 1_750_000_999.0, true);
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.contains("<title>"));
+        assert!(html.contains("Session ID:"));
+        assert!(html.contains("class=\"message user\""));
+        assert!(html.contains("class=\"message assistant\""));
+        assert!(html.contains("Tool — terminal"));
+        assert!(html.contains("<pre><code>"));
+        assert!(html.contains("Exported 2025-06-15T15:23:19Z"));
+        // Escaped, never raw.
+        assert!(!html.contains("<script>alert"));
+        assert!(html.contains("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"));
+    }
+
+    #[test]
+    fn test_write_html_and_format_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = sample_session();
+        let path = write_session_export(dir.path(), &session, "html").unwrap();
+        assert!(path.to_string_lossy().ends_with(".html"));
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("<!DOCTYPE html>"));
+        let manifest = std::fs::read_to_string(dir.path().join("manifest.jsonl")).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(manifest.lines().next().unwrap()).unwrap();
+        assert_eq!(entry["format"], "html");
+
+        assert!(write_session_export(dir.path(), &session, "pdf").is_err());
     }
 }
