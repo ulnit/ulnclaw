@@ -95,6 +95,7 @@ pub mod provider;
 pub mod redact;
 pub mod session;
 pub mod skills;
+pub mod think_scrubber;
 pub mod tools;
 pub mod toolsets;
 pub mod url_safety;

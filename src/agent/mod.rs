@@ -798,17 +798,31 @@ impl Agent {
         let mut finish_reason: Option<String> = None;
         let mut usage: Option<Usage> = None;
         let mut model: Option<String> = None;
+        // Stateful reasoning/thinking scrubber for streamed deltas — port of
+        // hermes `_fire_stream_delta` wiring: a per-delta strip loses tag
+        // state across chunk boundaries (an open tag in one delta and the
+        // reasoning prose in the next), so every delta is fed through the
+        // state machine and the held-back tail is flushed after the stream.
+        let mut think_scrubber = crate::think_scrubber::StreamingThinkScrubber::new();
+        let scrub_stream = self.config.strip_thinking_blocks;
         while let Some(chunk) = stream.try_next().await? {
             if let Some(delta) = &chunk.delta_content {
                 if !delta.is_empty() {
-                    emit_stream_event(StreamEvent::Delta(delta.clone()));
-                    {
-                        let callbacks = self.callbacks.lock().await;
-                        if let Some(ref on_delta) = callbacks.on_stream_delta {
-                            on_delta(delta);
+                    let visible = if scrub_stream {
+                        think_scrubber.feed(delta)
+                    } else {
+                        delta.clone()
+                    };
+                    if !visible.is_empty() {
+                        emit_stream_event(StreamEvent::Delta(visible.clone()));
+                        {
+                            let callbacks = self.callbacks.lock().await;
+                            if let Some(ref on_delta) = callbacks.on_stream_delta {
+                                on_delta(&visible);
+                            }
                         }
+                        content.push_str(&visible);
                     }
-                    content.push_str(delta);
                 }
             }
             if let Some(delta) = &chunk.delta_reasoning {
@@ -823,6 +837,22 @@ impl Agent {
             }
             if chunk.model.is_some() {
                 model = chunk.model;
+            }
+        }
+        // Flush the scrubber's held-back tail (e.g. a trailing '<' that
+        // turned out not to be a tag) so it still reaches the UI — hermes
+        // `_reset_stream_delivery_tracking` parity.
+        if scrub_stream {
+            let tail = think_scrubber.flush();
+            if !tail.is_empty() {
+                emit_stream_event(StreamEvent::Delta(tail.clone()));
+                {
+                    let callbacks = self.callbacks.lock().await;
+                    if let Some(ref on_delta) = callbacks.on_stream_delta {
+                        on_delta(&tail);
+                    }
+                }
+                content.push_str(&tail);
             }
         }
         let tool_calls = crate::provider::assemble_tool_calls(&tool_deltas);
