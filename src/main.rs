@@ -459,7 +459,10 @@ async fn make_agent(
         source: "cli".to_string(),
         ..Default::default()
     });
-    let agent = agent.with_store(store).with_tool_context(context);
+    let agent = agent
+        .with_store(store)
+        .with_tool_context(context)
+        .with_fallback_specs(&config.model.fallbacks);
     let agent = Arc::new(agent);
     // Wire the runners now that the agent is in an Arc.
     agent.wire_runners();

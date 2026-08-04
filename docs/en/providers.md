@@ -14,6 +14,7 @@ Complete guide to ulnclaw's provider abstraction and implementation.
 - [Best Practices](#best-practices)
 - [Auxiliary Model Routing](#auxiliary-model-routing)
 - [Mixture of Agents (MoA)](#mixture-of-agents-moa)
+- [Provider Fallback Chain](#provider-fallback-chain)
 
 ## Overview
 
@@ -770,6 +771,36 @@ Behavior (mirrors hermes):
 
 Not ported: the persistent `provider: moa` client facade (MoA as the acting
 model for whole sessions), MoA traces, and the privacy filter.
+
+## Provider Fallback Chain
+
+`[model] fallbacks` lists backup `"provider:model"` entries tried in order
+when a model call fails — a port of hermes' `fallback_providers` chain
+(`try_activate_fallback` + `restore_primary_runtime`):
+
+```toml
+[model]
+provider = "openai"
+model = "gpt-5.2"
+max_retries = 1                 # retries happen first, per provider
+fallbacks = [
+  "openai:gpt-5.2-mini",        # same provider, cheaper model
+  "ollama:qwen3:32b",           # local escape hatch (no key needed)
+]
+```
+
+Semantics:
+
+- The primary provider's own retries (`max_retries`, exponential backoff)
+  run first; the chain advances only after the call truly fails.
+- Each entry builds lazily on first use: OpenAI-compatible or Anthropic
+  transport per provider name, endpoint = the provider default (or
+  `OPENAI_BASE_URL`), key = main runtime key (keyless locals exempt).
+- The first fallback that answers stays active for the rest of the turn;
+  the next turn restores the primary (per-turn restore, like hermes).
+- Malformed specs (`"provider"` without a model) are skipped with a
+  warning; models may contain `:` (`ollama:qwen3:1.7b`).
+- Delegated sub-agents and cron runs inherit the configured specs.
 
 ## Troubleshooting
 

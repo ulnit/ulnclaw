@@ -184,6 +184,39 @@ pub struct Agent {
     store: Option<Arc<SqliteSessionStore>>,
     /// Delegation depth (0 = top-level).
     depth: usize,
+    /// Provider fallback chain (hermes `fallback_providers`), tried in
+    /// order when a model call fails.
+    fallback_chain: Vec<FallbackEntry>,
+    /// The raw `"provider:model"` specs the chain was built from (so child
+    /// agents can inherit them).
+    fallback_specs: Vec<String>,
+    /// Currently active fallback index (`None` = primary provider).
+    fallback_active: tokio::sync::Mutex<Option<usize>>,
+}
+
+/// One fallback provider slot (hermes `fallback_providers` entry).
+pub struct FallbackEntry {
+    pub provider_name: String,
+    pub model: String,
+    provider: tokio::sync::OnceCell<Arc<dyn Provider>>,
+}
+
+impl FallbackEntry {
+    pub fn label(&self) -> String {
+        format!("{}:{}", self.provider_name, self.model)
+    }
+}
+
+/// Parse a `"provider:model"` fallback spec (the model may itself contain
+/// `:`, e.g. `ollama:qwen3:1.7b`).
+pub fn parse_fallback_spec(spec: &str) -> Option<(String, String)> {
+    let (provider_name, model) = spec.split_once(':')?;
+    let provider_name = provider_name.trim();
+    let model = model.trim();
+    if provider_name.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some((provider_name.to_string(), model.to_string()))
 }
 
 impl Agent {
@@ -198,7 +231,88 @@ impl Agent {
             context: Arc::new(context),
             store: None,
             depth: 0,
+            fallback_chain: Vec::new(),
+            fallback_specs: Vec::new(),
+            fallback_active: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// The configured fallback specs (for child-agent inheritance).
+    pub fn fallback_specs(&self) -> Vec<String> {
+        self.fallback_specs.clone()
+    }
+
+    /// Configure the fallback chain from `"provider:model"` specs (hermes
+    /// `fallback_providers`; ulnclaw `[model] fallbacks`). Malformed specs
+    /// are skipped with a warning.
+    pub fn with_fallback_specs(mut self, specs: &[String]) -> Self {
+        self.fallback_specs = specs.to_vec();
+        let mut chain = Vec::new();
+        for spec in specs {
+            match parse_fallback_spec(spec) {
+                Some((provider_name, model)) => chain.push(FallbackEntry {
+                    provider_name,
+                    model,
+                    provider: tokio::sync::OnceCell::new(),
+                }),
+                None => tracing::warn!("ignoring malformed fallback spec: {}", spec),
+            }
+        }
+        self.fallback_chain = chain;
+        self
+    }
+
+    /// Provide pre-built fallback providers (tests / custom wiring).
+    pub fn with_fallback_providers(
+        mut self,
+        providers: Vec<(String, Arc<dyn Provider>)>,
+    ) -> Self {
+        self.fallback_specs = Vec::new();
+        self.fallback_chain = providers
+            .into_iter()
+            .map(|(label, provider)| {
+                let (provider_name, model) = parse_fallback_spec(&label)
+                    .unwrap_or_else(|| ("custom".to_string(), provider.model().to_string()));
+                let cell = tokio::sync::OnceCell::new();
+                cell.set(provider).ok();
+                FallbackEntry {
+                    provider_name,
+                    model,
+                    provider: cell,
+                }
+            })
+            .collect();
+        self
+    }
+
+    /// Whether a fallback provider is available past the current position
+    /// (hermes `_has_pending_fallback`).
+    pub async fn has_pending_fallback(&self) -> bool {
+        let index = *self.fallback_active.lock().await;
+        index.map(|i| i + 1).unwrap_or(0) < self.fallback_chain.len()
+    }
+
+    /// Build (lazily) the provider instance for a fallback entry, with
+    /// credential fallback to the main runtime key.
+    async fn build_fallback_provider(&self, entry: &FallbackEntry) -> Result<Arc<dyn Provider>> {
+        let config = &self.context.config;
+        let api_key = config.resolve_api_key();
+        if api_key.is_none()
+            && !crate::provider::auxiliary::is_keyless(&entry.provider_name)
+        {
+            return Err(AgentError::config(format!(
+                "fallback {}: no API key (set api_key in [model] or the provider env var)",
+                entry.label()
+            )));
+        }
+        let base_url = crate::config::default_base_url(&entry.provider_name);
+        crate::provider::auxiliary::build_task_provider(
+            &entry.provider_name,
+            &entry.model,
+            &base_url,
+            api_key.as_deref(),
+            config.model.max_retries,
+        )
     }
 
     /// Set agent configuration
@@ -295,6 +409,10 @@ impl Agent {
         conversation_history: Option<Vec<Message>>,
         resume_session_id: Option<&str>,
     ) -> Result<RunResult> {
+        // Per-turn primary restore (hermes `restore_primary_runtime`): a
+        // fallback activated on the previous turn does not stick.
+        *self.fallback_active.lock().await = None;
+
         let mut messages = Vec::new();
         let mut total_usage = Usage::default();
         let mut tool_calls_made = Vec::new();
@@ -524,13 +642,102 @@ impl Agent {
     }
 
     async fn call_provider(&self, messages: &[Message]) -> Result<crate::provider::ProviderResponse> {
+        // Active runtime: primary provider, or the last activated fallback
+        // (hermes keeps the fallback active until the next turn restores
+        // the primary).
+        let active_index = *self.fallback_active.lock().await;
+        let result = self.call_on_active(messages, active_index).await;
+        match result {
+            Ok(response) => Ok(response),
+            Err(error) => self.failover(messages, active_index, error).await,
+        }
+    }
+
+    /// Execute one model call on the given runtime (None = primary).
+    async fn call_on_active(
+        &self,
+        messages: &[Message],
+        active_index: Option<usize>,
+    ) -> Result<crate::provider::ProviderResponse> {
+        match active_index {
+            Some(index) => match self.fallback_chain.get(index) {
+                Some(entry) => {
+                    let provider = entry
+                        .provider
+                        .get_or_try_init(|| self.build_fallback_provider(entry))
+                        .await?;
+                    self.call_with(messages, provider.as_ref(), entry.model.clone())
+                        .await
+                }
+                None => Err(AgentError::provider("fallback index out of range")),
+            },
+            None => {
+                let provider = self.provider.clone();
+                self.call_with(messages, provider.as_ref(), self.effective_model())
+                    .await
+            }
+        }
+    }
+
+    /// Advance through the fallback chain after a failed model call
+    /// (hermes `try_activate_fallback`). The first fallback that answers
+    /// becomes the active runtime for the rest of this turn.
+    async fn failover(
+        &self,
+        messages: &[Message],
+        from_index: Option<usize>,
+        mut error: AgentError,
+    ) -> Result<crate::provider::ProviderResponse> {
+        let start = from_index.map(|i| i + 1).unwrap_or(0);
+        for index in start..self.fallback_chain.len() {
+            let entry = &self.fallback_chain[index];
+            tracing::warn!(
+                "provider call failed ({}); trying fallback {} ({})",
+                error,
+                index + 1,
+                entry.label()
+            );
+            let provider = match entry
+                .provider
+                .get_or_try_init(|| self.build_fallback_provider(entry))
+                .await
+            {
+                Ok(provider) => provider.clone(),
+                Err(build_error) => {
+                    tracing::warn!("fallback {} unavailable: {}", entry.label(), build_error);
+                    error = build_error;
+                    continue;
+                }
+            };
+            match self
+                .call_with(messages, provider.as_ref(), entry.model.clone())
+                .await
+            {
+                Ok(response) => {
+                    *self.fallback_active.lock().await = Some(index);
+                    return Ok(response);
+                }
+                Err(next_error) => error = next_error,
+            }
+        }
+        Err(error)
+    }
+
+    /// One model call against an explicit provider + model (streaming when
+    /// a stream consumer is attached and the provider supports it).
+    async fn call_with(
+        &self,
+        messages: &[Message],
+        provider: &dyn Provider,
+        model: String,
+    ) -> Result<crate::provider::ProviderResponse> {
         let tools = self.tools.lock().await;
         let tool_definitions = tools.definitions();
 
         let request = ProviderRequest {
             messages: messages.to_vec(),
             tools: tool_definitions,
-            model: self.effective_model(),
+            model,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             stream: STREAM_EMITTER.try_with(|_| ()).is_ok(),
@@ -539,14 +746,14 @@ impl Agent {
 
         // Non-streaming path (no active stream consumer, or provider
         // doesn't support streaming).
-        if !request.stream || !self.provider.supports_streaming() {
-            return self.provider.chat_completion(request).await;
+        if !request.stream || !provider.supports_streaming() {
+            return provider.chat_completion(request).await;
         }
 
         // Streaming path: accumulate chunks into a ProviderResponse while
         // emitting content deltas to the stream consumer.
         use futures::TryStreamExt;
-        let mut stream = self.provider.chat_completion_stream(request).await?;
+        let mut stream = provider.chat_completion_stream(request).await?;
         let mut content = String::new();
         let mut reasoning = String::new();
         let mut tool_deltas: Vec<crate::provider::ToolCallDelta> = Vec::new();
@@ -585,7 +792,7 @@ impl Agent {
             content: if content.is_empty() { None } else { Some(content) },
             tool_calls,
             usage,
-            model: model.unwrap_or_else(|| self.provider.model().to_string()),
+            model: model.unwrap_or_else(|| provider.model().to_string()),
             reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
             finish_reason,
         })
@@ -788,7 +995,12 @@ impl SubAgentRunner for Agent {
             context: Arc::new(child_context),
             store: None,
             depth: self.depth + 1,
+            fallback_chain: Vec::new(),
+            fallback_specs: Vec::new(),
+            fallback_active: tokio::sync::Mutex::new(None),
         };
+        // Children inherit the fallback chain configuration.
+        let child = child.with_fallback_specs(&self.fallback_specs());
 
         let prompt = if context.is_empty() {
             goal.to_string()
@@ -852,7 +1064,11 @@ impl CronRunner for Agent {
             context: self.context.clone(),
             store: self.store.clone(),
             depth: self.depth,
+            fallback_chain: Vec::new(),
+            fallback_specs: Vec::new(),
+            fallback_active: tokio::sync::Mutex::new(None),
         };
+        let cron_agent = cron_agent.with_fallback_specs(&self.fallback_specs());
         let result = cron_agent.run(&full_prompt, None).await?;
         Ok(result.content)
     }
@@ -881,6 +1097,116 @@ pub fn strip_thinking_blocks(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn test_parse_fallback_spec() {
+        assert_eq!(
+            parse_fallback_spec("openai:gpt-5.2"),
+            Some(("openai".into(), "gpt-5.2".into()))
+        );
+        // Models may contain ':' (ollama tags).
+        assert_eq!(
+            parse_fallback_spec("ollama:qwen3:1.7b"),
+            Some(("ollama".into(), "qwen3:1.7b".into()))
+        );
+        assert_eq!(parse_fallback_spec("openai"), None);
+        assert_eq!(parse_fallback_spec(":model"), None);
+        assert_eq!(parse_fallback_spec("provider:"), None);
+    }
+
+    struct CountingProvider {
+        reply: Option<String>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for CountingProvider {
+        async fn chat_completion(
+            &self,
+            _request: crate::provider::ProviderRequest,
+        ) -> Result<crate::provider::ProviderResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match &self.reply {
+                Some(text) => Ok(crate::provider::ProviderResponse {
+                    content: Some(text.clone()),
+                    tool_calls: vec![],
+                    usage: None,
+                    model: "counting".into(),
+                    reasoning: None,
+                    finish_reason: Some("stop".into()),
+                }),
+                None => Err(AgentError::provider("primary down")),
+            }
+        }
+        fn model(&self) -> &str {
+            "counting-model"
+        }
+        fn name(&self) -> &str {
+            "counting"
+        }
+    }
+
+    fn counting(reply: Option<&str>) -> (Arc<CountingProvider>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = Arc::new(CountingProvider {
+            reply: reply.map(str::to_string),
+            calls: calls.clone(),
+        });
+        (provider, calls)
+    }
+
+    #[tokio::test]
+    async fn fallback_activates_and_restores_per_turn() {
+        let (primary, primary_calls) = counting(None);
+        let (fallback, fallback_calls) = counting(Some("from-fallback"));
+        let agent = Agent::new(primary.clone(), ToolRegistry::new())
+            .with_fallback_providers(vec![("openai:backup-model".into(), fallback.clone())]);
+        let mut config = AgentConfig::default();
+        config.persist = false;
+        let agent = agent.with_config(config);
+
+        let result = agent.run("hello", None).await.expect("run via fallback");
+        assert_eq!(result.content, "from-fallback");
+        assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+
+        // Next turn restores the primary first (which fails again) and
+        // falls back again.
+        let result = agent.run("again", None).await.expect("second run");
+        assert_eq!(result.content, "from-fallback");
+        assert_eq!(primary_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn exhausted_chain_surfaces_last_error() {
+        let (primary, _) = counting(None);
+        let (fallback, _) = counting(None);
+        let agent = Agent::new(primary.clone(), ToolRegistry::new())
+            .with_fallback_providers(vec![("openai:backup".into(), fallback.clone())]);
+        let mut config = AgentConfig::default();
+        config.persist = false;
+        let agent = agent.with_config(config);
+        let error = agent.run("hello", None).await.err().expect("all fail");
+        assert!(error.to_string().contains("primary down"));
+    }
+
+    #[tokio::test]
+    async fn chain_skips_broken_entries() {
+        let (primary, _) = counting(None);
+        let (broken, _) = counting(None);
+        let (working, _) = counting(Some("third-time"));
+        let agent = Agent::new(primary.clone(), ToolRegistry::new()).with_fallback_providers(vec![
+            ("openai:broken".into(), broken.clone()),
+            ("ollama:working".into(), working.clone()),
+        ]);
+        let mut config = AgentConfig::default();
+        config.persist = false;
+        let agent = agent.with_config(config);
+        let result = agent.run("hello", None).await.expect("third entry answers");
+        assert_eq!(result.content, "third-time");
+    }
 
     #[test]
     fn test_strip_thinking() {

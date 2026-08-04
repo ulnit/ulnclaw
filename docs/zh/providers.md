@@ -14,6 +14,7 @@ ulnclaw 提供商抽象和实现的完整指南。
 - [最佳实践](#最佳实践)
 - [辅助模型路由](#辅助模型路由)
 - [混合智能体（MoA）](#混合智能体moa)
+- [Provider 回退链](#provider-回退链)
 
 ## 概述
 
@@ -761,6 +762,36 @@ ulnclaw moa delete other              # 删除预设（回写配置）
 
 未移植：持久 `provider: moa` 客户端门面（整会话以 MoA 为执行模型）、
 MoA trace 与隐私过滤。
+
+## Provider 回退链
+
+`[model] fallbacks` 列出模型调用失败时按序尝试的备用 `"provider:model"`
+条目——移植自 hermes 的 `fallback_providers` 链
+（`try_activate_fallback` + `restore_primary_runtime`）：
+
+```toml
+[model]
+provider = "openai"
+model = "gpt-5.2"
+max_retries = 1                 # 先按 provider 自身重试
+fallbacks = [
+  "openai:gpt-5.2-mini",        # 同 provider 的廉价模型
+  "ollama:qwen3:32b",           # 本地兜底（免密钥）
+]
+```
+
+语义：
+
+- 主 provider 先执行自身重试（`max_retries`、指数退避）；调用确实失败后
+  才推进回退链。
+- 每个条目首次使用时惰性构建：按 provider 名选择 OpenAI 兼容或 Anthropic
+  传输，端点取 provider 默认值（或 `OPENAI_BASE_URL`），密钥回退主运行时
+  密钥（本地 provider 免密钥）。
+- 首个应答的回退在本轮剩余时间内保持激活；下一轮恢复主 provider
+  （按轮恢复，与 hermes 一致）。
+- 畸形配置（如缺模型的 `"provider"`）跳过并告警；模型名可含 `:`
+  （`ollama:qwen3:1.7b`）。
+- 委派子代理与 cron 运行继承已配置的回退链。
 
 ## 故障排除
 

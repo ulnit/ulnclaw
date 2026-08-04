@@ -45,6 +45,7 @@ performance and a single static binary.
 | Toolsets (`toolsets.py`) | ✅ | all 33 toolset definitions incl. composition (`includes`), `coding` default |
 | Tool registry (`registry.py`) | ✅ | check_fn gating, toolset grouping, max result size truncation |
 | Provider abstraction (`runtime_provider.py`) | ✅ | OpenAI-compatible (OpenAI/OpenRouter/DashScope/Ollama/llama.cpp), native Anthropic Messages transport (`anthropic_messages`: system param, tool_use/tool_result blocks, SSE streaming, max_tokens ceilings, OAuth bearer), keyless local providers |
+| Provider fallback chain (`fallback_providers`, `try_activate_fallback`) | ✅ core | `[model] fallbacks = ["provider:model", ...]`: on a failed model call the chain advances (lazy per-entry clients, credential fallback to the main key), the activated fallback stays live for the turn, and the next turn restores the primary (hermes `restore_primary_runtime`); delegated/cron children inherit the specs |
 | Auxiliary model routing (`auxiliary_client.py`) | ✅ core | `[auxiliary.<task>]` per-task provider/model/base_url/api_key/key_env overrides (`compression`, `vision`); `"auto"`/blank inherits the main runtime; main client reused when nothing is overridden |
 | Config (`config.yaml`) | ✅ | `config.toml` + `.env` file, profiles, env precedence |
 | Skills system | ✅ | discovery, frontmatter, linked files |
