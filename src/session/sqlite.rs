@@ -506,6 +506,19 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Lock a session to a specific model (gateway model-lock API). The
+    /// locked model is inherited by forks (via the `model` column) and
+    /// survives `ensure_session` resumes.
+    pub fn set_session_model(&self, session_id: &str, model: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "UPDATE sessions SET model = ?2 WHERE id = ?1",
+            params![session_id, model],
+        )
+        .map_err(|e| AgentError::session(e.to_string()))?;
+        Ok(())
+    }
+
     /// Set/get state metadata.
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;

@@ -1017,6 +1017,7 @@ Binds and serves until interrupted.
 | GET | `/health`, `/v1/health` | no | Liveness probe |
 | GET | `/health/detailed` | no | Rich status (model, provider, auth, runs) |
 | GET | `/v1/models` | yes | Advertised model list |
+| GET | `/api/model/options` | yes | Provider/model inventory for pickers (configured provider row) |
 | GET | `/v1/capabilities` | yes | Machine-readable endpoint catalog |
 | POST | `/v1/chat/completions` | yes | OpenAI Chat Completions; session continuity via `X-Ulnclaw-Session-Id` (also accepts `X-Hermes-Session-Id`); id echoed back in the response header; `stream: true` → SSE `chat.completion.chunk` |
 | POST | `/v1/responses` | yes | OpenAI Responses format; `input` string or message array; chain turns with `previous_response_id`; `stream: true` → Responses-API SSE events |
@@ -1026,6 +1027,7 @@ Binds and serves until interrupted.
 | POST | `/api/sessions` | yes | Create an empty session |
 | GET | `/api/sessions/:id` | yes | Session row |
 | PATCH | `/api/sessions/:id` | yes | Update `title` and/or `end_reason` (unknown fields → 400) |
+| POST | `/api/sessions/:id/model` | yes | Lock the session to a model (`{"model": "...", "provider": "..."}`) |
 | DELETE | `/api/sessions/:id` | yes | Hard delete (messages + FTS entries) |
 | POST | `/api/sessions/:id/fork` | yes | Branch a session → `201` child session (transcript copied, source marked `branched`) |
 | GET | `/api/sessions/:id/messages` | yes | Message history |
@@ -1168,6 +1170,31 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
 Fork accepts an optional `id`/`session_id` (default: generated
 `api_<ts>_<rand>`) and `title` (default: `"<source title> fork"`).  Existing
 target id → `409 session_exists`; ids containing newline/NUL → `400`.
+
+**Session model lock** (`POST /api/sessions/:id/model`, hermes
+`_handle_session_model_lock` parity):
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"model":"llama3.1:8b","provider":"ollama"}' \
+     http://127.0.0.1:8642/api/sessions/$SID/model
+# {"object":"ulnclaw.session.model_lock","session_id":"...",
+#  "runtime":{"provider":"ollama","model":"llama3.1:8b",
+#             "route_source":"api_request","model_lock":"accepted"}}
+```
+
+The lock is persisted on the session row and **enforced**: every later turn
+of that session (session chat, chat completions with the session header,
+responses chaining, runs, streaming variants) sends the locked model to the
+provider via a per-task model override.  Locking back to the gateway's
+configured model clears the override.  Forks inherit the lock.  Missing
+`model` → `400 model_required`.
+
+**Model options** (`GET /api/model/options`): picker inventory in hermes'
+`{providers, model, provider}` shape.  ulnclaw runs one configured
+provider, so the inventory is that single row (`slug`, `models`,
+`is_user_defined`, `authenticated`, `current`); live catalog probing,
+pricing, and capability enrichment are not ported.
 
 **Discovery endpoints**: `GET /v1/skills` returns
 `{"object":"list","data":[{name, description, category, path}]}` from the

@@ -271,7 +271,7 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 
 **端点：**
 - `GET /health`、`/health/detailed`、`/v1/health`（始终开放）
-- `GET /v1/models`、`GET /v1/capabilities`
+- `GET /v1/models`、`GET /api/model/options`、`GET /v1/capabilities`
 - `POST /v1/chat/completions` - OpenAI 格式；经 `X-Ulnclaw-Session-Id`
   可选会话续接（从 SQLite 加载历史，并通过 `Agent::run_with_session`
   续用同一会话 id）；`stream: true` 返回 SSE `chat.completion.chunk`
@@ -281,6 +281,8 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 - `GET/POST /api/sessions`、`GET/DELETE /api/sessions/:id`、
   `PATCH /api/sessions/:id`（title/end_reason）、
   `POST /api/sessions/:id/fork`（分叉为子会话）、
+  `POST /api/sessions/:id/model`（会话级模型锁，经 task-local provider
+  模型覆盖在每一轮生效）、
   `GET /api/sessions/:id/messages`、`POST /api/sessions/:id/chat`、
   `POST /api/sessions/:id/chat/stream`（SSE）
 - `GET/POST /api/jobs`、`GET/PATCH/DELETE /api/jobs/:id`、

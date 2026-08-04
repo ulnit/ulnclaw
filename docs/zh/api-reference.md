@@ -1016,6 +1016,7 @@ axum 路由表（供 `serve` 与测试使用）。
 | GET | `/health`、`/v1/health` | 否 | 存活探测 |
 | GET | `/health/detailed` | 否 | 详细状态（模型、provider、鉴权、runs） |
 | GET | `/v1/models` | 是 | 对外模型列表 |
+| GET | `/api/model/options` | 是 | 供选择器使用的 provider/模型清单（已配置的 provider 行） |
 | GET | `/v1/capabilities` | 是 | 机器可读的端点目录 |
 | POST | `/v1/chat/completions` | 是 | OpenAI Chat Completions；经 `X-Ulnclaw-Session-Id` 会话续接（兼容 `X-Hermes-Session-Id`）；id 回显于响应头；`stream: true` → SSE `chat.completion.chunk` |
 | POST | `/v1/responses` | 是 | OpenAI Responses 格式；`input` 为字符串或消息数组；经 `previous_response_id` 链式续接；`stream: true` → Responses-API SSE 事件 |
@@ -1025,6 +1026,7 @@ axum 路由表（供 `serve` 与测试使用）。
 | POST | `/api/sessions` | 是 | 创建空会话 |
 | GET | `/api/sessions/:id` | 是 | 会话行 |
 | PATCH | `/api/sessions/:id` | 是 | 更新 `title` 和/或 `end_reason`（未知字段 → 400） |
+| POST | `/api/sessions/:id/model` | 是 | 将会话锁定到指定模型（`{"model": "...", "provider": "..."}`） |
 | DELETE | `/api/sessions/:id` | 是 | 硬删除（消息 + FTS 条目） |
 | POST | `/api/sessions/:id/fork` | 是 | 分叉会话 → `201` 子会话（转录复制，源会话标记 `branched`） |
 | GET | `/api/sessions/:id/messages` | 是 | 消息历史 |
@@ -1161,6 +1163,29 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
 fork 可传 `id`/`session_id`（缺省生成 `api_<ts>_<rand>`）与 `title`
 （缺省 `"<源标题> fork"`）。目标 id 已存在 → `409 session_exists`；
 含换行/NUL 的 id → `400`。
+
+**会话模型锁**（`POST /api/sessions/:id/model`，对标 hermes
+`_handle_session_model_lock`）：
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"model":"llama3.1:8b","provider":"ollama"}' \
+     http://127.0.0.1:8642/api/sessions/$SID/model
+# {"object":"ulnclaw.session.model_lock","session_id":"...",
+#  "runtime":{"provider":"ollama","model":"llama3.1:8b",
+#             "route_source":"api_request","model_lock":"accepted"}}
+```
+
+锁定持久化在会话行上并且**实际生效**：该会话之后的每一轮（会话聊天、
+带会话头的 chat completions、responses 链式续接、runs、流式变体）都会
+通过 per-task 模型覆盖把锁定模型发给 provider。重新锁定回网关配置的
+模型即清除覆盖。fork 继承锁定。缺少 `model` → `400 model_required`。
+
+**模型清单**（`GET /api/model/options`）：以 hermes 的
+`{providers, model, provider}` 形状返回选择器清单。ulnclaw 只运行一个
+已配置的 provider，因此清单就是这一行（`slug`、`models`、
+`is_user_defined`、`authenticated`、`current`）；在线目录探测、定价与
+能力富化未移植。
 
 **发现端点**：`GET /v1/skills` 返回
 `{"object":"list","data":[{name, description, category, path}]}`，

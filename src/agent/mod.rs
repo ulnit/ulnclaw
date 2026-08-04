@@ -37,6 +37,7 @@ pub enum StreamEvent {
 
 tokio::task_local! {
     static STREAM_EMITTER: Arc<dyn Fn(StreamEvent) + Send + Sync>;
+    static MODEL_OVERRIDE: String;
 }
 
 /// Emit an event to the active stream consumer, if any (task-local scope
@@ -55,6 +56,21 @@ pub fn stream_scope<F: std::future::Future>(
     STREAM_EMITTER.scope(emitter, future)
 }
 
+/// The active per-task model override, if any (installed by
+/// `model_override_scope` for session model locks).
+pub fn current_model_override() -> Option<String> {
+    MODEL_OVERRIDE.try_with(|m| m.clone()).ok()
+}
+
+/// Run a future with a per-task provider model override in effect — all
+/// provider calls and session-row model stamps inside `future` use `model`
+/// instead of the agent's configured model (session model-lock support).
+pub fn model_override_scope<F: std::future::Future>(
+    model: String,
+    future: F,
+) -> tokio::task::futures::TaskLocalFuture<String, F> {
+    MODEL_OVERRIDE.scope(model, future)
+}
 /// Agent configuration
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -227,6 +243,14 @@ impl Agent {
         self.tools.try_lock().map(|r| r.names()).unwrap_or_default()
     }
 
+    /// The model used for provider calls: per-task override (session model
+    /// lock) → configured model → the provider's default.
+    fn effective_model(&self) -> String {
+        current_model_override()
+            .or_else(|| self.config.model.clone())
+            .unwrap_or_else(|| self.provider.model().to_string())
+    }
+
     /// Wire this agent as its own delegation + cron runner. Call once after
     /// wrapping the agent in an Arc.
     pub fn wire_runners(self: &Arc<Self>) {
@@ -302,11 +326,7 @@ impl Agent {
         let resuming = resume_session_id.is_some();
         let session_id = if self.config.persist {
             if let Some(ref store) = self.store {
-                let model = self
-                    .config
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| self.provider.model().to_string());
+                let model = self.effective_model();
                 if let Some(sid) = resume_session_id {
                     if let Err(e) = store.ensure_session(
                         sid,
@@ -487,11 +507,7 @@ impl Agent {
         let request = ProviderRequest {
             messages: messages.to_vec(),
             tools: tool_definitions,
-            model: self
-                .config
-                .model
-                .clone()
-                .unwrap_or_else(|| self.provider.model().to_string()),
+            model: self.effective_model(),
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             stream: STREAM_EMITTER.try_with(|_| ()).is_ok(),

@@ -2,7 +2,7 @@
 //!
 //! Minimal Rust port of hermes' `gateway/platforms/api_server.py`:
 //!   - `GET  /health`, `GET /health/detailed` — probes (always unauthenticated)
-//!   - `GET  /v1/models`, `GET /v1/capabilities`
+//!   - `GET  /v1/models`, `GET /api/model/options`, `GET /v1/capabilities`
 //!   - `POST /v1/chat/completions` — OpenAI Chat Completions format; opt-in
 //!     session continuity via the `X-Ulnclaw-Session-Id` header;
 //!     `stream: true` returns SSE `chat.completion.chunk` events
@@ -11,6 +11,7 @@
 //!     `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`
 //!   - `PATCH /api/sessions/:id` — update title / end_reason
 //!   - `POST /api/sessions/:id/fork` — branch a session into a child
+//!   - `POST /api/sessions/:id/model` — lock a session to a model
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
 //!     `POST /v1/runs/:id/stop`
 //!   - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/{id}`,
@@ -347,6 +348,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/health/detailed", get(health_detailed))
         .route("/v1/health", get(health))
         .route("/v1/models", get(models))
+        .route("/api/model/options", get(model_options))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(create_response))
@@ -363,6 +365,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/messages", get(session_messages))
         .route("/api/sessions/:id/chat", post(session_chat))
         .route("/api/sessions/:id/chat/stream", post(session_chat_stream))
+        .route("/api/sessions/:id/model", post(lock_session_model))
         .route("/api/jobs", get(list_jobs).post(create_job))
         .route(
             "/api/jobs/:id",
@@ -490,6 +493,91 @@ async fn models(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     }))
 }
 
+/// `GET /api/model/options` — provider/model inventory for pickers
+/// (hermes `_handle_model_options`). ulnclaw runs one configured
+/// provider, so the inventory is the configured row (no live catalog
+/// probing or pricing enrichment).
+async fn model_options(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    Json(json!({
+        "providers": [{
+            "slug": state.provider_name,
+            "models": [state.model_name],
+            "total_models": 1,
+            "is_user_defined": true,
+            "authenticated": true,
+            "current": true,
+        }],
+        "model": state.model_name,
+        "provider": state.provider_name,
+    }))
+}
+
+/// The model a session is locked to, when it differs from the gateway's
+/// configured model (session rows stamp the configured model at creation).
+fn session_model_override(state: &GatewayState, session_id: &str) -> Option<String> {
+    let row = state.store.get_session_row(session_id).ok().flatten()?;
+    let model = row.model.filter(|m| !m.is_empty())?;
+    if model == state.model_name {
+        None
+    } else {
+        Some(model)
+    }
+}
+
+/// `POST /api/sessions/:id/model` — acknowledge + persist a session model
+/// lock (hermes `_handle_session_model_lock`). The lock is enforced on
+/// every subsequent turn of this session via a per-task model override.
+async fn lock_session_model(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.store.get_session_row(&id) {
+        Ok(None) => return not_found(&format!("session {} not found", id)),
+        Err(e) => return server_error(&e.to_string()),
+        Ok(Some(_)) => {}
+    }
+    let model = body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let Some(model) = model else {
+        return bad_request("model is required", Some("model_required"));
+    };
+    let provider = body
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| state.provider_name.clone());
+    if let Err(e) = state.store.set_session_model(&id, &model) {
+        return server_error(&e.to_string());
+    }
+    Json(json!({
+        "object": "ulnclaw.session.model_lock",
+        "session_id": id,
+        "runtime": {
+            "provider": provider,
+            "model": model,
+            "route_source": "api_request",
+            "model_lock": "accepted",
+        },
+    }))
+    .into_response()
+}
+/// Await an agent future with the session's model lock (if any) installed
+/// as a per-task override.
+async fn await_with_model_override<F, T>(override_model: Option<String>, future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    match override_model {
+        Some(model) => crate::agent::model_override_scope(model, future).await,
+        None => future.await,
+    }
+}
+
 async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     Json(json!({
         "service": "ulnclaw-gateway",
@@ -508,6 +596,8 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "jobs": true,
             "skills": true,
             "toolsets": true,
+            "model_options": true,
+            "session_model_lock": true,
             "streaming": true,
         },
     }))
@@ -632,11 +722,15 @@ async fn chat_completions(
     if request.stream {
         return stream_agent_response(state, prompt, history_arg, session_id);
     }
-    match state
-        .agent
-        .run_with_session(&prompt, history_arg, session_id.as_deref())
-        .await
-    {
+    let override_model = session_id
+        .as_deref()
+        .and_then(|sid| session_model_override(&state, sid));
+    let outcome = await_with_model_override(
+        override_model,
+        state.agent.run_with_session(&prompt, history_arg, session_id.as_deref()),
+    )
+    .await;
+    match outcome {
         Ok(result) => {
             let mut response = Json(json!({
                 "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -719,9 +813,18 @@ fn stream_agent_response(
 
     let runner = state.agent.clone();
     let run_session_id = session_id.clone();
+    let override_model = session_id
+        .as_deref()
+        .and_then(|sid| session_model_override(&state, sid));
     let task = tokio::spawn(crate::agent::stream_scope(
         emitter,
-        async move { runner.run_with_session(&prompt, history, run_session_id.as_deref()).await },
+        async move {
+            await_with_model_override(
+                override_model,
+                runner.run_with_session(&prompt, history, run_session_id.as_deref()),
+            )
+            .await
+        },
     ));
 
     let sse_state = SseState {
@@ -971,9 +1074,18 @@ fn stream_responses_response(
 
     let runner = state.agent.clone();
     let run_session_id = session_id.clone();
+    let override_model = session_id
+        .as_deref()
+        .and_then(|sid| session_model_override(&state, sid));
     let task = tokio::spawn(crate::agent::stream_scope(
         emitter,
-        async move { runner.run_with_session(&prompt, history, run_session_id.as_deref()).await },
+        async move {
+            await_with_model_override(
+                override_model,
+                runner.run_with_session(&prompt, history, run_session_id.as_deref()),
+            )
+            .await
+        },
     ));
 
     let gateway_state = state.clone();
@@ -1267,11 +1379,15 @@ async fn create_response(
         );
     }
 
-    match state
-        .agent
-        .run_with_session(&prompt, history, session_id.as_deref())
-        .await
-    {
+    let override_model = session_id
+        .as_deref()
+        .and_then(|sid| session_model_override(&state, sid));
+    let outcome = await_with_model_override(
+        override_model,
+        state.agent.run_with_session(&prompt, history, session_id.as_deref()),
+    )
+    .await;
+    match outcome {
         Ok(result) => {
             let response_id = format!("resp_{}", uuid::Uuid::new_v4());
             let body = json!({
@@ -1412,11 +1528,13 @@ async fn session_chat(
         .filter(|m| m.role != Role::System)
         .collect::<Vec<_>>();
     let history_arg = if history.is_empty() { None } else { Some(history) };
-    match state
-        .agent
-        .run_with_session(&request.message, history_arg, Some(&id))
-        .await
-    {
+    let override_model = session_model_override(&state, &id);
+    let outcome = await_with_model_override(
+        override_model,
+        state.agent.run_with_session(&request.message, history_arg, Some(&id)),
+    )
+    .await;
+    match outcome {
         Ok(result) => Json(json!({
             "session_id": id,
             "response": result.content,
@@ -2107,10 +2225,12 @@ fn spawn_tracked_run(state: Arc<GatewayState>, run_id: String, session_id: Strin
             .filter(|m| m.role != Role::System)
             .collect::<Vec<_>>();
         let history = if history.is_empty() { None } else { Some(history) };
-        let outcome = runner
-            .agent
-            .run_with_session(&message, history, Some(session_id.as_str()))
-            .await;
+        let override_model = session_model_override(&runner, &session_id);
+        let outcome = await_with_model_override(
+            override_model,
+            runner.agent.run_with_session(&message, history, Some(session_id.as_str())),
+        )
+        .await;
         let mut runs = runner.runs.lock().await;
         if let Some(run) = runs.get_mut(&spawn_run_id) {
             match outcome {
@@ -3123,5 +3243,87 @@ mod tests {
         for flag in ["jobs", "skills", "toolsets", "session_fork", "session_patch"] {
             assert_eq!(body["endpoints"][flag], true, "missing capability {}", flag);
         }
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_lists_phase10_endpoints() {
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/v1/capabilities", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        for flag in ["model_options", "session_model_lock"] {
+            assert_eq!(body["endpoints"][flag], true, "missing capability {}", flag);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_model_options_inventory() {
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/model/options", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["provider"], "test");
+        let providers = body["providers"].as_array().unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0]["slug"], "test");
+        assert_eq!(providers[0]["models"][0], "test-model");
+        assert_eq!(providers[0]["current"], true);
+    }
+
+    #[tokio::test]
+    async fn test_session_model_lock() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let id = state.store.create_session("gateway", Some("test-model"), None).unwrap();
+
+        // Missing model → 400.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/sessions/{}/model", id), Some(token),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "model_required");
+
+        // Lock to another model → acknowledged + persisted.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/sessions/{}/model", id), Some(token),
+            json!({"model": "other-model", "provider": "test"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["object"], "ulnclaw.session.model_lock");
+        assert_eq!(body["runtime"]["model"], "other-model");
+        assert_eq!(body["runtime"]["model_lock"], "accepted");
+        let row = state.store.get_session_row(&id).unwrap().unwrap();
+        assert_eq!(row.model.as_deref(), Some("other-model"));
+
+        // The override is detected for locked sessions only.
+        assert_eq!(session_model_override(&state, &id), Some("other-model".into()));
+
+        // Locking back to the gateway model clears the override.
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/sessions/{}/model", id), Some(token),
+            json!({"model": "test-model"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(session_model_override(&state, &id), None);
+
+        // Unknown session → 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/sessions/ghost/model", Some(token),
+            json!({"model": "m"}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_model_override_scope_task_local() {
+        assert_eq!(crate::agent::current_model_override(), None);
+        let inside = crate::agent::model_override_scope("locked".into(), async {
+            crate::agent::current_model_override()
+        })
+        .await;
+        assert_eq!(inside.as_deref(), Some("locked"));
+        assert_eq!(crate::agent::current_model_override(), None);
     }
 }

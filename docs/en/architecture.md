@@ -246,7 +246,7 @@ a port of hermes' `gateway/platforms/api_server.py` core.
 
 **Endpoints:**
 - `GET /health`, `/health/detailed`, `/v1/health` (always open)
-- `GET /v1/models`, `GET /v1/capabilities`
+- `GET /v1/models`, `GET /api/model/options`, `GET /v1/capabilities`
 - `POST /v1/chat/completions` - OpenAI format; opt-in session continuity
   via `X-Ulnclaw-Session-Id` (history loaded from the SQLite store and the
   same session id resumed via `Agent::run_with_session`); `stream: true`
@@ -257,6 +257,8 @@ a port of hermes' `gateway/platforms/api_server.py` core.
 - `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`,
   `PATCH /api/sessions/:id` (title/end_reason),
   `POST /api/sessions/:id/fork` (branch into a child session),
+  `POST /api/sessions/:id/model` (per-session model lock, enforced via a
+  task-local provider model override on every turn),
   `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`,
   `POST /api/sessions/:id/chat/stream` (SSE)
 - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/:id`,
