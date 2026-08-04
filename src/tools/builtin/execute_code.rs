@@ -97,8 +97,8 @@ async fn run_python(ctx: &Arc<ToolContext>, code: &str) -> Result<serde_json::Va
 
     match output {
         Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let stdout = crate::ansi::strip_ansi(&String::from_utf8_lossy(&output.stdout)).into_owned();
+            let stderr = crate::ansi::strip_ansi(&String::from_utf8_lossy(&output.stderr)).into_owned();
             Ok(json!({
                 "success": output.status.success(),
                 "exit_code": output.status.code().unwrap_or(-1),

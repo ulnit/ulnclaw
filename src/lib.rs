@@ -73,6 +73,7 @@
 //! ```
 
 pub mod agent;
+pub mod ansi;
 pub mod browser;
 pub mod checkpoint;
 pub mod config;

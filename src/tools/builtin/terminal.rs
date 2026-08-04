@@ -300,6 +300,9 @@ async fn terminal_exec(
                 format!("{}\n[stderr]\n{}", stdout, stderr)
             };
             let exit_code = status.code().unwrap_or(-1);
+            // hermes strips ANSI before output reaches the model so escape
+            // sequences never leak into context (tools/ansi_strip.py).
+            let combined = crate::ansi::strip_ansi(&combined);
             let output = truncate_output(combined.trim_end());
             let mut result = json!({
                 "success": status.success(),
@@ -490,6 +493,7 @@ fn process_tool() -> crate::tools::Tool {
                         "log" => {
                             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
                             let output = proc.output.lock().map(|g| g.clone()).unwrap_or_default();
+                            let output = crate::ansi::strip_ansi(&output).into_owned();
                             let lines: Vec<&str> = output.lines().collect();
                             let tail: Vec<&str> = lines.iter().rev().take(limit).cloned().collect::<Vec<_>>().into_iter().rev().collect();
                             let running = proc.exit_code.lock().map(|g| g.is_none()).unwrap_or(false);
@@ -508,6 +512,7 @@ fn process_tool() -> crate::tools::Tool {
                                 if let Ok(guard) = proc.exit_code.lock() {
                                     if let Some(code) = *guard {
                                         let output = proc.output.lock().map(|g| g.clone()).unwrap_or_default();
+                                        let output = crate::ansi::strip_ansi(&output);
                                         return Ok(json!({
                                             "success": true,
                                             "session_id": session_id,
@@ -625,5 +630,23 @@ mod tests {
         assert_eq!(result["exit_code"], json!(127));
         let hint = result["hint"].as_str().expect("hint present");
         assert!(hint.contains("ulnclaw-no-such-cmd-xyz"), "got: {hint}");
+    }
+
+    #[tokio::test]
+    async fn test_output_is_ansi_stripped() {
+        let ctx = Arc::new(ToolContext::new());
+        let result = terminal_exec(
+            ctx,
+            "printf '\\033[31mred\\033[0m plain'".into(),
+            false,
+            10,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["success"], json!(true));
+        let output = result["output"].as_str().unwrap();
+        assert_eq!(output, "red plain");
     }
 }
