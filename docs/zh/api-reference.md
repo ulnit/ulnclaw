@@ -954,6 +954,8 @@ ssh_identity = "~/.ssh/id_ed25519"
 #### `async status(&self) -> StoreStatus` / `async prune(&self, retention_days: u64, delete_orphans: bool) -> PruneStats` / `async maybe_auto_prune(&self)`
 
 CLI：`ulnclaw checkpoints list [dir] | status | restore <hash> [file] [--dir D] | diff <hash> [--dir D] | prune [--days N]`。
+REPL：`/rollback`（列表）、`/rollback <N|hash> [file]`（恢复）、
+`/rollback diff <N|hash>`（预览）、`/diff [session|N|hash]`。
 
 配置（`config.toml`）：
 

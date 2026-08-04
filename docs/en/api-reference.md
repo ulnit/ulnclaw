@@ -951,6 +951,8 @@ Diff the working tree against a checkpoint / against the earliest retained check
 #### `async status(&self) -> StoreStatus` / `async prune(&self, retention_days: u64, delete_orphans: bool) -> PruneStats` / `async maybe_auto_prune(&self)`
 
 CLI: `ulnclaw checkpoints list [dir] | status | restore <hash> [file] [--dir D] | diff <hash> [--dir D] | prune [--days N]`.
+REPL: `/rollback` (list), `/rollback <N|hash> [file]` (restore),
+`/rollback diff <N|hash>` (preview), `/diff [session|N|hash]`.
 
 Config (`config.toml`):
 

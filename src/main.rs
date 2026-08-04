@@ -463,7 +463,7 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /quit           exit"
             );
         }
         "/history" => {
@@ -521,9 +521,102 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
                 }
             }
         }
+        "/rollback" => {
+            let context = agent.tool_context();
+            let manager = context.checkpoint_manager();
+            let dir_str = context.cwd().to_string_lossy().to_string();
+            let mut sub = rest.splitn(2, ' ');
+            let first = sub.next().unwrap_or("").trim();
+            let second = sub.next().unwrap_or("").trim();
+            let checkpoints = manager.list_checkpoints(&dir_str).await;
+            if first.is_empty() {
+                println!(
+                    "{}",
+                    ulnclaw::checkpoint::format_checkpoint_list(&checkpoints, &dir_str)
+                );
+            } else if first == "diff" {
+                match resolve_checkpoint(&checkpoints, second) {
+                    Some(hash) => match manager.diff(&dir_str, &hash).await {
+                        Ok(result) => print_diff_result(&result),
+                        Err(e) => println!("diff failed: {}", e),
+                    },
+                    None => println!("no such checkpoint: {}", second),
+                }
+            } else {
+                match resolve_checkpoint(&checkpoints, first) {
+                    Some(hash) => {
+                        let file = if second.is_empty() { None } else { Some(second) };
+                        match manager.restore(&dir_str, &hash, file).await {
+                            Ok(result) => println!(
+                                "✅ Restored to {} ({})",
+                                result["restored_to"].as_str().unwrap_or("?"),
+                                result["reason"].as_str().unwrap_or("?")
+                            ),
+                            Err(e) => println!("restore failed: {}", e),
+                        }
+                    }
+                    None => println!("no such checkpoint: {}", first),
+                }
+            }
+        }
+        "/diff" => {
+            let context = agent.tool_context();
+            let manager = context.checkpoint_manager();
+            let dir_str = context.cwd().to_string_lossy().to_string();
+            if rest.is_empty() || rest == "session" {
+                print_diff_result(&manager.session_diff(&dir_str).await);
+            } else {
+                let checkpoints = manager.list_checkpoints(&dir_str).await;
+                match resolve_checkpoint(&checkpoints, rest) {
+                    Some(hash) => match manager.diff(&dir_str, &hash).await {
+                        Ok(result) => print_diff_result(&result),
+                        Err(e) => println!("diff failed: {}", e),
+                    },
+                    None => println!("no such checkpoint: {}", rest),
+                }
+            }
+        }
         other => println!("unknown command: {} (/help for a list)", other),
     }
     Ok(true)
+}
+
+/// Resolve a checkpoint selector: 1-based list index or (prefix of a) hash.
+fn resolve_checkpoint(
+    checkpoints: &[ulnclaw::checkpoint::CheckpointEntry],
+    selector: &str,
+) -> Option<String> {
+    if selector.is_empty() {
+        return None;
+    }
+    if let Ok(n) = selector.parse::<usize>() {
+        return checkpoints
+            .get(n.saturating_sub(1))
+            .map(|c| c.hash.clone());
+    }
+    checkpoints
+        .iter()
+        .find(|c| c.hash.starts_with(selector) || c.short_hash == selector)
+        .map(|c| c.hash.clone())
+}
+
+fn print_diff_result(result: &serde_json::Value) {
+    if result.get("empty").and_then(|v| v.as_bool()).unwrap_or(false) {
+        println!("No changes recorded.");
+        return;
+    }
+    let stat = result["stat"].as_str().unwrap_or("");
+    let diff = result["diff"].as_str().unwrap_or("");
+    if stat.is_empty() && diff.is_empty() {
+        println!("No changes.");
+    } else {
+        if !stat.is_empty() {
+            println!("{}", stat);
+        }
+        if !diff.is_empty() {
+            println!("{}", diff);
+        }
+    }
 }
 
 async fn sessions_cmd(action: SessionAction) -> Result<(), String> {

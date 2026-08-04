@@ -49,7 +49,7 @@ performance and a single static binary.
 | Memory system | ✅ | MEMORY.md/USER.md with prompt injection |
 | Cron scheduler | ✅ | job store + schedule parsing + poll loop (`cron::run_scheduler`) |
 | MCP client (`mcp_tool.py`) | ✅ core | stdio JSON-RPC: initialize/tools/list/tools/call; `[[mcp.servers]]` config; tools registered as `mcp__<server>__<tool>` |
-| CLI (`hermes_cli/`) | ✅ core | chat REPL with slash commands, one-shot `run`, sessions/tools/skills/cron subcommands, `init` |
+| CLI (`hermes_cli/`) | ✅ core | chat REPL with slash commands (incl. `/rollback [N|hash] [file]`, `/rollback diff <N>`, `/diff` checkpoint commands), one-shot `run`, sessions/tools/skills/cron/checkpoints subcommands, `init` |
 | Delegation | ✅ | SubAgentRunner trait, depth limit, child sessions |
 | HTTP gateway (`gateway/platforms/api_server.py`) | ✅ core | `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` (session continuity via `X-Ulnclaw-Session-Id`, `stream: true` SSE token streaming with `hermes.tool.progress` events), `/v1/responses` (stateful via `previous_response_id`), `/v1/models`, `/v1/capabilities`, `/v1/runs` (async runs + SSE events + stop + approval), `/api/sessions` CRUD + chat + chat/stream, bearer-token auth |
 | Messaging platforms (Telegram/WhatsApp/QQ/…) | ⬜ deferred | hermes' platform adapters are not ported; the HTTP gateway covers OpenAI-compatible frontends |
