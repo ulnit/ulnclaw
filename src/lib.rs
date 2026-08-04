@@ -74,6 +74,7 @@
 
 pub mod agent;
 pub mod ansi;
+pub mod async_delegation;
 pub mod binary_ext;
 pub mod browser;
 pub mod checkpoint;

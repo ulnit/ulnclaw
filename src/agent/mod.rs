@@ -375,6 +375,11 @@ impl Agent {
 
     /// Wire this agent as its own delegation + cron runner. Call once after
     /// wrapping the agent in an Arc.
+    /// Shared tool context (session key, home, delivery flags).
+    pub fn context(&self) -> Arc<ToolContext> {
+        self.context.clone()
+    }
+
     pub fn wire_runners(self: &Arc<Self>) {
         self.context.set_subagent_runner(self.clone());
         self.context.set_cron_runner(self.clone());
@@ -978,7 +983,8 @@ impl SubAgentRunner for Agent {
             .with_session_id(child_session.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()))
             .with_home(self.context.home.clone())
             .with_config(self.context.config.clone())
-            .with_provider(self.provider.clone());
+            .with_provider(self.provider.clone())
+            .with_delegate_depth(self.depth + 1);
         child_context.workdir = self.context.workdir.clone();
         if let Some(ref store) = self.store {
             child_context = child_context.with_store(store.clone());

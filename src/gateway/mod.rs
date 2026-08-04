@@ -578,6 +578,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/jobs/:id/run", post(run_job_now))
         .route("/v1/skills", get(skills_list))
         .route("/v1/toolsets", get(toolsets_list))
+        .route("/v1/delegations", get(list_delegations_http))
+        .route("/v1/delegations/:id", get(get_delegation_http))
         .route("/v1/runs", get(list_runs).post(start_run))
         .route("/v1/runs/:id", get(get_run))
         .route("/v1/runs/:id/events", get(run_events))
@@ -802,6 +804,55 @@ where
     }
 }
 
+/// `GET /v1/delegations` — background delegation registry (ulnclaw ops
+/// extension over hermes async_delegation).
+async fn list_delegations_http(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let _ = state;
+    let records: Vec<Value> = crate::async_delegation::list_delegations()
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "status": r.status,
+                "tasks": r.tasks,
+                "parent_session_key": r.parent_session_key,
+                "created_ms": r.created_ms,
+                "finished_ms": r.finished_ms,
+                "log_dir": r.log_dir.display().to_string(),
+            })
+        })
+        .collect();
+    Json(json!({"delegations": records}))
+}
+
+/// `GET /v1/delegations/:id` — one delegation record + consolidated result
+/// once finished (ulnclaw ops extension).
+async fn get_delegation_http(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(record) = crate::async_delegation::get_delegation(&id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": {"message": format!("delegation '{id}' not found"), "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    };
+    let home = state.agent.context().home.clone();
+    let result = crate::async_delegation::read_result(&home, &id);
+    Json(json!({
+        "id": record.id,
+        "status": record.status,
+        "tasks": record.tasks,
+        "parent_session_key": record.parent_session_key,
+        "created_ms": record.created_ms,
+        "finished_ms": record.finished_ms,
+        "log_dir": record.log_dir.display().to_string(),
+        "result": result,
+    }))
+    .into_response()
+}
+
 async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     Json(json!({
         "service": "ulnclaw-gateway",
@@ -823,6 +874,7 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "model_options": true,
             "session_model_lock": true,
             "session_recap": true,
+            "delegations": true,
             "metrics": true,
             "usage": true,
             "streaming": true,
@@ -1745,6 +1797,23 @@ struct SessionChatRequest {
     message: String,
 }
 
+/// Drain finished background delegations into a session before its turn —
+/// hermes' async-delegation wake delivery (positive-ownership by the
+/// process session key; ulnclaw runs one profile per gateway process).
+fn drain_delegations_into_session(state: &GatewayState, session_id: &str) {
+    let key = state.agent.context().session_id.clone();
+    for completion in crate::async_delegation::drain_completions(&key) {
+        let message = crate::provider::Message {
+            role: crate::provider::Role::User,
+            content: Some(completion.message),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        let _ = state.store.append_message(session_id, &message);
+    }
+}
+
 async fn session_chat(
     State(state): State<Arc<GatewayState>>,
     Path(id): Path<String>,
@@ -1757,6 +1826,7 @@ async fn session_chat(
         )
             .into_response();
     }
+    drain_delegations_into_session(&state, &id);
     let history = state
         .store
         .load_messages(&id)
@@ -1803,6 +1873,7 @@ async fn session_chat_stream(
         )
             .into_response();
     }
+    drain_delegations_into_session(&state, &id);
     let history = state
         .store
         .load_messages(&id)

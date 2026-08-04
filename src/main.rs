@@ -294,6 +294,7 @@ async fn gateway_cmd(
         Arc::new(tokio::sync::OnceCell::new());
     let approve = ulnclaw::gateway::gateway_approve_fn(router.clone(), state_holder.clone());
     let agent = make_agent(config, false, Some(approve)).await?;
+    agent.context().set_async_delivery(true);
     let state = ulnclaw::gateway::GatewayState::new(
         agent,
         config.model.model.clone(),
@@ -457,6 +458,7 @@ async fn make_agent(
     let mut context = ToolContext::new()
         .with_home(home)
         .with_config(config.clone())
+        .with_async_delivery(interactive)
         .with_env_passthrough(&config.terminal.env_passthrough)
         .with_store(store.clone())
         .with_provider(provider.clone());
@@ -555,7 +557,23 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
 
     let mut history: Vec<Message> = Vec::new();
     let stdin = std::io::stdin();
+    let session_key = agent.context().session_id.clone();
     loop {
+        // Drain finished background delegations into the conversation
+        // (hermes CLI completion drain, positive-ownership by session key).
+        for completion in ulnclaw::async_delegation::drain_completions(&session_key) {
+            println!(
+                "\n[delegation {} finished — consolidated result injected]",
+                completion.delegation_id
+            );
+            history.push(Message {
+                role: Role::User,
+                content: Some(completion.message),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            });
+        }
         print!("\n> ");
         std::io::stdout().flush().map_err(|e| e.to_string())?;
         let mut line = String::new();

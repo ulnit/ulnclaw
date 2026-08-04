@@ -73,6 +73,16 @@ pub struct ToolContext {
     /// Env vars allowed through the sandbox scrub (skill declarations +
     /// `[terminal] env_passthrough`); see `env_guard`.
     env_passthrough: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Whether this session can receive detached (background) delegation
+    /// results after the current turn ends — interactive REPL / persistent
+    /// gateway sessions set it; one-shot runners do not (hermes
+    /// `async_delivery_supported`). `delegate_task background=true` falls
+    /// back to synchronous execution when unsupported.
+    async_delivery: Arc<std::sync::atomic::AtomicBool>,
+    /// Delegation depth of the agent owning this context (0 = top-level).
+    /// Top-level delegations run in the background; orchestrator children
+    /// (depth > 0) stay synchronous (hermes `_model_background_value`).
+    delegate_depth: usize,
 }
 
 impl Default for ToolContext {
@@ -93,6 +103,8 @@ impl Default for ToolContext {
             tool_definitions: Arc::new(std::sync::RwLock::new(Vec::new())),
             checkpoints: Arc::new(std::sync::RwLock::new(None)),
             env_passthrough: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            async_delivery: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            delegate_depth: 0,
         }
     }
 }
@@ -191,6 +203,34 @@ impl ToolContext {
     /// Snapshot of the current passthrough allowlist.
     pub fn env_passthrough_snapshot(&self) -> std::collections::HashSet<String> {
         self.env_passthrough.lock().unwrap().clone()
+    }
+
+    /// Mark this session able to receive background-delegation results.
+    pub fn with_async_delivery(mut self, enabled: bool) -> Self {
+        self.async_delivery = Arc::new(std::sync::atomic::AtomicBool::new(enabled));
+        self
+    }
+
+    /// Flip async-delivery support on a shared context (gateway startup).
+    pub fn set_async_delivery(&self, enabled: bool) {
+        self.async_delivery
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// True when background delegations can deliver results to this session.
+    pub fn async_delivery(&self) -> bool {
+        self.async_delivery.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Set the delegation depth of the owning agent (children > 0).
+    pub fn with_delegate_depth(mut self, depth: usize) -> Self {
+        self.delegate_depth = depth;
+        self
+    }
+
+    /// Delegation depth (0 = top-level agent).
+    pub fn delegate_depth(&self) -> usize {
+        self.delegate_depth
     }
 
     pub fn with_provider(mut self, provider: Arc<dyn Provider>) -> Self {
