@@ -18,6 +18,7 @@ use std::sync::Arc;
 pub const TASK_COMPRESSION: &str = "compression";
 /// Auxiliary task: image analysis (vision).
 pub const TASK_VISION: &str = "vision";
+pub const TASK_APPROVAL: &str = "approval";
 
 /// Where the resolved auxiliary runtime came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

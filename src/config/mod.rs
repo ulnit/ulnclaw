@@ -721,11 +721,27 @@ pub struct ApprovalsConfig {
     /// Seconds to wait for a human decision before fail-closed auto-deny
     /// (hermes default 300).
     pub timeout: u64,
+    /// `manual` (prompt a human), `smart` (auxiliary-LLM guardian first,
+    /// escalate to a human when unsure) or `off` (auto-approve everything
+    /// except the hardline floor) — hermes `approvals.mode`.
+    pub mode: String,
+    /// `deny` (default, fail-closed) or `approve` — what happens when a
+    /// cron-triggered run hits the approval gate with no human present
+    /// (hermes `approvals.cron_mode`).
+    pub cron_mode: String,
+    /// Operator rules appended to the smart-approval guardian's system
+    /// prompt (hermes `approvals.smart_policy`).
+    pub smart_policy: String,
 }
 
 impl Default for ApprovalsConfig {
     fn default() -> Self {
-        Self { timeout: 300 }
+        Self {
+            timeout: 300,
+            mode: "manual".to_string(),
+            cron_mode: "deny".to_string(),
+            smart_policy: String::new(),
+        }
     }
 }
 

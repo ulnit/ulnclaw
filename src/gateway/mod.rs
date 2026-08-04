@@ -2548,7 +2548,7 @@ async fn run_job_now(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
         }
     });
 
-    spawn_tracked_run(state, run_id.clone(), session_id, job.prompt.clone());
+    spawn_tracked_run(state, run_id.clone(), session_id, job.prompt.clone(), true);
     Json(json!({"job": job_value(&job), "run_id": run_id})).into_response()
 }
 
@@ -2644,15 +2644,23 @@ async fn start_run(
     };
     state.runs.lock().await.insert(run_id.clone(), run.clone());
 
-    spawn_tracked_run(state, run_id.clone(), session_id.clone(), request.message.clone());
+    spawn_tracked_run(state, run_id.clone(), session_id.clone(), request.message.clone(), false);
 
     (StatusCode::ACCEPTED, Json(json!({"run_id": run_id, "status": "running", "session_id": session_id}))).into_response()
 }
 
 /// Execute one agent turn as a tracked background run: registers approval
 /// routing, pumps pending approvals into run state, and updates the run row
-/// when the turn finishes. Shared by `/v1/runs` and `/api/jobs/:id/run`.
-fn spawn_tracked_run(state: Arc<GatewayState>, run_id: String, session_id: String, message: String) {
+/// when the turn finishes. Shared by `/v1/runs` (`cron = false`) and
+/// `/api/jobs/:id/run` (`cron = true` — approval gates apply
+/// `approvals.cron_mode` because no human is attached).
+fn spawn_tracked_run(
+    state: Arc<GatewayState>,
+    run_id: String,
+    session_id: String,
+    message: String,
+    cron: bool,
+) {
     // Approval plumbing: channel from the approve callback into run state.
     let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<PendingApproval>();
     state.router.register(&run_id, &session_id, approval_tx);
@@ -2684,7 +2692,9 @@ fn spawn_tracked_run(state: Arc<GatewayState>, run_id: String, session_id: Strin
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let runner = state.clone();
     let spawn_run_id = run_id.clone();
-    tokio::spawn(RUN_ID.scope(run_id.clone(), async move {
+    tokio::spawn(RUN_ID.scope(
+        run_id.clone(),
+        crate::agent::cron_scope(cron, async move {
         let history = runner
             .store
             .load_messages(&session_id)
@@ -2726,7 +2736,8 @@ fn spawn_tracked_run(state: Arc<GatewayState>, run_id: String, session_id: Strin
         }
         drop(runs);
         runner.router.unregister(&spawn_run_id);
-    }));
+        }),
+    ));
 }
 
 async fn list_runs(State(state): State<Arc<GatewayState>>) -> Json<Value> {

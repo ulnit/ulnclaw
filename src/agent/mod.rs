@@ -38,6 +38,7 @@ pub enum StreamEvent {
 tokio::task_local! {
     static STREAM_EMITTER: Arc<dyn Fn(StreamEvent) + Send + Sync>;
     static MODEL_OVERRIDE: String;
+    static CRON_RUN: bool;
 }
 
 /// Emit an event to the active stream consumer, if any (task-local scope
@@ -71,6 +72,21 @@ pub fn model_override_scope<F: std::future::Future>(
 ) -> tokio::task::futures::TaskLocalFuture<String, F> {
     MODEL_OVERRIDE.scope(model, future)
 }
+/// Run a future marked as a cron-triggered agent run (hermes cron
+/// approval context): `true` scopes the run as unattended, so approval
+/// gates apply `approvals.cron_mode` instead of waiting for a human.
+pub fn cron_scope<F: std::future::Future>(
+    cron: bool,
+    future: F,
+) -> tokio::task::futures::TaskLocalFuture<bool, F> {
+    CRON_RUN.scope(cron, future)
+}
+
+/// Whether the current task runs inside a cron-triggered agent run.
+pub fn is_cron_context() -> bool {
+    CRON_RUN.try_with(|cron| *cron).unwrap_or(false)
+}
+
 /// Agent configuration
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -839,6 +855,82 @@ impl Agent {
                 ),
             })),
             ApprovalDecision::Confirm(reason) => {
+                let approvals = self.context.config.approvals.clone();
+                let mode = crate::tools::approval::parse_approval_mode(&approvals.mode);
+
+                // hermes `approvals.mode: off` bypass — the hardline floor
+                // above still holds; only the confirm layer is skipped.
+                if mode == crate::tools::approval::ApprovalMode::Off {
+                    return None;
+                }
+
+                // hermes cron approval context: no human can answer, so
+                // `approvals.cron_mode` decides (fail-closed by default).
+                if is_cron_context() {
+                    return match crate::tools::approval::parse_cron_mode(&approvals.cron_mode) {
+                        crate::tools::approval::CronApprovalMode::Approve => None,
+                        crate::tools::approval::CronApprovalMode::Deny => Some(serde_json::json!({
+                            "success": false,
+                            "error": format!(
+                                "BLOCKED: this unattended (cron) run hit the approval gate ({}).                                  approvals.cron_mode is 'deny' and no human is present to consent.                                  Do not retry.",
+                                reason
+                            ),
+                        })),
+                    };
+                }
+
+                // hermes `approvals.mode: smart` — auxiliary guardian LLM
+                // verdict before any human prompt.
+                if mode == crate::tools::approval::ApprovalMode::Smart {
+                    let (guard_provider, guard_model) = match crate::provider::auxiliary::resolve_aux_task(
+                        &self.context.config,
+                        crate::provider::auxiliary::TASK_APPROVAL,
+                        self.provider.clone(),
+                    ) {
+                        Ok(aux) => (aux.provider, aux.model),
+                        Err(e) => {
+                            tracing::warn!(
+                                "auxiliary approval routing failed: {}; using main provider",
+                                e
+                            );
+                            (self.provider.clone(), self.provider.model().to_string())
+                        }
+                    };
+                    let verdict = crate::tools::approval::smart_assess(
+                        guard_provider.as_ref(),
+                        &guard_model,
+                        command,
+                        &reason,
+                        &approvals.smart_policy,
+                    )
+                    .await;
+                    match verdict {
+                        crate::tools::approval::SmartVerdict::Approve => {
+                            tracing::info!(
+                                "smart approval: auto-approved command ({})",
+                                reason
+                            );
+                            return None;
+                        }
+                        crate::tools::approval::SmartVerdict::Deny
+                            if self.context.approve.is_none() =>
+                        {
+                            return Some(serde_json::json!({
+                                "success": false,
+                                "error": format!(
+                                    "BLOCKED by smart approval ({}): the guardian assessed this                                      command as genuinely dangerous and no human is present to                                      override. Do NOT retry, rephrase, or reach the same outcome                                      via a different path.",
+                                    reason
+                                ),
+                            }));
+                        }
+                        // Guardian DENY with a human available falls through
+                        // to the prompt (one-operation override, hermes
+                        // semantics); ESCALATE always prompts.
+                        crate::tools::approval::SmartVerdict::Deny
+                        | crate::tools::approval::SmartVerdict::Escalate => {}
+                    }
+                }
+
                 {
                     let callbacks = self.callbacks.lock().await;
                     if let Some(ref hook) = callbacks.on_approval_request {
@@ -1080,7 +1172,7 @@ impl CronRunner for Agent {
                      user-facing content in your final response. Do NOT schedule more cron jobs."
                         .to_string(),
                 ),
-                approval: false,
+                approval: self.config.approval,
                 persist: true,
                 source: "cron".to_string(),
                 ..self.config.clone()
@@ -1094,7 +1186,9 @@ impl CronRunner for Agent {
             fallback_active: tokio::sync::Mutex::new(None),
         };
         let cron_agent = cron_agent.with_fallback_specs(&self.fallback_specs());
-        let result = cron_agent.run(&full_prompt, None).await?;
+        // Hermes cron approval context: unattended run — the approval gate
+        // applies `approvals.cron_mode` instead of waiting for a human.
+        let result = cron_scope(true, cron_agent.run(&full_prompt, None)).await?;
         Ok(result.content)
     }
 }
@@ -1240,5 +1334,112 @@ mod tests {
             "hello  world"
         );
         assert_eq!(strip_thinking_blocks("<think>x</think>done"), "done");
+    }
+
+    // ------------------------------------------------------------------
+    // Approval gate layers: mode off / cron / smart (hermes parity)
+    // ------------------------------------------------------------------
+
+    fn approvals_cfg(mode: &str, cron_mode: &str) -> crate::config::ApprovalsConfig {
+        crate::config::ApprovalsConfig {
+            timeout: 300,
+            mode: mode.to_string(),
+            cron_mode: cron_mode.to_string(),
+            smart_policy: String::new(),
+        }
+    }
+
+    fn gate_agent(
+        reply: Option<&str>,
+        approvals: crate::config::ApprovalsConfig,
+        human: bool,
+    ) -> Agent {
+        let (provider, _) = counting(reply);
+        let mut config = crate::config::UlncLawConfig::default();
+        config.approvals = approvals;
+        let mut context = ToolContext::new().with_config(config);
+        if human {
+            context = context.with_approve(Arc::new(|_reason, _command| Box::pin(async move { true })));
+        }
+        Agent::new(provider, crate::tools::ToolRegistry::new())
+            .with_config(AgentConfig {
+                approval: true,
+                ..Default::default()
+            })
+            .with_tool_context(context)
+    }
+
+    #[tokio::test]
+    async fn approval_mode_off_auto_approves_confirm() {
+        let agent = gate_agent(None, approvals_cfg("off", "deny"), false);
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        assert!(blocked.is_none());
+        // Hardline floor still holds even with mode off.
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf /"}))
+            .await;
+        assert!(blocked.unwrap()["error"].as_str().unwrap().contains("hardline"));
+    }
+
+    #[tokio::test]
+    async fn cron_context_respects_cron_mode() {
+        let agent = gate_agent(None, approvals_cfg("manual", "deny"), true);
+        let blocked = cron_scope(
+            true,
+            agent.approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"})),
+        )
+        .await;
+        let error = blocked.unwrap()["error"].as_str().unwrap().to_string();
+        assert!(error.contains("cron"), "{}", error);
+
+        let agent = gate_agent(None, approvals_cfg("manual", "approve"), false);
+        let blocked = cron_scope(
+            true,
+            agent.approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"})),
+        )
+        .await;
+        assert!(blocked.is_none());
+
+        // Outside cron scope the same agent prompts (fail-closed without a
+        // human): denied.
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        assert!(blocked.is_some());
+    }
+
+    #[tokio::test]
+    async fn smart_mode_guardian_verdicts() {
+        // Guardian APPROVE auto-approves without any human.
+        let agent = gate_agent(Some("APPROVE"), approvals_cfg("smart", "deny"), false);
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "python -c \"print('hi')\""}))
+            .await;
+        assert!(blocked.is_none());
+
+        // Guardian DENY with no human blocks.
+        let agent = gate_agent(Some("DENY"), approvals_cfg("smart", "deny"), false);
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        let error = blocked.unwrap()["error"].as_str().unwrap().to_string();
+        assert!(error.contains("smart approval"), "{}", error);
+
+        // Guardian ESCALATE with a human falls through to the prompt
+        // (test human approves).
+        let agent = gate_agent(Some("ESCALATE"), approvals_cfg("smart", "deny"), true);
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        assert!(blocked.is_none());
+
+        // Guardian offline -> escalate -> no human -> fail-closed deny.
+        let agent = gate_agent(None, approvals_cfg("smart", "deny"), false);
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        assert!(blocked.is_some());
     }
 }

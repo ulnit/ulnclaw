@@ -51,7 +51,7 @@
 | 会话数据库恢复（`session_recovery.py`） | ✅ 核心 | `ulnclaw sessions recover <db> [--out FILE]`：离线、非破坏性——源库连同 WAL/SHM/journal 旁车文件复制到一次性目录，规范表按列交集拷入全新当前表结构库，受损表按 rowid 逐行抢救，孤儿消息重建会话行，重建 FTS，完整性校验 + JSON 报告；绝不就地修复或覆盖在用数据库 |
 | 环境探针（`tools/env_probe.py`） | ✅ | 终端后端为本地时，向系统提示注入一行确定性的 Python 工具链说明：python3/python 版本、pip 模块可用性、`pip`↔`python3` 版本错配、PEP 668 外部管理标记（有 uv 时不告警）；健康环境保持静默；进程级缓存由单一后台线程构建，调用方最多等 10 秒后放行；远端后端（docker/ssh）跳过探测；`[agent] environment_probe` 开关（默认开启） |
 | 上下文压缩（`conversation_compression.py`） | ✅ | 预算触发，中段对话经二次模型调用摘要，保留系统提示词 + 首条用户消息 + 最近尾部；摘要调用遵循 `[auxiliary.compression]` 路由 |
-| 审批系统（`approval.py`） | ✅ | 命令归一化（反斜杠续行、`${IFS}`、注释剥离）、硬性底线（直接阻止）、可恢复但昂贵的操作（需确认）；REPL y/N 提示；网关运行审批（`POST /v1/runs/:id/approval`，once/session/always/deny，SSE `approval.request`）、fail-closed `[approvals] timeout`（默认 300s）、`always` 授权跨重启持久化 |
+| 审批系统（`approval.py`） | ✅ | 命令归一化（反斜杠续行、`${IFS}`、注释剥离）、硬性底线（直接阻止）、可恢复但昂贵的操作（需确认）；REPL y/N 提示；网关运行审批（`POST /v1/runs/:id/approval`，once/session/always/deny，SSE `approval.request`）、fail-closed `[approvals] timeout`（默认 300s）、`always` 授权跨重启持久化；`[approvals] mode = manual|smart|off` —— smart 模式先询问辅助守护 LLM（防提示注入的提示词设计，运维 `smart_policy` 仅走可信通道），不确定时升级人工，`off` 在硬性底线以下自动放行；`cron_mode = deny|approve` 管控无人值守 cron 运行（deny = fail-closed 默认） |
 | 威胁模式扫描（`threat_patterns.py`） | ✅ 核心 | 对重新进入上下文的工具结果做提示注入扫描（建议性） |
 | 工具集（`toolsets.py`） | ✅ | 全部 33 个工具集定义，含组合（`includes`），默认 `coding` |
 | 工具注册表（`registry.py`） | ✅ | check_fn 门控、工具集分组、结果大小截断 |
@@ -98,8 +98,9 @@
 
 - CLI 上审批交互为终端 y/N 提示（hermes 有更丰富的平台化流程）；网关通过
   HTTP 暴露运行审批（once/session/always/deny）。chat-completions 请求没有
-  run 上下文，确认级命令按设计自动拒绝。hermes 的 Smart-DENY（LLM 辅助）
-  判定与 cron 审批模式未移植；无人值守的运行一律 fail-closed。
+  run 上下文，确认级命令按设计自动拒绝。Smart 审批（LLM 守护）与 cron
+  审批模式已移植；无人值守的运行默认 fail-closed，`cron_mode = "approve"`
+  可放行。
 - 浏览器监督器直接启动本地 Chrome/Chromium；hermes 驱动外部 `agent-browser`
   守护进程（云浏览器 provider 未移植）。
 - 网关实现了 api_server 平台的子集；多 profile 复用（`/p/<profile>/...`）

@@ -52,7 +52,7 @@ performance and a single static binary.
 | Session recovery (`session_recovery.py`) | ✅ core | `ulnclaw sessions recover <db> [--out FILE]`: offline, non-destructive — source copied (with WAL/SHM/journal sidecars) to a disposable dir, canonical rows copied into a fresh current-schema db with rowid salvage over damaged tables, orphaned messages get reconstructed session rows, FTS rebuilt, integrity-checked, JSON report; never repairs in place or overwrites the active db |
 | Environment probe (`tools/env_probe.py`) | ✅ | one deterministic Python-toolchain line in the system prompt when the terminal backend is local: python3/python versions, pip-module availability, `pip`↔`python3` version mismatch, PEP 668 externally-managed marker (uv neutralizes it); silent on healthy machines; process-wide cache built by a single background worker, callers wait ≤10s then fail open; remote backends (docker/ssh) skip the probe; `[agent] environment_probe` toggle (default true) |
 | Context compression (`conversation_compression.py`) | ✅ | budget-triggered, middle-turn summarization via secondary model call, keeps system prompt + first user message + recent tail; summary call honors `[auxiliary.compression]` routing |
-| Approval system (`approval.py`) | ✅ | command normalization (backslash-joins, `${IFS}`, comment strip), hardline floor (block), recoverable-costly (confirm); REPL y/N prompt; gateway run approvals (`POST /v1/runs/:id/approval`, once/session/always/deny, SSE `approval.request`), fail-closed `[approvals] timeout` (default 300s), `always` grants persisted across restarts |
+| Approval system (`approval.py`) | ✅ | command normalization (backslash-joins, `${IFS}`, comment strip), hardline floor (block), recoverable-costly (confirm); REPL y/N prompt; gateway run approvals (`POST /v1/runs/:id/approval`, once/session/always/deny, SSE `approval.request`), fail-closed `[approvals] timeout` (default 300s), `always` grants persisted across restarts; `[approvals] mode = manual|smart|off` — smart mode asks an auxiliary guardian LLM (prompt-injection-hardened prompt, operator `smart_policy` on the trusted channel) and escalates to a human when unsure, `off` auto-approves below the hardline floor; `cron_mode = deny|approve` governs unattended cron runs (deny = fail-closed default) |
 | Threat-pattern scanning (`threat_patterns.py`) | ✅ core | advisory injection scan for tool results re-entering context |
 | Toolsets (`toolsets.py`) | ✅ | all 33 toolset definitions incl. composition (`includes`), `coding` default |
 | Tool registry (`registry.py`) | ✅ | check_fn gating, toolset grouping, max result size truncation |
@@ -100,9 +100,9 @@ performance and a single static binary.
 - Approval UX is a terminal y/N prompt on the CLI (hermes has richer
   platform-specific flows); the gateway exposes run approvals over HTTP with
   once/session/always/deny semantics.  Chat-completions requests have no run
-  context and auto-deny confirm-tier commands by design.  hermes' Smart-DENY
-  (LLM-assisted) verdicts and cron approval modes are not ported; unattended
-  runs fail closed.
+  context and auto-deny confirm-tier commands by design.  Smart-approval
+  (LLM guardian) and cron approval modes are ported; unattended runs fail
+  closed unless `cron_mode = "approve"`.
 - Browser supervisor launches a local Chrome/Chromium directly; hermes drives
   an external `agent-browser` daemon (cloud browser providers are not ported).
 - The gateway implements the api_server platform subset; profile multiplexing

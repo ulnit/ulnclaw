@@ -103,6 +103,9 @@ environment_probe = true       # one-line Python toolchain note in the system pr
 
 # [approvals]
 # timeout = 300                # gateway approvals fail closed after N seconds
+# mode = "manual"              # manual | smart (aux-LLM guardian) | off
+# cron_mode = "deny"           # deny | approve — unattended cron runs
+# smart_policy = ""            # operator rules for the smart-approval guardian
 
 [delegation]
 max_concurrent_children = 3
@@ -189,7 +192,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 298 tests
+cargo test                     # 307 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -313,7 +316,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 298 个测试
+cargo test                     # 307 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 
