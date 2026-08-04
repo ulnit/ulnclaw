@@ -1,0 +1,699 @@
+# Provider System Guide
+
+Complete guide to ulnclaw's provider abstraction and implementation.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Provider Trait](#provider-trait)
+- [OpenAI Provider](#openai-provider)
+- [Supported Providers](#supported-providers)
+- [Implementing Custom Providers](#implementing-custom-providers)
+- [Provider Configuration](#provider-configuration)
+- [Error Handling](#error-handling)
+- [Best Practices](#best-practices)
+
+## Overview
+
+ulnclaw's provider system abstracts AI model backends behind a common trait, allowing seamless switching between different providers.
+
+**Key Features:**
+- Unified `Provider` trait for all backends
+- OpenAI-compatible implementation (covers most providers)
+- Builder pattern for configuration
+- Async/await for non-blocking I/O
+- Comprehensive error handling
+
+## Provider Trait
+
+The core abstraction for AI model providers:
+
+```rust
+#[async_trait]
+pub trait Provider: Send + Sync {
+    /// Send a chat completion request
+    async fn chat_completion(&self, request: ProviderRequest) -> Result<ProviderResponse>;
+    
+    /// Get the model name
+    fn model(&self) -> &str;
+    
+    /// Get the provider name
+    fn name(&self) -> &str;
+    
+    /// Check if provider is available
+    async fn is_available(&self) -> bool {
+        true
+    }
+}
+```
+
+### Request/Response Types
+
+```rust
+pub struct ProviderRequest {
+    pub messages: Vec<Message>,
+    pub tools: Vec<ToolDefinition>,
+    pub model: String,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    pub stream: bool,
+    pub stop: Option<Vec<String>>,
+}
+
+pub struct ProviderResponse {
+    pub content: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
+    pub usage: Option<Usage>,
+    pub model: String,
+    pub reasoning: Option<String>,
+    pub finish_reason: Option<String>,
+}
+```
+
+## OpenAI Provider
+
+The `OpenAiProvider` implements the OpenAI Chat Completions API format, which is widely adopted by other providers.
+
+### Basic Usage
+
+```rust
+use ulnclaw::prelude::*;
+
+let provider = OpenAiProvider::builder()
+    .endpoint("https://api.openai.com/v1")
+    .api_key("sk-...")
+    .model("gpt-4")
+    .build()?;
+
+let agent = Agent::new(Arc::new(provider), tools);
+```
+
+### Builder Pattern
+
+```rust
+let provider = OpenAiProvider::builder()
+    .endpoint("https://api.openai.com/v1")  // Required
+    .api_key("sk-...")                       // Optional (some providers don't need it)
+    .model("gpt-4")                          // Required
+    .name("My Provider")                     // Optional (defaults to model name)
+    .max_tokens(4096)                        // Optional
+    .temperature(0.7)                        // Optional
+    .build()?;
+```
+
+### API URL Resolution
+
+The provider automatically resolves the API URL:
+
+```rust
+// These all resolve to the same endpoint:
+"https://api.openai.com/v1"
+"https://api.openai.com/v1/"
+"https://api.openai.com"
+// → "https://api.openai.com/v1/chat/completions"
+
+// Direct endpoint:
+"https://api.openai.com/v1/chat/completions"
+// → "https://api.openai.com/v1/chat/completions"
+```
+
+### Request Flow
+
+```
+1. Convert Message/ToolCall to OpenAI API format
+   ↓
+2. Build HTTP request with headers
+   ├─ Content-Type: application/json
+   ├─ Authorization: Bearer <api_key>
+   └─ Body: JSON payload
+   ↓
+3. Send POST to /v1/chat/completions
+   ↓
+4. Parse response
+   ├─ Extract content
+   ├─ Extract tool_calls
+   ├─ Extract usage stats
+   └─ Extract reasoning (if present)
+   ↓
+5. Convert to ProviderResponse
+```
+
+## Supported Providers
+
+### OpenAI
+
+```rust
+let provider = OpenAiProvider::builder()
+    .endpoint("https://api.openai.com/v1")
+    .api_key(&std::env::var("OPENAI_API_KEY")?)
+    .model("gpt-4")
+    .build()?;
+```
+
+**Models:** gpt-4, gpt-4-turbo, gpt-3.5-turbo
+
+### Anthropic (Claude)
+
+Use OpenAI-compatible format:
+
+```rust
+let provider = OpenAiProvider::builder()
+    .endpoint("https://api.anthropic.com/v1")
+    .api_key(&std::env::var("ANTHROPIC_API_KEY")?)
+    .model("claude-3-opus-20240229")
+    .build()?;
+```
+
+**Models:** claude-3-opus, claude-3-sonnet, claude-3-haiku
+
+### DashScope (Alibaba Qwen)
+
+```rust
+let provider = OpenAiProvider::builder()
+    .endpoint("https://dashscope.aliyuncs.com/compatible-mode")
+    .api_key(&std::env::var("DASHSCOPE_API_KEY")?)
+    .model("qwen-plus")
+    .build()?;
+```
+
+**Models:** qwen-turbo, qwen-plus, qwen-max
+
+### OpenRouter
+
+```rust
+let provider = OpenAiProvider::builder()
+    .endpoint("https://openrouter.ai/api/v1")
+    .api_key(&std::env::var("OPENROUTER_API_KEY")?)
+    .model("anthropic/claude-3-opus")
+    .build()?;
+```
+
+**Models:** Any model available on OpenRouter
+
+### Ollama (Local)
+
+```rust
+let provider = OpenAiProvider::builder()
+    .endpoint("http://localhost:11434/v1")
+    .model("llama2")
+    .build()?;
+```
+
+**Models:** Any model pulled with `ollama pull`
+
+### llama.cpp Server
+
+```rust
+let provider = OpenAiProvider::builder()
+    .endpoint("http://localhost:8080/v1")
+    .model("local-model")
+    .build()?;
+```
+
+**Note:** Model name is ignored by llama.cpp server
+
+## Implementing Custom Providers
+
+### Step 1: Create Provider Struct
+
+```rust
+use ulnclaw::provider::{Provider, ProviderRequest, ProviderResponse};
+use ulnclaw::error::Result;
+use async_trait::async_trait;
+
+pub struct CustomProvider {
+    client: reqwest::Client,
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+    name: String,
+}
+```
+
+### Step 2: Implement Builder
+
+```rust
+pub struct CustomProviderBuilder {
+    endpoint: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+    name: Option<String>,
+}
+
+impl CustomProvider {
+    pub fn builder() -> CustomProviderBuilder {
+        CustomProviderBuilder {
+            endpoint: None,
+            api_key: None,
+            model: None,
+            name: None,
+        }
+    }
+}
+
+impl CustomProviderBuilder {
+    pub fn endpoint(mut self, endpoint: &str) -> Self {
+        self.endpoint = Some(endpoint.to_string());
+        self
+    }
+
+    pub fn api_key(mut self, key: &str) -> Self {
+        self.api_key = Some(key.to_string());
+        self
+    }
+
+    pub fn model(mut self, model: &str) -> Self {
+        self.model = Some(model.to_string());
+        self
+    }
+
+    pub fn name(mut self, name: &str) -> Self {
+        self.name = Some(name.to_string());
+        self
+    }
+
+    pub fn build(self) -> Result<CustomProvider> {
+        let endpoint = self.endpoint
+            .ok_or_else(|| ulnclaw::AgentError::config("endpoint is required"))?;
+        let model = self.model
+            .ok_or_else(|| ulnclaw::AgentError::config("model is required"))?;
+        let name = self.name.unwrap_or_else(|| model.clone());
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .map_err(|e| ulnclaw::AgentError::Internal(e.to_string()))?;
+
+        Ok(CustomProvider {
+            client,
+            endpoint,
+            api_key: self.api_key,
+            model,
+            name,
+        })
+    }
+}
+```
+
+### Step 3: Implement Provider Trait
+
+```rust
+#[async_trait]
+impl Provider for CustomProvider {
+    async fn chat_completion(&self, request: ProviderRequest) -> Result<ProviderResponse> {
+        // 1. Convert request to API format
+        let api_request = self.convert_request(&request);
+        
+        // 2. Build HTTP request
+        let url = format!("{}/chat/completions", self.endpoint);
+        let mut req_builder = self.client.post(&url)
+            .json(&api_request);
+        
+        if let Some(ref key) = self.api_key {
+            req_builder = req_builder.bearer_auth(key);
+        }
+        
+        // 3. Send request
+        let response = req_builder.send().await
+            .map_err(|e| ulnclaw::AgentError::Provider(e.to_string()))?;
+        
+        // 4. Check status
+        if !response.status().is_success() {
+            let error = response.text().await.unwrap_or_default();
+            return Err(ulnclaw::AgentError::Provider(error));
+        }
+        
+        // 5. Parse response
+        let api_response: ApiResponse = response.json().await
+            .map_err(|e| ulnclaw::AgentError::Provider(e.to_string()))?;
+        
+        // 6. Convert to ProviderResponse
+        self.convert_response(api_response)
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+```
+
+### Step 4: Add Conversion Methods
+
+```rust
+impl CustomProvider {
+    fn convert_request(&self, request: &ProviderRequest) -> serde_json::Value {
+        // Convert Message and ToolCall to API format
+        serde_json::json!({
+            "model": request.model,
+            "messages": request.messages,
+            "tools": request.tools,
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        })
+    }
+
+    fn convert_response(&self, response: ApiResponse) -> Result<ProviderResponse> {
+        // Parse API response into ProviderResponse
+        Ok(ProviderResponse {
+            content: response.choices[0].message.content.clone(),
+            tool_calls: vec![],
+            usage: None,
+            model: self.model.clone(),
+            reasoning: None,
+            finish_reason: None,
+        })
+    }
+}
+```
+
+### Step 5: Export and Use
+
+```rust
+// In your lib.rs or mod.rs
+pub mod custom_provider;
+pub use custom_provider::CustomProvider;
+
+// Usage
+let provider = CustomProvider::builder()
+    .endpoint("https://api.custom.com")
+    .model("custom-model")
+    .build()?;
+
+let agent = Agent::new(Arc::new(provider), tools);
+```
+
+## Provider Configuration
+
+### Dynamic Configuration
+
+Use `ProviderConfig` for runtime provider instantiation:
+
+```rust
+use ulnclaw::provider::{ProviderConfig, ProviderKind};
+
+let config = ProviderConfig {
+    name: "My Provider".to_string(),
+    kind: ProviderKind::OpenAiCompatible,
+    endpoint: "https://api.openai.com/v1".to_string(),
+    api_key: Some("sk-...".to_string()),
+    model: "gpt-4".to_string(),
+    max_tokens: Some(4096),
+    temperature: Some(0.7),
+    fallback_providers: vec![],
+};
+
+let provider = config.build()?;
+```
+
+### Provider Kinds
+
+```rust
+pub enum ProviderKind {
+    OpenAiCompatible,  // OpenAI, Anthropic, DashScope, etc.
+    Ollama,            // Local Ollama server
+    LlamaCpp,          // Local llama.cpp server
+    Anthropic,         // Native Anthropic API (future)
+    Local,             // Embedded model (future)
+}
+```
+
+### Fallback Providers
+
+Configure fallback providers for automatic failover:
+
+```rust
+let config = ProviderConfig {
+    name: "Primary".to_string(),
+    kind: ProviderKind::OpenAiCompatible,
+    endpoint: "https://api.openai.com/v1".to_string(),
+    api_key: Some("sk-primary".to_string()),
+    model: "gpt-4".to_string(),
+    fallback_providers: vec![
+        "Fallback 1".to_string(),
+        "Fallback 2".to_string(),
+    ],
+    ..Default::default()
+};
+```
+
+Implement fallback logic in your application:
+
+```rust
+async fn try_providers(configs: Vec<ProviderConfig>, message: &str) -> Result<String> {
+    let mut last_error = None;
+    
+    for config in configs {
+        match config.build() {
+            Ok(provider) => {
+                let agent = Agent::new(Arc::from(provider), tools.clone());
+                match agent.chat(message).await {
+                    Ok(response) => return Ok(response),
+                    Err(e) => last_error = Some(e),
+                }
+            }
+            Err(e) => last_error = Some(e),
+        }
+    }
+    
+    Err(last_error.unwrap())
+}
+```
+
+## Error Handling
+
+### Provider Errors
+
+```rust
+pub enum AgentError {
+    Provider(String),  // API failures, auth errors, rate limits
+    Http(reqwest::Error),  // Network errors
+    Json(serde_json::Error),  // Serialization errors
+    // ...
+}
+```
+
+### Common Error Scenarios
+
+**Authentication Error:**
+```rust
+// Error: Provider error: API error (401): Invalid API key
+// Solution: Check API key is set correctly
+```
+
+**Rate Limit Error:**
+```rust
+// Error: Provider error: API error (429): Rate limit exceeded
+// Solution: Implement retry logic with exponential backoff
+```
+
+**Network Error:**
+```rust
+// Error: HTTP error: Connection timeout
+// Solution: Check network connectivity, increase timeout
+```
+
+**Model Not Found:**
+```rust
+// Error: Provider error: API error (404): Model not found
+// Solution: Check model name is correct
+```
+
+### Error Recovery
+
+```rust
+match agent.chat(&message).await {
+    Ok(response) => println!("{}", response),
+    Err(ulnclaw::AgentError::Provider(msg)) => {
+        if msg.contains("401") {
+            eprintln!("Authentication failed. Check API key.");
+        } else if msg.contains("429") {
+            eprintln!("Rate limited. Retrying...");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Retry
+        } else {
+            eprintln!("Provider error: {}", msg);
+        }
+    }
+    Err(e) => eprintln!("Error: {}", e),
+}
+```
+
+## Best Practices
+
+### 1. Use Environment Variables for API Keys
+
+```rust
+// ❌ Don't hardcode
+let provider = OpenAiProvider::builder()
+    .api_key("sk-...")
+    .build()?;
+
+// ✅ Use environment variables
+let provider = OpenAiProvider::builder()
+    .api_key(&std::env::var("OPENAI_API_KEY")?)
+    .build()?;
+```
+
+### 2. Set Reasonable Timeouts
+
+```rust
+let provider = OpenAiProvider::builder()
+    .endpoint("https://api.openai.com/v1")
+    .api_key(&api_key)
+    .model("gpt-4")
+    // Timeout is set in builder (default: 120s)
+    .build()?;
+```
+
+### 3. Implement Retry Logic
+
+```rust
+async fn chat_with_retry(agent: &Agent, message: &str, max_retries: u32) -> Result<String> {
+    let mut attempt = 0;
+    
+    loop {
+        match agent.chat(message).await {
+            Ok(response) => return Ok(response),
+            Err(ulnclaw::AgentError::Provider(msg)) if msg.contains("429") => {
+                attempt += 1;
+                if attempt > max_retries {
+                    return Err(ulnclaw::AgentError::Provider("Max retries exceeded".into()));
+                }
+                
+                let delay = Duration::from_secs(2u64.pow(attempt));
+                eprintln!("Rate limited. Retrying in {:?}...", delay);
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+```
+
+### 4. Monitor Usage
+
+```rust
+let result = agent.run(&message, None).await?;
+
+if let Some(usage) = &result.usage {
+    println!("Tokens used: {}", usage.total_tokens);
+    println!("Prompt tokens: {}", usage.prompt_tokens);
+    println!("Completion tokens: {}", usage.completion_tokens);
+    
+    // Log to monitoring system
+    log_usage(usage.total_tokens, &result.model);
+}
+```
+
+### 5. Test with Mock Providers
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockProvider;
+
+    #[async_trait]
+    impl Provider for MockProvider {
+        async fn chat_completion(&self, _request: ProviderRequest) -> Result<ProviderResponse> {
+            Ok(ProviderResponse {
+                content: Some("Mock response".to_string()),
+                tool_calls: vec![],
+                usage: Some(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+                model: "mock".to_string(),
+                reasoning: None,
+                finish_reason: Some("stop".to_string()),
+            })
+        }
+
+        fn model(&self) -> &str {
+            "mock"
+        }
+
+        fn name(&self) -> &str {
+            "MockProvider"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_with_mock() {
+        let provider = MockProvider;
+        let tools = ToolRegistry::new();
+        let agent = Agent::new(Arc::new(provider), tools);
+        
+        let response = agent.chat("Hello").await.unwrap();
+        assert_eq!(response, "Mock response");
+    }
+}
+```
+
+### 6. Handle Streaming (Future)
+
+```rust
+// Streaming support is planned for future versions
+// For now, use non-streaming mode
+
+let provider = OpenAiProvider::builder()
+    .endpoint("https://api.openai.com/v1")
+    .api_key(&api_key)
+    .model("gpt-4")
+    .build()?;
+
+// stream: false (default)
+let request = ProviderRequest {
+    messages: vec![],
+    tools: vec![],
+    model: "gpt-4".to_string(),
+    stream: false,  // Non-streaming
+    // ...
+};
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**Issue**: "API error (401): Invalid API key"
+- **Solution**: Verify API key is set correctly, check environment variable
+
+**Issue**: "API error (404): Model not found"
+- **Solution**: Check model name spelling, verify model is available
+
+**Issue**: "Connection timeout"
+- **Solution**: Check network connectivity, verify endpoint URL
+
+**Issue**: "API error (429): Rate limit exceeded"
+- **Solution**: Implement retry logic, reduce request frequency
+
+**Issue**: "Failed to parse response"
+- **Solution**: Check API compatibility, verify endpoint returns OpenAI format
+
+### Debug Mode
+
+Enable detailed logging:
+
+```rust
+use tracing_subscriber;
+
+tracing_subscriber::fmt()
+    .with_max_level(tracing::Level::DEBUG)
+    .init();
+
+// Now you'll see detailed HTTP request/response logs
+```
+
+## Next Steps
+
+- Read [Tool System Guide](tools.md) for implementing tools
+- Check [API Reference](api-reference.md) for complete type documentation
+- See [Integration Guide](integration.md) for using providers in applications
+- Review [Development Guide](development.md) for contributing new providers
