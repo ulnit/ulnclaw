@@ -90,6 +90,7 @@ pub mod git_diff;
 pub mod mcp;
 pub mod moa;
 pub mod provider;
+pub mod redact;
 pub mod session;
 pub mod skills;
 pub mod tools;

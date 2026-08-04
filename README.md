@@ -37,6 +37,7 @@ full feature-by-feature mapping.
 - **🔒 Sandbox credential scrub** — terminal/execute_code child processes run with provider & tool credentials stripped from their environment (hermes GHSA-rhgp-j443-p4rf semantics); skills' `required_environment_variables` and `[terminal] env_passthrough` allowlist the rest — provider credentials can never be allowlisted
 - **🚫 Binary guard** — `read_file` refuses ~80 binary extensions (images, archives, executables, fonts, bytecode, databases) with a pointer to vision_analyze/terminal; `.pdf` stays readable
 - **📏 Configurable output limits** — `[tool_output] max_bytes/max_lines/max_line_length` tune terminal truncation, read_file pagination, and per-line clamping without patching source
+- **🕵️ Secret redaction** — ~55 vendor key prefixes, JWTs, private keys, DB connstrings, auth headers, and env-dump `KEY=value` pairs are masked before output reaches the model; file content gets non-reusable sentinels so truncated keys are never written back
 - **📸 Checkpoints** — transparent git-backed snapshots before file edits (shared shadow store, per-project chains), `ulnclaw checkpoints list/restore/diff/prune`
 - **📝 Working diff** — `ulnclaw diff [--staged|--all]` shows what changed in a git worktree (untracked files included), REPL `/gitdiff`
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
@@ -178,7 +179,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 238 tests
+cargo test                     # 248 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -220,6 +221,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🔒 沙箱凭证清洗** —— terminal/execute_code 子进程的环境中剥离 provider 与工具凭证（hermes GHSA-rhgp-j443-p4rf 语义）；技能 `required_environment_variables` 与 `[terminal] env_passthrough` 允许其余变量通过——provider 凭证永不可被放行
 - **🚫 二进制守卫** —— `read_file` 拒绝约 80 种二进制扩展（图像、压缩包、可执行文件、字体、字节码、数据库），并提示改用 vision_analyze/terminal；`.pdf` 保持可读
 - **📏 可配置输出上限** —— `[tool_output] max_bytes/max_lines/max_line_length` 无需改源码即可调整 terminal 截断、read_file 分页与每行截断上限
+- **🕵️ 密钥脱敏** —— 约 55 种厂商密钥前缀、JWT、私钥、数据库连接串、认证头与 env 转储的 `KEY=value` 在输出送达模型前脱敏；文件内容使用不可复用哨兵，截断密钥永不会被写回
 - **📸 检查点** —— 文件编辑前的透明 git 快照（共享 shadow 存储、按项目快照链），`ulnclaw checkpoints list/restore/diff/prune`
 - **📝 工作区 diff** —— `ulnclaw diff [--staged|--all]` 显示 git 工作区变更（含未跟踪文件），REPL `/gitdiff`
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
@@ -298,7 +300,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 238 个测试
+cargo test                     # 248 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

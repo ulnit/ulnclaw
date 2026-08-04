@@ -312,6 +312,9 @@ async fn terminal_exec(
             // hermes strips ANSI before output reaches the model so escape
             // sequences never leak into context (tools/ansi_strip.py).
             let combined = crate::ansi::strip_ansi(&combined);
+            // Secrets redaction (agent/redact.py): env-dump commands mask
+            // KEY=value pairs; everything else runs in code-file mode.
+            let combined = crate::redact::redact_terminal_output(&combined, &command);
             let max_output = ctx.config.tool_output.resolved().max_bytes;
             let output = truncate_output_with(combined.trim_end(), max_output);
             let mut result = json!({
@@ -508,6 +511,7 @@ fn process_tool() -> crate::tools::Tool {
                             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
                             let output = proc.output.lock().map(|g| g.clone()).unwrap_or_default();
                             let output = crate::ansi::strip_ansi(&output).into_owned();
+                            let output = crate::redact::redact_terminal_output(&output, &proc.command);
                             let lines: Vec<&str> = output.lines().collect();
                             let tail: Vec<&str> = lines.iter().rev().take(limit).cloned().collect::<Vec<_>>().into_iter().rev().collect();
                             let running = proc.exit_code.lock().map(|g| g.is_none()).unwrap_or(false);
@@ -527,6 +531,7 @@ fn process_tool() -> crate::tools::Tool {
                                     if let Some(code) = *guard {
                                         let output = proc.output.lock().map(|g| g.clone()).unwrap_or_default();
                                         let output = crate::ansi::strip_ansi(&output);
+                                        let output = crate::redact::redact_terminal_output(&output, &proc.command);
                                         return Ok(json!({
                                             "success": true,
                                             "session_id": session_id,

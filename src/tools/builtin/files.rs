@@ -210,6 +210,13 @@ fn read_file_impl(
         last_line = idx + 1;
     }
 
+    // Secrets in file content become non-reusable sentinels so the agent
+    // never sees (or writes back) real credential bytes (agent/redact.py,
+    // file_read semantics).
+    let out = crate::redact::redact_sensitive_text(
+        &out,
+        crate::redact::RedactOpts { file_read: true, ..Default::default() },
+    );
     let mut result = json!({
         "success": true,
         "content": out,
