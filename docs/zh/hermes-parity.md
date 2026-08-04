@@ -26,7 +26,7 @@
 | `text_to_speech` | ✅ 完整 | OpenAI TTS 或自定义 `ULNCLAW_TTS_ENDPOINT` |
 | `ha_*`（4 个 Home Assistant 工具） | ✅ 完整 | Home Assistant REST API，依赖 `HASS_URL` + `HASS_TOKEN` |
 | `kanban_*`（12 个工具） | ✅ 完整 | 本地 SQLite 协作看板：create/list/show/complete/block/unblock/comment/heartbeat/link/attach/attach_url/attachments |
-| `browser_*`（12 个工具） | ✅ 完整 | CDP WebSocket 客户端（`browser` 模块）：端点发现、页面会话、带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框；门控于 `ULNCLAW_BROWSER_CDP`（ws:// 或 http://host:port） |
+| `browser_*`（12 个工具） | ✅ 完整 | CDP WebSocket 客户端（`browser` 模块）：端点发现、页面会话、带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框；`ULNCLAW_BROWSER_CDP` 支持 ws://、http://host:port 或 `auto`（监督器启动托管的无头 Chrome/Chromium） |
 | `computer_use` | 🟡 门控 | 需要 computer-use 驱动（hermes：cua-driver） |
 | `discord`, `discord_admin`, `feishu_doc_read`, `spotify_*`, `yuanbao` | 🟡 门控 | 已注册，依赖平台凭据门控；后端待实现 |
 | `x_search`, `video_analyze`, `video_generate`, `bfl_flux3_*` | ⬜ 暂缓 | 依赖特定供应商（xAI/BFL）；凭据就绪后再补 |
@@ -50,7 +50,7 @@
 | MCP 客户端（`mcp_tool.py`） | ✅ 核心 | stdio JSON-RPC：initialize/tools/list/tools/call；`[[mcp.servers]]` 配置；工具注册为 `mcp__<server>__<tool>` |
 | CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL、一次性 `run`、sessions/tools/skills/cron 子命令、`init` |
 | 委派（delegation） | ✅ | SubAgentRunner trait、深度限制、子会话 |
-| HTTP 网关（`gateway/platforms/api_server.py`） | ✅ 核心 | `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接）、`/v1/models`、`/v1/capabilities`、`/v1/runs`（异步运行 + 停止）、`/api/sessions` 增删查改 + 会话聊天、Bearer 令牌鉴权 |
+| HTTP 网关（`gateway/platforms/api_server.py`） | ✅ 核心 | `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接）、`/v1/responses`（经 `previous_response_id` 有状态续接）、`/v1/models`、`/v1/capabilities`、`/v1/runs`（异步运行 + SSE 事件 + 停止）、`/api/sessions` 增删查改 + 会话聊天、Bearer 令牌鉴权 |
 | 消息平台（Telegram/WhatsApp/QQ 等） | ⬜ 暂缓 | hermes 的平台适配器未移植；HTTP 网关已覆盖 OpenAI 兼容前端 |
 | TUI/web/app | ⬜ 暂缓 | hermes 提供 TUI 与 web 应用；ulnclaw 目前是库 + CLI + HTTP 网关 |
 | 环境（docker/ssh/modal/daytona/vercel） | ⬜ 暂缓 | terminal 在本地执行；远程后端待做 |
@@ -75,9 +75,10 @@
 ## 已知差异
 
 - 审批交互为终端 y/N 提示（hermes 有更丰富的平台化流程）。
-- 浏览器工具需要可达的、开启远程调试的 Chrome/Chromium（`ULNCLAW_BROWSER_CDP`）；尚无托管浏览器启动（hermes 的 browser supervisor）。
-- 网关实现了 api_server 平台的子集；SSE 运行事件、`/v1/responses`、多 profile 复用未移植。
+- 浏览器监督器直接启动本地 Chrome/Chromium；hermes 驱动外部 `agent-browser`
+  守护进程（云浏览器 provider 未移植）。
+- 网关实现了 api_server 平台的子集；多 profile 复用（`/p/<profile>/...`）、
+  运行审批处理、令牌流式输出未移植。
 - 压缩使用 字符数/4 的 token 估算而非分词器。
-- `patch` 模糊链实现了 hermes 的 4 个确定性策略
-  （精确 → 行尾修剪 → 空白归一 → 缩进自适应）；两个基于相似度的策略
-  （block_anchor、context_aware）未移植。
+- `patch` 模糊链实现了全部 9 种 hermes 策略；相似度基于 LCS 比率
+  （difflib.SequenceMatcher 的等价实现），边界阈值与 CPython 实现可能略有差异。

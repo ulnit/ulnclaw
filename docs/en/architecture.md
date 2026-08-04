@@ -7,10 +7,11 @@ ulnclaw is designed as a modular, high-performance AI agent engine with clear se
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Entry Points                              │
-│  Agent::run()    Agent::chat()    Custom integration            │
-└──────────┬──────────────┬───────────────────────┬───────────────┘
-           │              │                       │
-           ▼              ▼                       ▼
+│  CLI (chat REPL / run / sessions / cron)   HTTP Gateway          │
+│  Agent::run() / run_with_session()         (OpenAI-compatible)   │
+└──────────┬──────────────────┬───────────────────────┬───────────┘
+           │                  │                       │
+           ▼                  ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Agent (conversation loop)                    │
 │                                                                  │
@@ -21,15 +22,16 @@ ulnclaw is designed as a modular, high-performance AI agent engine with clear se
 │         │                 │                 │                   │
 │  ┌──────┴───────┐  ┌──────┴───────┐  ┌──────┴───────┐           │
 │  │ Compression  │  │ OpenAI       │  │ Tool Registry│           │
-│  │ & Caching    │  │ Compatible   │  │ (dynamic)    │           │
+│  │ (budget)     │  │ Compatible   │  │ + MCP tools  │           │
 │  └──────────────┘  └──────────────┘  └──────────────┘           │
 └─────────┴─────────────────┴─────────────────┴───────────────────┘
-           │                                    │
-           ▼                                    ▼
-┌───────────────────┐              ┌──────────────────────┐
-│ Session Storage   │              │ Tool Handlers         │
-│ (In-memory/SQLite)│              │ Custom implementations│
-└───────────────────┘              └──────────────────────┘
+           │                │                   │
+           ▼                ▼                   ▼
+┌───────────────────┐ ┌──────────────┐ ┌──────────────────────────┐
+│ SQLite State      │ │ Providers    │ │ Tool Backends             │
+│ sessions/messages │ │ OpenAI/Ollama│ │ terminal, files, web,     │
+│ FTS5 + lineage    │ │ DashScope/…  │ │ browser (CDP), HA, kanban │
+└───────────────────┘ └──────────────┘ └──────────────────────────┘
 ```
 
 ## Core Components
@@ -118,7 +120,7 @@ let tool = tool("get_weather")
         },
         "required": ["city"]
     }))
-    .handler(|args| async move {
+    .handler(|args, _ctx| async move {
         let city = args["city"].as_str().unwrap();
         Ok(json!({"temp": "22°C", "condition": "sunny"}))
     })
@@ -140,6 +142,10 @@ Conversation persistence with lineage tracking for compression scenarios.
 **Key Types:**
 - `SessionStore` - Trait for storage backends
 - `MemorySessionStore` - In-memory implementation
+- `SqliteSessionStore` - Production backend (hermes_state schema: sessions,
+  messages, system_prompts, state_meta, async_delegations; FTS5 full-text
+  search with LIKE fallback; parent/child lineage; session-row queries for
+  the gateway API)
 - `Session` - Conversation state with metadata
 - `SessionMetadata` - User ID, platform, model info
 
@@ -197,6 +203,74 @@ Comprehensive error types with automatic conversion.
 - `AgentError::Http` - Network errors (from reqwest)
 - `AgentError::Json` - Serialization errors
 - `AgentError::Internal` - Generic internal errors
+
+### 7. Browser Module (`browser/mod.rs`)
+
+Chrome DevTools Protocol client backing the `browser_*` tools.
+
+**Key Types:**
+- `BrowserEndpoint` / `resolve_endpoint` - parses `ULNCLAW_BROWSER_CDP`
+  (`ws://...` direct endpoint, or `http://host:port` discovery)
+- `CdpClient` - WebSocket JSON-RPC with request/response demultiplexing and
+  prefix-based event subscriptions (`Page.*`, `Runtime.*`, ...)
+- `BrowserSession` - one attached page target: navigate (load-event
+  bounded), accessibility snapshot with numbered element refs, click/type
+  through `DOM.resolveNode` + `Runtime.callFunctionOn` (CSS selector
+  fallback), scroll/press/images/screenshot/evaluate, JS dialog tracking
+- `with_session` - global shared-session manager used by all browser tools
+- Browser supervisor: `ULNCLAW_BROWSER_CDP=auto` (the default) launches a
+  managed headless Chrome/Chromium (`find_browser_binary`,
+  `launch_managed_browser`, `stop_managed_browser`) and waits for the
+  DevTools port before connecting
+
+**Flow:**
+```
+browser_navigate → with_session → resolve_endpoint → CDP connect
+  → Page.enable/Runtime.enable/DOM.enable/Accessibility.enable
+  → Page.navigate → wait Page.loadEventFired → page_info
+```
+
+### 8. Gateway Module (`gateway/mod.rs`)
+
+HTTP surface (axum) exposing the agent to OpenAI-compatible clients —
+a port of hermes' `gateway/platforms/api_server.py` core.
+
+**Key Types:**
+- `GatewayState` - agent + store + model identity + optional bearer key +
+  run registry
+- `RunState` - tracked async run (`/v1/runs`): status, result, stop flag
+- `router()` / `serve()` - route table and listener
+
+**Endpoints:**
+- `GET /health`, `/health/detailed`, `/v1/health` (always open)
+- `GET /v1/models`, `GET /v1/capabilities`
+- `POST /v1/chat/completions` - OpenAI format; opt-in session continuity
+  via `X-Ulnclaw-Session-Id` (history loaded from the SQLite store and the
+  same session id resumed via `Agent::run_with_session`)
+- `POST/GET/DELETE /v1/responses` - OpenAI Responses format, stateful via
+  `previous_response_id`
+- `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`,
+  `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`
+- `POST /v1/runs` (202 + run_id), `GET /v1/runs`, `GET /v1/runs/:id`,
+  `GET /v1/runs/:id/events` (SSE lifecycle events),
+  `POST /v1/runs/:id/stop`
+
+**Security:** bearer-token middleware (constant-time compare) on all routes
+except health probes; key comes from `[gateway] key` or
+`ULNCLAW_GATEWAY_KEY`. Non-interactive by design: approval callbacks are
+unset, so dangerous terminal commands are denied rather than prompted.
+
+### Supporting Modules
+
+- `config/` - `config.toml` + `.env` + profiles (`UlncLawConfig`,
+  `GatewayConfig`, env overrides such as `ULNCLAW_HOME`)
+- `toolsets.rs` - hermes-compatible tool grouping (33 toolsets, composition,
+  enable/disable policy)
+- `cron/` - schedule parsing (`30m`, `every 2h`, cron expressions, ISO
+  one-shot) + job store + poll scheduler
+- `skills/` - SKILL.md discovery and prompt injection
+- `mcp/` - MCP stdio client; server tools register as
+  `mcp__<server>__<tool>`
 
 ## Data Flow
 
@@ -331,11 +405,12 @@ Optional subsystems use registry patterns:
 ## Future Enhancements
 
 ### Planned Features
-- **Streaming Responses**: Real-time token streaming
-- **Context Compression**: Model-based conversation summarization
-- **Subagent Delegation**: Hierarchical agent spawning
-- **MCP Protocol**: Model Context Protocol support
-- **SQLite Backend**: Production-ready session storage
+- **Token Streaming**: SSE token streaming for chat completions (run
+  lifecycle events already stream via `/v1/runs/:id/events`)
+- **Messaging Platforms**: hermes' Telegram/WhatsApp/QQ adapters
+- **Environments**: docker/ssh terminal backends
+- **Run Approval Resolution**: `/v1/runs/:id/approval` for interactive
+  approval flows over the gateway
 - **Anthropic Native**: Direct Claude API support
 - **Retry Logic**: Automatic retry with backoff
 - **Metrics**: Prometheus/OpenTelemetry integration
@@ -343,8 +418,7 @@ Optional subsystems use registry patterns:
 ### Architecture Evolution
 - **Plugin System**: Dynamic tool/provider loading
 - **Distributed Agents**: Multi-node agent coordination
-- **Persistent Memory**: Long-term knowledge storage
-- **Multi-modal**: Image/audio/video support
+- **Checkpoint Manager**: hermes-style run checkpointing
 
 ## References
 

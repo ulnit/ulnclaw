@@ -68,21 +68,27 @@ ulnclaw/
 ├── Cargo.lock                 # Dependency lock file
 ├── README.md                  # Project documentation
 ├── src/
-│   ├── lib.rs                # Library entry point (112 lines)
-│   ├── error.rs              # Error types (74 lines)
-│   ├── agent/
-│   │   └── mod.rs            # Core agent loop (367 lines)
-│   ├── provider/
-│   │   ├── mod.rs            # Provider trait & types (214 lines)
-│   │   └── openai.rs         # OpenAI provider (371 lines)
+│   ├── lib.rs                # Library entry point
+│   ├── main.rs               # CLI (chat/run/sessions/tools/skills/cron/gateway/init)
+│   ├── error.rs              # Error types
+│   ├── agent/                # Core agent loop (persistence, approval, delegation)
+│   ├── provider/             # Provider trait + OpenAI-compatible implementation
 │   ├── tools/
-│   │   └── mod.rs            # Tool registry (287 lines)
-│   ├── session/
-│   │   └── mod.rs            # Session management (144 lines)
-│   └── context/
-│       └── mod.rs            # Context management (200 lines)
+│   │   ├── mod.rs            # Tool registry & builder
+│   │   ├── approval.rs       # Command approval policies
+│   │   ├── context.rs        # ToolContext (session, store, callbacks)
+│   │   └── builtin/          # 46 hermes tools (terminal, files, web, browser, ...)
+│   ├── browser/              # CDP WebSocket client (browser_* tools)
+│   ├── gateway/              # HTTP gateway (OpenAI-compatible API server)
+│   ├── session/              # SessionStore trait + SQLite backend (FTS5)
+│   ├── context/              # Prompt builder + context compression
+│   ├── config/               # config.toml/.env/profiles + env overrides
+│   ├── cron/                 # Schedule parsing, job store, scheduler
+│   ├── skills/               # SKILL.md discovery & injection
+│   ├── mcp/                  # MCP stdio client
+│   └── toolsets.rs           # hermes-compatible toolset policy
 ├── tests/
-│   └── integration_test.rs   # Integration tests (258 lines)
+│   └── integration_test.rs   # Integration tests
 └── docs/                      # Documentation
     ├── en/                    # English docs
     └── zh/                    # Chinese docs

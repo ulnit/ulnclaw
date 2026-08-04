@@ -93,6 +93,20 @@ println!("{}", result.content);
 println!("使用令牌数：{}", result.usage.total_tokens);
 ```
 
+#### `async run_with_session(user_message: &str, conversation_history: Option<Vec<Message>>, resume_session_id: Option<&str>) -> Result<RunResult>`
+
+与 `run` 相同，但续用已有会话 id 而非新建。当 `resume_session_id` 为
+`Some` 时，确保会话行存在且仅追加新的用户消息（历史行视为已存在）。
+HTTP 网关的会话续接即基于此方法。
+
+**参数：**
+- `user_message` - 用户输入消息
+- `conversation_history` - 可选的历史消息（通常取自该会话的存储）
+- `resume_session_id` - 要续用的会话 id，`None` 则新建
+
+**返回：**
+- `RunResult`，其 `session_id` 等于续用的 id
+
 #### `async chat(user_message: &str) -> Result<String>`
 
 简单接口，只返回文本响应。
@@ -762,6 +776,139 @@ async fn main() -> Result<()> {
     
     Ok(())
 }
+```
+
+## Browser 模块 (`browser/`)
+
+支撑 `browser_*` 工具的 CDP 客户端。需设置 `ULNCLAW_BROWSER_CDP`
+（`ws://...` 端点或 `http://host:port` 发现基址）。
+
+### 端点解析
+
+#### `resolve_endpoint(raw: &str) -> Result<BrowserEndpoint>`
+
+将配置解析为 `browser_ws`（直连 WebSocket）或 `http_base`（HTTP 发现）形式。
+
+#### `async discover_browser_ws(http_base: &str) -> Result<String>`
+
+请求 `/json/version` 并返回 `webSocketDebuggerUrl`。
+
+#### `async list_page_targets(http_base: &str) -> Result<Vec<Value>>` / `create_page_target(http_base, url)`
+
+经 `/json` 发现目标、`PUT /json/new?<url>` 创建页面。
+
+### CdpClient
+
+#### `async connect(ws_url: &str) -> Result<Arc<CdpClient>>`
+
+建立 WebSocket 并启动读/写循环。
+
+#### `async call(method: &str, params: Value) -> Result<Value>`
+
+发送 CDP 命令并等待结果（30 秒超时）。
+
+#### `fn notify(method: &str, params: Value) -> Result<()>`
+
+发送 CDP 事件/通知（不期待响应）。
+
+#### `async subscribe(prefix: &str) -> broadcast::Receiver<Value>`
+
+订阅 method 以 `prefix` 开头的事件。
+
+### BrowserSession
+
+#### `async open(endpoint: &BrowserEndpoint) -> Result<Arc<BrowserSession>>`
+
+查找（或创建）页面目标并附加，启用 Page/Runtime/DOM/Accessibility 域。
+
+| 方法 | 说明 |
+|--------|-------------|
+| `navigate(url)` | 导航并等待 load 事件（有界等待） |
+| `go_back()` | `window.history.back()` |
+| `evaluate(expression, timeout_ms)` | `Runtime.evaluate`（returnByValue） |
+| `snapshot()` | 可访问性列表 + 编号 `ElementRef` |
+| `click(element)` | 按元素引用（`"3"`）或 CSS 选择器点击 |
+| `type_text(element, text)` | 聚焦 + 赋值 + input/change 事件 |
+| `scroll(direction, pixels)` | `window.scrollBy` |
+| `press(key)` | `Input.dispatchKeyEvent`（Enter/Tab/Escape/方向键/字符） |
+| `get_images()` | 前 100 个 `document.images` 及尺寸 |
+| `screenshot()` | PNG 截图（base64） |
+| `page_info()` | `{title, url}` |
+| `handle_dialog(accept, prompt_text)` | 处理最近一次 JS 对话框 |
+
+### 浏览器监督器
+
+#### `find_browser_binary() -> Option<PathBuf>`
+
+定位 Chrome/Chromium（`ULNCLAW_BROWSER_PATH` 覆盖，随后是 PATH 与常见安装目录）。
+
+#### `async launch_managed_browser() -> Result<String>`
+
+启动（或复用）托管的无头浏览器于空闲端口，返回其 HTTP 发现基址。
+`ULNCLAW_BROWSER_CDP` 未设置或为 `auto` 时自动使用。
+
+#### `async stop_managed_browser()`
+
+终止托管浏览器并释放共享会话。
+
+### 会话管理器
+
+#### `async with_session<F, Fut, T>(func: F) -> Result<T>`
+
+获取（或打开）进程级共享会话并在其上执行 `func`。
+所有 `browser_*` 工具处理器以此为入口。
+
+## HTTP 网关 (`gateway/`)
+
+OpenAI 兼容 API 服务器（`ulnclaw gateway`）。
+
+### 库 API
+
+#### `GatewayState::new(agent: Arc<Agent>, model_name: String, provider_name: String, key: Option<String>) -> Result<Arc<GatewayState>>`
+
+从已装配的 agent 构建网关状态（必须附加 SQLite 存储）。
+
+#### `router(state: Arc<GatewayState>) -> Router`
+
+axum 路由表（供 `serve` 与测试使用）。
+
+#### `async serve(state: Arc<GatewayState>, host: &str, port: u16) -> Result<()>`
+
+绑定并持续服务直到中断。
+
+### HTTP 端点
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|--------|------|------|-------------|
+| GET | `/health`、`/v1/health` | 否 | 存活探测 |
+| GET | `/health/detailed` | 否 | 详细状态（模型、provider、鉴权、runs） |
+| GET | `/v1/models` | 是 | 对外模型列表 |
+| GET | `/v1/capabilities` | 是 | 机器可读的端点目录 |
+| POST | `/v1/chat/completions` | 是 | OpenAI Chat Completions；经 `X-Ulnclaw-Session-Id` 会话续接（兼容 `X-Hermes-Session-Id`）；id 回显于响应头 |
+| POST | `/v1/responses` | 是 | OpenAI Responses 格式；`input` 为字符串或消息数组；经 `previous_response_id` 链式续接 |
+| GET | `/v1/responses/:id` | 是 | 取回已存储的 response |
+| DELETE | `/v1/responses/:id` | 是 | 删除已存储的 response |
+| GET | `/api/sessions?limit=N` | 是 | 最近会话（新→旧） |
+| POST | `/api/sessions` | 是 | 创建空会话 |
+| GET | `/api/sessions/:id` | 是 | 会话行 |
+| DELETE | `/api/sessions/:id` | 是 | 硬删除（消息 + FTS 条目） |
+| GET | `/api/sessions/:id/messages` | 是 | 消息历史 |
+| POST | `/api/sessions/:id/chat` | 是 | 在该会话内执行一轮对话 |
+| POST | `/v1/runs` | 是 | 启动异步运行 → `202` + `run_id` |
+| GET | `/v1/runs` | 是 | 被跟踪的运行（新→旧） |
+| GET | `/v1/runs/:id` | 是 | 运行状态/结果 |
+| GET | `/v1/runs/:id/events` | 是 | SSE 生命周期事件（`run.progress` → `run.completed`/`run.failed`），终态后关闭 |
+| POST | `/v1/runs/:id/stop` | 是 | 尽力而为的停止请求 |
+
+**鉴权：** 设置 `[gateway] key` / `ULNCLAW_GATEWAY_KEY` 后需
+`Authorization: Bearer <key>`；未设置则开放。
+
+**请求/响应示例：**
+```bash
+curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"messages":[{"role":"user","content":"你好"}]}' \
+     http://127.0.0.1:8642/v1/chat/completions
 ```
 
 ## 下一步

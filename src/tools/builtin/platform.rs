@@ -637,12 +637,20 @@ use rusqlite::OptionalExtension;
 // ---------------------------------------------------------------------------
 
 fn browser_configured() -> ToolAvailability {
-    if crate::config::get_env_value("ULNCLAW_BROWSER_CDP").is_some() {
-        ToolAvailability::available()
-    } else {
-        ToolAvailability::unavailable(
-            "no browser backend configured (set ULNCLAW_BROWSER_CDP to a Chrome DevTools endpoint)",
-        )
+    let raw = crate::config::get_env_value("ULNCLAW_BROWSER_CDP");
+    match raw.as_deref() {
+        // Explicit endpoint always enabled.
+        Some(value) if !crate::browser::is_auto_mode(value) => ToolAvailability::available(),
+        // Auto/managed mode (explicit or default): need a local binary.
+        _ => {
+            if crate::browser::find_browser_binary().is_some() {
+                ToolAvailability::available()
+            } else {
+                ToolAvailability::unavailable(
+                    "no browser backend available (install Chrome/Chromium for auto-launch, or set ULNCLAW_BROWSER_CDP to a DevTools endpoint)",
+                )
+            }
+        }
     }
 }
 

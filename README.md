@@ -25,8 +25,8 @@ full feature-by-feature mapping.
 - **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits
 - **⏰ Cron** — `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules with a poll scheduler
 - **🔌 MCP client** — stdio JSON-RPC: any MCP server's tools appear as `mcp__<server>__<tool>`
-- **🌍 Browser automation** — CDP WebSocket client: accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs (`ULNCLAW_BROWSER_CDP`)
-- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` with session continuity, async `/v1/runs`, sessions API, bearer auth
+- **🌍 Browser automation** — CDP WebSocket client with a built-in supervisor (auto-launches headless Chrome/Chromium, or point `ULNCLAW_BROWSER_CDP` at your own): accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs
+- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), async `/v1/runs` with SSE events, sessions API, bearer auth
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp), keyless local providers
 
 ### CLI Quick Start
@@ -50,8 +50,9 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw skills list
 ./ulnclaw cron list
 
-# Browser automation: point browser_* tools at Chrome/Chromium remote debugging
-export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # or ws://.../devtools/browser/...
+# Browser automation: auto mode launches a managed headless Chrome/Chromium;
+# or point browser_* tools at an existing browser with remote debugging
+export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # or ws://.../devtools/browser/... or "auto"
 
 # HTTP gateway (OpenAI-compatible API server, default 127.0.0.1:8642)
 ./ulnclaw gateway --host 127.0.0.1 --port 8642
@@ -122,7 +123,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 48 tests
+cargo test                     # 70 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -152,8 +153,8 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🤝 委派** —— 并行子代理，隔离上下文，深度限制
 - **⏰ 定时任务** —— `30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划 + 轮询调度器
 - **🔌 MCP 客户端** —— stdio JSON-RPC：任意 MCP 服务器的工具以 `mcp__<server>__<tool>` 注册
-- **🌍 浏览器自动化** —— CDP WebSocket 客户端：带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框（`ULNCLAW_BROWSER_CDP`）
-- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（会话续接）、异步 `/v1/runs`、会话 API、Bearer 鉴权
+- **🌍 浏览器自动化** —— CDP WebSocket 客户端 + 内置监督器（自动启动无头 Chrome/Chromium，或用 `ULNCLAW_BROWSER_CDP` 指向自有浏览器）：带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框
+- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、带 SSE 事件的异步 `/v1/runs`、会话 API、Bearer 鉴权
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp），本地 provider 免密钥
 
 ### CLI 快速开始
@@ -177,8 +178,9 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw skills list
 ./ulnclaw cron list
 
-# 浏览器自动化：将 browser_* 工具指向开启远程调试的 Chrome/Chromium
-export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # 或 ws://.../devtools/browser/...
+# 浏览器自动化：auto 模式自动启动托管的无头 Chrome/Chromium；
+# 也可将 browser_* 工具指向已开启远程调试的浏览器
+export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # 或 ws://.../devtools/browser/... 或 "auto"
 
 # HTTP 网关（OpenAI 兼容 API 服务器，默认 127.0.0.1:8642）
 ./ulnclaw gateway --host 127.0.0.1 --port 8642
@@ -223,7 +225,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 48 个测试
+cargo test                     # 70 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

@@ -82,6 +82,22 @@ println!("{}", result.content);
 println!("Tokens used: {}", result.usage.total_tokens);
 ```
 
+#### `async run_with_session(user_message: &str, conversation_history: Option<Vec<Message>>, resume_session_id: Option<&str>) -> Result<RunResult>`
+
+Like `run`, but resumes an existing session id instead of creating a new
+one. When `resume_session_id` is `Some`, the store row is ensured and only
+the new user message is appended (history rows are assumed to exist).
+Used by the HTTP gateway for session continuity.
+
+**Parameters:**
+- `user_message` - User's input message
+- `conversation_history` - Optional previous messages (typically loaded
+  from the store for the resumed session)
+- `resume_session_id` - Session id to continue, or `None` for a fresh one
+
+**Returns:**
+- `RunResult` whose `session_id` equals the resumed id
+
 #### `async chat(user_message: &str) -> Result<String>`
 
 Simple interface that returns only the text response.
@@ -751,4 +767,141 @@ async fn main() -> Result<()> {
     
     Ok(())
 }
+```
+
+## Browser Module (`browser/`)
+
+CDP client backing the `browser_*` tools. Requires `ULNCLAW_BROWSER_CDP`
+(`ws://...` endpoint or `http://host:port` discovery base).
+
+### Endpoint Resolution
+
+#### `resolve_endpoint(raw: &str) -> Result<BrowserEndpoint>`
+
+Parses the configured endpoint into `browser_ws` (direct WebSocket) or
+`http_base` (HTTP discovery) form.
+
+#### `async discover_browser_ws(http_base: &str) -> Result<String>`
+
+Fetches `/json/version` and returns `webSocketDebuggerUrl`.
+
+#### `async list_page_targets(http_base: &str) -> Result<Vec<Value>>` / `create_page_target(http_base, url)`
+
+Target discovery via `/json` and `PUT /json/new?<url>`.
+
+### CdpClient
+
+#### `async connect(ws_url: &str) -> Result<Arc<CdpClient>>`
+
+Opens the WebSocket and starts reader/writer loops.
+
+#### `async call(method: &str, params: Value) -> Result<Value>`
+
+Sends a CDP command and awaits its result (30s timeout).
+
+#### `fn notify(method: &str, params: Value) -> Result<()>`
+
+Sends a CDP event/notification (no response expected).
+
+#### `async subscribe(prefix: &str) -> broadcast::Receiver<Value>`
+
+Subscribes to events whose method starts with `prefix`.
+
+### BrowserSession
+
+#### `async open(endpoint: &BrowserEndpoint) -> Result<Arc<BrowserSession>>`
+
+Finds (or creates) a page target, attaches, and enables
+Page/Runtime/DOM/Accessibility domains.
+
+| Method | Description |
+|--------|-------------|
+| `navigate(url)` | Navigate and wait for the load event (bounded) |
+| `go_back()` | `window.history.back()` |
+| `evaluate(expression, timeout_ms)` | `Runtime.evaluate` with `returnByValue` |
+| `snapshot()` | Accessibility listing + numbered `ElementRef`s |
+| `click(element)` | Click by element ref (`"3"`) or CSS selector |
+| `type_text(element, text)` | Focus + set value + input/change events |
+| `scroll(direction, pixels)` | `window.scrollBy` |
+| `press(key)` | `Input.dispatchKeyEvent` (Enter/Tab/Escape/arrows/chars) |
+| `get_images()` | First 100 `document.images` with sizes |
+| `screenshot()` | PNG screenshot as base64 |
+| `page_info()` | `{title, url}` |
+| `handle_dialog(accept, prompt_text)` | Resolve the most recent JS dialog |
+
+### Browser Supervisor
+
+#### `find_browser_binary() -> Option<PathBuf>`
+
+Locates Chrome/Chromium (`ULNCLAW_BROWSER_PATH` override, then PATH and
+well-known install dirs).
+
+#### `async launch_managed_browser() -> Result<String>`
+
+Launches (or reuses) a managed headless browser on a free port and returns
+its HTTP discovery base. Used automatically when `ULNCLAW_BROWSER_CDP` is
+unset or `auto`.
+
+#### `async stop_managed_browser()`
+
+Terminates the managed browser and drops the shared session.
+
+### Session Manager
+
+#### `async with_session<F, Fut, T>(func: F) -> Result<T>`
+
+Gets (or opens) the process-wide shared session and runs `func` against it.
+This is the entry point used by every `browser_*` tool handler.
+
+## HTTP Gateway (`gateway/`)
+
+OpenAI-compatible API server (`ulnclaw gateway`).
+
+### Library API
+
+#### `GatewayState::new(agent: Arc<Agent>, model_name: String, provider_name: String, key: Option<String>) -> Result<Arc<GatewayState>>`
+
+Builds gateway state from a wired agent (SQLite store must be attached).
+
+#### `router(state: Arc<GatewayState>) -> Router`
+
+The axum route table (used by `serve` and by tests).
+
+#### `async serve(state: Arc<GatewayState>, host: &str, port: u16) -> Result<()>`
+
+Binds and serves until interrupted.
+
+### HTTP Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/health`, `/v1/health` | no | Liveness probe |
+| GET | `/health/detailed` | no | Rich status (model, provider, auth, runs) |
+| GET | `/v1/models` | yes | Advertised model list |
+| GET | `/v1/capabilities` | yes | Machine-readable endpoint catalog |
+| POST | `/v1/chat/completions` | yes | OpenAI Chat Completions; session continuity via `X-Ulnclaw-Session-Id` (also accepts `X-Hermes-Session-Id`); id echoed back in the response header |
+| POST | `/v1/responses` | yes | OpenAI Responses format; `input` string or message array; chain turns with `previous_response_id` |
+| GET | `/v1/responses/:id` | yes | Retrieve a stored response |
+| DELETE | `/v1/responses/:id` | yes | Delete a stored response |
+| GET | `/api/sessions?limit=N` | yes | Recent sessions (newest first) |
+| POST | `/api/sessions` | yes | Create an empty session |
+| GET | `/api/sessions/:id` | yes | Session row |
+| DELETE | `/api/sessions/:id` | yes | Hard delete (messages + FTS entries) |
+| GET | `/api/sessions/:id/messages` | yes | Message history |
+| POST | `/api/sessions/:id/chat` | yes | Run one turn inside the session |
+| POST | `/v1/runs` | yes | Start async run → `202` + `run_id` |
+| GET | `/v1/runs` | yes | Tracked runs, newest first |
+| GET | `/v1/runs/:id` | yes | Run status/result |
+| GET | `/v1/runs/:id/events` | yes | SSE lifecycle events (`run.progress` → `run.completed`/`run.failed`), closes at terminal state |
+| POST | `/v1/runs/:id/stop` | yes | Best-effort stop request |
+
+**Auth:** `Authorization: Bearer <key>` when `[gateway] key` /
+`ULNCLAW_GATEWAY_KEY` is set; open otherwise.
+
+**Request/response example:**
+```bash
+curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"messages":[{"role":"user","content":"Hello"}]}' \
+     http://127.0.0.1:8642/v1/chat/completions
 ```

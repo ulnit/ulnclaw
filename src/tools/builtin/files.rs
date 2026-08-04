@@ -322,155 +322,11 @@ fn patch_tool() -> crate::tools::Tool {
 /// Fuzzy find-and-replace — port of the hermes strategy chain (exact →
 /// line-trimmed → whitespace-normalized → indentation-flexible →
 /// boundary-trimmed).
-fn fuzzy_find(content: &str, old: &str) -> Vec<(usize, usize)> {
-    // Strategy 1: exact
-    let matches = find_all(content, old);
-    if !matches.is_empty() {
-        return matches;
-    }
-    // Strategy 2: line-trimmed (each line of the pattern trimmed)
-    let trimmed_old: String = old
-        .lines()
-        .map(|l| l.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if trimmed_old != old {
-        let trimmed_content: String = content
-            .lines()
-            .map(|l| l.trim_end())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mapped = find_all(&trimmed_content, &trimmed_old);
-        if !mapped.is_empty() {
-            return map_positions(&trimmed_content, content, &mapped);
-        }
-    }
-    // Strategy 3: whitespace-normalized per line
-    let norm_old = normalize_ws(old);
-    let norm_content = normalize_ws(content);
-    let matches = find_all(&norm_content, &norm_old);
-    if !matches.is_empty() {
-        return map_positions(&norm_content, content, &matches);
-    }
-    // Strategy 4: indentation-flexible (strip leading whitespace per line)
-    let dedent_old = dedent(old);
-    let dedent_content = dedent(content);
-    let matches = find_all(&dedent_content, &dedent_old);
-    if !matches.is_empty() {
-        return map_positions(&dedent_content, content, &matches);
-    }
-    Vec::new()
-}
-
-fn find_all(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    if needle.is_empty() {
-        return out;
-    }
-    let mut start = 0usize;
-    while let Some(pos) = haystack[start..].find(needle) {
-        let abs = start + pos;
-        out.push((abs, abs + needle.len()));
-        start = abs + needle.len();
-    }
-    out
-}
-
-fn normalize_ws(text: &str) -> String {
-    text.lines()
-        .map(|line| {
-            let trimmed = line.trim();
-            let mut result = String::new();
-            let mut prev_space = false;
-            for ch in trimmed.chars() {
-                if ch.is_whitespace() {
-                    if !prev_space {
-                        result.push(' ');
-                        prev_space = true;
-                    }
-                } else {
-                    result.push(ch);
-                    prev_space = false;
-                }
-            }
-            result
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn dedent(text: &str) -> String {
-    text.lines()
-        .map(|l| l.trim_start())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Map byte positions found in `normalized` back into `original` using a
-/// char-index correspondence (both strings derived line-wise from original).
-fn map_positions(normalized: &str, original: &str, matches: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    // Build mapping: for each char index in normalized, the char index in
-    // original. Both were produced line-by-line in order, so walk original
-    // chars and normalized chars together greedily.
-    let orig_chars: Vec<char> = original.chars().collect();
-    let norm_chars: Vec<char> = normalized.chars().collect();
-    let mut norm_to_orig: Vec<usize> = Vec::with_capacity(norm_chars.len());
-    let mut oi = 0usize;
-    for &nc in &norm_chars {
-        // Advance in original until we find this char (greedy alignment).
-        while oi < orig_chars.len() && orig_chars[oi] != nc {
-            oi += 1;
-        }
-        if oi < orig_chars.len() {
-            norm_to_orig.push(oi);
-            oi += 1;
-        } else {
-            norm_to_orig.push(orig_chars.len().saturating_sub(1));
-        }
-    }
-    // Convert byte offsets to char offsets for the normalized string.
-    let mut result = Vec::new();
-    let norm_byte_to_char: Vec<usize> = {
-        let mut map = vec![0usize; normalized.len() + 1];
-        let mut char_idx = 0usize;
-        for (byte_idx, _) in normalized.char_indices() {
-            map[byte_idx] = char_idx;
-            char_idx += 1;
-        }
-        map[normalized.len()] = char_idx;
-        map
-    };
-    let orig_char_to_byte: Vec<usize> = {
-        let mut map = Vec::with_capacity(orig_chars.len() + 1);
-        let mut byte_idx = 0usize;
-        for ch in &orig_chars {
-            map.push(byte_idx);
-            byte_idx += ch.len_utf8();
-        }
-        map.push(byte_idx);
-        map
-    };
-    for &(start_byte, end_byte) in matches {
-        let start_char = norm_byte_to_char.get(start_byte).copied().unwrap_or(0);
-        let end_char = norm_byte_to_char.get(end_byte).copied().unwrap_or(start_char);
-        if start_char < norm_to_orig.len() {
-            let orig_start_char = norm_to_orig[start_char];
-            let orig_end_char = if end_char < norm_to_orig.len() {
-                norm_to_orig[end_char] + 1
-            } else {
-                orig_chars.len()
-            };
-            let start_b = orig_char_to_byte[orig_start_char.min(orig_chars.len())];
-            let end_b = orig_char_to_byte[orig_end_char.min(orig_chars.len())];
-            result.push((start_b, end_b));
-        }
-    }
-    result
-}
-
 /// Check whether an edit was already applied (hermes is_already_applied).
 fn already_applied(content: &str, old: &str, new: &str) -> bool {
-    !new.is_empty() && fuzzy_find(content, new).is_empty() == false && fuzzy_find(content, old).is_empty()
+    !new.is_empty()
+        && !crate::tools::fuzzy::fuzzy_find(content, new).matches.is_empty()
+        && crate::tools::fuzzy::fuzzy_find(content, old).matches.is_empty()
 }
 
 fn make_diff(path: &str, before: &str, after: &str) -> String {
@@ -532,32 +388,85 @@ fn patch_replace(
         }));
     }
 
-    let matches = fuzzy_find(&content, old_string);
-    if matches.is_empty() {
+    let hit = crate::tools::fuzzy::fuzzy_find(&content, old_string);
+    if hit.matches.is_empty() {
+        let hint = crate::tools::fuzzy::format_no_match_hint(
+            "Could not find a match for old_string in the file",
+            0,
+            old_string,
+            &content,
+        );
         return Ok(json!({
             "success": false,
             "error": format!(
-                "old_string not found in {} (even with fuzzy matching). Read the file to check exact content.",
-                path.display()
+                "old_string not found in {} (even with fuzzy matching). Read the file to check exact content.{}",
+                path.display(),
+                hint
             )
         }));
     }
-    if matches.len() > 1 && !replace_all {
+    if hit.matches.len() > 1 && !replace_all {
+        let locations = crate::tools::fuzzy::format_match_locations(&content, &hit.matches, 5);
         return Ok(json!({
             "success": false,
             "error": format!(
-                "old_string matches {} locations in {}. Include more surrounding context to make it unique, or set replace_all=true.",
-                matches.len(),
-                path.display()
+                "Found {} matches for old_string in {}. Provide more context to make it unique, or use replace_all=true. Matches:\n{}",
+                hit.matches.len(),
+                path.display(),
+                locations
             )
         }));
+    }
+    // Similarity-based strategies must never rewrite multiple approximate
+    // regions under replace_all.
+    if replace_all
+        && hit.matches.len() > 1
+        && crate::tools::fuzzy::SIMILARITY_STRATEGIES.contains(&hit.strategy)
+    {
+        return Ok(json!({
+            "success": false,
+            "error": format!(
+                "Found {} approximate matches via the '{}' strategy; replace_all only applies to exact matches. Provide the precise text (whitespace included) so an exact/line-trimmed match can be made.",
+                hit.matches.len(),
+                hit.strategy
+            )
+        }));
+    }
+    // Escape-drift guard on any non-exact match.
+    if hit.strategy != "exact" {
+        if let Some(drift) = crate::tools::fuzzy::detect_escape_drift(
+            &content,
+            &hit.matches,
+            old_string,
+            new_string,
+        ) {
+            return Ok(json!({"success": false, "error": drift}));
+        }
     }
 
+    // Effective replacement: conditional \t/\r unescape, Unicode
+    // preservation for strategy 7, re-indentation for all non-exact matches.
+    let mut effective_new =
+        crate::tools::fuzzy::maybe_unescape_new_string(new_string, &content, &hit.matches);
+    if hit.strategy == "unicode_normalized" {
+        effective_new = crate::tools::fuzzy::apply_unicode_preserving_replacement(
+            &content,
+            &hit.matches,
+            old_string,
+            &effective_new,
+        );
+    }
     // Apply replacements right-to-left to keep positions valid.
     let mut updated = content.clone();
-    for &(start, end) in matches.iter().rev() {
-        updated.replace_range(start..end, new_string);
+    for &(start, end) in hit.matches.iter().rev() {
+        let replacement = if hit.strategy == "exact" || hit.strategy == "unicode_normalized" {
+            effective_new.clone()
+        } else {
+            crate::tools::fuzzy::reindent_replacement(&content[start..end], old_string, &effective_new)
+        };
+        updated.replace_range(start..end, &replacement);
     }
+    let matches = &hit.matches;
     let diff = make_diff(raw_path, &content, &updated);
     std::fs::write(&path, &updated)
         .map_err(|e| crate::error::AgentError::tool(format!("write failed: {}", e)))?;
@@ -700,7 +609,7 @@ fn apply_v4a_patch(ctx: &Arc<ToolContext>, patch: &str) -> Result<serde_json::Va
                     }
                     let old_text = old_block.join("\n");
                     let new_text = new_block.join("\n");
-                    let matches = fuzzy_find(&content, &old_text);
+                    let matches = crate::tools::fuzzy::fuzzy_find(&content, &old_text).matches;
                     if matches.is_empty() {
                         return Ok(json!({
                             "success": false,
@@ -956,9 +865,12 @@ mod tests {
     #[test]
     fn test_fuzzy_find_exact_and_ws() {
         let content = "fn main() {\n    println!(\"hi\");\n}\n";
-        assert_eq!(fuzzy_find(content, "println!(\"hi\");").len(), 1);
+        let hit = crate::tools::fuzzy::fuzzy_find(content, "println!(\"hi\");");
+        assert_eq!(hit.strategy, "exact");
+        assert_eq!(hit.matches.len(), 1);
         // whitespace-normalized match
-        assert!(!fuzzy_find(content, "println!(   \"hi\"   );").is_empty() == false);
+        let hit = crate::tools::fuzzy::fuzzy_find(content, "println!(   \"hi\"   );");
+        assert!(!hit.matches.is_empty());
     }
 
     #[test]

@@ -68,21 +68,27 @@ ulnclaw/
 ├── Cargo.lock                 # 依赖锁定文件
 ├── README.md                  # 项目文档
 ├── src/
-│   ├── lib.rs                # 库入口点（112 行）
-│   ├── error.rs              # 错误类型（74 行）
-│   ├── agent/
-│   │   └── mod.rs            # 核心代理循环（367 行）
-│   ├── provider/
-│   │   ├── mod.rs            # Provider trait 和类型（214 行）
-│   │   └── openai.rs         # OpenAI 提供商（371 行）
+│   ├── lib.rs                # 库入口点
+│   ├── main.rs               # CLI（chat/run/sessions/tools/skills/cron/gateway/init）
+│   ├── error.rs              # 错误类型
+│   ├── agent/                # 核心代理循环（持久化、审批、委派）
+│   ├── provider/             # Provider trait + OpenAI 兼容实现
 │   ├── tools/
-│   │   └── mod.rs            # 工具注册表（287 行）
-│   ├── session/
-│   │   └── mod.rs            # 会话管理（144 行）
-│   └── context/
-│       └── mod.rs            # 上下文管理（200 行）
+│   │   ├── mod.rs            # 工具注册表与构建器
+│   │   ├── approval.rs       # 命令审批策略
+│   │   ├── context.rs        # ToolContext（会话、存储、回调）
+│   │   └── builtin/          # 46 个 hermes 工具（terminal、files、web、browser……）
+│   ├── browser/              # CDP WebSocket 客户端（browser_* 工具）
+│   ├── gateway/              # HTTP 网关（OpenAI 兼容 API 服务器）
+│   ├── session/              # SessionStore trait + SQLite 后端（FTS5）
+│   ├── context/              # 提示构建器 + 上下文压缩
+│   ├── config/               # config.toml/.env/profiles + 环境变量覆盖
+│   ├── cron/                 # 计划解析、任务存储、调度器
+│   ├── skills/               # SKILL.md 发现与注入
+│   ├── mcp/                  # MCP stdio 客户端
+│   └── toolsets.rs           # hermes 兼容工具集策略
 ├── tests/
-│   └── integration_test.rs   # 集成测试（258 行）
+│   └── integration_test.rs   # 集成测试
 └── docs/                      # 文档
     ├── en/                    # 英文文档
     └── zh/                    # 中文文档

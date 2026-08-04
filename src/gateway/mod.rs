@@ -66,6 +66,8 @@ pub struct GatewayState {
     pub provider_name: String,
     pub key: Option<String>,
     pub runs: Arc<Mutex<HashMap<String, RunState>>>,
+    /// Stored `/v1/responses` objects, keyed by response id.
+    pub responses: Arc<Mutex<HashMap<String, Value>>>,
 }
 
 impl GatewayState {
@@ -86,6 +88,7 @@ impl GatewayState {
             provider_name,
             key,
             runs: Arc::new(Mutex::new(HashMap::new())),
+            responses: Arc::new(Mutex::new(HashMap::new())),
         }))
     }
 }
@@ -99,7 +102,11 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/models", get(models))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/chat/completions", post(chat_completions))
-        .route("/v1/responses", post(responses_stub))
+        .route("/v1/responses", post(create_response))
+        .route(
+            "/v1/responses/:id",
+            get(get_response).delete(delete_response),
+        )
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route(
             "/api/sessions/:id",
@@ -109,6 +116,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/chat", post(session_chat))
         .route("/v1/runs", get(list_runs).post(start_run))
         .route("/v1/runs/:id", get(get_run))
+        .route("/v1/runs/:id/events", get(run_events))
         .route("/v1/runs/:id/stop", post(stop_run))
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
@@ -230,9 +238,9 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
         "session_header": "X-Ulnclaw-Session-Id",
         "endpoints": {
             "chat_completions": true,
-            "responses": false,
+            "responses": true,
             "runs": true,
-            "runs_events_sse": false,
+            "runs_events_sse": true,
             "sessions": true,
             "streaming": false,
         },
@@ -401,12 +409,140 @@ async fn chat_completions(
     }
 }
 
-async fn responses_stub() -> Response {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({"error": {"message": "/v1/responses is not implemented in this build; use /v1/chat/completions or /v1/runs", "type": "invalid_request_error"}})),
-    )
-        .into_response()
+// ---------------------------------------------------------------------------
+// /v1/responses — OpenAI Responses API (stateful via previous_response_id)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ResponsesRequest {
+    input: Value,
+    #[serde(default)]
+    previous_response_id: Option<String>,
+}
+
+fn input_to_messages(input: &Value) -> Vec<ChatMessage> {
+    match input {
+        Value::String(text) => vec![ChatMessage {
+            role: "user".to_string(),
+            content: Some(Value::String(text.clone())),
+        }],
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                Some(ChatMessage {
+                    role: item.get("role")?.as_str()?.to_string(),
+                    content: item.get("content").cloned(),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+async fn create_response(
+    State(state): State<Arc<GatewayState>>,
+    Json(request): Json<ResponsesRequest>,
+) -> Response {
+    let messages = input_to_messages(&request.input);
+    let prompt = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| message_text(&m.content))
+        .unwrap_or_default();
+    if prompt.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"message": "no user message found in input", "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    }
+
+    // Resolve the session: previous_response_id chains to its session.
+    let session_id = if let Some(ref prev) = request.previous_response_id {
+        let responses = state.responses.lock().await;
+        match responses.get(prev) {
+            Some(prev_response) => prev_response
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            None => {
+                return not_found(&format!("previous response {} not found", prev));
+            }
+        }
+    } else {
+        None
+    };
+
+    let history = session_id
+        .as_ref()
+        .map(|sid| {
+            state
+                .store
+                .load_messages(sid)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.role != Role::System)
+                .collect::<Vec<_>>()
+        })
+        .filter(|h| !h.is_empty());
+
+    match state
+        .agent
+        .run_with_session(&prompt, history, session_id.as_deref())
+        .await
+    {
+        Ok(result) => {
+            let response_id = format!("resp_{}", uuid::Uuid::new_v4());
+            let body = json!({
+                "id": response_id,
+                "object": "response",
+                "created_at": now_secs() as u64,
+                "model": state.model_name,
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "id": format!("msg_{}", uuid::Uuid::new_v4()),
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": result.content}],
+                }],
+                "usage": {
+                    "input_tokens": result.usage.prompt_tokens,
+                    "output_tokens": result.usage.completion_tokens,
+                    "total_tokens": result.usage.prompt_tokens + result.usage.completion_tokens,
+                },
+                "session_id": result.session_id,
+                "previous_response_id": request.previous_response_id,
+            });
+            state
+                .responses
+                .lock()
+                .await
+                .insert(response_id.clone(), body.clone());
+            (StatusCode::CREATED, Json(body)).into_response()
+        }
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+async fn get_response(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    let responses = state.responses.lock().await;
+    match responses.get(&id) {
+        Some(body) => Json(body.clone()).into_response(),
+        None => not_found(&format!("response {} not found", id)),
+    }
+}
+
+async fn delete_response(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let mut responses = state.responses.lock().await;
+    match responses.remove(&id) {
+        Some(_) => Json(json!({"deleted": id})).into_response(),
+        None => not_found(&format!("response {} not found", id)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -604,6 +740,59 @@ async fn get_run(State(state): State<Arc<GatewayState>>, Path(id): Path<String>)
     }
 }
 
+/// SSE stream of run lifecycle events (`run.progress` / `run.completed` /
+/// `run.failed`), closing once the run reaches a terminal state.
+async fn run_events(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let exists = state.runs.lock().await.contains_key(&id);
+    if !exists {
+        return not_found(&format!("run {} not found", id));
+    }
+    let stream = futures::stream::unfold(
+        (state, id, String::new(), false),
+        |(state, id, last_status, done)| async move {
+            if done {
+                return None;
+            }
+            loop {
+                let run = state.runs.lock().await.get(&id).cloned();
+                match run {
+                    None => return None,
+                    Some(run) if run.status != last_status => {
+                        let event_name = match run.status.as_str() {
+                            "completed" => "run.completed",
+                            "failed" => "run.failed",
+                            _ => "run.progress",
+                        };
+                        let data = serde_json::to_string(&run).unwrap_or_default();
+                        let event = axum::response::sse::Event::default()
+                            .event(event_name)
+                            .data(data);
+                        let terminal = matches!(run.status.as_str(), "completed" | "failed");
+                        return Some((
+                            Ok::<_, std::convert::Infallible>(event),
+                            (state, id, run.status.clone(), terminal),
+                        ));
+                    }
+                    Some(_) => {
+                        drop(run);
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    }
+                }
+            }
+        },
+    );
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(std::time::Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response()
+}
+
 async fn stop_run(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
     let mut runs = state.runs.lock().await;
     match runs.get_mut(&id) {
@@ -782,6 +971,51 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_responses_validation_and_404() {
+        let app = router(test_state());
+        // Missing user message -> 400.
+        let request = axum::http::Request::builder()
+            .uri("/v1/responses")
+            .method("POST")
+            .header("authorization", "Bearer sekret")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"input": []}"#))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Unknown previous_response_id -> 404.
+        let request = axum::http::Request::builder()
+            .uri("/v1/responses")
+            .method("POST")
+            .header("authorization", "Bearer sekret")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"input": "hi", "previous_response_id": "resp_missing"}"#,
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // GET unknown response -> 404.
+        let (status, _) = get_json(app.clone(), "/v1/responses/resp_missing", Some("sekret")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_run_events_404_for_unknown_run() {
+        let app = router(test_state());
+        let request = axum::http::Request::builder()
+            .uri("/v1/runs/missing/events")
+            .method("GET")
+            .header("authorization", "Bearer sekret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

@@ -87,7 +87,40 @@ println!("{}", result.content);
 
 ## Web Service Integration
 
-### Axum Example
+### Built-in HTTP Gateway (Recommended)
+
+ulnclaw ships an OpenAI-compatible gateway — no wrapper code needed. Any
+OpenAI-compatible frontend (Open WebUI, LobeChat, LibreChat, NextChat,
+ChatBox, ...) can connect by pointing at `http://host:port/v1`.
+
+```bash
+# config.toml
+[gateway]
+host = "127.0.0.1"
+port = 8642
+key = "sk-..."                 # optional bearer token (ULNCLAW_GATEWAY_KEY)
+
+# run it
+ulnclaw gateway
+```
+
+```rust
+// ...or embed it in your own binary:
+let state = ulnclaw::gateway::GatewayState::new(
+    agent,                       // Arc<Agent> with the SQLite store attached
+    "my-agent".to_string(),      // advertised model name
+    "openai".to_string(),        // provider label
+    Some("sk-...".to_string()),  // bearer key (None = open)
+)?;
+ulnclaw::gateway::serve(state, "127.0.0.1", 8642).await?;
+```
+
+Endpoints: `/v1/chat/completions` (with `X-Ulnclaw-Session-Id` session
+continuity), `/v1/models`, `/v1/capabilities`, `/api/sessions` CRUD +
+per-session chat, `/v1/runs` async runs. See the
+[API reference](api-reference.md#http-gateway-gateway) for the full table.
+
+### Axum Example (Custom Routes)
 
 ```rust
 use axum::{

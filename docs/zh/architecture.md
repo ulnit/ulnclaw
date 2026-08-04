@@ -18,10 +18,11 @@ ulnclaw 采用模块化、高性能的 AI Agent 引擎设计，具有清晰的�
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         入口点                                   │
-│  Agent::run()    Agent::chat()    自定义集成                      │
-└──────────┬──────────────┬───────────────────────┬───────────────┘
-           │              │                       │
-           ▼              ▼                       ▼
+│  CLI（chat REPL / run / sessions / cron）   HTTP 网关             │
+│  Agent::run() / run_with_session()         （OpenAI 兼容）        │
+└──────────┬──────────────────┬───────────────────────┬───────────┘
+           │                  │                       │
+           ▼                  ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Agent (对话循环)                               │
 │                                                                  │
@@ -33,17 +34,17 @@ ulnclaw 采用模块化、高性能的 AI Agent 引擎设计，具有清晰的�
 │         │                 │                 │                   │
 │  ┌──────┴───────┐  ┌──────┴───────┐  ┌──────┴───────┐           │
 │  │ Compression  │  │ OpenAI       │  │ Tool Registry│           │
-│  │ & Caching    │  │ Compatible   │  │ (动态)        │           │
-│  │ 压缩和缓存    │  │ 兼容提供商    │  │ 工具注册表    │           │
+│  │ （预算触发）   │  │ Compatible   │  │ + MCP 工具    │           │
+│  │ 上下文压缩    │  │ 兼容提供商    │  │ 工具注册表    │           │
 │  └──────────────┘  └──────────────┘  └──────────────┘           │
 └─────────┴─────────────────┴─────────────────┴───────────────────┘
-           │                                    │
-           ▼                                    ▼
-┌───────────────────┐              ┌──────────────────────┐
-│ Session Storage   │              │ Tool Handlers         │
-│ (内存/SQLite)      │              │ 自定义实现             │
-│ 会话存储           │              │ 工具处理器             │
-└───────────────────┘              └──────────────────────┘
+           │                │                   │
+           ▼                ▼                   ▼
+┌───────────────────┐ ┌──────────────┐ ┌──────────────────────────┐
+│ SQLite 状态库      │ │ Providers    │ │ 工具后端                  │
+│ sessions/messages │ │ OpenAI/Ollama│ │ terminal、files、web、    │
+│ FTS5 + 谱系       │ │ DashScope/…  │ │ browser(CDP)、HA、kanban  │
+└───────────────────┘ └──────────────┘ └──────────────────────────┘
 ```
 
 ## 核心组件
@@ -168,6 +169,9 @@ registry.register(tool);
 **关键类型：**
 - `SessionStore` - 存储后端的 trait
 - `MemorySessionStore` - 内存实现
+- `SqliteSessionStore` - 生产后端（hermes_state 模式：sessions、messages、
+  system_prompts、state_meta、async_delegations；FTS5 全文检索 + LIKE
+  回退；父子谱系；面向网关 API 的会话行查询）
 - `Session` - 带元数据的对话状态
 - `SessionMetadata` - 用户 ID、平台、模型信息
 
@@ -225,6 +229,69 @@ registry.register(tool);
 - `AgentError::Http` - 网络错误（来自 reqwest）
 - `AgentError::Json` - 序列化错误
 - `AgentError::Internal` - 通用内部错误
+
+### 7. Browser 模块 (`browser/mod.rs`)
+
+支撑 `browser_*` 工具的 Chrome DevTools Protocol 客户端。
+
+**关键类型：**
+- `BrowserEndpoint` / `resolve_endpoint` - 解析 `ULNCLAW_BROWSER_CDP`
+  （`ws://...` 直连端点，或 `http://host:port` 发现）
+- `CdpClient` - WebSocket JSON-RPC，请求/响应分流 + 前缀事件订阅
+  （`Page.*`、`Runtime.*`……）
+- `BrowserSession` - 单个已附加的页面目标：导航（等待 load 事件）、
+  带编号元素引用的可访问性快照、经 `DOM.resolveNode` +
+  `Runtime.callFunctionOn` 的点击/输入（CSS 选择器回退）、滚动/按键/
+  图片列表/截图/执行 JS、JS 对话框跟踪
+- `with_session` - 全部浏览器工具共用的全局共享会话管理器
+- 浏览器监督器：`ULNCLAW_BROWSER_CDP=auto`（默认）启动托管的无头
+  Chrome/Chromium（`find_browser_binary`、`launch_managed_browser`、
+  `stop_managed_browser`），等待 DevTools 端口就绪后再连接
+
+**流程：**
+```
+browser_navigate → with_session → resolve_endpoint → CDP 连接
+  → Page.enable/Runtime.enable/DOM.enable/Accessibility.enable
+  → Page.navigate → 等待 Page.loadEventFired → page_info
+```
+
+### 8. Gateway 模块 (`gateway/mod.rs`)
+
+将 Agent 暴露给 OpenAI 兼容客户端的 HTTP 层（axum）——
+hermes `gateway/platforms/api_server.py` 核心的移植。
+
+**关键类型：**
+- `GatewayState` - agent + store + 模型标识 + 可选 bearer 密钥 +
+  运行记录表
+- `RunState` - 被跟踪的异步运行（`/v1/runs`）：状态、结果、停止标志
+- `router()` / `serve()` - 路由表与监听器
+
+**端点：**
+- `GET /health`、`/health/detailed`、`/v1/health`（始终开放）
+- `GET /v1/models`、`GET /v1/capabilities`
+- `POST /v1/chat/completions` - OpenAI 格式；经 `X-Ulnclaw-Session-Id`
+  可选会话续接（从 SQLite 加载历史，并通过 `Agent::run_with_session`
+  续用同一会话 id）
+- `POST/GET/DELETE /v1/responses` - OpenAI Responses 格式，经
+  `previous_response_id` 有状态续接
+- `GET/POST /api/sessions`、`GET/DELETE /api/sessions/:id`、
+  `GET /api/sessions/:id/messages`、`POST /api/sessions/:id/chat`
+- `POST /v1/runs`（202 + run_id）、`GET /v1/runs`、`GET /v1/runs/:id`、
+  `GET /v1/runs/:id/events`（SSE 生命周期事件）、`POST /v1/runs/:id/stop`
+
+**安全：** 除健康探测外所有路由经 bearer 令牌中间件（常量时间比较）；
+密钥来自 `[gateway] key` 或 `ULNCLAW_GATEWAY_KEY`。非交互设计：
+不设置审批回调，危险终端命令直接被拒绝而非弹出提示。
+
+### 支撑模块
+
+- `config/` - `config.toml` + `.env` + profiles（`UlncLawConfig`、
+  `GatewayConfig`，`ULNCLAW_HOME` 等环境变量覆盖）
+- `toolsets.rs` - hermes 兼容工具分组（33 个工具集、组合、启用/禁用策略）
+- `cron/` - 计划解析（`30m`、`every 2h`、cron 表达式、ISO 一次性）+
+  任务存储 + 轮询调度器
+- `skills/` - SKILL.md 发现与提示注入
+- `mcp/` - MCP stdio 客户端；服务器工具注册为 `mcp__<server>__<tool>`
 
 ## 数据流
 
@@ -359,11 +426,11 @@ registry.register(tool);
 ## 未来增强
 
 ### 计划特性
-- **流式响应**：实时令牌流
-- **上下文压缩**：基于模型的对话摘要
-- **子代理委托**：分层代理解析
-- **MCP 协议**：模型上下文协议支持
-- **SQLite 后端**：生产就绪的会话存储
+- **令牌流式输出**：chat completions 的 SSE 令牌流
+  （运行生命周期事件已经由 `/v1/runs/:id/events` 流式输出）
+- **消息平台**：hermes 的 Telegram/WhatsApp/QQ 适配器
+- **运行环境**：docker/ssh 终端后端
+- **运行审批处理**：网关上的交互式审批 `/v1/runs/:id/approval`
 - **Anthropic 原生**：直接 Claude API 支持
 - **重试逻辑**：带退避的自动重试
 - **指标**：Prometheus/OpenTelemetry 集成
@@ -371,8 +438,7 @@ registry.register(tool);
 ### 架构演进
 - **插件系统**：动态工具/提供商加载
 - **分布式代理**：多节点代理协调
-- **持久记忆**：长期知识存储
-- **多模态**：图像/音频/视频支持
+- **检查点管理器**：hermes 风格的运行检查点
 
 ## 参考资料
 

@@ -675,6 +675,219 @@ impl BrowserSession {
 }
 
 // ---------------------------------------------------------------------------
+// Browser supervisor — managed launch of a local Chrome/Chromium
+// (hermes runs an external agent-browser daemon; ulnclaw launches directly)
+// ---------------------------------------------------------------------------
+
+/// A browser process launched by the supervisor.
+pub struct ManagedBrowser {
+    child: tokio::process::Child,
+    /// HTTP discovery base, e.g. `http://127.0.0.1:9333`.
+    pub http_base: String,
+    /// Port the DevTools server listens on.
+    pub port: u16,
+}
+
+impl ManagedBrowser {
+    /// True while the browser process is still running.
+    pub async fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Terminate the browser process.
+    pub async fn stop(&mut self) {
+        self.child.kill().await.ok();
+    }
+}
+
+fn managed_slot() -> &'static RwLock<Option<Arc<RwLock<ManagedBrowser>>>> {
+    static SLOT: std::sync::OnceLock<RwLock<Option<Arc<RwLock<ManagedBrowser>>>>> =
+        std::sync::OnceLock::new();
+    SLOT.get_or_init(|| RwLock::new(None))
+}
+
+/// Candidate binary names, most specific first.
+const BROWSER_CANDIDATES: &[&str] = &[
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "chrome",
+    "headless_shell",
+];
+
+/// Extra well-known install locations beyond PATH.
+const BROWSER_EXTRA_PATHS: &[&str] = &[
+    "/usr/bin",
+    "/usr/local/bin",
+    "/opt/google/chrome",
+    "/snap/bin",
+    "/Applications/Google Chrome.app/Contents/MacOS",
+    "/Applications/Chromium.app/Contents/MacOS",
+];
+
+/// Locate a Chrome/Chromium binary (env override `ULNCLAW_BROWSER_PATH`).
+pub fn find_browser_binary() -> Option<std::path::PathBuf> {
+    if let Some(custom) = crate::config::get_env_value("ULNCLAW_BROWSER_PATH") {
+        let path = std::path::PathBuf::from(custom);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path_var).collect();
+    for extra in BROWSER_EXTRA_PATHS {
+        let dir = std::path::PathBuf::from(extra);
+        if dir.is_dir() {
+            dirs.push(dir);
+        }
+    }
+    for dir in &dirs {
+        for name in BROWSER_CANDIDATES {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// True when the sandbox bypass flag is needed (root without CAP_SYS_ADMIN).
+fn needs_sandbox_bypass() -> bool {
+    #[cfg(unix)]
+    {
+        libc_getuid() == 0
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+#[cfg(unix)]
+fn libc_getuid() -> u32 {
+    // Avoid a libc dependency just for the uid: read /proc.
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                let uid_line = line.strip_prefix("Uid:")?;
+                uid_line.split_whitespace().next()?.parse::<u32>().ok()
+            })
+        })
+        .unwrap_or(1)
+}
+
+/// Launch (or reuse) a managed headless browser and return its HTTP base.
+pub async fn launch_managed_browser() -> Result<String> {
+    // Reuse a live managed browser.
+    {
+        let slot = managed_slot().read().await;
+        if let Some(browser) = slot.as_ref() {
+            let mut guard = browser.write().await;
+            if guard.alive().await {
+                return Ok(guard.http_base.clone());
+            }
+        }
+    }
+
+    let binary = find_browser_binary().ok_or_else(|| {
+        AgentError::Tool(
+            "no Chrome/Chromium binary found (set ULNCLAW_BROWSER_PATH, install chromium, \
+             or point ULNCLAW_BROWSER_CDP at an existing DevTools endpoint)"
+                .into(),
+        )
+    })?;
+
+    // Grab a free port.
+    let port = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| AgentError::Tool(format!("bind ephemeral port: {}", e)))?;
+        listener.local_addr().map(|a| a.port()).map_err(|e| AgentError::Tool(e.to_string()))?
+    };
+
+    let user_data_dir = std::env::temp_dir().join(format!("ulnclaw-browser-{}", port));
+    std::fs::create_dir_all(&user_data_dir).ok();
+
+    let mut args = vec![
+        format!("--remote-debugging-port={}", port),
+        "--remote-debugging-address=127.0.0.1".to_string(),
+        "--headless=new".to_string(),
+        "--no-first-run".to_string(),
+        "--no-default-browser-check".to_string(),
+        "--disable-background-networking".to_string(),
+        "--disable-sync".to_string(),
+        "--disable-extensions".to_string(),
+        format!("--user-data-dir={}", user_data_dir.display()),
+    ];
+    if needs_sandbox_bypass() {
+        args.push("--no-sandbox".to_string());
+    }
+    if let Some(extra) = crate::config::get_env_value("ULNCLAW_BROWSER_ARGS") {
+        for arg in extra.split_whitespace() {
+            args.push(arg.to_string());
+        }
+    }
+
+    let child = tokio::process::Command::new(&binary)
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            AgentError::Tool(format!("launch {}: {}", binary.display(), e))
+        })?;
+
+    let http_base = format!("http://127.0.0.1:{}", port);
+    // Wait for the DevTools endpoint to come up.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err(AgentError::Tool(format!(
+                "managed browser ({}) did not open the DevTools port {} within 30s",
+                binary.display(),
+                port
+            )));
+        }
+        if discover_browser_ws(&http_base).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    let managed = Arc::new(RwLock::new(ManagedBrowser {
+        child,
+        http_base: http_base.clone(),
+        port,
+    }));
+    {
+        let mut slot = managed_slot().write().await;
+        *slot = Some(managed.clone());
+    }
+    tracing::info!("managed browser launched: {} on port {}", binary.display(), port);
+    Ok(http_base)
+}
+
+/// Stop the managed browser, if one is running.
+pub async fn stop_managed_browser() {
+    let mut slot = managed_slot().write().await;
+    if let Some(browser) = slot.take() {
+        browser.write().await.stop().await;
+        // Drop any page session attached to it.
+        let session_slot = global_session_slot();
+        *session_slot.write().await = None;
+    }
+}
+
+/// True when the configured endpoint is (or defaults to) managed-launch mode.
+pub fn is_auto_mode(raw: &str) -> bool {
+    matches!(raw.trim(), "" | "auto" | "launch" | "managed")
+}
+
+// ---------------------------------------------------------------------------
 // Global session manager — one shared page across tool calls
 // ---------------------------------------------------------------------------
 
@@ -684,6 +897,7 @@ fn global_session_slot() -> &'static RwLock<Option<Arc<BrowserSession>>> {
 }
 
 /// Read the configured CDP endpoint (env/config), if any.
+/// Absent or `auto`/`launch`/`managed` means "launch a local browser".
 pub fn configured_endpoint_raw() -> Option<String> {
     crate::config::get_env_value("ULNCLAW_BROWSER_CDP")
 }
@@ -694,10 +908,17 @@ where
     F: FnOnce(Arc<BrowserSession>) -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
-    let raw = configured_endpoint_raw().ok_or_else(|| {
-        AgentError::Tool("ULNCLAW_BROWSER_CDP is not set — point it at a Chrome DevTools endpoint (ws://... or http://host:port)".into())
-    })?;
-    let endpoint = resolve_endpoint(&raw)?;
+    let raw = configured_endpoint_raw().unwrap_or_else(|| "auto".to_string());
+    let endpoint = if is_auto_mode(&raw) {
+        // Supervisor: launch (or reuse) a managed local browser.
+        let http_base = launch_managed_browser().await?;
+        BrowserEndpoint {
+            browser_ws: None,
+            http_base: Some(http_base),
+        }
+    } else {
+        resolve_endpoint(&raw)?
+    };
 
     // Reuse an existing live session.
     {

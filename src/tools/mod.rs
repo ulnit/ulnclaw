@@ -5,6 +5,7 @@
 //! requirements for dangerous operations.
 
 pub mod approval;
+pub mod fuzzy;
 pub mod builtin;
 pub mod context;
 
