@@ -1027,6 +1027,7 @@ axum 路由表（供 `serve` 与测试使用）。
 | GET | `/api/sessions/:id` | 是 | 会话行 |
 | PATCH | `/api/sessions/:id` | 是 | 更新 `title` 和/或 `end_reason`（未知字段 → 400） |
 | POST | `/api/sessions/:id/model` | 是 | 将会话锁定到指定模型（`{"model": "...", "provider": "..."}`） |
+| GET | `/api/sessions/:id/recap` | 是 | 即时本地活动回顾（不调用 LLM） |
 | DELETE | `/api/sessions/:id` | 是 | 硬删除（消息 + FTS 条目） |
 | POST | `/api/sessions/:id/fork` | 是 | 分叉会话 → `201` 子会话（转录复制，源会话标记 `branched`） |
 | GET | `/api/sessions/:id/messages` | 是 | 消息历史 |
@@ -1186,6 +1187,12 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
 已配置的 provider，因此清单就是这一行（`slug`、`models`、
 `is_user_defined`、`authenticated`、`current`）；在线目录探测、定价与
 能力富化未移植。
+
+**会话回顾**（`GET /api/sessions/:id/recap`）：返回
+`{"object":"ulnclaw.session.recap","session_id":...,"recap":"..."}` ——
+与 CLI `sessions recap` / REPL `/recap` 相同的即时本地摘要
+（近期轮次数、常用工具、涉及文件、最近的提问/回复）。
+不调用模型。
 
 **发现端点**：`GET /v1/skills` 返回
 `{"object":"list","data":[{name, description, category, path}]}`，

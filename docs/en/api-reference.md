@@ -1028,6 +1028,7 @@ Binds and serves until interrupted.
 | GET | `/api/sessions/:id` | yes | Session row |
 | PATCH | `/api/sessions/:id` | yes | Update `title` and/or `end_reason` (unknown fields → 400) |
 | POST | `/api/sessions/:id/model` | yes | Lock the session to a model (`{"model": "...", "provider": "..."}`) |
+| GET | `/api/sessions/:id/recap` | yes | Instant local activity recap (no LLM call) |
 | DELETE | `/api/sessions/:id` | yes | Hard delete (messages + FTS entries) |
 | POST | `/api/sessions/:id/fork` | yes | Branch a session → `201` child session (transcript copied, source marked `branched`) |
 | GET | `/api/sessions/:id/messages` | yes | Message history |
@@ -1195,6 +1196,12 @@ configured model clears the override.  Forks inherit the lock.  Missing
 provider, so the inventory is that single row (`slug`, `models`,
 `is_user_defined`, `authenticated`, `current`); live catalog probing,
 pricing, and capability enrichment are not ported.
+
+**Session recap** (`GET /api/sessions/:id/recap`): returns
+`{"object":"ulnclaw.session.recap","session_id":...,"recap":"..."}` —
+the same instant, local-only summary as the CLI `sessions recap` /
+REPL `/recap` (recent turn counts, top tools, files touched, last
+ask/reply).  No model call is made.
 
 **Discovery endpoints**: `GET /v1/skills` returns
 `{"object":"list","data":[{name, description, category, path}]}` from the

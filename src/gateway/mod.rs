@@ -12,6 +12,7 @@
 //!   - `PATCH /api/sessions/:id` — update title / end_reason
 //!   - `POST /api/sessions/:id/fork` — branch a session into a child
 //!   - `POST /api/sessions/:id/model` — lock a session to a model
+//!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
 //!     `POST /v1/runs/:id/stop`
 //!   - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/{id}`,
@@ -366,6 +367,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/chat", post(session_chat))
         .route("/api/sessions/:id/chat/stream", post(session_chat_stream))
         .route("/api/sessions/:id/model", post(lock_session_model))
+        .route("/api/sessions/:id/recap", get(session_recap))
         .route("/api/jobs", get(list_jobs).post(create_job))
         .route(
             "/api/jobs/:id",
@@ -566,6 +568,28 @@ async fn lock_session_model(
     }))
     .into_response()
 }
+
+/// `GET /api/sessions/:id/recap` — instant local activity recap (hermes
+/// `build_recap`, shared with the CLI `/recap`). No LLM call.
+async fn session_recap(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    let row = match state.store.get_session_row(&id) {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(&format!("session {} not found", id)),
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let messages = match state.store.load_messages(&id) {
+        Ok(messages) => messages,
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let recap = crate::session::recap::build_recap(&messages, row.title.as_deref(), Some(&row.id));
+    Json(json!({
+        "object": "ulnclaw.session.recap",
+        "session_id": row.id,
+        "recap": recap,
+    }))
+    .into_response()
+}
+
 /// Await an agent future with the session's model lock (if any) installed
 /// as a per-task override.
 async fn await_with_model_override<F, T>(override_model: Option<String>, future: F) -> T
@@ -598,6 +622,7 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "toolsets": true,
             "model_options": true,
             "session_model_lock": true,
+            "session_recap": true,
             "streaming": true,
         },
     }))
@@ -3325,5 +3350,65 @@ mod tests {
         .await;
         assert_eq!(inside.as_deref(), Some("locked"));
         assert_eq!(crate::agent::current_model_override(), None);
+    }
+
+    #[tokio::test]
+    async fn test_session_recap_endpoint() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let id = state.store.create_session("gateway", None, None).unwrap();
+        state
+            .store
+            .append_message(
+                &id,
+                &Message {
+                    role: Role::User,
+                    content: Some("what changed?".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        state
+            .store
+            .append_message(
+                &id,
+                &Message {
+                    role: Role::Assistant,
+                    content: Some("I updated the parser.".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/recap", id),
+            Some(token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["object"], "ulnclaw.session.recap");
+        assert_eq!(body["session_id"], id);
+        let recap = body["recap"].as_str().unwrap();
+        assert!(recap.contains("Session recap"));
+        assert!(recap.contains("Last ask: what changed?"));
+        assert!(recap.contains("Last reply: I updated the parser."));
+
+        let (status, _) = get_json(app.clone(), "/api/sessions/ghost/recap", Some(token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_lists_phase15_endpoints() {
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/v1/capabilities", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["endpoints"]["session_recap"], true);
     }
 }
