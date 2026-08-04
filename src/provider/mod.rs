@@ -125,6 +125,14 @@ pub trait Provider: Send + Sync {
     async fn is_available(&self) -> bool {
         true
     }
+
+    /// Analyze an image (vision). `image_url` is either an http(s) URL or a
+    /// data: URL. Default: unsupported.
+    async fn analyze_image(&self, _prompt: &str, _image_url: &str) -> Result<String> {
+        Err(AgentError::provider(
+            "this provider does not support vision (analyze_image)",
+        ))
+    }
 }
 
 /// Provider configuration for dynamic instantiation

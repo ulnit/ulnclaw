@@ -1,7 +1,14 @@
-//! Tool registry - self-registering tools with schema, handler, and toolset membership
+//! Tool registry — port of hermes' tools/registry.py
 //!
-//! Inspired by Hermes Agent's tools/registry.py which uses a central registry
-//! where each tool file calls registry.register() at module level.
+//! Tools self-register with a JSON schema, a toolset, an async handler, an
+//! optional `check_fn` availability gate, and optional confirmation
+//! requirements for dangerous operations.
+
+pub mod approval;
+pub mod builtin;
+pub mod context;
+
+pub use context::ToolContext;
 
 use crate::error::{AgentError, Result};
 use serde::{Deserialize, Serialize};
@@ -19,6 +26,29 @@ pub struct ToolDefinition {
     pub parameters: serde_json::Value,
 }
 
+/// Availability check result — port of hermes `check_fn`.
+#[derive(Debug, Clone)]
+pub enum ToolAvailability {
+    Available,
+    /// Unavailable with a reason (tool hidden from the model schema).
+    Unavailable(String),
+}
+
+impl ToolAvailability {
+    pub fn available() -> Self {
+        Self::Available
+    }
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self::Unavailable(reason.into())
+    }
+    pub fn is_available(&self) -> bool {
+        matches!(self, Self::Available)
+    }
+}
+
+/// Type alias for the availability gate.
+pub type CheckFn = Arc<dyn Fn() -> ToolAvailability + Send + Sync>;
+
 /// A tool with its definition and async handler
 pub struct Tool {
     pub definition: ToolDefinition,
@@ -27,12 +57,20 @@ pub struct Tool {
     pub toolset: String,
     /// Whether this tool requires user confirmation before execution
     pub dangerous: bool,
+    /// Emoji shown in UI logs (hermes `emoji`).
+    pub emoji: String,
+    /// Max result size in characters (hermes `max_result_size_chars`).
+    pub max_result_size_chars: usize,
+    /// Availability gate (hermes `check_fn`).
+    pub check_fn: Option<CheckFn>,
 }
 
-/// Type alias for async tool handler function
+/// Type alias for async tool handler function.
+/// Handlers receive the arguments plus the shared tool context.
 pub type ToolHandler = Arc<
     dyn Fn(
             serde_json::Value,
+            Arc<ToolContext>,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send>>
         + Send
         + Sync,
@@ -101,7 +139,7 @@ impl ToolRegistry {
 
         self.toolsets
             .entry(toolset)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(name.clone());
         self.tools.insert(name.clone(), tool);
         debug!("Registered tool: {}", name);
@@ -110,7 +148,6 @@ impl ToolRegistry {
     /// Unregister a tool by name
     pub fn unregister(&mut self, name: &str) -> Option<Tool> {
         if let Some(tool) = self.tools.remove(name) {
-            // Remove from toolset
             if let Some(tools) = self.toolsets.get_mut(&tool.toolset) {
                 tools.retain(|n| n != name);
             }
@@ -125,18 +162,18 @@ impl ToolRegistry {
         self.tools.get(name)
     }
 
-    /// Dispatch a tool call - execute the handler with given arguments
+    /// Dispatch a tool call — checks toolset enablement and availability.
     pub async fn dispatch(
         &self,
         name: &str,
         arguments: serde_json::Value,
+        context: Arc<ToolContext>,
     ) -> Result<serde_json::Value> {
         let tool = self
             .tools
             .get(name)
             .ok_or_else(|| AgentError::ToolNotFound(name.to_string()))?;
 
-        // Check if toolset is disabled
         if self.disabled_toolsets.contains(&tool.toolset) {
             return Err(AgentError::Tool(format!(
                 "Toolset '{}' is disabled",
@@ -144,23 +181,54 @@ impl ToolRegistry {
             )));
         }
 
+        if let Some(ref check) = tool.check_fn {
+            if let ToolAvailability::Unavailable(reason) = check() {
+                return Err(AgentError::Tool(format!(
+                    "Tool '{}' is unavailable: {}",
+                    name, reason
+                )));
+            }
+        }
+
         debug!("Dispatching tool: {}", name);
-        let result = (tool.handler)(arguments).await?;
+        let mut result = (tool.handler)(arguments, context).await?;
+        // Enforce max result size (hermes truncates oversized tool output).
+        let limit = tool.max_result_size_chars;
+        if let Some(text) = result.as_str() {
+            if text.chars().count() > limit {
+                let truncated: String = text.chars().take(limit).collect();
+                result = serde_json::json!(format!(
+                    "{}\n\n[output truncated at {} chars]",
+                    truncated, limit
+                ));
+            }
+        }
         Ok(result)
     }
 
-    /// Get all enabled tool definitions (for sending to the model)
+    /// Get all enabled + available tool definitions (for sending to the model)
     pub fn definitions(&self) -> Vec<ToolDefinition> {
-        self.tools
+        let mut defs: Vec<ToolDefinition> = self
+            .tools
             .values()
             .filter(|tool| !self.disabled_toolsets.contains(&tool.toolset))
+            .filter(|tool| {
+                tool.check_fn
+                    .as_ref()
+                    .map(|check| check().is_available())
+                    .unwrap_or(true)
+            })
             .map(|tool| tool.definition.clone())
-            .collect()
+            .collect();
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
+        defs
     }
 
     /// Get all tool names
     pub fn names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+        let mut names: Vec<String> = self.tools.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// Check if a tool exists
@@ -175,7 +243,7 @@ impl ToolRegistry {
 
     /// Check if registry is empty
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.tools.len() == 0
     }
 
     /// Enable a toolset
@@ -192,7 +260,9 @@ impl ToolRegistry {
 
     /// Get all toolset names
     pub fn toolset_names(&self) -> Vec<String> {
-        self.toolsets.keys().cloned().collect()
+        let mut names: Vec<String> = self.toolsets.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// Get tools in a specific toolset
@@ -217,6 +287,9 @@ pub struct ToolBuilder {
     handler: Option<ToolHandler>,
     toolset: String,
     dangerous: bool,
+    emoji: String,
+    max_result_size_chars: usize,
+    check_fn: Option<CheckFn>,
 }
 
 impl ToolBuilder {
@@ -231,6 +304,9 @@ impl ToolBuilder {
             handler: None,
             toolset: "default".to_string(),
             dangerous: false,
+            emoji: String::new(),
+            max_result_size_chars: 100_000,
+            check_fn: None,
         }
     }
 
@@ -246,10 +322,10 @@ impl ToolBuilder {
 
     pub fn handler<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(serde_json::Value) -> Fut + Send + Sync + 'static,
+        F: Fn(serde_json::Value, Arc<ToolContext>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<serde_json::Value>> + Send + 'static,
     {
-        self.handler = Some(Arc::new(move |args| Box::pin(handler(args))));
+        self.handler = Some(Arc::new(move |args, ctx| Box::pin(handler(args, ctx))));
         self
     }
 
@@ -260,6 +336,24 @@ impl ToolBuilder {
 
     pub fn dangerous(mut self, dangerous: bool) -> Self {
         self.dangerous = dangerous;
+        self
+    }
+
+    pub fn emoji(mut self, emoji: impl Into<String>) -> Self {
+        self.emoji = emoji.into();
+        self
+    }
+
+    pub fn max_result_size_chars(mut self, limit: usize) -> Self {
+        self.max_result_size_chars = limit;
+        self
+    }
+
+    pub fn check_fn<F>(mut self, check: F) -> Self
+    where
+        F: Fn() -> ToolAvailability + Send + Sync + 'static,
+    {
+        self.check_fn = Some(Arc::new(check));
         self
     }
 
@@ -277,6 +371,9 @@ impl ToolBuilder {
             handler,
             toolset: self.toolset,
             dangerous: self.dangerous,
+            emoji: self.emoji,
+            max_result_size_chars: self.max_result_size_chars,
+            check_fn: self.check_fn,
         })
     }
 }

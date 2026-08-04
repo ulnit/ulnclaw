@@ -1,0 +1,218 @@
+//! ToolContext — runtime state passed to every tool handler.
+//!
+//! Port of the `**kw` context hermes passes to handlers (task_id,
+//! session_id, config, stores) plus the interactive callbacks (clarify,
+//! approval) and the sub-agent runner used by delegation/cron.
+
+use crate::config::UlncLawConfig;
+use crate::error::Result;
+use crate::provider::Provider;
+use crate::session::sqlite::SqliteSessionStore;
+use async_trait::async_trait;
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, RwLock};
+
+/// Callback used by the `clarify` tool: (question, choices, multi_select) -> answer.
+pub type ClarifyFn = Arc<
+    dyn Fn(
+            String,
+            Vec<String>,
+            bool,
+        ) -> Pin<Box<dyn Future<Output = Result<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Callback used by the approval system: prompt -> approved?
+pub type ApproveFn = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
+>;
+
+/// Backend that can run delegated sub-agents (implemented by `Agent`).
+#[async_trait]
+pub trait SubAgentRunner: Send + Sync {
+    /// Run a sub-agent with the given goal/context; returns its final answer.
+    async fn run_subagent(&self, goal: &str, context: &str) -> Result<String>;
+}
+
+/// Backend that can run a cron job immediately (`cronjob action=run`).
+#[async_trait]
+pub trait CronRunner: Send + Sync {
+    async fn run_prompt(&self, prompt: &str, skills: &[String]) -> Result<String>;
+}
+
+/// Shared context handed to every tool invocation.
+#[derive(Clone)]
+pub struct ToolContext {
+    /// Session id this run belongs to.
+    pub session_id: String,
+    /// Session working directory (terminal `cd` updates it).
+    pub workdir: Arc<Mutex<PathBuf>>,
+    /// ulnclaw home directory.
+    pub home: PathBuf,
+    /// Loaded configuration.
+    pub config: UlncLawConfig,
+    /// SQLite state store (session_search, persistence).
+    pub store: Option<Arc<SqliteSessionStore>>,
+    /// Clarify callback (interactive frontends set this).
+    pub clarify: Option<ClarifyFn>,
+    /// Approval callback for dangerous commands.
+    pub approve: Option<ApproveFn>,
+    /// Delegation backend (set by Agent via wire_runners).
+    subagent_runner: Arc<RwLock<Option<Arc<dyn SubAgentRunner>>>>,
+    /// Cron immediate-run backend (set by Agent/CLI via wire_runners).
+    cron_runner: Arc<RwLock<Option<Arc<dyn CronRunner>>>>,
+    /// Chat provider (vision, compression summaries).
+    pub provider: Option<Arc<dyn Provider>>,
+    /// Snapshot of tool definitions (for tool_search).
+    tool_definitions: Arc<std::sync::RwLock<Vec<crate::tools::ToolDefinition>>>,
+}
+
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            workdir: Arc::new(Mutex::new(
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            )),
+            home: crate::config::ulnclaw_home(),
+            config: UlncLawConfig::default(),
+            store: None,
+            clarify: None,
+            approve: None,
+            subagent_runner: Arc::new(RwLock::new(None)),
+            cron_runner: Arc::new(RwLock::new(None)),
+            provider: None,
+            tool_definitions: Arc::new(std::sync::RwLock::new(Vec::new())),
+        }
+    }
+}
+
+impl ToolContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = id.into();
+        self
+    }
+
+    pub fn with_workdir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.workdir = Arc::new(Mutex::new(path.into()));
+        self
+    }
+
+    pub fn with_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.home = path.into();
+        self
+    }
+
+    pub fn with_config(mut self, config: UlncLawConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    pub fn with_store(mut self, store: Arc<SqliteSessionStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    pub fn with_clarify(mut self, clarify: ClarifyFn) -> Self {
+        self.clarify = Some(clarify);
+        self
+    }
+
+    pub fn with_approve(mut self, approve: ApproveFn) -> Self {
+        self.approve = Some(approve);
+        self
+    }
+
+    pub fn with_subagent_runner(self, runner: Arc<dyn SubAgentRunner>) -> Self {
+        self.set_subagent_runner(runner);
+        self
+    }
+
+    pub fn with_cron_runner(self, runner: Arc<dyn CronRunner>) -> Self {
+        self.set_cron_runner(runner);
+        self
+    }
+
+    /// Set the delegation backend (interior mutability — can be wired after
+    /// the context is shared).
+    pub fn set_subagent_runner(&self, runner: Arc<dyn SubAgentRunner>) {
+        if let Ok(mut guard) = self.subagent_runner.write() {
+            *guard = Some(runner);
+        }
+    }
+
+    /// Set the cron immediate-run backend.
+    pub fn set_cron_runner(&self, runner: Arc<dyn CronRunner>) {
+        if let Ok(mut guard) = self.cron_runner.write() {
+            *guard = Some(runner);
+        }
+    }
+
+    /// Get the delegation backend if wired.
+    pub fn subagent_runner(&self) -> Option<Arc<dyn SubAgentRunner>> {
+        self.subagent_runner.read().ok().and_then(|g| g.clone())
+    }
+
+    /// Get the cron runner if wired.
+    pub fn cron_runner(&self) -> Option<Arc<dyn CronRunner>> {
+        self.cron_runner.read().ok().and_then(|g| g.clone())
+    }
+
+    pub fn with_provider(mut self, provider: Arc<dyn Provider>) -> Self {
+        self.provider = Some(provider);
+        self
+    }
+
+    /// Refresh the tool-catalog snapshot (call after registration).
+    pub fn set_tool_definitions(&self, defs: Vec<crate::tools::ToolDefinition>) {
+        if let Ok(mut guard) = self.tool_definitions.write() {
+            *guard = defs;
+        }
+    }
+
+    /// Snapshot of registered tool definitions (for tool_search).
+    pub fn tool_registry_snapshot(&self) -> Vec<crate::tools::ToolDefinition> {
+        self.tool_definitions
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    /// Current working directory snapshot.
+    pub fn cwd(&self) -> PathBuf {
+        self.workdir.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// Update the session working directory.
+    pub fn set_cwd(&self, path: PathBuf) {
+        if let Ok(mut guard) = self.workdir.lock() {
+            *guard = path;
+        }
+    }
+
+    /// Resolve a possibly-relative path against the session cwd.
+    /// Also expands a leading `~` (hermes path convention).
+    pub fn resolve_path(&self, raw: &str) -> PathBuf {
+        let expanded = if let Some(stripped) = raw.strip_prefix("~/") {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(stripped)
+        } else if raw == "~" {
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+        } else {
+            PathBuf::from(raw)
+        };
+        if expanded.is_absolute() {
+            expanded
+        } else {
+            self.cwd().join(expanded)
+        }
+    }
+}

@@ -3,7 +3,9 @@
 //! Inspired by Hermes Agent's prompt_builder.py and context_compressor.py.
 //! Handles system prompt assembly and context window optimization.
 
-use crate::provider::Message;
+pub mod compressor;
+pub use compressor::ContextCompressor;
+
 
 /// Prompt builder - assembles system prompts from multiple layers
 ///
@@ -149,52 +151,3 @@ impl PromptBuilder {
     }
 }
 
-/// Context compressor - summarizes middle conversation turns when context exceeds thresholds
-///
-/// This is a placeholder for future implementation. Full compression requires
-/// a secondary model call to summarize old messages.
-pub struct ContextCompressor {
-    /// Maximum context tokens before compression kicks in
-    pub max_context_tokens: usize,
-    /// Target compression ratio (0.0 to 1.0)
-    pub target_ratio: f32,
-}
-
-impl Default for ContextCompressor {
-    fn default() -> Self {
-        Self {
-            max_context_tokens: 100_000,
-            target_ratio: 0.5,
-        }
-    }
-}
-
-impl ContextCompressor {
-    /// Estimate token count (rough approximation: 4 chars per token)
-    pub fn estimate_tokens(messages: &[Message]) -> usize {
-        messages
-            .iter()
-            .map(|m| {
-                let content_len = m.content.as_ref().map(|c| c.len()).unwrap_or(0);
-                content_len / 4
-            })
-            .sum()
-    }
-
-    /// Check if compression is needed
-    pub fn needs_compression(&self, messages: &[Message]) -> bool {
-        Self::estimate_tokens(messages) > self.max_context_tokens
-    }
-
-    /// Compress messages (placeholder - returns messages unchanged for now)
-    ///
-    /// Future implementation will:
-    /// 1. Keep system prompt + first N messages + last M messages
-    /// 2. Summarize middle messages using a secondary model call
-    /// 3. Return compressed message list
-    pub fn compress(&self, messages: Vec<Message>) -> Vec<Message> {
-        // Placeholder: return as-is
-        // TODO: Implement actual compression with model call
-        messages
-    }
-}

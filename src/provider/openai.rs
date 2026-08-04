@@ -223,6 +223,7 @@ struct ApiError {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 struct ApiErrorDetail {
     message: String,
     #[serde(default)]
@@ -367,5 +368,41 @@ impl Provider for OpenAiProvider {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    async fn analyze_image(&self, prompt: &str, image_url: &str) -> Result<String> {
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_url}}
+                ]
+            }],
+            "max_tokens": self.max_tokens.unwrap_or(1024),
+        });
+        let mut request = self.client.post(self.api_url()).json(&body);
+        if let Some(ref key) = self.api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| AgentError::provider(format!("vision request failed: {}", e)))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AgentError::provider(format!("vision API {}: {}", status, &text[..text.len().min(300)])));
+        }
+        let payload: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AgentError::provider(format!("parse vision response: {}", e)))?;
+        payload
+            .pointer("/choices/0/message/content")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| AgentError::provider("vision response missing content"))
     }
 }

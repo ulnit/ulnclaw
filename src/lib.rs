@@ -55,7 +55,7 @@
 //!     let mut tools = ToolRegistry::new();
 //!     tools.register(tool("get_time")
 //!         .description("Get current time")
-//!         .handler(|_args| async { Ok(json!({"time": "now"})) })
+//!         .handler(|_args, _ctx| async move { Ok(json!({"time": "now"})) })
 //!         .build()?);
 //!
 //!     // Create agent
@@ -73,11 +73,16 @@
 //! ```
 
 pub mod agent;
+pub mod config;
 pub mod context;
+pub mod cron;
 pub mod error;
+pub mod mcp;
 pub mod provider;
 pub mod session;
+pub mod skills;
 pub mod tools;
+pub mod toolsets;
 
 // Re-export core types for convenience
 pub use agent::{Agent, AgentCallbacks, AgentConfig, RunResult, ToolCallRecord};
@@ -89,7 +94,11 @@ pub use provider::{
 };
 pub use provider::openai::OpenAiProvider;
 pub use session::{MemorySessionStore, Session, SessionMetadata, SessionStore};
+pub use session::sqlite::SqliteSessionStore;
 pub use tools::{tool, Tool, ToolBuilder, ToolDefinition, ToolHandler, ToolRegistry, ToolResult};
+pub use tools::context::ToolContext;
+pub use tools::builtin::register_builtin_tools;
+pub use config::UlncLawConfig;
 
 /// Prelude module - convenient imports for common use cases
 pub mod prelude {

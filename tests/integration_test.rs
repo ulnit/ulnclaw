@@ -18,7 +18,7 @@ async fn test_tool_registry() {
             },
             "required": ["message"]
         }))
-        .handler(|args| async move {
+        .handler(|args, _ctx| async move {
             let msg = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
             Ok(json!({"echo": msg}))
         })
@@ -38,7 +38,7 @@ async fn test_tool_registry() {
     assert_eq!(defs[0].name, "echo");
     
     // Dispatch tool
-    let result = registry.dispatch("echo", json!({"message": "hello"})).await.unwrap();
+    let result = registry.dispatch("echo", json!({"message": "hello"}), std::sync::Arc::new(ulnclaw::ToolContext::new())).await.unwrap();
     assert_eq!(result, json!({"echo": "hello"}));
 }
 
@@ -49,7 +49,7 @@ async fn test_tool_dispatch_error() {
     
     let tool = tool("failing_tool")
         .description("A tool that fails")
-        .handler(|_args| async {
+        .handler(|_args, _ctx| async move {
             Err(ulnclaw::AgentError::tool("intentional failure"))
         })
         .build()
@@ -57,7 +57,7 @@ async fn test_tool_dispatch_error() {
     
     registry.register(tool);
     
-    let result = registry.dispatch("failing_tool", json!({})).await;
+    let result = registry.dispatch("failing_tool", json!({}), std::sync::Arc::new(ulnclaw::ToolContext::new())).await;
     assert!(result.is_err());
 }
 
@@ -68,14 +68,14 @@ async fn test_toolset_management() {
     
     let tool1 = tool("tool_a")
         .description("Tool A")
-        .handler(|_| async { Ok(json!({})) })
+        .handler(|_, _ctx| async move { Ok(json!({})) })
         .toolset("group1")
         .build()
         .unwrap();
     
     let tool2 = tool("tool_b")
         .description("Tool B")
-        .handler(|_| async { Ok(json!({})) })
+        .handler(|_, _ctx| async move { Ok(json!({})) })
         .toolset("group2")
         .build()
         .unwrap();
@@ -121,10 +121,7 @@ fn test_context_compressor() {
     use ulnclaw::ContextCompressor;
     use ulnclaw::provider::{Message, Role};
     
-    let compressor = ContextCompressor {
-        max_context_tokens: 100,
-        target_ratio: 0.5,
-    };
+    let compressor = ContextCompressor::new(100);
     
     // Small context - no compression needed
     let small_msgs = vec![
