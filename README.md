@@ -31,6 +31,7 @@ full feature-by-feature mapping.
 - **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), `stream: true` SSE streaming on both (token deltas, tool-progress/function-call events), async `/v1/runs` with SSE events + approval resolution, sessions API (incl. `PATCH`/fork + enforced per-session model lock), `/api/jobs` cron management (CRUD + pause/resume/run), `/v1/skills` + `/v1/toolsets` discovery, `/api/model/options`, Prometheus `/metrics`, bearer auth
 - **🖥️ Terminal environments** — run `terminal` locally (default), in docker (auto container creation), or over ssh (`[terminal] backend`)
 - **📸 Checkpoints** — transparent git-backed snapshots before file edits (shared shadow store, per-project chains), `ulnclaw checkpoints list/restore/diff/prune`
+- **📝 Working diff** — `ulnclaw diff [--staged|--all]` shows what changed in a git worktree (untracked files included), REPL `/gitdiff`
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
 
 ### CLI Quick Start
@@ -58,6 +59,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw cron list
 ./ulnclaw moa list           # MoA presets (run: ./ulnclaw moa run "<prompt>")
 ./ulnclaw checkpoints list   # filesystem snapshots ([checkpoints] enabled = true)
+./ulnclaw diff               # git working-tree diff (--staged / --all)
 
 # Browser automation: auto mode launches a managed headless Chrome/Chromium;
 # or point browser_* tools at an existing browser with remote debugging
@@ -162,7 +164,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 170 tests
+cargo test                     # 176 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -198,6 +200,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、两者均支持 `stream: true` SSE 流式（令牌增量、工具进度/函数调用事件）、带 SSE 事件 + 审批处理的异步 `/v1/runs`、会话 API（含 `PATCH`/fork + 逐轮生效的会话级模型锁）、`/api/jobs` 定时任务管理（增删查改 + pause/resume/run）、`/v1/skills` + `/v1/toolsets` 发现端点、`/api/model/options`、Prometheus `/metrics`、Bearer 鉴权
 - **🖥️ 终端环境** —— `terminal` 可在本地（默认）、docker（自动创建容器）或 ssh 上执行（`[terminal] backend`）
 - **📸 检查点** —— 文件编辑前的透明 git 快照（共享 shadow 存储、按项目快照链），`ulnclaw checkpoints list/restore/diff/prune`
+- **📝 工作区 diff** —— `ulnclaw diff [--staged|--all]` 显示 git 工作区变更（含未跟踪文件），REPL `/gitdiff`
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
 
 ### CLI 快速开始
@@ -225,6 +228,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw cron list
 ./ulnclaw moa list           # MoA 预设（运行：./ulnclaw moa run "<prompt>"）
 ./ulnclaw checkpoints list   # 文件系统快照（[checkpoints] enabled = true）
+./ulnclaw diff               # git 工作区 diff（--staged / --all）
 
 # 浏览器自动化：auto 模式自动启动托管的无头 Chrome/Chromium；
 # 也可将 browser_* 工具指向已开启远程调试的浏览器
@@ -273,7 +277,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 170 个测试
+cargo test                     # 176 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

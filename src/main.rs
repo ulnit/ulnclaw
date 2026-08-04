@@ -70,6 +70,20 @@ enum Commands {
         #[command(subcommand)]
         action: CheckpointAction,
     },
+    /// Git working-tree diff (hermes working_diff): what changed here?
+    Diff {
+        /// Show staged changes only (`git diff --cached`)
+        #[arg(long)]
+        staged: bool,
+        /// Show everything since HEAD (staged + unstaged + untracked)
+        #[arg(long)]
+        all: bool,
+        /// Directory to inspect (default: cwd)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Optional pathspecs to restrict the diff
+        paths: Vec<String>,
+    },
     /// Mixture-of-Agents: fan out reference models + aggregator synthesis
     /// (hermes `moa` presets / `/moa` one-shot)
     Moa {
@@ -368,6 +382,32 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Cron { action } => cron_cmd(action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
+        Commands::Diff { staged, all, dir, paths } => {
+            let mode = if all {
+                ulnclaw::git_diff::DiffMode::All
+            } else if staged {
+                ulnclaw::git_diff::DiffMode::Staged
+            } else {
+                ulnclaw::git_diff::DiffMode::Working
+            };
+            let cwd = dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            match ulnclaw::git_diff::collect_working_diff(&cwd, mode, &paths) {
+                Ok(result) if result.empty => {
+                    println!("No changes ({} mode).", mode.as_str());
+                }
+                Ok(result) => {
+                    if !result.stat.is_empty() {
+                        println!("{}", result.stat);
+                        println!();
+                    }
+                    if !result.diff.is_empty() {
+                        println!("{}", result.diff);
+                    }
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+            Ok(())
+        }
         Commands::Moa { action } => {
             moa_cmd(&config, action.unwrap_or(MoaAction::List), cli.config.as_deref()).await
         }
@@ -547,7 +587,7 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -598,6 +638,26 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/tools" => {
             println!("(use `ulnclaw tools` outside the REPL)");
+        }
+        "/gitdiff" => {
+            let (mode, rest) = match rest.split_whitespace().next() {
+                Some("staged") => (ulnclaw::git_diff::DiffMode::Staged, ""),
+                Some("all") => (ulnclaw::git_diff::DiffMode::All, ""),
+                _ => (ulnclaw::git_diff::DiffMode::Working, rest),
+            };
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            match ulnclaw::git_diff::collect_working_diff(&cwd, mode, &[]) {
+                Ok(result) if result.empty => println!("No changes ({} mode).", mode.as_str()),
+                Ok(result) => {
+                    if !result.stat.is_empty() {
+                        println!("{}", result.stat);
+                        println!();
+                    }
+                    println!("{}", result.diff);
+                    let _ = rest;
+                }
+                Err(e) => println!("gitdiff failed: {}", e),
+            }
         }
         "/skills" => {
             let dir = agent.tool_context().home.join("skills");
