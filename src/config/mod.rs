@@ -398,6 +398,24 @@ pub struct UlncLawConfig {
     /// HTTP gateway (OpenAI-compatible API server).
     #[serde(default)]
     pub gateway: GatewayConfig,
+    /// Approval flow settings (hermes `[approvals]`).
+    #[serde(default)]
+    pub approvals: ApprovalsConfig,
+}
+
+/// `[approvals]` config section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApprovalsConfig {
+    /// Seconds to wait for a human decision before fail-closed auto-deny
+    /// (hermes default 300).
+    pub timeout: u64,
+}
+
+impl Default for ApprovalsConfig {
+    fn default() -> Self {
+        Self { timeout: 300 }
+    }
 }
 
 /// MCP configuration section ([[mcp.servers]]).

@@ -182,18 +182,14 @@ async fn gateway_cmd(
     if let Some(port) = port {
         gateway.port = port;
     }
-    let router = ulnclaw::gateway::ApprovalRouter::new();
-    let router_approve = router.clone();
-    let approve: ulnclaw::tools::context::ApproveFn = Arc::new(move |reason, command| {
-        let router = router_approve.clone();
-        Box::pin(async move {
-            match ulnclaw::gateway::current_run_id() {
-                Some(run_id) => router.request(&run_id, reason, command).await,
-                // No run context (e.g. chat-completions path): deny by design.
-                None => false,
-            }
-        })
-    });
+    let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    let router = ulnclaw::gateway::ApprovalRouter::with_options(
+        std::time::Duration::from_secs(config.approvals.timeout),
+        Some(home.join("approvals.json")),
+    );
+    let state_holder: Arc<tokio::sync::OnceCell<Arc<ulnclaw::gateway::GatewayState>>> =
+        Arc::new(tokio::sync::OnceCell::new());
+    let approve = ulnclaw::gateway::gateway_approve_fn(router.clone(), state_holder.clone());
     let agent = make_agent(config, false, Some(approve)).await?;
     let state = ulnclaw::gateway::GatewayState::new(
         agent,
@@ -203,6 +199,7 @@ async fn gateway_cmd(
         router,
     )
     .map_err(|e| e.to_string())?;
+    state_holder.set(state.clone()).ok();
     ulnclaw::gateway::serve(state, &gateway.host, gateway.port)
         .await
         .map_err(|e| e.to_string())

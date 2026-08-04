@@ -288,8 +288,10 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 **安全：** 除健康探测外所有路由经 bearer 令牌中间件（常量时间比较）；
 密钥来自 `[gateway] key` 或 `ULNCLAW_GATEWAY_KEY`。run 总是拥有自己的
 会话；确认级命令使 run 停泊在 `waiting_for_approval`，经 HTTP 解决
-（`once`/`session`/`always`/`deny`）。没有 run 上下文的请求
-（chat-completions）对确认级命令自动拒绝。
+（`once`/`session`/`always`/`deny`）或在 `[approvals] timeout` 到期时
+fail-closed 自动拒绝（并清理 run 状态）。`always` 授权持久化到
+`approvals.json`。没有 run 上下文的请求（chat-completions）对确认级
+命令自动拒绝。
 
 ### 支撑模块
 

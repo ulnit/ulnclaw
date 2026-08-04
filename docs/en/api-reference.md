@@ -978,15 +978,29 @@ Builds gateway state from a wired agent (SQLite store must be attached).
 The `ApprovalRouter` connects the agent's approve callback to run-scoped
 HTTP approval resolution (see below).
 
-#### `ApprovalRouter::new() -> Arc<ApprovalRouter>` / `current_run_id() -> Option<String>`
+#### `ApprovalRouter::new() -> Arc<ApprovalRouter>` / `with_options(timeout, persist_path)` / `current_run_id() -> Option<String>`
 
 Run-approval plumbing.  The router maps `run_id → (session_id, channel)`;
 the agent's approve callback (installed by the CLI when starting the
 gateway) reads the task-local run id and awaits `router.request(run_id,
 reason, command)`.  `once` grants a single use, `session` remembers the
 command for the run's session, `always` remembers it for the gateway's
-lifetime, `deny` rejects.  Requests without a run context (e.g.
-`/v1/chat/completions`) auto-deny confirm-tier commands.
+lifetime **and persists it to `approvals.json`**, `deny` rejects.
+Requests without a run context (e.g. `/v1/chat/completions`) auto-deny
+confirm-tier commands.
+
+`request_outcome` distinguishes an explicit `Denied` from `TimedOut`.
+When no decision arrives within `[approvals] timeout` (default 300s,
+hermes parity) the approval fails closed, the run's pending approval is
+cleaned up, and the command is blocked — the run never parks forever.
+
+```toml
+[approvals]
+timeout = 300     # seconds before fail-closed auto-deny (0 = wait forever)
+```
+
+`gateway_approve_fn(router, state)` builds the approve callback with the
+late-bound gateway state used for timeout cleanup.
 
 #### `router(state: Arc<GatewayState>) -> Router`
 

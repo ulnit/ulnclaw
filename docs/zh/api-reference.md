@@ -980,14 +980,26 @@ OpenAI 兼容 API 服务器（`ulnclaw gateway`）。
 从已装配的 agent 构建网关状态（必须附加 SQLite 存储）。
 `ApprovalRouter` 将 agent 的审批回调连接到 run 级 HTTP 审批处理（见下）。
 
-#### `ApprovalRouter::new() -> Arc<ApprovalRouter>` / `current_run_id() -> Option<String>`
+#### `ApprovalRouter::new() -> Arc<ApprovalRouter>` / `with_options(timeout, persist_path)` / `current_run_id() -> Option<String>`
 
 运行审批管线。router 维护 `run_id → (session_id, channel)` 映射；
 CLI 启动网关时为 agent 安装的审批回调读取 task-local 的 run id，
 并等待 `router.request(run_id, reason, command)`。`once` 单次放行，
-`session` 在该 run 所属会话内记住命令，`always` 在网关生命周期内记住，
-`deny` 拒绝。没有 run 上下文的请求（如 `/v1/chat/completions`）
-对确认级命令按设计自动拒绝。
+`session` 在该 run 所属会话内记住命令，`always` 在网关生命周期内记住
+**并持久化到 `approvals.json`**，`deny` 拒绝。没有 run 上下文的请求
+（如 `/v1/chat/completions`）对确认级命令按设计自动拒绝。
+
+`request_outcome` 区分显式 `Denied` 与 `TimedOut`。`[approvals] timeout`
+（默认 300s，对齐 hermes）内无人处理时审批 fail-closed：清理该 run 的
+待审批项并阻止命令——run 不会永久停泊。
+
+```toml
+[approvals]
+timeout = 300     # fail-closed 自动拒绝前的秒数（0 = 永久等待）
+```
+
+`gateway_approve_fn(router, state)` 构建审批回调，延迟绑定的网关状态
+用于超时清理。
 
 #### `router(state: Arc<GatewayState>) -> Router`
 

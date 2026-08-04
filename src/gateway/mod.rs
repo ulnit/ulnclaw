@@ -55,20 +55,56 @@ pub struct PendingApproval {
     pub respond: tokio::sync::oneshot::Sender<String>,
 }
 
+/// How a pending approval ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    Approved,
+    Denied,
+    /// No decision arrived within the timeout window — fail closed.
+    TimedOut,
+}
+
 /// Routes approval requests raised inside agent runs to the HTTP approval
 /// flow (and remembers `always`/`session` decisions).
 pub struct ApprovalRouter {
     channels: std::sync::Mutex<HashMap<String, (String, tokio::sync::mpsc::UnboundedSender<PendingApproval>)>>,
     allow_always: tokio::sync::Mutex<std::collections::HashSet<String>>,
     allow_session: tokio::sync::Mutex<HashMap<String, std::collections::HashSet<String>>>,
+    /// Fail-closed wait limit for a human decision (hermes default 300s).
+    timeout: std::time::Duration,
+    /// Where `always` grants are persisted across restarts (optional).
+    persist_path: Option<std::path::PathBuf>,
 }
 
 impl ApprovalRouter {
     pub fn new() -> Arc<Self> {
+        Self::with_options(std::time::Duration::from_secs(300), None)
+    }
+
+    /// Build a router with a custom approval timeout and an optional
+    /// persistence file for `always` grants (hermes keeps permanent
+    /// approvals on disk so they survive restarts).
+    pub fn with_options(timeout: std::time::Duration, persist_path: Option<std::path::PathBuf>) -> Arc<Self> {
+        let mut allow_always = std::collections::HashSet::new();
+        if let Some(path) = &persist_path {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Ok(value) = serde_json::from_str::<Value>(&content) {
+                    if let Some(items) = value.get("always").and_then(|v| v.as_array()) {
+                        for item in items {
+                            if let Some(command) = item.as_str() {
+                                allow_always.insert(command.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Arc::new(Self {
             channels: std::sync::Mutex::new(HashMap::new()),
-            allow_always: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            allow_always: tokio::sync::Mutex::new(allow_always),
             allow_session: tokio::sync::Mutex::new(HashMap::new()),
+            timeout,
+            persist_path,
         })
     }
 
@@ -92,8 +128,22 @@ impl ApprovalRouter {
     /// Raised by the agent's approve callback inside a run task. Blocks until
     /// the HTTP client resolves the approval (or the channel disappears).
     pub async fn request(&self, run_id: &str, reason: String, command: String) -> bool {
+        matches!(
+            self.request_outcome(run_id, reason, command).await,
+            ApprovalOutcome::Approved
+        )
+    }
+
+    /// Like `request`, but distinguishes an explicit deny from a timeout
+    /// (hermes: a timeout is fail-closed "no response", not a user deny).
+    pub async fn request_outcome(
+        &self,
+        run_id: &str,
+        reason: String,
+        command: String,
+    ) -> ApprovalOutcome {
         if self.allow_always.lock().await.contains(&command) {
-            return true;
+            return ApprovalOutcome::Approved;
         }
         let (session_id, send_result) = {
             let channels = self.channels.lock().unwrap();
@@ -121,35 +171,94 @@ impl ApprovalRouter {
                 .map(|allowed| allowed.contains(&command))
                 .unwrap_or(false)
             {
-                return true;
+                return ApprovalOutcome::Approved;
             }
         }
         let Some(response) = send_result else {
-            return false;
+            return ApprovalOutcome::Denied;
         };
-        match response.await {
-            Ok(decision) => match decision.as_str() {
-                "once" => true,
-                "always" => {
-                    self.allow_always.lock().await.insert(command);
-                    true
+        let decision = match tokio::time::timeout(self.timeout, response).await {
+            Ok(Ok(decision)) => decision,
+            Ok(Err(_)) => return ApprovalOutcome::Denied,
+            Err(_) => return ApprovalOutcome::TimedOut,
+        };
+        match decision.as_str() {
+            "once" => ApprovalOutcome::Approved,
+            "always" => {
+                self.grant_always(command).await;
+                ApprovalOutcome::Approved
+            }
+            "session" => {
+                if let Some(session_id) = session_id {
+                    self.allow_session
+                        .lock()
+                        .await
+                        .entry(session_id)
+                        .or_default()
+                        .insert(command);
                 }
-                "session" => {
-                    if let Some(session_id) = session_id {
-                        self.allow_session
-                            .lock()
-                            .await
-                            .entry(session_id)
-                            .or_default()
-                            .insert(command);
-                    }
-                    true
-                }
-                _ => false,
-            },
-            Err(_) => false,
+                ApprovalOutcome::Approved
+            }
+            _ => ApprovalOutcome::Denied,
         }
     }
+
+    /// Remember a command for the gateway's lifetime and persist it across
+    /// restarts (when a persist path is configured).
+    pub async fn grant_always(&self, command: String) {
+        self.allow_always.lock().await.insert(command.clone());
+        let Some(path) = &self.persist_path else { return };
+        let commands: Vec<Value> = self
+            .allow_always
+            .lock()
+            .await
+            .iter()
+            .map(|c| Value::String(c.clone()))
+            .collect();
+        let payload = json!({"always": commands});
+        std::fs::write(path, serde_json::to_string_pretty(&payload).unwrap_or_default()).ok();
+    }
+}
+
+/// Build the gateway approve callback: routes confirm-tier commands raised
+/// inside a run to the HTTP approval flow.  On timeout the run's pending
+/// approval is cleaned up (fail closed) so the run never parks forever.
+///
+/// `state` is late-bound (the agent owning the callback is constructed
+/// before the GatewayState that wraps it).
+pub fn gateway_approve_fn(
+    router: Arc<ApprovalRouter>,
+    state: Arc<tokio::sync::OnceCell<Arc<GatewayState>>>,
+) -> crate::tools::context::ApproveFn {
+    Arc::new(move |reason, command| {
+        let router = router.clone();
+        let state = state.clone();
+        Box::pin(async move {
+            let Some(run_id) = current_run_id() else {
+                // No run context (e.g. chat-completions): deny by design.
+                return false;
+            };
+            match router.request_outcome(&run_id, reason, command).await {
+                ApprovalOutcome::Approved => true,
+                ApprovalOutcome::Denied => false,
+                ApprovalOutcome::TimedOut => {
+                    if let Some(state) = state.get() {
+                        state.pending_approvals.lock().await.remove(&run_id);
+                        let mut runs = state.runs.lock().await;
+                        if let Some(run) = runs.get_mut(&run_id) {
+                            if run.status == "waiting_for_approval" {
+                                run.status = "running".to_string();
+                            }
+                            if let Some(approval) = run.approval.as_mut() {
+                                approval["resolved"] = json!("timeout");
+                            }
+                        }
+                    }
+                    false
+                }
+            }
+        })
+    })
 }
 
 fn now_secs() -> f64 {
@@ -2008,6 +2117,47 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_approval_timeout_fails_closed() {
+        let router = ApprovalRouter::with_options(std::time::Duration::from_millis(50), None);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<PendingApproval>();
+        router.register("run-1", "sess-1", tx);
+        // Never resolved -> must time out (fail closed), not hang.
+        let outcome = router
+            .request_outcome("run-1", "test".into(), "sudo whoami".into())
+            .await;
+        assert_eq!(outcome, ApprovalOutcome::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn test_approval_always_persisted_and_reloaded() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("approvals.json");
+        let router = ApprovalRouter::with_options(
+            std::time::Duration::from_secs(5),
+            Some(path.clone()),
+        );
+        router.grant_always("git push --force".into()).await;
+        assert!(path.exists());
+
+        // A fresh router reloads the grant and auto-approves without a
+        // channel registered.
+        let reloaded = ApprovalRouter::with_options(
+            std::time::Duration::from_secs(5),
+            Some(path),
+        );
+        let outcome = reloaded
+            .request_outcome("no-run", "test".into(), "git push --force".into())
+            .await;
+        assert_eq!(outcome, ApprovalOutcome::Approved);
+    }
+
+    #[test]
+    fn test_approvals_config_default() {
+        let config = crate::config::ApprovalsConfig::default();
+        assert_eq!(config.timeout, 300);
     }
 
     #[tokio::test]

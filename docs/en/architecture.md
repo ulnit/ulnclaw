@@ -266,8 +266,10 @@ a port of hermes' `gateway/platforms/api_server.py` core.
 except health probes; key comes from `[gateway] key` or
 `ULNCLAW_GATEWAY_KEY`. Runs always own a session; confirm-tier commands
 park the run in `waiting_for_approval` until resolved over HTTP
-(`once`/`session`/`always`/`deny`). Requests without a run context
-(chat-completions) auto-deny confirm-tier commands.
+(`once`/`session`/`always`/`deny`) or the `[approvals] timeout` expires
+(fail-closed auto-deny with run-state cleanup). `always` grants persist to
+`approvals.json`. Requests without a run context (chat-completions)
+auto-deny confirm-tier commands.
 
 ### Supporting Modules
 

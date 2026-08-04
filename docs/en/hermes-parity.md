@@ -39,7 +39,7 @@ performance and a single static binary.
 | Agent loop with tool calling | ✅ | iteration budget, usage accounting, step callbacks |
 | SQLite state store (`hermes_state.py`) | ✅ | sessions/messages/system_prompts/state_meta/async_delegations schema, FTS5 with LIKE fallback, lineage (parent sessions) |
 | Context compression (`conversation_compression.py`) | ✅ | budget-triggered, middle-turn summarization via secondary model call, keeps system prompt + first user message + recent tail |
-| Approval system (`approval.py`) | ✅ | command normalization (backslash-joins, `${IFS}`, comment strip), hardline floor (block), recoverable-costly (confirm); REPL y/N prompt; gateway run approvals (`POST /v1/runs/:id/approval`, once/session/always/deny, SSE `approval.request`) |
+| Approval system (`approval.py`) | ✅ | command normalization (backslash-joins, `${IFS}`, comment strip), hardline floor (block), recoverable-costly (confirm); REPL y/N prompt; gateway run approvals (`POST /v1/runs/:id/approval`, once/session/always/deny, SSE `approval.request`), fail-closed `[approvals] timeout` (default 300s), `always` grants persisted across restarts |
 | Threat-pattern scanning (`threat_patterns.py`) | ✅ core | advisory injection scan for tool results re-entering context |
 | Toolsets (`toolsets.py`) | ✅ | all 33 toolset definitions incl. composition (`includes`), `coding` default |
 | Tool registry (`registry.py`) | ✅ | check_fn gating, toolset grouping, max result size truncation |
@@ -73,6 +73,7 @@ performance and a single static binary.
 ├── sessions/*.todos.json   per-session todo lists
 ├── images/  audio/         generated artifacts
 ├── sandboxes/              execute_code scripts
+├── approvals.json          persisted "always" approval grants
 └── checkpoints/store/      shared shadow git store (per-project refs/indexes)
 ```
 
@@ -81,7 +82,9 @@ performance and a single static binary.
 - Approval UX is a terminal y/N prompt on the CLI (hermes has richer
   platform-specific flows); the gateway exposes run approvals over HTTP with
   once/session/always/deny semantics.  Chat-completions requests have no run
-  context and auto-deny confirm-tier commands by design.
+  context and auto-deny confirm-tier commands by design.  hermes' Smart-DENY
+  (LLM-assisted) verdicts and cron approval modes are not ported; unattended
+  runs fail closed.
 - Browser supervisor launches a local Chrome/Chromium directly; hermes drives
   an external `agent-browser` daemon (cloud browser providers are not ported).
 - The gateway implements the api_server platform subset; profile multiplexing
