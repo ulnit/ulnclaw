@@ -179,6 +179,9 @@ registry.register(tool);
 - `export` - 可校验的 Markdown 会话导出（移植 hermes
   `session_export_md.py`）：frontmatter + 消息标题 + 工具调用块 +
   SHA256 校验页脚 + `manifest.jsonl`
+- `recap` - 即时的纯本地会话回顾（移植 hermes `session_recap.py`）：
+  近期窗口轮次统计、工具使用排行、触碰过的文件、最近提问/回复预览；
+  过滤 ANSI/控制字符
 
 **会话生命周期：**
 ```

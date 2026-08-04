@@ -92,6 +92,8 @@ enum SessionAction {
         #[arg(long)]
         no_verification: bool,
     },
+    /// Recap recent activity in a session (local, no LLM call)
+    Recap { id: String },
 }
 
 #[derive(Subcommand)]
@@ -495,11 +497,14 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /quit           exit"
             );
         }
         "/history" => {
             println!("{} messages in current conversation.", history.len());
+        }
+        "/recap" => {
+            println!("{}", ulnclaw::session::recap::build_recap(history, None, None));
         }
         "/usage" => {
             println!("(usage is tracked per session in state.db; see `ulnclaw sessions list`)");
@@ -710,6 +715,21 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
                 ulnclaw::session::export::write_session_markdown(&dir, &session)
                     .map_err(|e| e.to_string())?;
             println!("✅ Exported {} messages to {}", session.messages.len(), path.display());
+        }
+        SessionAction::Recap { id } => {
+            let row = store
+                .get_session_row(&id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("session '{}' not found", id))?;
+            let messages = store.load_messages(&id).map_err(|e| e.to_string())?;
+            println!(
+                "{}",
+                ulnclaw::session::recap::build_recap(
+                    &messages,
+                    row.title.as_deref(),
+                    Some(&row.id)
+                )
+            );
         }
     }
     Ok(())
