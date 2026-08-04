@@ -376,12 +376,35 @@ impl Agent {
             // Reset checkpoint per-turn dedup (hermes new_turn()).
             self.context.checkpoint_manager().new_turn();
 
-            // Context compression when over budget.
+            // Context compression when over budget. Auxiliary model routing:
+            // hermes resolves `auxiliary.compression.{provider,model}` and
+            // falls back to the main runtime when unset.
             if compressor.needs_compression(&messages) {
-                if let Some(compressed) = compressor
-                    .compress_with_provider(messages.clone(), self.provider.as_ref())
-                    .await
-                {
+                let compressed = match crate::provider::auxiliary::resolve_aux_task(
+                    &self.context.config,
+                    crate::provider::auxiliary::TASK_COMPRESSION,
+                    self.provider.clone(),
+                ) {
+                    Ok(aux) => {
+                        compressor
+                            .compress_with_model(
+                                messages.clone(),
+                                aux.provider.as_ref(),
+                                &aux.model,
+                            )
+                            .await
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "auxiliary compression routing failed: {}; using main provider",
+                            e
+                        );
+                        compressor
+                            .compress_with_provider(messages.clone(), self.provider.as_ref())
+                            .await
+                    }
+                };
+                if let Some(compressed) = compressed {
                     messages = compressed;
                     debug!("Context compressed");
                 }

@@ -311,6 +311,76 @@ impl Default for MemoryConfig {
     }
 }
 
+/// Per-task auxiliary provider override (port of hermes' `auxiliary.<task>`
+/// config consumed by `agent/auxiliary_client.py`).
+///
+/// Tasks are auxiliary LLM calls such as `compression` (context
+/// summarization) and `vision` (image analysis). When an entry is present,
+/// that task is routed through the configured provider/model instead of the
+/// main runtime. Blank values and `"auto"` inherit the main runtime.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuxiliaryTaskConfig {
+    /// Provider name ("openai", "anthropic", "ollama", ...); "auto"/blank
+    /// inherits the main provider.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Model id; "auto"/blank inherits the main model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Endpoint override; blank uses the provider default.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// API key; blank falls back to `key_env`, then the main runtime key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Environment variable holding the API key.
+    #[serde(default)]
+    pub key_env: Option<String>,
+}
+
+impl AuxiliaryTaskConfig {
+    fn nonblank(value: Option<&String>) -> Option<String> {
+        value
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Provider override, with "auto" normalized to "inherit".
+    pub fn provider(&self) -> Option<String> {
+        Self::nonblank(self.provider.as_ref()).filter(|v| v != "auto")
+    }
+
+    /// Model override, with "auto" normalized to "inherit".
+    pub fn model(&self) -> Option<String> {
+        Self::nonblank(self.model.as_ref()).filter(|v| v != "auto")
+    }
+
+    pub fn base_url(&self) -> Option<String> {
+        Self::nonblank(self.base_url.as_ref())
+    }
+
+    pub fn api_key(&self) -> Option<String> {
+        Self::nonblank(self.api_key.as_ref())
+    }
+
+    /// Resolve the task API key: literal `api_key`, else `key_env` lookup.
+    pub fn resolved_api_key(&self) -> Option<String> {
+        if let Some(key) = self.api_key() {
+            return Some(key);
+        }
+        Self::nonblank(self.key_env.as_ref()).and_then(|name| get_env_value(&name))
+    }
+
+    /// True when the entry carries no usable override at all.
+    pub fn is_empty(&self) -> bool {
+        self.provider().is_none()
+            && self.model().is_none()
+            && self.base_url().is_none()
+            && self.api_key().is_none()
+            && Self::nonblank(self.key_env.as_ref()).is_none()
+    }
+}
+
 
 /// HTTP gateway settings (`[gateway]`) — port of hermes' api_server platform.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -401,6 +471,10 @@ pub struct UlncLawConfig {
     /// Approval flow settings (hermes `[approvals]`).
     #[serde(default)]
     pub approvals: ApprovalsConfig,
+    /// Per-task auxiliary provider overrides (hermes `auxiliary.<task>`):
+    /// `[auxiliary.compression]`, `[auxiliary.vision]`, ...
+    #[serde(default)]
+    pub auxiliary: HashMap<String, AuxiliaryTaskConfig>,
 }
 
 /// `[approvals]` config section.
@@ -434,6 +508,21 @@ pub struct ProfileOverride {
     pub enabled_toolsets: Option<Vec<String>>,
     #[serde(default)]
     pub disabled_toolsets: Option<Vec<String>>,
+}
+
+/// Default base URL for a provider name (environment overrides aware).
+/// Shared by the main runtime and auxiliary task resolution.
+pub fn default_base_url(provider: &str) -> String {
+    match provider {
+        "openai" => get_env_value("OPENAI_BASE_URL")
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+        "anthropic" => "https://api.anthropic.com".to_string(),
+        "ollama" => get_env_value("OLLAMA_BASE_URL")
+            .unwrap_or_else(|| "http://localhost:11434/v1".to_string()),
+        "dashscope" => "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+        _ => get_env_value("OPENAI_BASE_URL")
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+    }
 }
 
 impl UlncLawConfig {
@@ -487,16 +576,7 @@ impl UlncLawConfig {
                 return url.clone();
             }
         }
-        match self.model.provider.as_str() {
-            "openai" => get_env_value("OPENAI_BASE_URL")
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-            "anthropic" => "https://api.anthropic.com".to_string(),
-            "ollama" => get_env_value("OLLAMA_BASE_URL")
-                .unwrap_or_else(|| "http://localhost:11434/v1".to_string()),
-            "dashscope" => "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
-            _ => get_env_value("OPENAI_BASE_URL")
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-        }
+        default_base_url(&self.model.provider)
     }
 
     /// Write a default config file if none exists.

@@ -4,6 +4,7 @@
 //! to (api_mode, api_key, base_url).
 
 pub mod anthropic;
+pub mod auxiliary;
 pub mod openai;
 
 use crate::error::{AgentError, Result};

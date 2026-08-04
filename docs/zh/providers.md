@@ -12,6 +12,7 @@ ulnclaw 提供商抽象和实现的完整指南。
 - [提供商配置](#提供商配置)
 - [错误处理](#错误处理)
 - [最佳实践](#最佳实践)
+- [辅助模型路由](#辅助模型路由)
 
 ## 概述
 
@@ -677,6 +678,36 @@ let request = ProviderRequest {
     // ...
 };
 ```
+
+## 辅助模型路由
+
+二次 LLM 调用——上下文压缩摘要与视觉分析——可以运行在与主对话不同的
+provider/模型上。这是 hermes `agent/auxiliary_client.py` 任务层的移植：
+每个任务先查 `[auxiliary.<task>]` 配置，留空或 `"auto"` 时继承主运行时。
+
+```toml
+# 用便宜模型做上下文摘要，主对话用大模型
+[auxiliary.compression]
+provider = "openai"
+model = "gpt-5.2-mini"
+
+# 视觉走专用端点（base_url/api_key/key_env 可选；
+# 未设置的值继承主 provider 的端点与密钥）
+[auxiliary.vision]
+model = "gpt-5.2"
+```
+
+每个任务的字段：`provider`、`model`、`base_url`、`api_key`、`key_env`。
+解析规则（`provider::auxiliary::resolve_aux_task`）：
+
+- 无配置项（或全部留空/`"auto"`）→ 直接复用主 provider 实例与主模型。
+- 仅覆盖模型 → 以覆盖后的模型构建主 provider 的新实例（端点/密钥不变）。
+- 覆盖 provider/端点/密钥 → 构建专用客户端（`anthropic` 走 Messages API
+  传输，其余走 OpenAI 兼容协议）。密钥回退顺序：`key_env` → 主运行时
+  密钥；本地 provider（`ollama`、`llamacpp`、`local`）免密钥。
+
+已接入的任务：`compression`（上下文压缩摘要调用）与 `vision`
+（`vision_analyze`、`browser_vision`）。
 
 ## 故障排除
 

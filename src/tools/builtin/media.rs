@@ -69,6 +69,19 @@ fn vision_analyze_tool() -> crate::tools::Tool {
             let Some(provider) = ctx.provider.clone() else {
                 return Ok(json!({"success": false, "error": "vision_analyze: no provider wired into this run"}));
             };
+            // Auxiliary model routing: [auxiliary.vision] override (hermes
+            // resolve_vision_provider_client); falls back to the main provider.
+            let provider = match crate::provider::auxiliary::resolve_aux_task(
+                &ctx.config,
+                crate::provider::auxiliary::TASK_VISION,
+                provider.clone(),
+            ) {
+                Ok(aux) => aux.provider,
+                Err(e) => {
+                    tracing::warn!("auxiliary vision routing failed: {}; using main provider", e);
+                    provider
+                }
+            };
             match provider.analyze_image(&prompt, &image_url).await {
                 Ok(answer) => Ok(json!({"success": true, "analysis": answer})),
                 Err(e) => Ok(json!({"success": false, "error": format!("vision provider: {}", e)})),

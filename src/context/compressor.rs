@@ -64,6 +64,18 @@ impl ContextCompressor {
         messages: Vec<Message>,
         provider: &dyn Provider,
     ) -> Option<Vec<Message>> {
+        self.compress_with_model(messages, provider, provider.model()).await
+    }
+
+    /// Compress with an explicit model id (auxiliary model routing — the
+    /// hermes compressor calls `get_text_auxiliary_client("compression")`
+    /// and summarizes with the resolved aux model).
+    pub async fn compress_with_model(
+        &self,
+        messages: Vec<Message>,
+        provider: &dyn Provider,
+        model: &str,
+    ) -> Option<Vec<Message>> {
         if messages.len() <= self.keep_recent + 2 {
             return None;
         }
@@ -104,7 +116,7 @@ impl ContextCompressor {
                 name: None,
             }],
             tools: vec![],
-            model: provider.model().to_string(),
+            model: model.to_string(),
             max_tokens: Some(1024),
             temperature: Some(0.2),
             stream: false,

@@ -821,6 +821,18 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 let Some(provider) = ctx.provider.clone() else {
                                     return Ok(json!({"success": false, "error": "no vision-capable provider configured"}));
                                 };
+                                // Auxiliary model routing: [auxiliary.vision] override.
+                                let provider = match crate::provider::auxiliary::resolve_aux_task(
+                                    &ctx.config,
+                                    crate::provider::auxiliary::TASK_VISION,
+                                    provider.clone(),
+                                ) {
+                                    Ok(aux) => aux.provider,
+                                    Err(e) => {
+                                        tracing::warn!("auxiliary vision routing failed: {}; using main provider", e);
+                                        provider
+                                    }
+                                };
                                 with_session(move |session| async move {
                                     let png = session.screenshot().await?;
                                     let image_url = format!("data:image/png;base64,{}", png);

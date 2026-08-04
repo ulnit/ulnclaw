@@ -21,7 +21,7 @@
 | `execute_code` | ✅ 完整 | python3 子进程沙箱，120 秒上限 |
 | `cronjob` | ✅ 完整 | create/list/update/pause/resume/remove/run；`30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划；SQLite 任务存储；调度循环 |
 | `tool_search` | ✅ 完整 | 按关键词搜索已注册工具目录 |
-| `vision_analyze` | ✅ 完整 | 经聊天 provider 的 `analyze_image` 路由 |
+| `vision_analyze` | ✅ 完整 | 经聊天 provider 的 `analyze_image` 路由，`[auxiliary.vision]` provider/模型覆盖 |
 | `image_generate` | ✅ 完整 | OpenAI images API，PNG 存于 `<home>/images` |
 | `text_to_speech` | ✅ 完整 | OpenAI TTS 或自定义 `ULNCLAW_TTS_ENDPOINT` |
 | `ha_*`（4 个 Home Assistant 工具） | ✅ 完整 | Home Assistant REST API，依赖 `HASS_URL` + `HASS_TOKEN` |
@@ -37,12 +37,13 @@
 |---|---|---|
 | 工具调用代理循环 | ✅ | 迭代预算、用量统计、step 回调 |
 | SQLite 状态库（`hermes_state.py`） | ✅ | sessions/messages/system_prompts/state_meta/async_delegations 表结构，FTS5（不可用时 LIKE 回退），会话血缘 |
-| 上下文压缩（`conversation_compression.py`） | ✅ | 预算触发，中段对话经二次模型调用摘要，保留系统提示词 + 首条用户消息 + 最近尾部 |
+| 上下文压缩（`conversation_compression.py`） | ✅ | 预算触发，中段对话经二次模型调用摘要，保留系统提示词 + 首条用户消息 + 最近尾部；摘要调用遵循 `[auxiliary.compression]` 路由 |
 | 审批系统（`approval.py`） | ✅ | 命令归一化（反斜杠续行、`${IFS}`、注释剥离）、硬性底线（直接阻止）、可恢复但昂贵的操作（需确认）；REPL y/N 提示；网关运行审批（`POST /v1/runs/:id/approval`，once/session/always/deny，SSE `approval.request`）、fail-closed `[approvals] timeout`（默认 300s）、`always` 授权跨重启持久化 |
 | 威胁模式扫描（`threat_patterns.py`） | ✅ 核心 | 对重新进入上下文的工具结果做提示注入扫描（建议性） |
 | 工具集（`toolsets.py`） | ✅ | 全部 33 个工具集定义，含组合（`includes`），默认 `coding` |
 | 工具注册表（`registry.py`） | ✅ | check_fn 门控、工具集分组、结果大小截断 |
 | Provider 抽象（`runtime_provider.py`） | ✅ | OpenAI 兼容（OpenAI/OpenRouter/DashScope/Ollama/llama.cpp）、原生 Anthropic Messages 传输（`anthropic_messages`：system 参数、tool_use/tool_result 块、SSE 流式、max_tokens 上限、OAuth bearer）、本地 provider 免密钥 |
+| 辅助模型路由（`auxiliary_client.py`） | ✅ 核心 | `[auxiliary.<task>]` 按任务覆盖 provider/模型/base_url/api_key/key_env（`compression`、`vision`）；`"auto"`/留空继承主运行时；无覆盖时复用主客户端 |
 | 配置（`config.yaml`） | ✅ | `config.toml` + `.env` 文件、profiles、环境变量优先级 |
 | 技能系统 | ✅ | 发现、frontmatter、关联文件 |
 | 记忆系统 | ✅ | MEMORY.md/USER.md，注入提示词 |

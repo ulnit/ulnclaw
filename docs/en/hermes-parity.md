@@ -22,7 +22,7 @@ performance and a single static binary.
 | `execute_code` | ✅ full | python3 subprocess sandbox, 120s cap |
 | `cronjob` | ✅ full | create/list/update/pause/resume/remove/run; `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules; SQLite job store; scheduler loop |
 | `tool_search` | ✅ full | keyword search over the registered tool catalog |
-| `vision_analyze` | ✅ full | routes through the chat provider (`analyze_image`) |
+| `vision_analyze` | ✅ full | routes through the chat provider (`analyze_image`), `[auxiliary.vision]` provider/model override |
 | `image_generate` | ✅ full | OpenAI images API, saves PNG under `<home>/images` |
 | `text_to_speech` | ✅ full | OpenAI TTS or custom `ULNCLAW_TTS_ENDPOINT` |
 | `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service` | ✅ full | Home Assistant REST API, gated on `HASS_URL` + `HASS_TOKEN` |
@@ -38,12 +38,13 @@ performance and a single static binary.
 |---|---|---|
 | Agent loop with tool calling | ✅ | iteration budget, usage accounting, step callbacks |
 | SQLite state store (`hermes_state.py`) | ✅ | sessions/messages/system_prompts/state_meta/async_delegations schema, FTS5 with LIKE fallback, lineage (parent sessions) |
-| Context compression (`conversation_compression.py`) | ✅ | budget-triggered, middle-turn summarization via secondary model call, keeps system prompt + first user message + recent tail |
+| Context compression (`conversation_compression.py`) | ✅ | budget-triggered, middle-turn summarization via secondary model call, keeps system prompt + first user message + recent tail; summary call honors `[auxiliary.compression]` routing |
 | Approval system (`approval.py`) | ✅ | command normalization (backslash-joins, `${IFS}`, comment strip), hardline floor (block), recoverable-costly (confirm); REPL y/N prompt; gateway run approvals (`POST /v1/runs/:id/approval`, once/session/always/deny, SSE `approval.request`), fail-closed `[approvals] timeout` (default 300s), `always` grants persisted across restarts |
 | Threat-pattern scanning (`threat_patterns.py`) | ✅ core | advisory injection scan for tool results re-entering context |
 | Toolsets (`toolsets.py`) | ✅ | all 33 toolset definitions incl. composition (`includes`), `coding` default |
 | Tool registry (`registry.py`) | ✅ | check_fn gating, toolset grouping, max result size truncation |
 | Provider abstraction (`runtime_provider.py`) | ✅ | OpenAI-compatible (OpenAI/OpenRouter/DashScope/Ollama/llama.cpp), native Anthropic Messages transport (`anthropic_messages`: system param, tool_use/tool_result blocks, SSE streaming, max_tokens ceilings, OAuth bearer), keyless local providers |
+| Auxiliary model routing (`auxiliary_client.py`) | ✅ core | `[auxiliary.<task>]` per-task provider/model/base_url/api_key/key_env overrides (`compression`, `vision`); `"auto"`/blank inherits the main runtime; main client reused when nothing is overridden |
 | Config (`config.yaml`) | ✅ | `config.toml` + `.env` file, profiles, env precedence |
 | Skills system | ✅ | discovery, frontmatter, linked files |
 | Memory system | ✅ | MEMORY.md/USER.md with prompt injection |

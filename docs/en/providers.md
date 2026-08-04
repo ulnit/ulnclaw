@@ -12,6 +12,7 @@ Complete guide to ulnclaw's provider abstraction and implementation.
 - [Provider Configuration](#provider-configuration)
 - [Error Handling](#error-handling)
 - [Best Practices](#best-practices)
+- [Auxiliary Model Routing](#auxiliary-model-routing)
 
 ## Overview
 
@@ -678,6 +679,41 @@ let request = ProviderRequest {
     // ...
 };
 ```
+
+## Auxiliary Model Routing
+
+Secondary LLM calls — context-compression summaries and vision analysis —
+can run on a different provider/model than the main conversation. This is a
+port of hermes' `agent/auxiliary_client.py` task layer: each task checks
+`[auxiliary.<task>]` config first and inherits the main runtime when the
+entry is blank or `"auto"`.
+
+```toml
+# Summarize context with a cheap model while chatting on a big one
+[auxiliary.compression]
+provider = "openai"
+model = "gpt-5.2-mini"
+
+# Vision on a dedicated endpoint (base_url/api_key/key_env optional;
+# unset values inherit the main provider's endpoint and key)
+[auxiliary.vision]
+model = "gpt-5.2"
+```
+
+Fields per task: `provider`, `model`, `base_url`, `api_key`, `key_env`.
+Resolution rules (`provider::auxiliary::resolve_aux_task`):
+
+- No entry (or everything blank/`"auto"`) → the main provider instance is
+  reused with the main model.
+- Model-only override → a fresh instance of the main provider is built with
+  the overridden model (same endpoint/key).
+- Provider/endpoint/key override → a dedicated client is built
+  (`anthropic` uses the Messages API transport, everything else
+  OpenAI-compatible). The key falls back to `key_env`, then the main
+  runtime key; keyless providers (`ollama`, `llamacpp`, `local`) need none.
+
+Wired tasks: `compression` (context compressor summary call) and `vision`
+(`vision_analyze`, `browser_vision`).
 
 ## Troubleshooting
 
