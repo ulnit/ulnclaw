@@ -169,6 +169,10 @@ pub struct AgentSettings {
     /// Verbose logging to stderr.
     #[serde(default)]
     pub verbose: bool,
+    /// Probe the local Python toolchain for the system prompt
+    /// (hermes `agent.environment_probe`, default true).
+    #[serde(default = "default_true")]
+    pub environment_probe: bool,
 }
 
 fn default_max_iterations() -> usize {
@@ -193,6 +197,7 @@ impl Default for AgentSettings {
             max_concurrent_tools: default_max_concurrent(),
             context_budget_tokens: default_context_budget(),
             verbose: false,
+            environment_probe: true,
         }
     }
 }

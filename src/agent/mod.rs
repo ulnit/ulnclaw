@@ -98,6 +98,12 @@ pub struct AgentConfig {
     pub persist: bool,
     /// Source tag for created sessions ("cli", "cron", "delegate").
     pub source: String,
+    /// Probe the local Python toolchain for the system prompt
+    /// (hermes `agent.environment_probe`).
+    pub environment_probe: bool,
+    /// Terminal backend name ("local"/"docker"/"ssh") — the probe skips
+    /// non-local backends since tools run in the sandbox, not on the host.
+    pub terminal_backend: String,
 }
 
 impl Default for AgentConfig {
@@ -115,6 +121,8 @@ impl Default for AgentConfig {
             context_budget_tokens: 120_000,
             persist: true,
             source: "cli".to_string(),
+            environment_probe: true,
+            terminal_backend: "local".to_string(),
         }
     }
 }
@@ -384,11 +392,20 @@ impl Agent {
         if let Some(memory) = crate::tools::builtin::memory::load_memory_for_prompt(&self.context.home) {
             parts.push(format!("## Persistent memory\n{}", memory));
         }
-        parts.push(format!(
+        let mut env_section = format!(
             "## Environment\n- cwd: {}\n- home: {}",
             self.context.cwd().display(),
             self.context.home.display()
-        ));
+        );
+        if self.config.environment_probe {
+            // hermes tools/env_probe.py: one deterministic toolchain line,
+            // only when something non-default is detected; fails open.
+            let line = crate::env_probe::get_environment_probe_line(&self.config.terminal_backend);
+            if !line.is_empty() {
+                env_section.push_str(&format!("\n- {}", line));
+            }
+        }
+        parts.push(env_section);
         Some(parts.join("\n\n"))
     }
 
@@ -990,6 +1007,8 @@ impl SubAgentRunner for Agent {
                 context_budget_tokens: self.config.context_budget_tokens,
                 persist: false,
                 source: "delegate".to_string(),
+                environment_probe: self.config.environment_probe,
+                terminal_backend: self.config.terminal_backend.clone(),
             },
             callbacks: Arc::new(Mutex::new(AgentCallbacks::default())),
             context: Arc::new(child_context),

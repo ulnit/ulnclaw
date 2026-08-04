@@ -31,6 +31,7 @@ full feature-by-feature mapping.
 - **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), `stream: true` SSE streaming on both (token deltas, tool-progress/function-call events), async `/v1/runs` with SSE events + approval resolution, sessions API (incl. `PATCH`/fork + enforced per-session model lock), `/api/jobs` cron management (CRUD + pause/resume/run), `/v1/skills` + `/v1/toolsets` discovery, `/api/model/options`, Prometheus `/metrics`, bearer auth
 - **🖥️ Terminal environments** — run `terminal` locally (default), in docker (auto container creation), or over ssh (`[terminal] backend`)
 - **🩺 Terminal failure intelligence** — failed commands carry actionable guidance: benign exit codes are explained (`grep=1` → "no matches, not an error" as `exit_code_meaning`) and well-known failure shapes get one recovery `hint` (command/module not found, git conflicts, gh field drift & rate limits, permission errors, exits 124/126/137)
+- **🔬 Environment probe** — when the terminal backend is local, one deterministic Python-toolchain line (pip/python3 mismatch, missing pip module, PEP 668, missing bare `python`) is injected into the system prompt — silent on healthy machines, background-probed with fail-open timeout (`[agent] environment_probe`)
 - **📸 Checkpoints** — transparent git-backed snapshots before file edits (shared shadow store, per-project chains), `ulnclaw checkpoints list/restore/diff/prune`
 - **📝 Working diff** — `ulnclaw diff [--staged|--all]` shows what changed in a git worktree (untracked files included), REPL `/gitdiff`
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
@@ -87,6 +88,7 @@ base_url = "http://localhost:11434/v1"
 [agent]
 max_iterations = 90
 approval = true                # y/N prompt before dangerous commands
+environment_probe = true       # one-line Python toolchain note in the system prompt
 
 # [approvals]
 # timeout = 300                # gateway approvals fail closed after N seconds
@@ -165,7 +167,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 192 tests
+cargo test                     # 204 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -201,6 +203,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、两者均支持 `stream: true` SSE 流式（令牌增量、工具进度/函数调用事件）、带 SSE 事件 + 审批处理的异步 `/v1/runs`、会话 API（含 `PATCH`/fork + 逐轮生效的会话级模型锁）、`/api/jobs` 定时任务管理（增删查改 + pause/resume/run）、`/v1/skills` + `/v1/toolsets` 发现端点、`/api/model/options`、Prometheus `/metrics`、Bearer 鉴权
 - **🖥️ 终端环境** —— `terminal` 可在本地（默认）、docker（自动创建容器）或 ssh 上执行（`[terminal] backend`）
 - **🩺 终端失败提示** —— 失败命令自带可执行提示：良性退出码会被解释（`grep=1` → "无匹配（非错误）"，`exit_code_meaning`），常见失败形态附加一条恢复建议（`hint`）：命令/模块未找到、git 冲突、gh 字段漂移与限流、权限错误、退出码 124/126/137
+- **🔬 环境探针** —— 终端后端为本地时，向系统提示注入一行确定性的 Python 工具链说明（pip/python3 版本错配、缺 pip 模块、PEP 668、缺少裸 `python`）；健康环境保持静默，后台探测 + 超时即放行（`[agent] environment_probe`）
 - **📸 检查点** —— 文件编辑前的透明 git 快照（共享 shadow 存储、按项目快照链），`ulnclaw checkpoints list/restore/diff/prune`
 - **📝 工作区 diff** —— `ulnclaw diff [--staged|--all]` 显示 git 工作区变更（含未跟踪文件），REPL `/gitdiff`
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
@@ -279,7 +282,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 192 个测试
+cargo test                     # 204 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

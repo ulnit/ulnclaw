@@ -508,6 +508,8 @@ async fn make_agent(
         context_budget_tokens: config.agent.context_budget_tokens,
         persist: true,
         source: "cli".to_string(),
+        environment_probe: config.agent.environment_probe,
+        terminal_backend: config.terminal.backend.clone().unwrap_or_else(|| "local".to_string()),
         ..Default::default()
     });
     let agent = agent

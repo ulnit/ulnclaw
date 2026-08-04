@@ -78,6 +78,7 @@ pub mod checkpoint;
 pub mod config;
 pub mod context;
 pub mod cron;
+pub mod env_probe;
 pub mod environments;
 pub mod error;
 pub mod gateway;
