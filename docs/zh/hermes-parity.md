@@ -10,6 +10,7 @@
 | hermes 工具 | ulnclaw | 说明 |
 |---|---|---|
 | `terminal`, `process` | ✅ 完整 | 前台/后台执行、超时、工作目录跟踪、后台会话管理（list/log/wait/kill）、失败智能（良性退出码语义 + 输出模式恢复提示） |
+| 工具输出上限（`tool_output_limits.py`） | ✅ | `[tool_output] max_bytes/max_lines/max_line_length` 可调 terminal 输出头+尾上限（默认 10 万字符）、read_file 分页上限（2000 行）与每行截断（2000 字符，`... [truncated]` 标记）；非正值回退默认；未配置时行为不变 |
 | 终端失败提示（`terminal_hints.py`、`_interpret_exit_code`） | ✅ | 良性非零退出码给出 `exit_code_meaning`（grep/rg/diff/find/test/curl/git 语义表，取管道/链的最后一段，跳过 `VAR=val` 前缀）；失败命令至多附加一条 `hint`，按生产频率排序的输出模式扫描（gh JSON 字段漂移、合并冲突、命令未找到——python/pip 特判、ModuleNotFoundError/ImportError、"already exists"、gh 限流、权限拒绝）+ 退出码 124/126/137 专属提示；扫描窗口限 4000 字符，首个匹配生效 |
 | ANSI 剥离（`ansi_strip.py`） | ✅ | 完整 ECMA-48 覆盖（CSI 含私有模式/冒号参数/中间字节、OSC 的 BEL/ST 终止、DCS/SOS/PM/APC、nF 与单字节转义、8-bit C1），terminal 与 execute_code 输出在送达模型前剥离；`sanitize_display_text` 另去除裸控制字符并归一化 CR，供终端安全回显 |
 | 二进制扩展守卫（`binary_extensions.py`） | ✅ | `read_file` 以纯字符串检查（无 I/O）拒绝约 80 种二进制扩展，并提示改用 vision_analyze/terminal；`.pdf` 保持可读（文本类） |

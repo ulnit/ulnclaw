@@ -18,6 +18,8 @@ const DEFAULT_TIMEOUT: u64 = 180;
 /// Hard cap for foreground commands (hermes FOREGROUND_MAX_TIMEOUT).
 const FOREGROUND_MAX_TIMEOUT: u64 = 600;
 /// Max output chars returned to the model.
+/// Fallback output cap when no config is available (tests); the live
+/// tools read `[tool_output] max_bytes` from config.
 const MAX_OUTPUT_CHARS: usize = 100_000;
 
 /// Check whether a shell is available (hermes check_terminal_requirements).
@@ -119,20 +121,22 @@ fn shell_command(command: &str) -> Command {
     cmd
 }
 
-fn truncate_output(output: &str) -> String {
+fn truncate_output_with(output: &str, max_chars: usize) -> String {
+    let max_chars = if max_chars == 0 { MAX_OUTPUT_CHARS } else { max_chars };
     let count = output.chars().count();
-    if count <= MAX_OUTPUT_CHARS {
+    if count <= max_chars {
         return output.to_string();
     }
-    let head: String = output.chars().take(MAX_OUTPUT_CHARS / 2).collect();
-    let tail: String = output.chars().skip(count - MAX_OUTPUT_CHARS / 2).collect();
+    let head: String = output.chars().take(max_chars / 2).collect();
+    let tail: String = output.chars().skip(count - max_chars / 2).collect();
     format!(
         "{}\n\n[... {} chars truncated ...]\n\n{}",
         head,
-        count - MAX_OUTPUT_CHARS,
+        count - max_chars,
         tail
     )
 }
+
 
 pub fn register(registry: &mut ToolRegistry) {
     registry.register(terminal_tool());
@@ -308,7 +312,8 @@ async fn terminal_exec(
             // hermes strips ANSI before output reaches the model so escape
             // sequences never leak into context (tools/ansi_strip.py).
             let combined = crate::ansi::strip_ansi(&combined);
-            let output = truncate_output(combined.trim_end());
+            let max_output = ctx.config.tool_output.resolved().max_bytes;
+            let output = truncate_output_with(combined.trim_end(), max_output);
             let mut result = json!({
                 "success": status.success(),
                 "exit_code": exit_code,
@@ -369,6 +374,7 @@ async fn spawn_background(
     };
 
     let buffer_clone = output_buffer.clone();
+    let buffer_cap = ctx.config.tool_output.resolved().max_bytes;
     tokio::spawn(async move {
         if let Some(mut stream) = stdout {
             let buf = buffer_clone.clone();
@@ -380,8 +386,8 @@ async fn spawn_background(
                         Ok(n) => {
                             if let Ok(mut guard) = buf.lock() {
                                 guard.push_str(&String::from_utf8_lossy(&chunk[..n]));
-                                if guard.len() > MAX_OUTPUT_CHARS * 2 {
-                                    let drain = guard.len() - MAX_OUTPUT_CHARS;
+                                if guard.len() > buffer_cap * 2 {
+                                    let drain = guard.len() - buffer_cap;
                                     guard.drain(..drain);
                                 }
                             }
@@ -467,7 +473,7 @@ fn process_tool() -> crate::tools::Tool {
             },
             "required": ["action"]
         }))
-        .handler(|args, _ctx| async move {
+        .handler(|args, ctx| async move {
             let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
             let session_id = args.get("session_id").and_then(|v| v.as_str()).map(String::from);
             match action {
@@ -510,7 +516,7 @@ fn process_tool() -> crate::tools::Tool {
                                 "session_id": session_id,
                                 "status": if running { "running" } else { "exited" },
                                 "exit_code": proc.exit_code.lock().ok().and_then(|g| *g),
-                                "output": truncate_output(&tail.join("\n")),
+                                "output": truncate_output_with(&tail.join("\n"), ctx.config.tool_output.resolved().max_bytes),
                             }))
                         }
                         "wait" => {
@@ -526,7 +532,7 @@ fn process_tool() -> crate::tools::Tool {
                                             "session_id": session_id,
                                             "status": "exited",
                                             "exit_code": code,
-                                            "output": truncate_output(output.trim_end()),
+                                            "output": truncate_output_with(output.trim_end(), ctx.config.tool_output.resolved().max_bytes),
                                         }));
                                     }
                                 }
@@ -638,6 +644,17 @@ mod tests {
         assert_eq!(result["exit_code"], json!(127));
         let hint = result["hint"].as_str().expect("hint present");
         assert!(hint.contains("ulnclaw-no-such-cmd-xyz"), "got: {hint}");
+    }
+
+    #[test]
+    fn test_truncate_honors_configured_cap() {
+        let output = "x".repeat(1000);
+        // Cap larger than output: unchanged.
+        assert_eq!(truncate_output_with(&output, 2000), output);
+        // Smaller cap: head + tail + marker.
+        let truncated = truncate_output_with(&output, 100);
+        assert!(truncated.contains("[... 900 chars truncated ...]"), "got: {truncated}");
+        assert!(truncated.len() < 300);
     }
 
     #[tokio::test]

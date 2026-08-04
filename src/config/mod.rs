@@ -600,6 +600,63 @@ pub struct UlncLawConfig {
     /// Mixture-of-Agents presets (`[moa]`, hermes `moa:`).
     #[serde(default)]
     pub moa: MoaConfig,
+    /// Tool-output truncation limits (hermes `tool_output:`).
+    #[serde(default)]
+    pub tool_output: ToolOutputConfig,
+}
+
+/// `[tool_output]` — configurable tool-output truncation limits (port of
+/// hermes `tools/tool_output_limits.py`). Defaults preserve the existing
+/// ulnclaw behaviour; invalid or non-positive values fall back to the
+/// defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolOutputConfig {
+    /// Terminal stdout/stderr character cap (head+tail kept).
+    #[serde(default = "default_tool_output_max_bytes")]
+    pub max_bytes: usize,
+    /// read_file pagination/truncation line cap.
+    #[serde(default = "default_tool_output_max_lines")]
+    pub max_lines: usize,
+    /// Per-line length cap before '... [truncated]'.
+    #[serde(default = "default_tool_output_max_line_length")]
+    pub max_line_length: usize,
+}
+
+fn default_tool_output_max_bytes() -> usize {
+    100_000
+}
+fn default_tool_output_max_lines() -> usize {
+    2000
+}
+fn default_tool_output_max_line_length() -> usize {
+    2000
+}
+
+fn positive_or(value: usize, default: usize) -> usize {
+    if value == 0 { default } else { value }
+}
+
+impl ToolOutputConfig {
+    /// Resolved limits with non-positive values coerced to defaults
+    /// (hermes `_coerce_positive_int` semantics).
+    pub fn resolved(&self) -> ToolOutputConfig {
+        ToolOutputConfig {
+            max_bytes: positive_or(self.max_bytes, default_tool_output_max_bytes()),
+            max_lines: positive_or(self.max_lines, default_tool_output_max_lines()),
+            max_line_length: positive_or(self.max_line_length, default_tool_output_max_line_length()),
+        }
+    }
+}
+
+impl Default for ToolOutputConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes: default_tool_output_max_bytes(),
+            max_lines: default_tool_output_max_lines(),
+            max_line_length: default_tool_output_max_line_length(),
+        }
+    }
 }
 
 /// `[approvals]` config section.
@@ -723,6 +780,18 @@ impl UlncLawConfig {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_tool_output_limits_coercion() {
+        let cfg = ToolOutputConfig { max_bytes: 0, max_lines: 0, max_line_length: 0 };
+        let r = cfg.resolved();
+        assert_eq!(r.max_bytes, 100_000);
+        assert_eq!(r.max_lines, 2000);
+        assert_eq!(r.max_line_length, 2000);
+        let cfg = ToolOutputConfig { max_bytes: 500, max_lines: 10, max_line_length: 80 };
+        let r = cfg.resolved();
+        assert_eq!((r.max_bytes, r.max_lines, r.max_line_length), (500, 10, 80));
+    }
     use super::*;
 
     #[test]

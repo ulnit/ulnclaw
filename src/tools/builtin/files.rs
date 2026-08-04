@@ -8,7 +8,6 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAX_READ_LINES: usize = 2000;
 const MAX_READ_CHARS: usize = 100_000;
 const DEFAULT_SEARCH_LIMIT: usize = 50;
 
@@ -51,7 +50,7 @@ fn read_file_tool() -> crate::tools::Tool {
             "properties": {
                 "path": {"type": "string", "description": "Path to the file to read (absolute, relative, or ~/path)"},
                 "offset": {"type": "integer", "description": "Line number to start reading from (1-indexed, default: 1)", "default": 1, "minimum": 1},
-                "limit": {"type": "integer", "description": "Maximum number of lines to read (default: 2000, max: 2000)", "default": 2000, "maximum": 2000}
+                "limit": {"type": "integer", "description": "Maximum number of lines to read (default and max come from [tool_output] max_lines, normally 2000)", "default": 2000}
             },
             "required": ["path"]
         }))
@@ -62,11 +61,12 @@ fn read_file_tool() -> crate::tools::Tool {
                 .unwrap_or("")
                 .to_string();
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
+            let max_lines = ctx.config.tool_output.resolved().max_lines as u64;
             let limit = args
                 .get("limit")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(MAX_READ_LINES as u64)
-                .min(MAX_READ_LINES as u64) as usize;
+                .unwrap_or(max_lines)
+                .min(max_lines) as usize;
             read_file_impl(&ctx, &path, offset, limit)
         })
         .toolset("file")
@@ -190,11 +190,18 @@ fn read_file_impl(
         }));
     }
 
+    let limits = ctx.config.tool_output.resolved();
     let mut out = String::new();
     let mut char_count = 0usize;
     let mut last_line = start;
     for (idx, line) in lines.iter().enumerate().skip(start).take(limit) {
-        let formatted = format!("{}|{}\n", idx + 1, line);
+        // Long lines get clamped with a marker (hermes file_operations).
+        let display: String = if line.chars().count() > limits.max_line_length {
+            line.chars().take(limits.max_line_length).collect::<String>() + "... [truncated]"
+        } else {
+            (*line).to_string()
+        };
+        let formatted = format!("{}|{}\n", idx + 1, display);
         char_count += formatted.len();
         if char_count > MAX_READ_CHARS {
             break;
