@@ -807,8 +807,10 @@ where
 /// `GET /v1/delegations` — background delegation registry (ulnclaw ops
 /// extension over hermes async_delegation).
 async fn list_delegations_http(State(state): State<Arc<GatewayState>>) -> Json<Value> {
-    let _ = state;
-    let records: Vec<Value> = crate::async_delegation::list_delegations()
+    let snapshot = crate::async_delegation::list_delegations();
+    let known_ids: std::collections::HashSet<String> =
+        snapshot.iter().map(|r| r.id.clone()).collect();
+    let mut records: Vec<Value> = snapshot
         .into_iter()
         .map(|r| {
             json!({
@@ -822,6 +824,28 @@ async fn list_delegations_http(State(state): State<Arc<GatewayState>>) -> Json<V
             })
         })
         .collect();
+    // Cross-restart history from the durable registry (in-memory wins on
+    // id collisions; DB rows cover delegations from previous processes).
+    let home = state.agent.context().home.clone();
+    for (id, origin, row_state, dispatched_at, completed_at, _result_json) in
+        state.store.delegation_rows(200)
+    {
+        if known_ids.contains(&id) {
+            continue;
+        }
+        records.push(json!({
+            "id": id,
+            "status": row_state,
+            "parent_session_key": origin,
+            "created_ms": (dispatched_at * 1000.0) as i64,
+            "finished_ms": completed_at.map(|s| (s * 1000.0) as i64),
+            "log_dir": crate::async_delegation::live_root(&home)
+                .join(&id)
+                .display()
+                .to_string(),
+            "persisted": true,
+        }));
+    }
     Json(json!({"delegations": records}))
 }
 
@@ -831,26 +855,51 @@ async fn get_delegation_http(
     State(state): State<Arc<GatewayState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let Some(record) = crate::async_delegation::get_delegation(&id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": {"message": format!("delegation '{id}' not found"), "type": "invalid_request_error"}})),
-        )
-            .into_response();
-    };
-    let home = state.agent.context().home.clone();
-    let result = crate::async_delegation::read_result(&home, &id);
-    Json(json!({
-        "id": record.id,
-        "status": record.status,
-        "tasks": record.tasks,
-        "parent_session_key": record.parent_session_key,
-        "created_ms": record.created_ms,
-        "finished_ms": record.finished_ms,
-        "log_dir": record.log_dir.display().to_string(),
+    if let Some(record) = crate::async_delegation::get_delegation(&id) {
+        let home = state.agent.context().home.clone();
+        let result = crate::async_delegation::read_result(&home, &id);
+        return Json(json!({
+            "id": record.id,
+            "status": record.status,
+            "tasks": record.tasks,
+            "parent_session_key": record.parent_session_key,
+            "created_ms": record.created_ms,
+            "finished_ms": record.finished_ms,
+            "log_dir": record.log_dir.display().to_string(),
         "result": result,
     }))
-    .into_response()
+    .into_response();
+    }
+    // Durable-registry fallback: delegations from previous processes.
+    if let Some((_, origin, row_state, dispatched_at, completed_at, result_json)) = state
+        .store
+        .delegation_rows(500)
+        .into_iter()
+        .find(|(row_id, _, _, _, _, _)| row_id == &id)
+    {
+        let home = state.agent.context().home.clone();
+        let result = crate::async_delegation::read_result(&home, &id)
+            .or_else(|| result_json.and_then(|raw| serde_json::from_str(&raw).ok()));
+        return Json(json!({
+            "id": id,
+            "status": row_state,
+            "parent_session_key": origin,
+            "created_ms": (dispatched_at * 1000.0) as i64,
+            "finished_ms": completed_at.map(|s| (s * 1000.0) as i64),
+            "log_dir": crate::async_delegation::live_root(&home)
+                .join(&id)
+                .display()
+                .to_string(),
+            "result": result,
+            "persisted": true,
+        }))
+        .into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"error": {"message": format!("delegation '{id}' not found"), "type": "invalid_request_error"}})),
+    )
+        .into_response()
 }
 
 async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
@@ -1802,7 +1851,9 @@ struct SessionChatRequest {
 /// process session key; ulnclaw runs one profile per gateway process).
 fn drain_delegations_into_session(state: &GatewayState, session_id: &str) {
     let key = state.agent.context().session_id.clone();
-    for completion in crate::async_delegation::drain_completions(&key) {
+    for completion in
+        crate::async_delegation::drain_completions(Some(&state.store), &key)
+    {
         let message = crate::provider::Message {
             role: crate::provider::Role::User,
             content: Some(completion.message),

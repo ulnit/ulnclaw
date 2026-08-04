@@ -22,7 +22,7 @@ full feature-by-feature mapping.
 - **🛡️ Approval system** — command normalization, hardline floor (auto-block), confirm-before-run for costly operations; REPL prompts plus gateway run approvals over HTTP with fail-closed timeout and persisted `always` grants
 - **💾 SQLite state** — sessions/messages with FTS5 full-text search, lineage (parent/child sessions), cron jobs, kanban board; offline non-destructive `sessions recover` for damaged databases (rowid salvage, orphan-session reconstruction, FTS rebuild)
 - **🗜️ Context compression** — budget-triggered middle-turn summarization via a secondary model call
-- **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits; top-level delegations run fire-and-forget in the background (live transcripts under `cache/delegation/live/`) and one consolidated result re-enters the conversation when the batch finishes
+- **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits; top-level delegations run fire-and-forget in the background (live transcripts under `cache/delegation/live/`) and one consolidated result re-enters the conversation when the batch finishes; dispatches and results persist in the SQLite delegation registry, so finished work survives restarts (rows still running after a crash recover as terminal "outcome unknown" reports)
 - **🧬 Mixture of Agents** — `[moa]` presets fan a prompt out to reference models in parallel and synthesize their answers via an aggregator (`ulnclaw moa run/list/delete`, REPL `/moa`)
 - **⏰ Cron** — `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules with a poll scheduler
 - **📐 Blueprints** — skills with a `metadata.hermes.blueprint.schedule` frontmatter become cron jobs (`skills blueprints`, `skills schedule/unschedule`)
@@ -188,7 +188,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 287 tests
+cargo test                     # 289 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -215,7 +215,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🛡️ 审批系统** —— 命令归一化、硬性底线（自动阻止）、高成本操作先确认再执行；REPL 提示 + 网关 HTTP 运行审批（fail-closed 超时、`always` 授权持久化）
 - **💾 SQLite 状态库** —— 会话/消息 FTS5 全文检索、会话血缘（父子会话）、定时任务、kanban 看板；受损数据库的离线非破坏性 `sessions recover`（rowid 抢救、孤儿会话重建、FTS 重建）
 - **🗜️ 上下文压缩** —— 预算触发，中段对话经二次模型调用摘要
-- **🤝 委派** —— 并行子代理，隔离上下文，深度限制；顶层委派后台即发即忘（实时记录在 `cache/delegation/live/`），整批完成后以单条汇总结果重回会话
+- **🤝 委派** —— 并行子代理，隔离上下文，深度限制；顶层委派后台即发即忘（实时记录在 `cache/delegation/live/`），整批完成后以单条汇总结果重回会话；派发与结果持久化于 SQLite 委派登记表，完成的工作可跨重启保留（崩溃后仍在运行的委派以终态 "outcome unknown" 报告恢复投递）
 - **🧬 混合智能体（MoA）** —— `[moa]` 预设将提示词并行扇出给参考模型，经聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa`）
 - **⏰ 定时任务** —— `30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划 + 轮询调度器
 - **📐 蓝图（Blueprints）** —— frontmatter 声明 `metadata.hermes.blueprint.schedule` 的技能可排程（`skills blueprints`、`skills schedule/unschedule`）
@@ -311,7 +311,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 287 个测试
+cargo test                     # 289 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

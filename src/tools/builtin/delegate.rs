@@ -115,6 +115,7 @@ fn delegate_task_tool() -> crate::tools::Tool {
                     ctx.session_id.clone(),
                     ctx.home.clone(),
                     max_children,
+                    ctx.store.clone(),
                 ) {
                     Ok(record) => {
                         let n = goals.len();

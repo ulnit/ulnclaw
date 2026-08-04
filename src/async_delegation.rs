@@ -11,10 +11,19 @@
 //!   (hermes CLI drain with positive-ownership filtering by session key).
 //! - Gateway session chats drain the same queue before each turn.
 //!
-//! Hermes' durable sqlite registry (crash recovery, delivery claims,
-//! multiplex-profile routing) is not ported: the registry lives for the
-//! process lifetime and the files under `cache/delegation/live/` are the
-//! durable artifact.
+//! Durable registry (hermes sqlite store): when a session store is wired,
+//! dispatches and consolidated results persist to the `async_delegations`
+//! table so finished work survives process restarts. On startup
+//! `recover_from_store` abandons delegations whose workers died with the
+//! previous process — hermes `recover_abandoned_delegations`: the row is
+//! given a terminal `unknown` outcome whose consolidated result is
+//! delivered through the normal path. `drain_completions` claims both the
+//! in-memory queue (same-process, ownership-filtered) and undelivered DB
+//! rows (claim-all: ulnclaw runs one consumer per process and session keys
+//! are per-process UUIDs, so recovered rows are delivered to the session
+//! that drains first), marking rows `delivered` exactly when claimed.
+//! Live transcripts under `cache/delegation/live/` remain the inspectable
+//! artifact.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -23,6 +32,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 
+use crate::session::sqlite::SqliteSessionStore;
 use crate::tools::context::SubAgentRunner;
 
 /// Status of a background delegation.
@@ -83,6 +93,7 @@ pub fn dispatch_background_delegation(
     parent_session_key: String,
     home: PathBuf,
     max_concurrent: usize,
+    store: Option<Arc<SqliteSessionStore>>,
 ) -> Result<DelegationRecord, String> {
     if tasks.is_empty() {
         return Err("no tasks to delegate".to_string());
@@ -102,10 +113,24 @@ pub fn dispatch_background_delegation(
         log_dir: log_dir.clone(),
     };
     state().lock().unwrap().records.insert(id.clone(), record.clone());
+    if let Some(store) = &store {
+        let tasks_json = serde_json::to_string(
+            &tasks
+                .iter()
+                .map(|(goal, context)| json!({"goal": goal, "context": context}))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
+        if let Err(e) = store.persist_delegation_dispatch(&id, &parent_session_key, &tasks_json) {
+            // Durability is best-effort; in-memory delivery still works.
+            eprintln!("warning: persist delegation dispatch: {e}");
+        }
+    }
 
+    let store_for_task = store.clone();
     tokio::spawn(async move {
         let results = run_batch(runner, tasks, &log_dir, max_concurrent.max(1)).await;
-        finalize_delegation(&id, &parent_session_key, &log_dir, results);
+        finalize_delegation(&id, &parent_session_key, &log_dir, results, store_for_task.as_deref());
     });
 
     Ok(record)
@@ -177,6 +202,7 @@ fn finalize_delegation(
     parent_session_key: &str,
     log_dir: &Path,
     results: Vec<serde_json::Value>,
+    store: Option<&SqliteSessionStore>,
 ) {
     let failed = results
         .iter()
@@ -201,6 +227,14 @@ fn finalize_delegation(
         serde_json::to_string_pretty(&consolidated).unwrap_or_default(),
     );
     let _ = std::fs::write(log_dir.join("DONE"), format!("{}\n", status));
+
+    if let Some(store) = store {
+        let _ = store.finish_delegation(
+            id,
+            status,
+            &serde_json::to_string(&consolidated).unwrap_or_default(),
+        );
+    }
 
     let message = format_consolidated_report(id, &consolidated);
 
@@ -249,22 +283,61 @@ pub fn format_consolidated_report(delegation_id: &str, consolidated: &serde_json
 
 /// Claim all queued completions owned by `session_key` (hermes
 /// positive-ownership drain). Completions for other sessions stay queued.
-pub fn drain_completions(session_key: &str) -> Vec<Completion> {
+pub fn drain_completions(store: Option<&SqliteSessionStore>, session_key: &str) -> Vec<Completion> {
     if session_key.is_empty() {
         return Vec::new();
     }
-    let mut guard = state().lock().unwrap();
     let mut claimed = Vec::new();
-    let mut rest = VecDeque::new();
-    while let Some(completion) = guard.completions.pop_front() {
-        if completion.session_key == session_key {
-            claimed.push(completion);
-        } else {
-            rest.push_back(completion);
+    {
+        let mut guard = state().lock().unwrap();
+        let mut rest = VecDeque::new();
+        while let Some(completion) = guard.completions.pop_front() {
+            if completion.session_key == session_key {
+                if let Some(store) = store {
+                    let _ = store.mark_delegation_delivered(&completion.delegation_id);
+                }
+                claimed.push(completion);
+            } else {
+                rest.push_back(completion);
+            }
+        }
+        guard.completions = rest;
+    }
+
+    // Durability catch-up (hermes delivery claim): undelivered rows from a
+    // previous process, or from a crash between finalize and drain. Claim
+    // ALL of them — ulnclaw runs one consumer per process and session keys
+    // are per-process UUIDs, so ownership matching across restarts is
+    // impossible; the first drain adopts the pending results.
+    if let Some(store) = store {
+        for (id, origin_session, result_json) in store.undelivered_delegations() {
+            let Ok(consolidated) = serde_json::from_str::<serde_json::Value>(&result_json) else {
+                continue;
+            };
+            let message = format_consolidated_report(&id, &consolidated);
+            let _ = store.mark_delegation_delivered(&id);
+            claimed.push(Completion {
+                delegation_id: id,
+                session_key: origin_session,
+                message,
+                result: consolidated,
+                finished_ms: now_ms(),
+            });
         }
     }
-    guard.completions = rest;
     claimed
+}
+
+/// Startup recovery (hermes `recover_abandoned_delegations`): delegations
+/// still marked `running` belonged to a process that died, so give them a
+/// terminal `unknown` outcome with a consolidated result — the normal
+/// delivery claim injects the "outcome unknown" report into the
+/// conversation on the next drain. Completed-but-undelivered rows also
+/// stay in the store until claimed, so a crash between recovery and the
+/// first drain cannot lose results. Returns the number of abandoned
+/// delegations.
+pub fn recover_from_store(store: &SqliteSessionStore) -> usize {
+    store.abandon_running_delegations().len()
 }
 
 /// Snapshot of all live/finished delegations in this process.
@@ -322,10 +395,14 @@ mod tests {
         dir
     }
 
-    async fn wait_for_completion(key: &str, timeout_ms: u64) -> Vec<Completion> {
+    async fn wait_for_completion(
+        store: Option<&SqliteSessionStore>,
+        key: &str,
+        timeout_ms: u64,
+    ) -> Vec<Completion> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
         loop {
-            let drained = drain_completions(key);
+            let drained = drain_completions(store, key);
             if !drained.is_empty() {
                 return drained;
             }
@@ -353,10 +430,11 @@ mod tests {
             "session-owner".to_string(),
             home.clone(),
             2,
+            None,
         )
         .unwrap();
 
-        let completions = wait_for_completion("session-owner", 5000).await;
+        let completions = wait_for_completion(None, "session-owner", 5000).await;
         assert_eq!(completions.len(), 1);
         let completion = &completions[0];
         assert_eq!(completion.delegation_id, record.id);
@@ -395,9 +473,10 @@ mod tests {
             "session-fail".to_string(),
             home.clone(),
             1,
+            None,
         )
         .unwrap();
-        let completions = wait_for_completion("session-fail", 5000).await;
+        let completions = wait_for_completion(None, "session-fail", 5000).await;
         assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].result["status"], "failed");
         assert_eq!(completions[0].result["failed"], 1);
@@ -419,16 +498,17 @@ mod tests {
             "alice".to_string(),
             home,
             1,
+            None,
         )
         .unwrap();
         // Bob drains first: nothing for him, Alice's completion stays queued.
-        assert!(drain_completions("bob").is_empty());
-        let completions = wait_for_completion("alice", 5000).await;
+        assert!(drain_completions(None, "bob").is_empty());
+        let completions = wait_for_completion(None, "alice", 5000).await;
         assert_eq!(completions.len(), 1);
         // Second drain is empty (claimed exactly once).
-        assert!(drain_completions("alice").is_empty());
+        assert!(drain_completions(None, "alice").is_empty());
         // Empty session key never claims anything.
-        assert!(drain_completions("").is_empty());
+        assert!(drain_completions(None, "").is_empty());
     }
 
     #[tokio::test]
@@ -446,15 +526,105 @@ mod tests {
             "session-bounded".to_string(),
             home,
             2,
+            None,
         )
         .unwrap();
         // Shortly after dispatch at most 2 children can have started.
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(runner.runs.load(Ordering::SeqCst) <= 2);
-        let completions = wait_for_completion("session-bounded", 5000).await;
+        let completions = wait_for_completion(None, "session-bounded", 5000).await;
         assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].result["subagents"], 4);
         assert!(get_delegation(&record.id).is_some());
+    }
+
+    // The store-backed tests share the process-global store handle; keep
+    // them serialized so drains observe the intended store.
+    static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[tokio::test]
+    async fn durable_registry_recovery_and_delivery_claim() {
+        let _guard = STORE_LOCK.lock().unwrap();
+        let home = unique_home("durable");
+        let store = Arc::new(SqliteSessionStore::open(home.join("state.db")).unwrap());
+
+        // Simulate a previous process (different session key): one
+        // delegation still running, one completed but never delivered.
+        store
+            .persist_delegation_dispatch(
+                "d-abandoned",
+                "old-sess",
+                "[{\"goal\":\"old work\",\"context\":\"\"}]",
+            )
+            .unwrap();
+        store.persist_delegation_dispatch("d-finished", "old-sess", "[]").unwrap();
+        store
+            .finish_delegation(
+                "d-finished",
+                "completed",
+                "{\"delegation_id\":\"d-finished\",\"status\":\"completed\",\"subagents\":1,\"failed\":0,\"results\":[{\"task\":\"t\",\"status\":\"completed\",\"result\":\"done\"}]}",
+            )
+            .unwrap();
+
+        // Restart recovery: the running row becomes a terminal `unknown`
+        // outcome with a consolidated result (hermes recover_abandoned).
+        assert_eq!(recover_from_store(&store), 1);
+        let states: std::collections::HashMap<String, String> = store
+            .delegation_rows(10)
+            .into_iter()
+            .map(|(id, _, st, _, _, _)| (id, st))
+            .collect();
+        assert_eq!(states.get("d-abandoned").map(String::as_str), Some("unknown"));
+        assert_eq!(states.get("d-finished").map(String::as_str), Some("completed"));
+
+        // The restarted process has a NEW session key; the delivery claim
+        // still hands over every pending row (single-consumer process).
+        let drained = drain_completions(Some(&store), "new-sess");
+        assert_eq!(drained.len(), 2);
+        let lost = drained.iter().find(|c| c.delegation_id == "d-abandoned").unwrap();
+        assert!(lost.message.contains("outcome unknown"));
+        assert!(lost.message.contains("old work"));
+        let recovered = drained.iter().find(|c| c.delegation_id == "d-finished").unwrap();
+        assert!(recovered.message.contains("done"));
+        // Claim is durable: nothing left undelivered, second drain empty.
+        assert!(store.undelivered_delegations().is_empty());
+        assert!(drain_completions(Some(&store), "new-sess").is_empty());
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_store_persists_and_delivers_once() {
+        let _guard = STORE_LOCK.lock().unwrap();
+        let home = unique_home("durable-dispatch");
+        let store = Arc::new(SqliteSessionStore::open(home.join("state.db")).unwrap());
+        let runner: Arc<dyn SubAgentRunner> = Arc::new(FakeRunner {
+            delay_ms: 1,
+            fail: false,
+            runs: AtomicUsize::new(0),
+        });
+        let record = dispatch_background_delegation(
+            runner,
+            vec![("persist me".to_string(), String::new())],
+            "sess-persist".to_string(),
+            home,
+            1,
+            Some(store.clone()),
+        )
+        .unwrap();
+        let completions = wait_for_completion(Some(&store), "sess-persist", 5000).await;
+        assert_eq!(completions.len(), 1);
+        assert!(completions[0].message.contains("persist me"));
+
+        // Row persisted end-to-end: dispatch -> completed -> delivered.
+        let rows = store.delegation_rows(10);
+        assert_eq!(rows.len(), 1);
+        let (id, origin, row_state, _, _, result_json) = &rows[0];
+        assert_eq!(id, &record.id);
+        assert_eq!(origin, "sess-persist");
+        assert_eq!(row_state, "delivered");
+        assert!(result_json.as_deref().unwrap_or("").contains("persist me"));
+        // Delivery claim prevents any second delivery.
+        assert!(store.undelivered_delegations().is_empty());
+        assert!(drain_completions(Some(&store), "sess-persist").is_empty());
     }
 
     #[test]

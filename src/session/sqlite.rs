@@ -440,6 +440,181 @@ impl SqliteSessionStore {
         Some(reactions)
     }
 
+    // ── Durable background-delegation registry (hermes async_delegation
+    //    durable store: dispatch/completion persisted so results survive
+    //    process restarts) ─────────────────────────────────────────────
+
+    /// Persist a background-delegation dispatch.
+    pub fn persist_delegation_dispatch(
+        &self,
+        delegation_id: &str,
+        origin_session: &str,
+        tasks_json: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO async_delegations
+             (delegation_id, origin_session, parent_session_id, state, dispatched_at, updated_at, task_json)
+             VALUES (?1, ?2, ?2, 'running', ?3, ?3, ?4)",
+            params![delegation_id, origin_session, now_secs(), tasks_json],
+        )
+        .map_err(|e| AgentError::session(format!("persist delegation: {}", e)))?;
+        Ok(())
+    }
+
+    /// Record the consolidated result of a finished delegation
+    /// (`state` = completed | failed).
+    pub fn finish_delegation(&self, delegation_id: &str, state: &str, result_json: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "UPDATE async_delegations SET state = ?2, completed_at = ?3, updated_at = ?3, result_json = ?4
+             WHERE delegation_id = ?1",
+            params![delegation_id, state, now_secs(), result_json],
+        )
+        .map_err(|e| AgentError::session(format!("finish delegation: {}", e)))?;
+        Ok(())
+    }
+
+    /// Mark a completed delegation as delivered to its session.
+    pub fn mark_delegation_delivered(&self, delegation_id: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "UPDATE async_delegations SET state = 'delivered', updated_at = ?2
+             WHERE delegation_id = ?1 AND state IN ('completed', 'unknown')",
+            params![delegation_id, now_secs()],
+        )
+        .map_err(|e| AgentError::session(format!("deliver delegation: {}", e)))?;
+        Ok(())
+    }
+
+    /// Undelivered finished delegations: (id, origin_session, result_json).
+    pub fn undelivered_delegations(&self) -> Vec<(String, String, String)> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT delegation_id, origin_session, result_json FROM async_delegations
+             WHERE state IN ('completed', 'unknown') AND result_json IS NOT NULL
+             ORDER BY completed_at",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = match stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        }) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    /// Abandon delegations still `running` from a previous process (their
+    /// workers died with the owner). Hermes `recover_abandoned_delegations`:
+    /// each row gets a terminal `unknown` outcome whose consolidated-shaped
+    /// result flows through the normal delivery claim, so the conversation
+    /// learns "outcome unknown" instead of silently waiting forever.
+    /// Returns (id, origin_session) pairs.
+    pub fn abandon_running_delegations(&self) -> Vec<(String, String)> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT delegation_id, origin_session, COALESCE(task_json, '[]')
+             FROM async_delegations WHERE state = 'running'",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows: Vec<(String, String, String)> = match stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        }) {
+            Ok(r) => r.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        };
+        drop(stmt);
+        let mut abandoned = Vec::new();
+        for (id, origin, task_json) in rows {
+            let mut goals: Vec<String> = serde_json::from_str::<serde_json::Value>(&task_json)
+                .ok()
+                .and_then(|v| {
+                    v.as_array().map(|arr| {
+                        arr.iter()
+                            .map(|t| t["goal"].as_str().unwrap_or("(unknown task)").to_string())
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
+            if goals.is_empty() {
+                goals.push("(unknown task)".to_string());
+            }
+            let results: Vec<serde_json::Value> = goals
+                .iter()
+                .map(|goal| {
+                    serde_json::json!({
+                        "task": goal,
+                        "status": "error",
+                        "error": "Delegation owner exited before recording a terminal result; outcome unknown.",
+                    })
+                })
+                .collect();
+            let result = serde_json::json!({
+                "delegation_id": id,
+                "status": "unknown",
+                "subagents": results.len(),
+                "failed": results.len(),
+                "results": results,
+            });
+            let result_json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+            conn.execute(
+                "UPDATE async_delegations
+                 SET state = 'unknown', completed_at = ?2, updated_at = ?2, result_json = ?3
+                 WHERE delegation_id = ?1 AND state = 'running'",
+                params![id, now_secs(), result_json],
+            )
+            .ok();
+            abandoned.push((id, origin));
+        }
+        abandoned
+    }
+
+    /// All persisted delegation rows (newest first), for the gateway
+    /// registry endpoint across restarts.
+    pub fn delegation_rows(&self, limit: usize) -> Vec<(String, String, String, f64, Option<f64>, Option<String>)> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT delegation_id, origin_session, state, dispatched_at, completed_at, result_json
+             FROM async_delegations ORDER BY dispatched_at DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = match stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        }) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
     /// Current reactions on a message (hermes `get_message_reactions`).
     pub fn get_message_reactions(&self, session_id: &str, row_id: i64) -> Vec<serde_json::Value> {
         let Some(conn) = self.conn.lock().ok() else {

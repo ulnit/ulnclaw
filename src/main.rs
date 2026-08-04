@@ -454,6 +454,12 @@ async fn make_agent(
 
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
     let store = Arc::new(SqliteSessionStore::open(home.join("state.db")).map_err(|e| e.to_string())?);
+    // Crash recovery for background delegations (hermes durable registry):
+    // rows still running from a previous process become terminal
+    // "outcome unknown" results delivered on the next drain.
+    if ulnclaw::async_delegation::recover_from_store(&store) > 0 {
+        eprintln!("[delegation] recovered abandoned background delegation(s) from a previous run");
+    }
 
     let mut context = ToolContext::new()
         .with_home(home)
@@ -558,10 +564,13 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
     let mut history: Vec<Message> = Vec::new();
     let stdin = std::io::stdin();
     let session_key = agent.context().session_id.clone();
+    let store = agent.context().store.clone();
     loop {
         // Drain finished background delegations into the conversation
         // (hermes CLI completion drain, positive-ownership by session key).
-        for completion in ulnclaw::async_delegation::drain_completions(&session_key) {
+        for completion in
+            ulnclaw::async_delegation::drain_completions(store.as_deref(), &session_key)
+        {
             println!(
                 "\n[delegation {} finished — consolidated result injected]",
                 completion.delegation_id
