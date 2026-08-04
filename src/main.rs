@@ -90,6 +90,11 @@ enum Commands {
         #[command(subcommand)]
         action: Option<MoaAction>,
     },
+    /// Multi-provider model catalog (models.dev registry)
+    Models {
+        #[command(subcommand)]
+        action: Option<ModelsAction>,
+    },
     /// Write a default config.toml
     Init,
 }
@@ -141,6 +146,26 @@ enum MoaAction {
     List,
     /// Delete a preset from config.toml
     Delete { name: String },
+}
+
+#[derive(Subcommand)]
+enum ModelsAction {
+    /// List catalog providers (id, name, model count, env vars)
+    Providers,
+    /// List models for a provider from the catalog (agentic by default)
+    List {
+        provider: String,
+        /// Include non-agentic models (TTS, embeddings, image, ...)
+        #[arg(long)]
+        all: bool,
+        /// Force a catalog refresh before listing
+        #[arg(long)]
+        refresh: bool,
+    },
+    /// Show metadata for one model (limits, cost, capabilities)
+    Info { provider: String, model: String },
+    /// Force-refresh the local models.dev cache
+    Refresh,
 }
 
 #[derive(Subcommand)]
@@ -429,6 +454,15 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         }
         Commands::Moa { action } => {
             moa_cmd(&config, action.unwrap_or(MoaAction::List), cli.config.as_deref()).await
+        }
+        Commands::Models { action } => {
+            // reqwest's blocking client builds its own runtime, so catalog
+            // network fetches must run off the async main context.
+            tokio::task::spawn_blocking(move || {
+                models_cmd(action.unwrap_or(ModelsAction::Providers))
+            })
+            .await
+            .map_err(|e| e.to_string())?
         }
         Commands::Init => {
             let path = UlncLawConfig::write_default_if_missing().map_err(|e| e.to_string())?;
@@ -1077,6 +1111,100 @@ fn tools_cmd(config: &UlncLawConfig) -> Result<(), String> {
     println!("\nEnabled tools ({}):", registry.len());
     for def in registry.definitions() {
         println!("  {}", def.name);
+    }
+    Ok(())
+}
+
+fn models_cmd(action: ModelsAction) -> Result<(), String> {
+    use ulnclaw::models_dev as md;
+    match action {
+        ModelsAction::Providers => {
+            let providers = md::list_providers(true);
+            if providers.is_empty() {
+                return Err(
+                    "models.dev catalog unavailable (network offline and no local cache)"
+                        .to_string(),
+                );
+            }
+            println!(
+                "{:<24} {:<36} {:>7}  env",
+                "id", "name", "models"
+            );
+            for provider in providers {
+                println!(
+                    "{:<24} {:<36} {:>7}  {}",
+                    provider.id,
+                    provider.name,
+                    provider.model_count,
+                    provider.env.join(",")
+                );
+            }
+            let cache = md::cache_info();
+            println!(
+                "\ncatalog: {} providers (age {}s, fresh={})",
+                cache.providers,
+                cache.age_secs.round() as u64,
+                cache.fresh
+            );
+        }
+        ModelsAction::List { provider, all, refresh } => {
+            if refresh {
+                md::fetch_models_dev_opts(true, true);
+            }
+            let models = if all {
+                md::list_provider_models(&provider)
+            } else {
+                md::list_agentic_models(&provider)
+            };
+            if models.is_empty() {
+                return Err(format!(
+                    "no models found for provider '{provider}' (not in the models.dev catalog?)"
+                ));
+            }
+            for model in models {
+                println!("{model}");
+            }
+        }
+        ModelsAction::Info { provider, model } => {
+            let Some(info) = md::get_model_info(&provider, &model) else {
+                return Err(format!("model '{model}' not found for provider '{provider}'"));
+            };
+            println!("{} ({})", info.name, info.id);
+            println!("  provider:    {}", info.provider_id);
+            if !info.family.is_empty() {
+                println!("  family:      {}", info.family);
+            }
+            println!(
+                "  limits:      context={} output={}{}",
+                info.context_window,
+                info.max_output,
+                info.max_input
+                    .map(|v| format!(" input={v}"))
+                    .unwrap_or_default()
+            );
+            println!("  cost:        {}", info.format_cost());
+            println!("  capabilities: {}", info.format_capabilities());
+            if !info.input_modalities.is_empty() {
+                println!("  modalities:  in={} out={}", info.input_modalities.join("+"), info.output_modalities.join("+"));
+            }
+            if !info.knowledge_cutoff.is_empty() {
+                println!("  knowledge:   {}", info.knowledge_cutoff);
+            }
+            if !info.status.is_empty() {
+                println!("  status:      {}", info.status);
+            }
+        }
+        ModelsAction::Refresh => {
+            md::fetch_models_dev_opts(true, true);
+            let cache = md::cache_info();
+            if cache.providers == 0 {
+                return Err("models.dev refresh failed (see debug log); no cache available".to_string());
+            }
+            println!(
+                "models.dev cache refreshed: {} providers (fresh={})",
+                cache.providers, cache.fresh
+            );
+        }
     }
     Ok(())
 }

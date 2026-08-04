@@ -58,16 +58,17 @@
 | Provider 抽象（`runtime_provider.py`） | ✅ | OpenAI 兼容（OpenAI/OpenRouter/DashScope/Ollama/llama.cpp）、原生 Anthropic Messages 传输（`anthropic_messages`：system 参数、tool_use/tool_result 块、SSE 流式、max_tokens 上限、OAuth bearer）、本地 provider 免密钥 |
 | Provider 回退链（`fallback_providers`、`try_activate_fallback`） | ✅ 核心 | `[model] fallbacks = ["provider:model", ...]`：模型调用失败时按序推进（每条目惰性构建客户端、密钥回退主运行时），激活的回退在本轮内保持生效，下一轮恢复主 provider（hermes `restore_primary_runtime`）；委派/cron 子代理继承配置 |
 | 辅助模型路由（`auxiliary_client.py`） | ✅ 核心 | `[auxiliary.<task>]` 按任务覆盖 provider/模型/base_url/api_key/key_env（`compression`、`vision`）；`"auto"`/留空继承主运行时；无覆盖时复用主客户端 |
+| models.dev 目录（`agent/models_dev.py`） | ✅ 核心 | `models_dev.rs`：拉取 `https://models.dev/api.json`，三级缓存——内存（1 小时 TTL，过期数据立即返回并由后台线程刷新）→ 磁盘（`$ULNCLAW_HOME/models_dev_cache.json`，任意陈旧度可用）→ 网络单飞获取（失败后进程级退避 5 分钟）；provider ID 映射 + 同名回退、上下文/能力查询（大小写不敏感、`:cloud`/`-cloud` 后缀回退）、agentic 目录过滤（噪声模式 + Google 隐藏清单）、`get_provider_info`/`get_model_info`；`ULNCLAW_MODELS_DEV_URL` 镜像覆盖（http(s)/file）、`ULNCLAW_MODELS_DEV_CACHE` 路径覆盖；网关 `/api/model/options` 目录增强 + `?refresh=true`；CLI `ulnclaw models providers\|list\|info\|refresh` |
 | 配置（`config.yaml`） | ✅ | `config.toml` + `.env` 文件、profiles、环境变量优先级 |
 | 技能系统 | ✅ | 发现、frontmatter、关联文件 |
 | 记忆系统 | ✅ | MEMORY.md/USER.md，注入提示词 |
 | Cron 调度器 | ✅ | 任务存储 + 计划解析 + 轮询循环（`cron::run_scheduler`） |
 | MCP 客户端（`mcp_tool.py`） | ✅ 核心 | stdio JSON-RPC：initialize/tools/list/tools/call；`[[mcp.servers]]` 配置；工具注册为 `mcp__<server>__<tool>`；npx/uvx/pipx 启动前的 OSV 恶意软件检查（`osv_check.py` 移植：MAL-* 通告阻止启动、fail-open、1 小时结论缓存、`OSV_ENDPOINT`/`OSV_CHECK_CACHE_TTL` 覆盖） |
-| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap` 与 `sessions recover`）、`moa run/list/delete`、`skills blueprints/schedule/unschedule`、`diff`、`init` |
+| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap` 与 `sessions recover`）、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
 | Git 工作区 diff（`working_diff.py`） | ✅ | `ulnclaw diff [--staged|--all] [--dir PATH] [paths...]` + REPL `/gitdiff [staged|all]`：working/staged/all 三模式，未跟踪文件经 `git diff --no-index` 折入（上限 50 个），带超时；基于检查点的 REPL `/diff` 保持独立 |
 | 委派（delegation） | ✅ | SubAgentRunner trait、深度限制、子会话 |
 | 混合智能体 MoA（`moa_loop.py`、`moa_config.py`） | ✅ 核心 | `[moa.presets.<name>]` 参考模型并行扇出 + 聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa <prompt>`）；loud/silent 降级策略、全部失败提前返回、聚合失败回退拼接结果；持久 `provider: moa` 门面、trace 与隐私过滤未移植 |
-| HTTP 网关（`gateway/platforms/api_server.py`） | ✅ 核心 | `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接、`stream: true` SSE 令牌流 + `hermes.tool.progress` 事件）、`/v1/responses`（经 `previous_response_id` 有状态续接、`stream: true` Responses-API SSE 事件）、`/v1/models`、`/api/model/options`、`/v1/capabilities`、`/v1/runs`（异步运行 + SSE 事件 + 停止 + 审批）、`/api/sessions` 增删查改 + 会话聊天 + chat/stream + `PATCH`（title/end_reason）+ `fork` + 会话级模型锁（每轮生效）+ `recap`、`/api/jobs` 定时任务 HTTP API（增删查改 + pause/resume/run）、`/v1/skills`、`/v1/toolsets`、`/metrics`（Prometheus 计数器/量表——ulnclaw 运维扩展）、`/api/usage`（令牌核算：进程计数器 + 全时会话库总量 + 按会话明细——ulnclaw 运维扩展）、`/v1/delegations`（后台委派登记——ulnclaw 运维扩展）、`/v1/browser/status|connect|disconnect`（实时 CDP 端点控制，对齐 hermes `/browser connect`——ulnclaw 运维扩展）、Bearer 令牌鉴权 |
+| HTTP 网关（`gateway/platforms/api_server.py`） | ✅ 核心 | `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接、`stream: true` SSE 令牌流 + `hermes.tool.progress` 事件）、`/v1/responses`（经 `previous_response_id` 有状态续接、`stream: true` Responses-API SSE 事件）、`/v1/models`、`/api/model/options`（models.dev 目录增强、`?refresh=true`）、`/v1/capabilities`、`/v1/runs`（异步运行 + SSE 事件 + 停止 + 审批）、`/api/sessions` 增删查改 + 会话聊天 + chat/stream + `PATCH`（title/end_reason）+ `fork` + 会话级模型锁（每轮生效）+ `recap`、`/api/jobs` 定时任务 HTTP API（增删查改 + pause/resume/run）、`/v1/skills`、`/v1/toolsets`、`/metrics`（Prometheus 计数器/量表——ulnclaw 运维扩展）、`/api/usage`（令牌核算：进程计数器 + 全时会话库总量 + 按会话明细——ulnclaw 运维扩展）、`/v1/delegations`（后台委派登记——ulnclaw 运维扩展）、`/v1/browser/status|connect|disconnect`（实时 CDP 端点控制，对齐 hermes `/browser connect`——ulnclaw 运维扩展）、Bearer 令牌鉴权 |
 | 消息平台（Telegram/WhatsApp/QQ 等） | ⬜ 暂缓 | hermes 的平台适配器未移植；HTTP 网关已覆盖 OpenAI 兼容前端 |
 | TUI/web/app | ⬜ 暂缓 | hermes 提供 TUI 与 web 应用；ulnclaw 目前是库 + CLI + HTTP 网关——`desktop` 桥接层是 GUI 宿主安装事件发射器的嵌入接缝 |
 | 沙箱环境清洗 + passthrough（`environments/local.py` 黑名单、`env_passthrough.py`） | ✅ | terminal/execute_code 子进程继承的环境会剔除 provider/工具凭证黑名单与虚拟环境标记（`VIRTUAL_ENV`/`CONDA_PREFIX`）；技能 `required_environment_variables`（`skill_view` 时注册）与 `[terminal] env_passthrough` 放行其余变量——受保护的 provider 凭证与 `AUXILIARY_*_API_KEY`/`GATEWAY_RELAY_*` 动态密钥永远被拒绝（hermes GHSA-rhgp-j443-p4rf，失败即关闭） |
@@ -106,8 +107,9 @@
 - 网关实现了 api_server 平台的子集；多 profile 复用（`/p/<profile>/...`）
   未移植。任务 API 仅本地投递（`deliver="local"`）；hermes 的外部投递
   目标与 NAS/Chronos 触发 webhook（`/api/cron/fire`）未移植。
-- `/api/model/options` 仅返回已配置的单个 provider 行；hermes 的多
-  provider 清单（在线目录探测、定价、能力、models.dev 精选模型）未移植。
+- `/api/model/options` 以 models.dev 目录增强已配置的单个 provider 行
+  （模型清单 + 能力/成本映射、`?refresh=true`）；hermes 的多 provider
+  选择器清单（多 provider 探测、精选模型、凭据池行）未移植。
 - 压缩使用 字符数/4 的 token 估算而非分词器。
 - `patch` 模糊链实现了全部 9 种 hermes 策略；相似度基于 LCS 比率
   （difflib.SequenceMatcher 的等价实现），边界阈值与 CPython 实现可能略有差异。

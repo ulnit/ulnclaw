@@ -90,6 +90,7 @@ pub mod gateway;
 pub mod git_diff;
 pub mod mcp;
 pub mod moa;
+pub mod models_dev;
 pub mod provider;
 pub mod redact;
 pub mod session;

@@ -700,23 +700,129 @@ async fn models(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     }))
 }
 
+#[derive(serde::Deserialize)]
+struct ModelOptionsQuery {
+    refresh: Option<String>,
+}
+
+/// Catalog enrichment for the configured provider row (models.dev).
+#[derive(Default)]
+struct CatalogEnrichment {
+    provider_name: Option<String>,
+    api: Option<String>,
+    doc: Option<String>,
+    models: Vec<String>,
+    capabilities: Vec<(String, Value)>,
+    cache: Option<crate::models_dev::CacheInfo>,
+}
+
+fn query_flag(value: Option<&String>) -> bool {
+    value
+        .map(|v| matches!(v.to_lowercase().as_str(), "true" | "1" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+/// Resolve the configured provider against the models.dev registry.
+/// Runs on the blocking pool: cache hits are memory-only, but a cold
+/// start may touch disk/network (hermes keeps picker work off the loop).
+fn models_dev_enrichment(provider: &str, refresh: bool) -> CatalogEnrichment {
+    let mut out = CatalogEnrichment::default();
+    let registry = crate::models_dev::fetch_models_dev_opts(refresh, true);
+    out.cache = Some(crate::models_dev::cache_info());
+    let mdev_id = crate::models_dev::provider_to_models_dev(provider)
+        .map(str::to_string)
+        .unwrap_or_else(|| provider.to_string());
+    let Some(pdata) = registry.get(&mdev_id).filter(|v| v.is_object()) else {
+        return out;
+    };
+    out.provider_name = pdata
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    out.api = pdata.get("api").and_then(|v| v.as_str()).map(str::to_string);
+    out.doc = pdata.get("doc").and_then(|v| v.as_str()).map(str::to_string);
+    // Shared catalog filters (hide lists + agentic noise) live in
+    // models_dev; these re-hit the fresh in-memory cache, not the network.
+    out.models = crate::models_dev::list_provider_models(provider);
+    for model_id in &out.models {
+        if let Some(info) = crate::models_dev::get_model_info(provider, model_id) {
+            let mut caps = json!({
+                "reasoning": info.reasoning,
+                "tools": info.tool_call,
+                "vision": info.supports_vision(),
+                "context_window": info.context_window,
+                "max_output_tokens": info.max_output,
+            });
+            if !info.family.is_empty() {
+                caps["family"] = json!(info.family);
+            }
+            if info.has_cost_data() {
+                caps["cost"] = json!({
+                    "input_per_mtok": info.cost_input,
+                    "output_per_mtok": info.cost_output,
+                });
+            }
+            out.capabilities.push((model_id.clone(), caps));
+        }
+    }
+    out
+}
+
 /// `GET /api/model/options` — provider/model inventory for pickers
-/// (hermes `_handle_model_options`). ulnclaw runs one configured
-/// provider, so the inventory is the configured row (no live catalog
-/// probing or pricing enrichment).
-async fn model_options(State(state): State<Arc<GatewayState>>) -> Json<Value> {
-    Json(json!({
-        "providers": [{
-            "slug": state.provider_name,
-            "models": [state.model_name],
-            "total_models": 1,
-            "is_user_defined": true,
-            "authenticated": true,
-            "current": true,
-        }],
+/// (hermes `_handle_model_options`). The configured provider row is
+/// enriched from the models.dev catalog when the provider is known there
+/// (model list + per-model capabilities/costs). `?refresh=true` forces a
+/// catalog refresh, mirroring hermes' inventory endpoint.
+async fn model_options(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<ModelOptionsQuery>,
+) -> Json<Value> {
+    let refresh = query_flag(query.refresh.as_ref());
+    let provider = state.provider_name.clone();
+    let enrichment = tokio::task::spawn_blocking(move || models_dev_enrichment(&provider, refresh))
+        .await
+        .unwrap_or_default();
+
+    let mut row = json!({
+        "slug": state.provider_name,
+        "models": [state.model_name],
+        "total_models": 1,
+        "is_user_defined": true,
+        "authenticated": true,
+        "current": true,
+    });
+    if let Some(name) = &enrichment.provider_name {
+        row["name"] = json!(name);
+    }
+    if !enrichment.models.is_empty() {
+        row["models"] = json!(enrichment.models);
+        row["total_models"] = json!(enrichment.models.len());
+        row["catalog"] = json!("models.dev");
+        row["catalog_stale"] = json!(enrichment.cache.as_ref().map_or(true, |c| !c.fresh));
+        row["capabilities"] =
+            Value::Object(enrichment.capabilities.into_iter().collect());
+        if let Some(api) = &enrichment.api {
+            row["api"] = json!(api);
+        }
+        if let Some(doc) = &enrichment.doc {
+            row["doc"] = json!(doc);
+        }
+    }
+
+    let mut payload = json!({
+        "providers": [row],
         "model": state.model_name,
         "provider": state.provider_name,
-    }))
+    });
+    if let Some(cache) = &enrichment.cache {
+        payload["catalog_cache"] = json!({
+            "providers": cache.providers,
+            "age_secs": cache.age_secs.round() as u64,
+            "fresh": cache.fresh,
+        });
+    }
+    Json(payload)
 }
 
 /// The model a session is locked to, when it differs from the gateway's
@@ -3788,16 +3894,76 @@ mod tests {
 
     #[tokio::test]
     async fn test_model_options_inventory() {
+        // models.dev enrichment is deterministic: pin a file:// registry
+        // mirror + cache path under the shared env lock.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("models-dev.json");
+        std::fs::write(
+            &fixture,
+            json!({
+                "test": {
+                    "name": "Test Provider",
+                    "api": "https://test.example/v1",
+                    "doc": "https://test.example/docs",
+                    "models": {
+                        "test-model": {
+                            "tool_call": true,
+                            "reasoning": true,
+                            "limit": {"context": 128000, "output": 8192},
+                            "cost": {"input": 0.5, "output": 1.5}
+                        },
+                        "other-model": {"tool_call": true}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::env::set_var(
+            crate::models_dev::MODELS_DEV_URL_ENV,
+            format!("file://{}", fixture.display()),
+        );
+        std::env::set_var(
+            crate::models_dev::MODELS_DEV_CACHE_ENV,
+            dir.path().join("cache.json").display().to_string(),
+        );
+        crate::models_dev::reset_cache_for_tests();
+
         let app = router(test_state());
-        let (status, body) = get_json(app, "/api/model/options", Some("sekret")).await;
+        let (status, body) = get_json(app.clone(), "/api/model/options", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["model"], "test-model");
         assert_eq!(body["provider"], "test");
         let providers = body["providers"].as_array().unwrap();
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0]["slug"], "test");
-        assert_eq!(providers[0]["models"][0], "test-model");
         assert_eq!(providers[0]["current"], true);
+        // models.dev catalog enrichment for the configured provider row.
+        assert_eq!(providers[0]["name"], "Test Provider");
+        assert_eq!(providers[0]["catalog"], "models.dev");
+        assert_eq!(providers[0]["total_models"], 2);
+        let models = providers[0]["models"].as_array().unwrap();
+        assert!(models.iter().any(|m| m == "test-model"));
+        assert!(models.iter().any(|m| m == "other-model"));
+        assert_eq!(providers[0]["capabilities"]["test-model"]["reasoning"], true);
+        assert_eq!(providers[0]["capabilities"]["test-model"]["context_window"], 128000);
+        assert_eq!(
+            providers[0]["capabilities"]["test-model"]["cost"]["input_per_mtok"],
+            0.5
+        );
+        assert!(body["catalog_cache"]["providers"].as_u64().unwrap() >= 1);
+
+        // ?refresh=true forces a registry re-read (same fixture here).
+        let (status, body) =
+            get_json(app.clone(), "/api/model/options?refresh=true", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["providers"][0]["catalog"], "models.dev");
+        assert_eq!(body["providers"][0]["catalog_stale"], false);
+
+        std::env::remove_var(crate::models_dev::MODELS_DEV_URL_ENV);
+        std::env::remove_var(crate::models_dev::MODELS_DEV_CACHE_ENV);
+        crate::models_dev::reset_cache_for_tests();
     }
 
     #[tokio::test]

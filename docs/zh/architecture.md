@@ -322,6 +322,25 @@ fail-closed 自动拒绝（并清理 run 状态）。`always` 授权持久化到
 `approvals.json`。没有 run 上下文的请求（chat-completions）对确认级
 命令自动拒绝。
 
+### 9. Models.dev 目录 (`models_dev.rs`)
+
+移植自 hermes `agent/models_dev.py` 的多 provider 模型清单。拉取社区
+models.dev 注册表，三级缓存：
+
+1. **内存** —— 1 小时 TTL；过期数据立即返回，由单个后台线程刷新
+   （只要存在缓存，调用方绝不阻塞在网络）。
+2. **磁盘** —— `$ULNCLAW_HOME/models_dev_cache.json`（原子写入），任意
+   陈旧度可用；新鲜文件按文件年龄锚定内存 TTL。
+3. **网络** —— 仅在无任何缓存时单飞前台获取；刷新失败触发进程级 5 分钟
+   退避，并回退到陈旧的磁盘缓存。
+
+注册表 URL 可用 `ULNCLAW_MODELS_DEV_URL` 覆盖（http(s) 或 `file://`
+镜像），磁盘缓存路径可用 `ULNCLAW_MODELS_DEV_CACHE` 覆盖。查询面：
+上下文窗口查询（大小写不敏感 + `:cloud`/`-cloud` 后缀回退）、能力元数据、
+provider/模型信息、agentic 模型清单（噪声模式 + Google 隐藏清单）。
+网关 `GET /api/model/options` 用目录增强（`?refresh=true` 强制刷新）；
+CLI 提供 `ulnclaw models providers|list|info|refresh`。
+
 ### 支撑模块
 
 - `config/` - `config.toml` + `.env` + profiles（`UlncLawConfig`、

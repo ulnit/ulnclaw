@@ -302,6 +302,28 @@ park the run in `waiting_for_approval` until resolved over HTTP
 `approvals.json`. Requests without a run context (chat-completions)
 auto-deny confirm-tier commands.
 
+### 9. Models.dev Catalog (`models_dev.rs`)
+
+Multi-provider model inventory ported from hermes `agent/models_dev.py`.
+Fetches the community models.dev registry with a three-tier cache:
+
+1. **In-memory** — 1h TTL; stale data is served immediately while a single
+   background thread refreshes (callers never block on the network while a
+   cache exists).
+2. **Disk** — `$ULNCLAW_HOME/models_dev_cache.json` (atomic write), served
+   at any age; fresh files anchor the in-memory TTL to the file age.
+3. **Network** — singleflight foreground fetch only when no cache exists;
+   failed refreshes arm a 5-minute process-wide backoff and fall back to any
+   stale disk cache.
+
+The registry URL is overridable via `ULNCLAW_MODELS_DEV_URL` (http(s) or
+`file://` mirrors) and the disk cache path via `ULNCLAW_MODELS_DEV_CACHE`.
+Query surface: context-window lookup (case-insensitive + `:cloud`/`-cloud`
+suffix fallback), capability metadata, provider/model info, and agentic
+model lists (noise patterns + Google hidden list). The gateway enriches
+`GET /api/model/options` from the catalog (`?refresh=true` forces a
+re-read); the CLI exposes `ulnclaw models providers|list|info|refresh`.
+
 ### Supporting Modules
 
 - `config/` - `config.toml` + `.env` + profiles (`UlncLawConfig`,
