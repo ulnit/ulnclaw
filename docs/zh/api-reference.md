@@ -1018,6 +1018,7 @@ axum 路由表（供 `serve` 与测试使用）。
 | GET | `/v1/models` | 是 | 对外模型列表 |
 | GET | `/api/model/options` | 是 | 供选择器使用的 provider/模型清单（已配置的 provider 行） |
 | GET | `/v1/capabilities` | 是 | 机器可读的端点目录 |
+| GET | `/metrics` | 是 | Prometheus 文本格式计数器与量表（ulnclaw 运维扩展） |
 | POST | `/v1/chat/completions` | 是 | OpenAI Chat Completions；经 `X-Ulnclaw-Session-Id` 会话续接（兼容 `X-Hermes-Session-Id`）；id 回显于响应头；`stream: true` → SSE `chat.completion.chunk` |
 | POST | `/v1/responses` | 是 | OpenAI Responses 格式；`input` 为字符串或消息数组；经 `previous_response_id` 链式续接；`stream: true` → Responses-API SSE 事件 |
 | GET | `/v1/responses/:id` | 是 | 取回已存储的 response |
@@ -1193,6 +1194,16 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
 与 CLI `sessions recap` / REPL `/recap` 相同的即时本地摘要
 （近期轮次数、常用工具、涉及文件、最近的提问/回复）。
 不调用模型。
+
+**指标**（`GET /metrics`）：Prometheus 文本格式（version 0.0.4）。
+量表：`ulnclaw_uptime_seconds`、`ulnclaw_build_info{version,provider,model}`、
+`ulnclaw_sessions_total`、`ulnclaw_messages_total`、`ulnclaw_runs_active`、
+`ulnclaw_cron_jobs{state}`。计数器：
+`ulnclaw_http_requests_total{endpoint}`（chat_completions/responses/session_chat）、
+`ulnclaw_runs_total{outcome}`（started/completed/failed）、
+`ulnclaw_tokens_total{direction}`（prompt/completion）、`ulnclaw_tool_calls_total`。
+与其他 API 路由一样需要 Bearer 令牌；hermes api_server 无对应端点——
+此为 ulnclaw 运维扩展。
 
 **发现端点**：`GET /v1/skills` 返回
 `{"object":"list","data":[{name, description, category, path}]}`，

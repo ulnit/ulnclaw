@@ -295,6 +295,37 @@ pub struct RunState {
 }
 
 /// Shared gateway state.
+/// Process-wide gateway counters for `GET /metrics` (Prometheus text
+/// format). An ulnclaw ops extension — hermes' api_server has no metrics
+/// endpoint.
+#[derive(Debug, Default)]
+pub struct GatewayMetrics {
+    pub chat_completions: std::sync::atomic::AtomicU64,
+    pub responses_requests: std::sync::atomic::AtomicU64,
+    pub session_chats: std::sync::atomic::AtomicU64,
+    pub runs_started: std::sync::atomic::AtomicU64,
+    pub runs_completed: std::sync::atomic::AtomicU64,
+    pub runs_failed: std::sync::atomic::AtomicU64,
+    pub prompt_tokens: std::sync::atomic::AtomicU64,
+    pub completion_tokens: std::sync::atomic::AtomicU64,
+    pub tool_calls: std::sync::atomic::AtomicU64,
+}
+
+impl GatewayMetrics {
+    fn add(counter: &std::sync::atomic::AtomicU64, value: u64) {
+        if value > 0 {
+            counter.fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Accumulate usage + tool-call counts from one finished agent run.
+    pub fn record_run(&self, usage: &crate::provider::Usage, tool_call_count: usize) {
+        Self::add(&self.prompt_tokens, usage.prompt_tokens as u64);
+        Self::add(&self.completion_tokens, usage.completion_tokens as u64);
+        Self::add(&self.tool_calls, tool_call_count as u64);
+    }
+}
+
 pub struct GatewayState {
     pub agent: Arc<Agent>,
     pub store: Arc<SqliteSessionStore>,
@@ -312,6 +343,10 @@ pub struct GatewayState {
     pub cron: OnceLock<Arc<CronStore>>,
     /// Skills directory backing `GET /v1/skills`.
     pub skills_dir: OnceLock<PathBuf>,
+    /// Request/run counters backing `GET /metrics`.
+    pub metrics: Arc<GatewayMetrics>,
+    /// Gateway start instant (uptime gauge).
+    pub started_at: std::time::Instant,
 }
 
 impl GatewayState {
@@ -338,8 +373,99 @@ impl GatewayState {
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             cron: OnceLock::new(),
             skills_dir: OnceLock::new(),
+            metrics: Arc::new(GatewayMetrics::default()),
+            started_at: std::time::Instant::now(),
         }))
     }
+}
+
+/// `GET /metrics` — Prometheus text-format counters and gauges.
+/// An ulnclaw ops extension (hermes' api_server has no metrics endpoint).
+async fn metrics(State(state): State<Arc<GatewayState>>) -> Response {
+    let uptime = state.started_at.elapsed().as_secs_f64();
+    let sessions = state.store.count_sessions().unwrap_or(0);
+    let messages = state.store.count_messages().unwrap_or(0);
+    let active_runs = state.runs.lock().await.len();
+    let mut cron_jobs_enabled = 0usize;
+    let mut cron_jobs_disabled = 0usize;
+    if let Some(cron) = state.cron.get() {
+        if let Ok(jobs) = cron.list() {
+            for job in &jobs {
+                if job.enabled {
+                    cron_jobs_enabled += 1;
+                } else {
+                    cron_jobs_disabled += 1;
+                }
+            }
+        }
+    }
+    let m = &state.metrics;
+    use std::sync::atomic::Ordering::Relaxed;
+    let body = format!(
+        "# HELP ulnclaw_uptime_seconds Gateway uptime in seconds.
+# TYPE ulnclaw_uptime_seconds gauge
+ulnclaw_uptime_seconds {uptime:.3}
+# HELP ulnclaw_build_info Build metadata.
+# TYPE ulnclaw_build_info gauge
+ulnclaw_build_info{{version=\"{version}\",provider=\"{provider}\",model=\"{model}\"}} 1
+# HELP ulnclaw_sessions_total Sessions stored.
+# TYPE ulnclaw_sessions_total gauge
+ulnclaw_sessions_total {sessions}
+# HELP ulnclaw_messages_total Messages stored.
+# TYPE ulnclaw_messages_total gauge
+ulnclaw_messages_total {messages}
+# HELP ulnclaw_runs_active Currently tracked runs.
+# TYPE ulnclaw_runs_active gauge
+ulnclaw_runs_active {active_runs}
+# HELP ulnclaw_cron_jobs Cron jobs by state.
+# TYPE ulnclaw_cron_jobs gauge
+ulnclaw_cron_jobs{{state=\"enabled\"}} {cron_jobs_enabled}
+ulnclaw_cron_jobs{{state=\"disabled\"}} {cron_jobs_disabled}
+# HELP ulnclaw_http_requests_total Gateway HTTP requests by endpoint.
+# TYPE ulnclaw_http_requests_total counter
+ulnclaw_http_requests_total{{endpoint=\"chat_completions\"}} {chat_completions}
+ulnclaw_http_requests_total{{endpoint=\"responses\"}} {responses_requests}
+ulnclaw_http_requests_total{{endpoint=\"session_chat\"}} {session_chats}
+# HELP ulnclaw_runs_total Tracked runs by outcome.
+# TYPE ulnclaw_runs_total counter
+ulnclaw_runs_total{{outcome=\"started\"}} {runs_started}
+ulnclaw_runs_total{{outcome=\"completed\"}} {runs_completed}
+ulnclaw_runs_total{{outcome=\"failed\"}} {runs_failed}
+# HELP ulnclaw_tokens_total Tokens consumed by direction.
+# TYPE ulnclaw_tokens_total counter
+ulnclaw_tokens_total{{direction=\"prompt\"}} {prompt_tokens}
+ulnclaw_tokens_total{{direction=\"completion\"}} {completion_tokens}
+# HELP ulnclaw_tool_calls_total Tool calls executed via gateway runs.
+# TYPE ulnclaw_tool_calls_total counter
+ulnclaw_tool_calls_total {tool_calls}
+",
+        uptime = uptime,
+        version = env!("CARGO_PKG_VERSION"),
+        provider = state.provider_name,
+        model = state.model_name,
+        sessions = sessions,
+        messages = messages,
+        active_runs = active_runs,
+        cron_jobs_enabled = cron_jobs_enabled,
+        cron_jobs_disabled = cron_jobs_disabled,
+        chat_completions = m.chat_completions.load(Relaxed),
+        responses_requests = m.responses_requests.load(Relaxed),
+        session_chats = m.session_chats.load(Relaxed),
+        runs_started = m.runs_started.load(Relaxed),
+        runs_completed = m.runs_completed.load(Relaxed),
+        runs_failed = m.runs_failed.load(Relaxed),
+        prompt_tokens = m.prompt_tokens.load(Relaxed),
+        completion_tokens = m.completion_tokens.load(Relaxed),
+        tool_calls = m.tool_calls.load(Relaxed),
+    );
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 /// Build the HTTP router (also used by tests).
@@ -351,6 +477,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/models", get(models))
         .route("/api/model/options", get(model_options))
         .route("/v1/capabilities", get(capabilities))
+        .route("/metrics", get(metrics))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(create_response))
         .route(
@@ -623,6 +750,7 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "model_options": true,
             "session_model_lock": true,
             "session_recap": true,
+            "metrics": true,
             "streaming": true,
         },
     }))
@@ -743,6 +871,10 @@ async fn chat_completions(
             .into_response();
     }
 
+    state
+        .metrics
+        .chat_completions
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let history_arg = if history.is_empty() { None } else { Some(history) };
     if request.stream {
         return stream_agent_response(state, prompt, history_arg, session_id);
@@ -775,6 +907,7 @@ async fn chat_completions(
                 "session_id": result.session_id,
             }))
             .into_response();
+            state.metrics.record_run(&result.usage, result.tool_calls.len());
             if let Some(ref sid) = result.session_id {
                 if let Ok(value) = sid.parse() {
                     response.headers_mut().insert(SESSION_HEADER, value);
@@ -1350,6 +1483,10 @@ async fn create_response(
     State(state): State<Arc<GatewayState>>,
     Json(request): Json<ResponsesRequest>,
 ) -> Response {
+    state
+        .metrics
+        .responses_requests
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let messages = input_to_messages(&request.input);
     let prompt = messages
         .iter()
@@ -1414,6 +1551,7 @@ async fn create_response(
     .await;
     match outcome {
         Ok(result) => {
+            state.metrics.record_run(&result.usage, result.tool_calls.len());
             let response_id = format!("resp_{}", uuid::Uuid::new_v4());
             let body = json!({
                 "id": response_id,
@@ -1554,18 +1692,25 @@ async fn session_chat(
         .collect::<Vec<_>>();
     let history_arg = if history.is_empty() { None } else { Some(history) };
     let override_model = session_model_override(&state, &id);
+    state
+        .metrics
+        .session_chats
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let outcome = await_with_model_override(
         override_model,
         state.agent.run_with_session(&request.message, history_arg, Some(&id)),
     )
     .await;
     match outcome {
-        Ok(result) => Json(json!({
-            "session_id": id,
-            "response": result.content,
-            "iterations": result.iterations,
-        }))
-        .into_response(),
+        Ok(result) => {
+            state.metrics.record_run(&result.usage, result.tool_calls.len());
+            Json(json!({
+                "session_id": id,
+                "response": result.content,
+                "iterations": result.iterations,
+            }))
+            .into_response()
+        }
         Err(e) => server_error(&e.to_string()),
     }
 }
@@ -2239,6 +2384,10 @@ fn spawn_tracked_run(state: Arc<GatewayState>, run_id: String, session_id: Strin
         }
     });
 
+    state
+        .metrics
+        .runs_started
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let runner = state.clone();
     let spawn_run_id = run_id.clone();
     tokio::spawn(RUN_ID.scope(run_id.clone(), async move {
@@ -2261,12 +2410,21 @@ fn spawn_tracked_run(state: Arc<GatewayState>, run_id: String, session_id: Strin
             match outcome {
                 Ok(result) => {
                     run.status = "completed".to_string();
+                    runner.metrics.record_run(&result.usage, result.tool_calls.len());
+                    runner
+                        .metrics
+                        .runs_completed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     run.result = Some(result.content);
                     run.session_id = result.session_id.or(run.session_id.take());
                     run.iterations = Some(result.iterations);
                 }
                 Err(e) => {
                     run.status = "failed".to_string();
+                    runner
+                        .metrics
+                        .runs_failed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     run.error = Some(e.to_string());
                 }
             }
@@ -3410,5 +3568,54 @@ mod tests {
         let (status, body) = get_json(app, "/v1/capabilities", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["endpoints"]["session_recap"], true);
+        assert_eq!(body["endpoints"]["metrics"], true);
+    }
+
+    async fn get_text(app: Router, uri: &str, token: Option<&str>) -> (StatusCode, String) {
+        let mut request = axum::http::Request::builder().uri(uri).method("GET");
+        if let Some(token) = token {
+            request = request.header("authorization", format!("Bearer {}", token));
+        }
+        let response = app
+            .oneshot(request.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8_lossy(&body).to_string())
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_requires_auth_and_reports() {
+        let state = test_state();
+        let app = router(state.clone());
+        let (status, _) = get_text(app, "/metrics", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let app = router(state.clone());
+        let (status, body) = get_text(app, "/metrics", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("ulnclaw_uptime_seconds"));
+        assert!(body.contains("ulnclaw_build_info"));
+        assert!(body.contains("ulnclaw_sessions_total"));
+        assert!(body.contains("ulnclaw_http_requests_total{endpoint=\"chat_completions\"} 0"));
+
+        // A chat completions request bumps the endpoint counter even when
+        // the provider itself is unreachable.
+        let app = router(state.clone());
+        let request = axum::http::Request::builder()
+            .uri("/v1/chat/completions")
+            .method("POST")
+            .header("authorization", "Bearer sekret")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"messages":[{"role":"user","content":"hi"}]}"#,
+            ))
+            .unwrap();
+        app.oneshot(request).await.unwrap();
+        let app = router(state.clone());
+        let (status, body) = get_text(app, "/metrics", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("ulnclaw_http_requests_total{endpoint=\"chat_completions\"} 1"));
     }
 }

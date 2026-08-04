@@ -1019,6 +1019,7 @@ Binds and serves until interrupted.
 | GET | `/v1/models` | yes | Advertised model list |
 | GET | `/api/model/options` | yes | Provider/model inventory for pickers (configured provider row) |
 | GET | `/v1/capabilities` | yes | Machine-readable endpoint catalog |
+| GET | `/metrics` | yes | Prometheus text-format counters and gauges (ulnclaw ops extension) |
 | POST | `/v1/chat/completions` | yes | OpenAI Chat Completions; session continuity via `X-Ulnclaw-Session-Id` (also accepts `X-Hermes-Session-Id`); id echoed back in the response header; `stream: true` → SSE `chat.completion.chunk` |
 | POST | `/v1/responses` | yes | OpenAI Responses format; `input` string or message array; chain turns with `previous_response_id`; `stream: true` → Responses-API SSE events |
 | GET | `/v1/responses/:id` | yes | Retrieve a stored response |
@@ -1202,6 +1203,16 @@ pricing, and capability enrichment are not ported.
 the same instant, local-only summary as the CLI `sessions recap` /
 REPL `/recap` (recent turn counts, top tools, files touched, last
 ask/reply).  No model call is made.
+
+**Metrics** (`GET /metrics`): Prometheus text format (version 0.0.4).
+Gauges: `ulnclaw_uptime_seconds`, `ulnclaw_build_info{version,provider,model}`,
+`ulnclaw_sessions_total`, `ulnclaw_messages_total`, `ulnclaw_runs_active`,
+`ulnclaw_cron_jobs{state}`. Counters:
+`ulnclaw_http_requests_total{endpoint}` (chat_completions/responses/session_chat),
+`ulnclaw_runs_total{outcome}` (started/completed/failed),
+`ulnclaw_tokens_total{direction}` (prompt/completion), `ulnclaw_tool_calls_total`.
+Requires the bearer token like every API route; hermes' api_server has no
+equivalent — this is an ulnclaw operations extension.
 
 **Discovery endpoints**: `GET /v1/skills` returns
 `{"object":"list","data":[{name, description, category, path}]}` from the

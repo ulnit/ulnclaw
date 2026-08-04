@@ -183,6 +183,22 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Number of sessions in the store (metrics/observability).
+    pub fn count_sessions(&self) -> Result<usize> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get::<_, i64>(0))
+            .map(|count| count as usize)
+            .map_err(|e| AgentError::session(e.to_string()))
+    }
+
+    /// Number of stored messages (metrics/observability).
+    pub fn count_messages(&self) -> Result<usize> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get::<_, i64>(0))
+            .map(|count| count as usize)
+            .map_err(|e| AgentError::session(e.to_string()))
+    }
+
     /// Database file path.
     pub fn path(&self) -> &Path {
         &self.path
