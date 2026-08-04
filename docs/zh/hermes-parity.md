@@ -39,7 +39,8 @@
 | `computer_use` | 🟡 门控 | 需要 computer-use 驱动（hermes：cua-driver） |
 | `discord`, `discord_admin`, `feishu_doc_read`, `spotify_*`, `yuanbao` | 🟡 门控 | 已注册，依赖平台凭据门控；后端待实现 |
 | `x_search` | 🟡 门控 | hermes `x_search_tool.py` 完整移植：xAI Responses-API `x_search` 服务端工具，支持账号白/黑名单（最多 10 个、去 `@`）、严格客户端日期范围校验（YYYY-MM-DD、禁止倒置/纯未来窗口）、`enable_image_understanding` / `enable_video_understanding`、5xx/瞬时错误退避重试、过滤无引文时的 `degraded`/`degraded_reason` 标记、`[x_search]` 配置（model / reasoning_effort / timeout_seconds / retries）；仅在 `XAI_API_KEY` 存在**且**启用可选 `x_search` 工具集时注册（hermes 对齐——SuperGrok OAuth 路径未移植） |
-| `video_analyze`, `video_generate`, `bfl_flux3_*` | ⬜ 暂缓 | 依赖特定供应商（xAI/BFL 插件注册表）；凭据就绪后再补 |
+| `video_analyze` | ✅ 核心 | hermes `vision_tools.video_analyze_tool` 完整移植：本地文件 / `file://` / HTTP(S) 来源（远程下载经 SSRF 防护，缓存于 `cache/video/temp_video_files/` 并自动清理）、扩展名→mime 映射（mp4/webm/mov/avi/mkv/mpeg/mpg）、20 MB 警告 + 50 MB base64 硬上限、内联 `video_url` data-URL 载荷、`[auxiliary.vision]` 路由失败回落主 provider、空响应重试一次；可选 `video` 工具集（hermes 对齐）——需要支持视频的 provider |
+| `video_generate`、`bfl_flux3_*` | ⭜ 暂缓 | provider 插件注册表（xAI/BFL/Pixverse/…）——BFL 工具经 Nous 网关运行；凭据就绪后再补 |
 
 ## 功能对标
 

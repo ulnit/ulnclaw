@@ -215,6 +215,15 @@ pub trait Provider: Send + Sync {
             "this provider does not support vision (analyze_image)",
         ))
     }
+
+    /// Analyze a video (hermes `video_analyze`). `video_data_url` is a
+    /// base64 `data:` URL (providers that accept video do so inline).
+    /// Default: unsupported.
+    async fn analyze_video(&self, _prompt: &str, _video_data_url: &str) -> Result<String> {
+        Err(AgentError::provider(
+            "this provider does not support video analysis (analyze_video)",
+        ))
+    }
 }
 
 /// Provider configuration for dynamic instantiation

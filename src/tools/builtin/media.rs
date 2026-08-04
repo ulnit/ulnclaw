@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 pub fn register(registry: &mut ToolRegistry) {
     registry.register(vision_analyze_tool());
+    registry.register(video_analyze_tool());
     registry.register(image_generate_tool());
     registry.register(text_to_speech_tool());
 }
@@ -91,6 +92,211 @@ fn vision_analyze_tool() -> crate::tools::Tool {
         .emoji("👁️")
         .build()
         .expect("vision_analyze builds")
+}
+
+// ---------------------------------------------------------------------------
+// video_analyze (hermes vision_tools.video_analyze_tool)
+// ---------------------------------------------------------------------------
+
+/// Hermes `_VIDEO_MIME_TYPES` — extension → mime for inline video payloads.
+fn video_mime_for(path: &std::path::Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .as_deref()?
+    {
+        "mp4" => Some("video/mp4"),
+        "webm" => Some("video/webm"),
+        "mov" => Some("video/mov"),
+        "avi" => Some("video/mp4"),
+        "mkv" => Some("video/mp4"),
+        "mpeg" => Some("video/mpeg"),
+        "mpg" => Some("video/mpeg"),
+        _ => None,
+    }
+}
+
+const MAX_VIDEO_BASE64_BYTES: usize = 50 * 1024 * 1024; // hermes hard cap
+const VIDEO_SIZE_WARN_BYTES: u64 = 20 * 1024 * 1024;
+
+fn video_analyze_tool() -> crate::tools::Tool {
+    tool("video_analyze")
+        .description(
+            "Analyze a video with the multimodal model. Provide a local file path or an              HTTP(S) URL plus a prompt describing what to extract (action description,              scene understanding, transcription, event detection). Videos are sent inline              as base64 (50 MB payload cap); large files may need trimming first.",
+        )
+        .parameters(json!({
+            "type": "object",
+            "properties": {
+                "video_url": {
+                    "type": "string",
+                    "description": "Path to a local video file (file:// or bare path) or an http(s) URL"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "What to extract or describe (default: detailed description of the video)"
+                }
+            },
+            "required": ["video_url"]
+        }))
+        .handler(|args, ctx| async move {
+            let Some(video_url) = args.get("video_url").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()) else {
+                return Ok(json!({"success": false, "error": "video_analyze: 'video_url' is required"}));
+            };
+            let prompt = args
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("Describe this video in detail.")
+                .to_string();
+
+            // ── Resolve local path vs remote URL (hermes parity) ────────
+            let mut temp_path: Option<std::path::PathBuf> = None;
+            let source_path: std::path::PathBuf = if video_url.starts_with("http://")
+                || video_url.starts_with("https://")
+            {
+                if !crate::url_safety::is_safe_url(video_url).await {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "Blocked: URL targets a private or internal network address"
+                    }));
+                }
+                let cache_dir = ctx
+                    .home
+                    .join("cache")
+                    .join("video")
+                    .join("temp_video_files");
+                if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+                    return Ok(json!({"success": false, "error": format!("create video cache dir: {e}")}));
+                }
+                let dest = cache_dir.join(format!("temp_video_{}.mp4", uuid::Uuid::new_v4()));
+                let client = crate::url_safety::ssrf_guarded_client(std::time::Duration::from_secs(300));
+                match client.get(video_url).send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            return Ok(json!({
+                                "success": false,
+                                "error": format!("download video: HTTP {}", response.status())
+                            }));
+                        }
+                        match response.bytes().await {
+                            Ok(bytes) => {
+                                if let Err(e) = std::fs::write(&dest, &bytes) {
+                                    return Ok(json!({"success": false, "error": format!("save video: {e}")}));
+                                }
+                            }
+                            Err(e) => {
+                                return Ok(json!({"success": false, "error": format!("download video body: {e}")}))
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Ok(json!({"success": false, "error": format!("download video: {e}")}))
+                    }
+                }
+                temp_path = Some(dest.clone());
+                dest
+            } else {
+                let raw = video_url.strip_prefix("file://").unwrap_or(video_url);
+                ctx.resolve_path(raw)
+            };
+
+            if !source_path.is_file() {
+                return Ok(json!({
+                    "success": false,
+                    "error": "Invalid video source. Provide an HTTP/HTTPS URL or a valid local file path."
+                }));
+            }
+
+            let result: serde_json::Value = loop {
+                let Some(mime) = video_mime_for(&source_path) else {
+                    let suffix = source_path
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    break json!({
+                        "success": false,
+                        "error": format!(
+                            "Unsupported video format: '{suffix}'. Supported: avi, mkv, mov, mp4, mpeg, mpg, webm"
+                        )
+                    });
+                };
+
+                let size = std::fs::metadata(&source_path).map(|m| m.len()).unwrap_or(0);
+                if size > VIDEO_SIZE_WARN_BYTES {
+                    tracing::warn!(
+                        "Video is {:.1} MB — may be slow or rejected",
+                        size as f64 / (1024.0 * 1024.0)
+                    );
+                }
+
+                let bytes = match std::fs::read(&source_path) {
+                    Ok(b) => b,
+                    Err(e) => break json!({"success": false, "error": format!("read video: {e}")}),
+                };
+                let data_url = format!(
+                    "data:{};base64,{}",
+                    mime,
+                    base64_engine::STANDARD.encode(&bytes)
+                );
+                if data_url.len() > MAX_VIDEO_BASE64_BYTES {
+                    break json!({
+                        "success": false,
+                        "error": format!(
+                            "Video too large for API: base64 payload is {:.1} MB (limit {} MB). Compress or trim the video and retry.",
+                            data_url.len() as f64 / (1024.0 * 1024.0),
+                            MAX_VIDEO_BASE64_BYTES / (1024 * 1024)
+                        )
+                    });
+                }
+
+                let Some(provider) = ctx.provider.clone() else {
+                    break json!({"success": false, "error": "video_analyze: no provider wired into this run"});
+                };
+                // Auxiliary routing: [auxiliary.vision] override (hermes
+                // video analysis uses the vision task), else main provider.
+                let provider = match crate::provider::auxiliary::resolve_aux_task(
+                    &ctx.config,
+                    crate::provider::auxiliary::TASK_VISION,
+                    provider.clone(),
+                ) {
+                    Ok(aux) => aux.provider,
+                    Err(e) => {
+                        tracing::warn!("auxiliary vision routing failed: {}; using main provider", e);
+                        provider
+                    }
+                };
+
+                let mut analysis = match provider.analyze_video(&prompt, &data_url).await {
+                    Ok(answer) => answer,
+                    Err(e) => break json!({"success": false, "error": format!("video provider: {e}")}),
+                };
+                if analysis.trim().is_empty() {
+                    // Hermes retries once on an empty response.
+                    tracing::warn!("Empty video response, retrying once");
+                    analysis = provider
+                        .analyze_video(&prompt, &data_url)
+                        .await
+                        .unwrap_or_default();
+                }
+                break json!({
+                    "success": true,
+                    "analysis": if analysis.trim().is_empty() {
+                        "There was a problem with the request and the video could not be analyzed."
+                    } else {
+                        &analysis
+                    },
+                });
+            };
+
+            if let Some(temp) = temp_path {
+                let _ = std::fs::remove_file(temp);
+            }
+            Ok(result)
+        })
+        .toolset("video")
+        .emoji("🎬")
+        .build()
+        .expect("video_analyze builds")
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +586,7 @@ mod base64_engine {
 #[cfg(test)]
 mod tests {
     use super::base64_engine::STANDARD;
+    use super::video_mime_for;
 
     #[test]
     fn test_base64_roundtrip() {
@@ -387,5 +594,20 @@ mod tests {
         let encoded = STANDARD.encode(data);
         let decoded = STANDARD.decode(&encoded).unwrap();
         assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn video_mime_mapping_matches_hermes() {
+        use std::path::Path;
+        assert_eq!(video_mime_for(Path::new("a.mp4")), Some("video/mp4"));
+        assert_eq!(video_mime_for(Path::new("a.MP4")), Some("video/mp4"));
+        assert_eq!(video_mime_for(Path::new("a.webm")), Some("video/webm"));
+        assert_eq!(video_mime_for(Path::new("a.mov")), Some("video/mov"));
+        assert_eq!(video_mime_for(Path::new("a.avi")), Some("video/mp4"));
+        assert_eq!(video_mime_for(Path::new("a.mkv")), Some("video/mp4"));
+        assert_eq!(video_mime_for(Path::new("a.mpeg")), Some("video/mpeg"));
+        assert_eq!(video_mime_for(Path::new("a.mpg")), Some("video/mpeg"));
+        assert_eq!(video_mime_for(Path::new("a.txt")), None);
+        assert_eq!(video_mime_for(Path::new("noext")), None);
     }
 }

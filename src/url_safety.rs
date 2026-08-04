@@ -619,6 +619,27 @@ pub fn normalize_url_for_request(url: &str) -> String {
     rebuilt
 }
 
+/// HTTP client whose redirect policy re-validates every hop against the
+/// SSRF rules (hermes httpx event-hook semantics). Shared by every
+/// hermes-owned fetch path (web extract, video download, ...).
+pub fn ssrf_guarded_client(timeout: std::time::Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent(concat!("Mozilla/5.0 (X11; Linux x86_64) ulnclaw/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let target = attempt.url().to_string();
+            if is_safe_url_sync(&target) {
+                attempt.follow()
+            } else {
+                attempt.error(format!(
+                    "blocked redirect to private/internal address: {target}"
+                ))
+            }
+        }))
+        .build()
+        .unwrap_or_default()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

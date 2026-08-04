@@ -40,7 +40,8 @@ performance and a single static binary.
 | `computer_use` | 🟡 gated | requires a computer-use driver (hermes: cua-driver) |
 | `discord`, `discord_admin`, `feishu_doc_read`, `spotify_*`, `yuanbao` | 🟡 gated | registered, gated on platform credentials; backends pending |
 | `x_search` | 🟡 gated | full port of hermes `x_search_tool.py`: xAI Responses-API `x_search` server tool with handle allow/exclude filters (max 10, `@` stripped), strict client-side date-range validation (YYYY-MM-DD, no inverted/pure-future windows), `enable_image_understanding` / `enable_video_understanding`, retry-with-backoff on 5xx/transient failures, `degraded`/`degraded_reason` markers when filters yield no citations, `[x_search]` config (model / reasoning_effort / timeout_seconds / retries); registered only with `XAI_API_KEY` **and** the opt-in `x_search` toolset enabled (hermes parity — SuperGrok OAuth path not ported) |
-| `video_analyze`, `video_generate`, `bfl_flux3_*` | ⭜ deferred | provider-specific (xAI/BFL plugin registry); add when credentials are available |
+| `video_analyze` | ✅ core | full port of hermes `vision_tools.video_analyze_tool`: local file / `file://` / HTTP(S) sources (remote downloads gated by the SSRF guard, cached under `cache/video/temp_video_files/` and cleaned up), extension→mime table (mp4/webm/mov/avi/mkv/mpeg/mpg), 20 MB warn + 50 MB base64 hard cap, inline `video_url` data-URL payload, `[auxiliary.vision]` routing with main-provider fallback, one retry on empty responses; opt-in `video` toolset (hermes parity) — requires a provider that accepts video |
+| `video_generate`, `bfl_flux3_*` | ⭜ deferred | provider plugin registry (xAI/BFL/Pixverse/…) — BFL tools run through the Nous gateway; add when credentials are available |
 
 ## Feature parity
 

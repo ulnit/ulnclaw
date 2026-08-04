@@ -50,7 +50,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "memory", "todo", "clarify", "session_search",
         "skills_list", "skill_view", "skill_manage",
         "delegate_task", "execute_code", "cronjob",
-        "vision_analyze", "image_generate", "text_to_speech",
+        "vision_analyze", "video_analyze", "image_generate", "text_to_speech",
         "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
         "kanban_create", "kanban_list", "kanban_show", "kanban_complete",
         "kanban_block", "kanban_unblock", "kanban_comment", "kanban_heartbeat",

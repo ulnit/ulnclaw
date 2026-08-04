@@ -594,6 +594,53 @@ impl Provider for OpenAiProvider {
             .map(str::to_string)
             .ok_or_else(|| AgentError::provider("vision response missing content"))
     }
+
+    async fn analyze_video(&self, prompt: &str, video_data_url: &str) -> Result<String> {
+        // Hermes call_kwargs for video: temperature 0.1, max_tokens 4000,
+        // generous timeout for large inline payloads.
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "video_url", "video_url": {"url": video_data_url}}
+                ]
+            }],
+            "max_tokens": 4000,
+            "temperature": 0.1,
+        });
+        let mut request = self
+            .client
+            .post(self.api_url())
+            .timeout(std::time::Duration::from_secs(180))
+            .json(&body);
+        if let Some(ref key) = self.api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| AgentError::provider(format!("video analysis request failed: {}", e)))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AgentError::provider(format!(
+                "video analysis API {}: {}",
+                status,
+                &text[..text.len().min(300)]
+            )));
+        }
+        let payload: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AgentError::provider(format!("parse video analysis response: {}", e)))?;
+        payload
+            .pointer("/choices/0/message/content")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| AgentError::provider("video analysis response missing content"))
+    }
 }
 
 

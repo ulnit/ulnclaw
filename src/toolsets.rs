@@ -37,6 +37,11 @@ pub fn toolsets() -> &'static std::collections::HashMap<&'static str, ToolsetDef
             tools: &["vision_analyze"],
             includes: &[],
         });
+        map.insert("video", ToolsetDef {
+            description: "Video analysis and understanding tools (opt-in, not in default toolset)",
+            tools: &["video_analyze"],
+            includes: &[],
+        });
         map.insert("image_gen", ToolsetDef {
             description: "Creative generation tools (images)",
             tools: &["image_generate"],

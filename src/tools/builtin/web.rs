@@ -19,24 +19,7 @@ pub fn register(registry: &mut ToolRegistry) {
 }
 
 fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) ulnclaw/0.2")
-        // SSRF: re-validate every redirect target (hermes httpx event-hook
-        // semantics via url_safety) so a public URL cannot redirect the
-        // fetch onto a private/internal address.
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            let target = attempt.url().to_string();
-            if crate::url_safety::is_safe_url_sync(&target) {
-                attempt.follow()
-            } else {
-                attempt.error(format!(
-                    "blocked redirect to private/internal address: {target}"
-                ))
-            }
-        }))
-        .build()
-        .unwrap_or_default()
+    crate::url_safety::ssrf_guarded_client(Duration::from_secs(30))
 }
 
 // ---------------------------------------------------------------------------
