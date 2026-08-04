@@ -1,0 +1,23 @@
+[package]
+name = "ulnclaw"
+version = "0.1.0"
+edition = "2021"
+authors = ["ZStep Team"]
+description = "A Rust-based AI agent engine inspired by Hermes Agent"
+repository = "https://gitee.com/ushaw/ulnclaw"
+license = "MIT OR Apache-2.0"
+keywords = ["ai", "agent", "llm", "tool-calling"]
+
+[dependencies]
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+thiserror = "1.0"
+futures = "0.3"
+
+[dev-dependencies]
+tokio-test = "0.4"
