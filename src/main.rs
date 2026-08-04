@@ -133,6 +133,17 @@ enum MoaAction {
 enum SkillAction {
     List,
     View { name: String },
+    /// List installed skills that declare a blueprint schedule
+    Blueprints,
+    /// Schedule a blueprint skill as a cron job (hermes blueprint jobs)
+    Schedule {
+        name: String,
+        /// Custom job name (default: `blueprint:<skill>`)
+        #[arg(long)]
+        job_name: Option<String>,
+    },
+    /// Remove the cron job created for a blueprint skill
+    Unschedule { name: String },
 }
 
 #[derive(Subcommand)]
@@ -943,7 +954,68 @@ async fn skills_cmd(action: SkillAction) -> Result<(), String> {
                 println!("No skills installed ({}).", dir.display());
             }
             for skill in skills {
-                println!("  {} — {}", skill.name, skill.description);
+                let skill_md = std::fs::read_to_string(skill.path.join("SKILL.md")).unwrap_or_default();
+                let blueprint_note = match ulnclaw::skills::blueprint::parse_blueprint(&skill_md) {
+                    Ok(Some(spec)) => format!("  ⏰ {}", spec.schedule),
+                    _ => String::new(),
+                };
+                println!("  {} — {}{}", skill.name, skill.description, blueprint_note);
+            }
+        }
+        SkillAction::Blueprints => {
+            let mut found = false;
+            for skill in ulnclaw::skills::list_skills(&dir) {
+                let content =
+                    std::fs::read_to_string(skill.path.join("SKILL.md")).unwrap_or_default();
+                let Ok(Some(spec)) = ulnclaw::skills::blueprint::parse_blueprint(&content) else {
+                    continue;
+                };
+                found = true;
+                println!("  {} — schedule: {}", skill.name, spec.schedule);
+                if spec.deliver != "origin" {
+                    println!("    deliver: {}", spec.deliver);
+                }
+                if let Some(ref prompt) = spec.prompt {
+                    println!("    prompt: {}", prompt);
+                }
+            }
+            if !found {
+                println!("No blueprint skills installed (add `metadata.hermes.blueprint.schedule` to a SKILL.md frontmatter).");
+            }
+        }
+        SkillAction::Schedule { name, job_name } => {
+            let Some(spec) = ulnclaw::skills::blueprint::blueprint_spec_for_installed(&dir, &name)
+            else {
+                return Err(format!(
+                    "skill '{}' is not an installed blueprint (no metadata.hermes.blueprint block)",
+                    name
+                ));
+            };
+            let job = ulnclaw::skills::blueprint::blueprint_to_job(&spec, job_name.as_deref())
+                .map_err(|e| e.to_string())?;
+            let store = ulnclaw::cron::CronStore::open(&home.join("state.db"))
+                .map_err(|e| e.to_string())?;
+            store.add(&job).map_err(|e| e.to_string())?;
+            println!(
+                "scheduled blueprint '{}' as job '{}' ({})",
+                name, job.name, job.schedule
+            );
+        }
+        SkillAction::Unschedule { name } => {
+            let store = ulnclaw::cron::CronStore::open(&home.join("state.db"))
+                .map_err(|e| e.to_string())?;
+            let wanted = format!("blueprint:{}", name);
+            let jobs = store.list().map_err(|e| e.to_string())?;
+            let matches: Vec<_> = jobs
+                .into_iter()
+                .filter(|job| job.name == wanted)
+                .collect();
+            if matches.is_empty() {
+                return Err(format!("no cron job named '{}' found", wanted));
+            }
+            for job in matches {
+                store.remove(&job.id).map_err(|e| e.to_string())?;
+                println!("removed job {} ({})", job.id, job.name);
             }
         }
         SkillAction::View { name } => {

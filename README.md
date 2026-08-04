@@ -25,6 +25,7 @@ full feature-by-feature mapping.
 - **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits
 - **🧬 Mixture of Agents** — `[moa]` presets fan a prompt out to reference models in parallel and synthesize their answers via an aggregator (`ulnclaw moa run/list/delete`, REPL `/moa`)
 - **⏰ Cron** — `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules with a poll scheduler
+- **📐 Blueprints** — skills with a `metadata.hermes.blueprint.schedule` frontmatter become cron jobs (`skills blueprints`, `skills schedule/unschedule`)
 - **🔌 MCP client** — stdio JSON-RPC: any MCP server's tools appear as `mcp__<server>__<tool>`; npx/uvx launches get an OSV malware preflight (MAL-* advisories block, fail-open)
 - **🌍 Browser automation** — CDP WebSocket client with a built-in supervisor (auto-launches headless Chrome/Chromium, or point `ULNCLAW_BROWSER_CDP` at your own): accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs
 - **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), `stream: true` SSE streaming on both (token deltas, tool-progress/function-call events), async `/v1/runs` with SSE events + approval resolution, sessions API (incl. `PATCH`/fork + enforced per-session model lock), `/api/jobs` cron management (CRUD + pause/resume/run), `/v1/skills` + `/v1/toolsets` discovery, `/api/model/options`, bearer auth
@@ -53,6 +54,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # offline db recovery
 ./ulnclaw skills list
+./ulnclaw skills blueprints    # schedulable skills (skills schedule <name>)
 ./ulnclaw cron list
 ./ulnclaw moa list           # MoA presets (run: ./ulnclaw moa run "<prompt>")
 ./ulnclaw checkpoints list   # filesystem snapshots ([checkpoints] enabled = true)
@@ -160,7 +162,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 162 tests
+cargo test                     # 169 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -190,6 +192,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🤝 委派** —— 并行子代理，隔离上下文，深度限制
 - **🧬 混合智能体（MoA）** —— `[moa]` 预设将提示词并行扇出给参考模型，经聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa`）
 - **⏰ 定时任务** —— `30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划 + 轮询调度器
+- **📐 蓝图（Blueprints）** —— frontmatter 声明 `metadata.hermes.blueprint.schedule` 的技能可排程（`skills blueprints`、`skills schedule/unschedule`）
 - **🔌 MCP 客户端** —— stdio JSON-RPC：任意 MCP 服务器的工具以 `mcp__<server>__<tool>` 注册；npx/uvx 启动前经 OSV 恶意软件检查（MAL-* 通告阻止、fail-open）
 - **🌍 浏览器自动化** —— CDP WebSocket 客户端 + 内置监督器（自动启动无头 Chrome/Chromium，或用 `ULNCLAW_BROWSER_CDP` 指向自有浏览器）：带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框
 - **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、两者均支持 `stream: true` SSE 流式（令牌增量、工具进度/函数调用事件）、带 SSE 事件 + 审批处理的异步 `/v1/runs`、会话 API（含 `PATCH`/fork + 逐轮生效的会话级模型锁）、`/api/jobs` 定时任务管理（增删查改 + pause/resume/run）、`/v1/skills` + `/v1/toolsets` 发现端点、`/api/model/options`、Bearer 鉴权
@@ -218,6 +221,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # 离线数据库恢复
 ./ulnclaw skills list
+./ulnclaw skills blueprints    # 可排程技能（skills schedule <name>）
 ./ulnclaw cron list
 ./ulnclaw moa list           # MoA 预设（运行：./ulnclaw moa run "<prompt>"）
 ./ulnclaw checkpoints list   # 文件系统快照（[checkpoints] enabled = true）
@@ -269,7 +273,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 162 个测试
+cargo test                     # 169 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

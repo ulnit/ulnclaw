@@ -4,6 +4,8 @@
 //! frontmatter (name, description) plus optional linked files under
 //! references/, templates/, scripts/.
 
+pub mod blueprint;
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
