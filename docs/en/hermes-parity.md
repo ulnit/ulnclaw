@@ -43,7 +43,7 @@ performance and a single static binary.
 | Threat-pattern scanning (`threat_patterns.py`) | ✅ core | advisory injection scan for tool results re-entering context |
 | Toolsets (`toolsets.py`) | ✅ | all 33 toolset definitions incl. composition (`includes`), `coding` default |
 | Tool registry (`registry.py`) | ✅ | check_fn gating, toolset grouping, max result size truncation |
-| Provider abstraction (`runtime_provider.py`) | ✅ | OpenAI-compatible (OpenAI/OpenRouter/DashScope/Ollama/llama.cpp), keyless local providers |
+| Provider abstraction (`runtime_provider.py`) | ✅ | OpenAI-compatible (OpenAI/OpenRouter/DashScope/Ollama/llama.cpp), native Anthropic Messages transport (`anthropic_messages`: system param, tool_use/tool_result blocks, SSE streaming, max_tokens ceilings, OAuth bearer), keyless local providers |
 | Config (`config.yaml`) | ✅ | `config.toml` + `.env` file, profiles, env precedence |
 | Skills system | ✅ | discovery, frontmatter, linked files |
 | Memory system | ✅ | MEMORY.md/USER.md with prompt injection |

@@ -141,17 +141,36 @@ fn load_config(cli: &Cli) -> UlncLawConfig {
     config
 }
 
-fn build_provider(config: &UlncLawConfig) -> Result<Arc<OpenAiProvider>, String> {
+fn build_provider(config: &UlncLawConfig) -> Result<Arc<dyn ulnclaw::provider::Provider>, String> {
+    let api_key = config.resolve_api_key();
+    let keyless = matches!(
+        config.model.provider.as_str(),
+        "ollama" | "llamacpp" | "llama_cpp" | "local"
+    );
+    if api_key.is_none() && !keyless {
+        return Err(
+            "No API key found. Set OPENAI_API_KEY / ANTHROPIC_API_KEY (or api_key in config.toml)."
+                .into(),
+        );
+    }
+    if config.model.provider == "anthropic" {
+        let mut builder = ulnclaw::provider::anthropic::AnthropicProvider::builder()
+            .endpoint(&config.resolve_base_url())
+            .model(&config.model.model)
+            .name(&config.model.provider)
+            .max_retries(config.model.max_retries);
+        if let Some(ref key) = api_key {
+            builder = builder.api_key(key);
+        }
+        return Ok(Arc::new(builder.build().map_err(|e| e.to_string())?));
+    }
     let mut builder = OpenAiProvider::builder()
         .endpoint(&config.resolve_base_url())
         .model(&config.model.model)
         .name(&config.model.provider)
         .max_retries(config.model.max_retries);
-    // Local providers (ollama, llama.cpp) run keyless.
-    if let Some(api_key) = config.resolve_api_key() {
-        builder = builder.api_key(&api_key);
-    } else if !matches!(config.model.provider.as_str(), "ollama" | "llamacpp" | "llama_cpp" | "local") {
-        return Err("No API key found. Set OPENAI_API_KEY (or api_key in config.toml).".into());
+    if let Some(ref key) = api_key {
+        builder = builder.api_key(key);
     }
     let provider = builder.build().map_err(|e| e.to_string())?;
     Ok(Arc::new(provider))

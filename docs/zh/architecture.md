@@ -93,6 +93,8 @@ AI 模型后端的抽象接口，带有 OpenAI 兼容实现。
 **关键类型：**
 - `Provider` - 定义提供商接口的 trait
 - `OpenAiProvider` - OpenAI 兼容实现
+- `AnthropicProvider` - 原生 Anthropic Messages API（hermes 的
+  `anthropic_messages` 传输层）
 - `Message`, `ToolCall`, `Usage` - 核心对话类型
 - `ProviderConfig` - 动态提供商实例化
 

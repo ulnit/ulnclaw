@@ -66,6 +66,8 @@ Abstract interface for AI model backends with OpenAI-compatible implementation.
 **Key Types:**
 - `Provider` - Trait defining the provider interface
 - `OpenAiProvider` - OpenAI-compatible implementation
+- `AnthropicProvider` - native Anthropic Messages API (hermes'
+  `anthropic_messages` transport)
 - `Message`, `ToolCall`, `Usage` - Core conversation types
 - `ProviderConfig` - Dynamic provider instantiation
 

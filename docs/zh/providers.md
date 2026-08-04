@@ -154,17 +154,37 @@ let provider = OpenAiProvider::builder()
 
 ### Anthropic (Claude)
 
-使用 OpenAI 兼容格式：
+原生 Messages API（`POST /v1/messages`、`x-api-key` 鉴权、
+`anthropic-version: 2023-06-01`）—— 移植自 hermes 的 `anthropic_messages`
+传输层：
 
 ```rust
-let provider = OpenAiProvider::builder()
-    .endpoint("https://api.anthropic.com/v1")
+let provider = ulnclaw::provider::anthropic::AnthropicProvider::builder()
+    .endpoint("https://api.anthropic.com")
     .api_key(&std::env::var("ANTHROPIC_API_KEY")?)
-    .model("claude-3-opus-20240229")
+    .model("claude-sonnet-4-5")
     .build()?;
 ```
 
-**模型：** claude-3-opus, claude-3-sonnet, claude-3-haiku
+当 `[model] provider = "anthropic"` 时 CLI 自动选用该 provider
+（API key 来自配置、`ULNCLAW_API_KEY` 或 `ANTHROPIC_API_KEY`）。
+转换语义与 hermes 一致：
+
+- system 消息移入 `system` 参数
+- assistant 工具调用变为 `tool_use` 块；工具结果变为 `tool_result` 块并
+  合并进 user 轮次（角色必须交替）
+- 总是携带 `max_tokens`：请求值 → 配置值 → 按模型输出上限表
+  （claude-sonnet-4-5 → 64k、claude-3-5-* → 8k……）→ 默认 128k
+- 流式把 Anthropic SSE 事件（`message_start`、`content_block_delta` 的
+  `text_delta` / `thinking_delta` / `input_json_delta`、`message_delta`
+  等）映射到共享 chunk 流；视觉走 `image` 块（base64 data URL 或
+  `url` 源）
+- OAuth 访问令牌（`sk-ant-oat…`）自动切换 bearer 鉴权
+- 第三方 Anthropic 兼容端点可经 `endpoint` 接入（`/anthropic` 后缀
+  代理、MiniMax、DashScope 等）
+
+**模型：** claude-sonnet-4-5、claude-opus-4-x、claude-3-7-sonnet、
+claude-3-5-sonnet/haiku、claude-3-opus/sonnet/haiku……
 
 ### DashScope (阿里巴巴 Qwen)
 
@@ -413,10 +433,10 @@ let provider = config.build()?;
 
 ```rust
 pub enum ProviderKind {
-    OpenAiCompatible,  // OpenAI, Anthropic, DashScope 等
+    OpenAiCompatible,  // OpenAI, DashScope 等
     Ollama,            // 本地 Ollama 服务器
     LlamaCpp,          // 本地 llama.cpp 服务器
-    Anthropic,         // 原生 Anthropic API（未来）
+    Anthropic,         // 原生 Anthropic Messages API
     Local,             // 嵌入式模型（未来）
 }
 ```

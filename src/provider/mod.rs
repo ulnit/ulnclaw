@@ -3,6 +3,7 @@
 //! Inspired by Hermes Agent's runtime_provider.py which maps (provider, model)
 //! to (api_mode, api_key, base_url).
 
+pub mod anthropic;
 pub mod openai;
 
 use crate::error::{AgentError, Result};
@@ -281,15 +282,19 @@ impl ProviderConfig {
                 Ok(Box::new(builder.build()?))
             }
             ProviderKind::Anthropic => {
-                // Anthropic uses OpenAI-compatible format for now
-                // TODO: Implement native Anthropic Messages API
-                let mut builder = openai::OpenAiProvider::builder()
+                let mut builder = anthropic::AnthropicProvider::builder()
                     .endpoint(&self.endpoint)
                     .model(&self.model)
                     .name(&self.name);
 
                 if let Some(ref key) = self.api_key {
                     builder = builder.api_key(key);
+                }
+                if let Some(max_tokens) = self.max_tokens {
+                    builder = builder.max_tokens(max_tokens);
+                }
+                if let Some(temp) = self.temperature {
+                    builder = builder.temperature(temp);
                 }
 
                 Ok(Box::new(builder.build()?))

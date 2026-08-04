@@ -154,17 +154,38 @@ let provider = OpenAiProvider::builder()
 
 ### Anthropic (Claude)
 
-Use OpenAI-compatible format:
+Native Messages API (`POST /v1/messages`, `x-api-key` auth,
+`anthropic-version: 2023-06-01`) — port of hermes' `anthropic_messages`
+transport:
 
 ```rust
-let provider = OpenAiProvider::builder()
-    .endpoint("https://api.anthropic.com/v1")
+let provider = ulnclaw::provider::anthropic::AnthropicProvider::builder()
+    .endpoint("https://api.anthropic.com")
     .api_key(&std::env::var("ANTHROPIC_API_KEY")?)
-    .model("claude-3-opus-20240229")
+    .model("claude-sonnet-4-5")
     .build()?;
 ```
 
-**Models:** claude-3-opus, claude-3-sonnet, claude-3-haiku
+The CLI picks this provider automatically when `[model] provider =
+"anthropic"` (API key from config, `ULNCLAW_API_KEY`, or
+`ANTHROPIC_API_KEY`).  Conversion semantics mirror hermes:
+
+- system messages move into the `system` parameter
+- assistant tool calls become `tool_use` blocks; tool results become
+  `tool_result` blocks merged into user turns (roles must alternate)
+- `max_tokens` is always sent: requested → configured → per-model output
+  ceiling table (claude-sonnet-4-5 → 64k, claude-3-5-* → 8k, …) → 128k
+  default
+- streaming maps Anthropic SSE events (`message_start`,
+  `content_block_delta` with `text_delta` / `thinking_delta` /
+  `input_json_delta`, `message_delta`, …) onto the shared chunk stream;
+  vision uses `image` blocks (base64 data URLs or `url` sources)
+- OAuth access tokens (`sk-ant-oat…`) switch to bearer auth
+- third-party Anthropic-compatible endpoints work via `endpoint`
+  (proxies under an `/anthropic` suffix, MiniMax, DashScope, …)
+
+**Models:** claude-sonnet-4-5, claude-opus-4-x, claude-3-7-sonnet,
+claude-3-5-sonnet/haiku, claude-3-opus/sonnet/haiku, …
 
 ### DashScope (Alibaba Qwen)
 
