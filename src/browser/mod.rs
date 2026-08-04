@@ -11,6 +11,7 @@
 //! element refs (`[3] button "Submit"`); click/type resolve refs through
 //! `DOM.resolveNode` + `Runtime.callFunctionOn`.
 
+pub mod camofox;
 pub mod guard;
 
 use crate::error::{AgentError, Result};

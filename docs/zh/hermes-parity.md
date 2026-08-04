@@ -34,7 +34,7 @@
 | `text_to_speech` | ✅ 完整 | OpenAI TTS 或自定义 `ULNCLAW_TTS_ENDPOINT` |
 | `ha_*`（4 个 Home Assistant 工具） | ✅ 完整 | Home Assistant REST API，依赖 `HASS_URL` + `HASS_TOKEN` |
 | `kanban_*`（12 个工具） | ✅ 完整 | 本地 SQLite 协作看板：create/list/show/complete/block/unblock/comment/heartbeat/link/attach/attach_url/attachments |
-| `browser_*`（12 个工具） | ✅ 完整 | CDP WebSocket 客户端（`browser` 模块）：端点发现、页面会话、带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框；`ULNCLAW_BROWSER_CDP` 支持 ws://、http://host:port 或 `auto`（监督器启动托管的无头 Chrome/Chromium）；已移植 hermes SSRF 防护（`browser/guard.rs`）：敏感查询参数 + 云元数据底线无条件拦截，非本地端点或容器化终端启用私网地址防护，重定向落地复检，console/eval 表达式内 URL 字面量预筛，私有页面下原始 CDP 方法白名单；浏览器输出强制脱敏；REPL `/browser connect` 与网关 `/v1/browser/connect|disconnect|status` 实时切换端点（云浏览器 provider 仍未移植） |
+| `browser_*`（12 个工具） | ✅ 完整 | CDP WebSocket 客户端（`browser` 模块）：端点发现、页面会话、带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框；`ULNCLAW_BROWSER_CDP` 支持 ws://、http://host:port 或 `auto`（监督器启动托管的无头 Chrome/Chromium）；已移植 hermes SSRF 防护（`browser/guard.rs`）：敏感查询参数 + 云元数据底线无条件拦截，非本地端点或容器化终端启用私网地址防护，重定向落地复检，console/eval 表达式内 URL 字面量预筛，私有页面下原始 CDP 方法白名单；浏览器输出强制脱敏；REPL `/browser connect` 与网关 `/v1/browser/connect|disconnect|status` 实时切换端点；`CAMOFOX_URL` 接入 Camofox REST 后端（其他云浏览器 provider 仍未移植） |
 | `close_terminal`、`read_terminal`、`focus_pane`、`open_preview` | ✅ 核心 | 桌面 GUI 工具（hermes `close_terminal_tool.py` / `read_terminal_tool.py` / `focus_pane_tool.py` / `open_preview_tool.py`）：仅在 `ULNCLAW_DESKTOP=1` 下注册，经 `desktop` 桥接层路由——宿主应用安装事件发射器（`ulnclaw::desktop::set_emitter`）接收 `(ui_session_id, event, payload)` 事件（`terminal.close`、`pane.reveal`、`preview.open`）及阻塞式 `read_terminal` 回调；未接入宿主时返回 "desktop only"，从不杀进程，并规范化裸域名（`www.cnn.com` → https、`localhost:3000` → http）；`react_to_message`（hermes `react_to_message_tool.py` 移植）：代理表情回应——每作者一个、重发相同表情即撤回，默认最新用户消息（`messages_back` 回溯、`message_row_id` 精确指定），持久于 `messages.display_metadata` 并经 `message.reaction` 桥接事件实时渲染；门控于 `ULNCLAW_DESKTOP=1` **与** `[display] message_reactions` |
 | `computer_use` | 🟡 门控 | 需要 computer-use 驱动（hermes：cua-driver） |
 | `discord`, `discord_admin`, `feishu_doc_read`, `spotify_*`, `yuanbao` | 🟡 门控 | 已注册，依赖平台凭据门控；后端待实现 |
@@ -75,6 +75,7 @@
 | 环境（`tools/environments/`） | ✅ 核心 | `terminal` 后端：local（默认）、docker（`ensure_docker_container` inspect→run）、ssh（BatchMode、identity 文件）；`[terminal] backend/container/image/ssh_host/...`；modal/daytona/vercel 暂缓 |
 | 检查点管理器（`checkpoint_manager.py`） | ✅ | v2 共享 shadow git 存储（`<home>/checkpoints/store`）：按项目 ref/index，编辑前透明快照（每轮 `write_file`/`patch` 前一次），list/restore/diff/prune CLI，容量上限、超大文件过滤、孤儿/过期自动清理 |
 | 浏览器监督器 | ✅ | `ULNCLAW_BROWSER_CDP=auto` 时自动启动受管 headless Chrome/Chromium |
+| Camofox 后端（`tools/browser_camofox.py`） | ✅ 核心 | `browser/camofox.rs`：`CAMOFOX_URL` REST 反检测浏览器（Camoufox）后端——全部 12 个 browser 工具经 REST 路由（标签页会话、带元素引用的可访问性快照、点击/输入/滚动/后退/按键、从快照提取图片、截图供视觉分析）；CDP 覆盖优先；`CAMOFOX_API_KEY` bearer 鉴权、`CAMOFOX_USER_ID`/`CAMOFOX_SESSION_KEY` 身份覆盖 + 已有标签页收养、Docker 环回 URL 重写（`CAMOFOX_REWRITE_LOOPBACK_URLS` + 别名）、从 `/health` 发现 VNC URL、读取操作的 SSRF 私有页面防护、console/原始 CDP/对话框明确报不支持；网关与 REPL browser status 报告后端 |
 | CUA（computer-use） | ⬜ 暂缓 | 需要 computer-use 驱动 |
 
 ## 存储布局
@@ -103,7 +104,8 @@
   审批模式已移植；无人值守的运行默认 fail-closed，`cron_mode = "approve"`
   可放行。
 - 浏览器监督器直接启动本地 Chrome/Chromium；hermes 驱动外部 `agent-browser`
-  守护进程（云浏览器 provider 未移植）。
+  守护进程。Camofox REST 后端已移植；hermes 的 Camofox 受管持久化
+  （profile 级身份状态文件）与其他云浏览器 provider 未移植。
 - 网关实现了 api_server 平台的子集；多 profile 复用（`/p/<profile>/...`）
   未移植。任务 API 仅本地投递（`deliver="local"`）；hermes 的外部投递
   目标与 NAS/Chronos 触发 webhook（`/api/cron/fire`）未移植。

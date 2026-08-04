@@ -267,6 +267,10 @@ registry.register(tool);
   覆盖，优先于 `ULNCLAW_BROWSER_CDP`；`/browser disconnect` 与
   `POST /v1/browser/disconnect` 清除；`GET /v1/browser/status` 报告
   来源/模式
+- Camofox 后端（`browser/camofox.rs`）：设置 `CAMOFOX_URL` 且无 CDP 覆盖
+  时，全部 12 个 browser 工具改走 Camofox REST API（Camoufox 反检测浏览
+  器）而非 CDP——带身份覆盖/标签页收养的会话、导航后自动快照、Docker
+  环回 URL 重写、VNC 发现，读取操作沿用同样的 SSRF 私有页面防护
 
 **流程：**
 ```

@@ -1016,6 +1016,20 @@ async fn get_delegation_http(
 async fn browser_status(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     let _ = state;
     let managed_running = crate::browser::managed_running().await;
+    if crate::browser::camofox::is_camofox_mode() {
+        let available = crate::browser::camofox::check_available().await;
+        let vnc = crate::browser::camofox::vnc_url().await;
+        return Json(json!({
+            "configured": true,
+            "backend": "camofox",
+            "source": "env",
+            "endpoint": crate::browser::camofox::camofox_url(),
+            "mode": "camofox",
+            "available": available,
+            "vnc_url": vnc,
+            "managed_running": false,
+        }));
+    }
     match crate::browser::endpoint_with_source() {
         Some((source, raw)) => {
             let mode = if crate::browser::is_auto_mode(&raw) {
@@ -1025,6 +1039,7 @@ async fn browser_status(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             };
             Json(json!({
                 "configured": true,
+                "backend": "cdp",
                 "source": source,
                 "endpoint": raw,
                 "mode": mode,
@@ -1033,6 +1048,7 @@ async fn browser_status(State(state): State<Arc<GatewayState>>) -> Json<Value> {
         }
         None => Json(json!({
             "configured": false,
+            "backend": null,
             "source": null,
             "endpoint": null,
             "mode": "none",

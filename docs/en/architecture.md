@@ -244,6 +244,12 @@ Chrome DevTools Protocol client backing the `browser_*` tools.
   sticks) set a process-lifetime override ahead of `ULNCLAW_BROWSER_CDP`;
   `/browser disconnect` + `POST /v1/browser/disconnect` clear it;
   `GET /v1/browser/status` reports source/mode
+- Camofox backend (`browser/camofox.rs`): when `CAMOFOX_URL` is set and no
+  CDP override is active, all 12 browser tools route through the Camofox
+  REST API (Camoufox anti-detect browser) instead of CDP — tab sessions
+  with identity override/adoption, auto-snapshot on navigate, Docker
+  loopback URL rewriting, VNC discovery, and the same SSRF private-page
+  guard on reads
 
 **Flow:**
 ```

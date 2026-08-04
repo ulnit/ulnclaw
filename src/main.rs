@@ -725,13 +725,25 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
             // hermes `/browser` UX: live CDP endpoint control.
             let mut parts = rest.splitn(2, ' ');
             match parts.next().unwrap_or("") {
-                "status" | "" => match ulnclaw::browser::endpoint_with_source() {
-                    Some((source, raw)) => {
-                        let mode = if ulnclaw::browser::is_auto_mode(&raw) { "managed" } else { "endpoint" };
-                        println!("browser: configured via {source} — {raw} (mode: {mode})");
+                "status" | "" => {
+                    if ulnclaw::browser::camofox::is_camofox_mode() {
+                        let url = ulnclaw::browser::camofox::camofox_url().unwrap_or_default();
+                        let available = ulnclaw::browser::camofox::check_available().await;
+                        let vnc = ulnclaw::browser::camofox::vnc_url().await;
+                        println!(
+                            "browser: camofox backend — {url} (available: {available}{})",
+                            vnc.map(|v| format!(", vnc: {v}")).unwrap_or_default()
+                        );
+                    } else {
+                        match ulnclaw::browser::endpoint_with_source() {
+                            Some((source, raw)) => {
+                                let mode = if ulnclaw::browser::is_auto_mode(&raw) { "managed" } else { "endpoint" };
+                                println!("browser: configured via {source} — {raw} (mode: {mode})");
+                            }
+                            None => println!("browser: not configured (set ULNCLAW_BROWSER_CDP or /browser connect <url>, or CAMOFOX_URL for the Camofox backend)"),
+                        }
                     }
-                    None => println!("browser: not configured (set ULNCLAW_BROWSER_CDP or /browser connect <url>)"),
-                },
+                }
                 "connect" => {
                     let url = parts.next().unwrap_or("").trim();
                     if url.is_empty() {

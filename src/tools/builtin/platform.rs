@@ -637,6 +637,9 @@ use rusqlite::OptionalExtension;
 // ---------------------------------------------------------------------------
 
 fn browser_configured() -> ToolAvailability {
+    if crate::browser::camofox::is_camofox_mode() {
+        return ToolAvailability::available();
+    }
     let raw = crate::config::get_env_value("ULNCLAW_BROWSER_CDP");
     match raw.as_deref() {
         // Explicit endpoint always enabled.
@@ -772,6 +775,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 if let Some(error) = crate::browser::guard::blocked_navigate(&url, guard) {
                                     return Ok(json!({"success": false, "error": error}));
                                 }
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::navigate(&ctx.session_id, &url, guard).await);
+                                }
                                 with_session(move |session| async move {
                                     session.navigate(&url).await?;
                                     let info = session.page_info().await.unwrap_or(json!({}));
@@ -805,6 +811,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                             }
                             "browser_snapshot" => {
                                 let guard = guard;
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::snapshot(&ctx.session_id, guard).await);
+                                }
                                 with_session(move |session| async move {
                                     if let Some(blocked) = private_page_block(&session, guard).await {
                                         return Ok(blocked);
@@ -824,6 +833,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 if element.is_empty() {
                                     return Ok(json!({"success": false, "error": "element is required"}));
                                 }
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::click(&ctx.session_id, &element, guard).await);
+                                }
                                 with_session(move |session| async move {
                                     if let Some(blocked) = private_page_block(&session, guard).await {
                                         return Ok(blocked);
@@ -839,6 +851,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 if element.is_empty() {
                                     return Ok(json!({"success": false, "error": "element is required"}));
                                 }
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::type_text(&ctx.session_id, &element, &text, guard).await);
+                                }
                                 with_session(move |session| async move {
                                     if let Some(blocked) = private_page_block(&session, guard).await {
                                         return Ok(blocked);
@@ -851,6 +866,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                             "browser_scroll" => {
                                 let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down").to_string();
                                 let pixels = args.get("pixels").and_then(|v| v.as_u64()).unwrap_or(800);
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::scroll(&ctx.session_id, &direction).await);
+                                }
                                 with_session(move |session| async move {
                                     if let Some(blocked) = private_page_block(&session, guard).await {
                                         return Ok(blocked);
@@ -862,6 +880,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                             }
                             "browser_back" => {
                                 let guard = guard;
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::back(&ctx.session_id).await);
+                                }
                                 with_session(move |session| async move {
                                     if let Some(blocked) = private_page_block(&session, guard).await {
                                         return Ok(blocked);
@@ -877,6 +898,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 if key.is_empty() {
                                     return Ok(json!({"success": false, "error": "key is required"}));
                                 }
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::press(&ctx.session_id, &key, guard).await);
+                                }
                                 with_session(move |session| async move {
                                     if let Some(blocked) = private_page_block(&session, guard).await {
                                         return Ok(blocked);
@@ -888,6 +912,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                             }
                             "browser_get_images" => {
                                 let guard = guard;
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::get_images(&ctx.session_id, guard).await);
+                                }
                                 with_session(move |session| async move {
                                     if let Some(blocked) = private_page_block(&session, guard).await {
                                         return Ok(blocked);
@@ -919,6 +946,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                         provider
                                     }
                                 };
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::vision(&ctx.session_id, &prompt, provider, guard).await);
+                                }
                                 with_session(move |session| async move {
                                     if let Some(blocked) = private_page_block(&session, guard).await {
                                         return Ok(blocked);
@@ -933,6 +963,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 .await
                             }
                             "browser_console" => {
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::console_unavailable());
+                                }
                                 let expression = args.get("expression").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 if expression.is_empty() {
                                     return Ok(json!({"success": false, "error": "expression is required"}));
@@ -962,6 +995,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 .await
                             }
                             "browser_cdp" => {
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::unsupported("browser_cdp"));
+                                }
                                 let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
                                 let params = args.get("params").cloned().unwrap_or(json!({}));
                                 if method.is_empty() {
@@ -998,6 +1034,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 .await
                             }
                             "browser_dialog" => {
+                                if crate::browser::camofox::is_camofox_mode() {
+                                    return Ok(crate::browser::camofox::unsupported("browser_dialog"));
+                                }
                                 let accept = args.get("action").and_then(|v| v.as_str()).unwrap_or("accept") != "dismiss";
                                 let prompt_text = args.get("prompt_text").and_then(|v| v.as_str()).map(String::from);
                                 with_session(move |session| async move {
