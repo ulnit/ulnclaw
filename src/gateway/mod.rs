@@ -4,7 +4,9 @@
 //!   - `GET  /health`, `GET /health/detailed` — probes (always unauthenticated)
 //!   - `GET  /v1/models`, `GET /v1/capabilities`
 //!   - `POST /v1/chat/completions` — OpenAI Chat Completions format; opt-in
-//!     session continuity via the `X-Ulnclaw-Session-Id` header
+//!     session continuity via the `X-Ulnclaw-Session-Id` header;
+//!     `stream: true` returns SSE `chat.completion.chunk` events
+//!   - `POST /api/sessions/{id}/chat/stream` — SSE variant of session chat
 //!   - `GET/POST /api/sessions`, `GET/DELETE /api/sessions/{id}`,
 //!     `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
@@ -237,6 +239,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         )
         .route("/api/sessions/:id/messages", get(session_messages))
         .route("/api/sessions/:id/chat", post(session_chat))
+        .route("/api/sessions/:id/chat/stream", post(session_chat_stream))
         .route("/v1/runs", get(list_runs).post(start_run))
         .route("/v1/runs/:id", get(get_run))
         .route("/v1/runs/:id/events", get(run_events))
@@ -367,7 +370,7 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "runs_events_sse": true,
             "run_approval": true,
             "sessions": true,
-            "streaming": false,
+            "streaming": true,
         },
     }))
 }
@@ -420,13 +423,6 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Response {
-    if request.stream {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": {"message": "streaming is not supported by this gateway", "type": "invalid_request_error"}})),
-        )
-            .into_response();
-    }
     let session_id = session_id_from_headers(&headers);
 
     // History: resumed session rows, or the request's own messages.
@@ -495,6 +491,9 @@ async fn chat_completions(
     }
 
     let history_arg = if history.is_empty() { None } else { Some(history) };
+    if request.stream {
+        return stream_agent_response(state, prompt, history_arg, session_id);
+    }
     match state
         .agent
         .run_with_session(&prompt, history_arg, session_id.as_deref())
@@ -532,6 +531,179 @@ async fn chat_completions(
         )
             .into_response(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming (SSE chat.completion.chunk) — hermes stream_delta_callback port
+// ---------------------------------------------------------------------------
+
+/// Join handle guard: aborts the agent task when the SSE body is dropped
+/// (client disconnect), mirroring hermes' mid-stream interrupt.
+struct AbortGuard {
+    handle: Option<tokio::task::JoinHandle<Result<crate::agent::RunResult>>>,
+}
+
+impl Drop for AbortGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+struct SseState {
+    rx: tokio::sync::mpsc::UnboundedReceiver<crate::agent::StreamEvent>,
+    guard: AbortGuard,
+    completion_id: String,
+    created: u64,
+    model: String,
+    started: bool,
+    pending: std::collections::VecDeque<axum::response::sse::Event>,
+    finished: bool,
+}
+
+/// Stream an agent run as OpenAI-compatible SSE chunks.
+///
+/// Emits a role chunk, then `delta.content` chunks as the model produces
+/// tokens, `hermes.tool.progress` events for tool lifecycle, and a final
+/// chunk with `finish_reason` + usage followed by `[DONE]`.
+fn stream_agent_response(
+    state: Arc<GatewayState>,
+    prompt: String,
+    history: Option<Vec<Message>>,
+    session_id: Option<String>,
+) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<crate::agent::StreamEvent>();
+    let emitter: Arc<dyn Fn(crate::agent::StreamEvent) + Send + Sync> =
+        Arc::new(move |event| {
+            let _ = tx.send(event);
+        });
+
+    let runner = state.agent.clone();
+    let run_session_id = session_id.clone();
+    let task = tokio::spawn(crate::agent::stream_scope(
+        emitter,
+        async move { runner.run_with_session(&prompt, history, run_session_id.as_deref()).await },
+    ));
+
+    let sse_state = SseState {
+        rx,
+        guard: AbortGuard { handle: Some(task) },
+        completion_id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+        created: now_secs() as u64,
+        model: state.model_name.clone(),
+        started: false,
+        pending: std::collections::VecDeque::new(),
+        finished: false,
+    };
+
+    let stream = futures::stream::unfold(sse_state, |mut st| async move {
+        use axum::response::sse::Event;
+        let make_chunk = |st: &SseState, delta: Value, finish: Value| {
+            json!({
+                "id": st.completion_id,
+                "object": "chat.completion.chunk",
+                "created": st.created,
+                "model": st.model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+            })
+        };
+        loop {
+            if !st.started {
+                st.started = true;
+                let chunk = make_chunk(&st, json!({"role": "assistant"}), Value::Null);
+                return Some((Ok::<_, std::convert::Infallible>(Event::default().json_data(chunk).unwrap()), st));
+            }
+            if let Some(event) = st.pending.pop_front() {
+                return Some((Ok(event), st));
+            }
+            if st.finished {
+                return None;
+            }
+            match st.rx.recv().await {
+                Some(crate::agent::StreamEvent::Delta(delta)) => {
+                    let chunk = make_chunk(&st, json!({"content": delta}), Value::Null);
+                    return Some((Ok(Event::default().json_data(chunk).unwrap()), st));
+                }
+                Some(crate::agent::StreamEvent::ToolProgress { tool, status }) => {
+                    let payload = json!({"tool": tool, "status": status});
+                    let event = Event::default()
+                        .event("hermes.tool.progress")
+                        .json_data(payload)
+                        .unwrap();
+                    return Some((Ok(event), st));
+                }
+                None => {
+                    // Emitter dropped → the agent task finished. Await it and
+                    // queue the terminal events: [error delta] + final chunk
+                    // + [DONE].
+                    let outcome = match st.guard.handle.take() {
+                        Some(handle) => handle.await,
+                        None => Ok(Err(AgentError::provider("agent task vanished"))),
+                    };
+                    let (finish_reason, usage, error_text) = match outcome {
+                        Ok(Ok(result)) => (
+                            "stop",
+                            json!({
+                                "prompt_tokens": result.usage.prompt_tokens,
+                                "completion_tokens": result.usage.completion_tokens,
+                                "total_tokens": result.usage.total_tokens,
+                            }),
+                            None,
+                        ),
+                        Ok(Err(e)) => (
+                            "error",
+                            json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                            Some(e.to_string()),
+                        ),
+                        Err(e) => (
+                            "error",
+                            json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                            Some(format!("agent task aborted: {}", e)),
+                        ),
+                    };
+                    if let Some(text) = error_text {
+                        let chunk = make_chunk(
+                            &st,
+                            json!({"content": format!("[error] {}", text)}),
+                            Value::Null,
+                        );
+                        st.pending
+                            .push_back(Event::default().json_data(chunk).unwrap());
+                    }
+                    let final_chunk = json!({
+                        "id": st.completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": st.created,
+                        "model": st.model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+                        "usage": usage,
+                    });
+                    st.pending
+                        .push_back(Event::default().json_data(final_chunk).unwrap());
+                    st.pending.push_back(Event::default().data("[DONE]"));
+                    st.finished = true;
+                }
+            }
+        }
+    });
+
+    let sse = axum::response::Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("keepalive"),
+    );
+    let mut response = sse.into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    if let Some(ref sid) = session_id {
+        if let Ok(value) = sid.parse() {
+            response.headers_mut().insert(SESSION_HEADER, value);
+        }
+    }
+    response
 }
 
 // ---------------------------------------------------------------------------
@@ -770,6 +942,31 @@ async fn session_chat(
         .into_response(),
         Err(e) => server_error(&e.to_string()),
     }
+}
+
+/// `POST /api/sessions/:id/chat/stream` — SSE wrapper over session chat
+/// (hermes `_handle_session_chat_stream`).
+async fn session_chat_stream(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Json(request): Json<SessionChatRequest>,
+) -> Response {
+    if request.message.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"message": "message is required", "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    }
+    let history = state
+        .store
+        .load_messages(&id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.role != Role::System)
+        .collect::<Vec<_>>();
+    let history_arg = if history.is_empty() { None } else { Some(history) };
+    stream_agent_response(state, request.message, history_arg, Some(id))
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,6 +1414,125 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    struct FakeStreamProvider;
+
+    #[async_trait::async_trait]
+    impl crate::provider::Provider for FakeStreamProvider {
+        async fn chat_completion(
+            &self,
+            request: crate::provider::ProviderRequest,
+        ) -> crate::error::Result<crate::provider::ProviderResponse> {
+            Ok(crate::provider::ProviderResponse {
+                content: Some("Hello".into()),
+                tool_calls: vec![],
+                usage: Some(crate::provider::Usage::default()),
+                model: request.model,
+                reasoning: None,
+                finish_reason: Some("stop".into()),
+            })
+        }
+        async fn chat_completion_stream(
+            &self,
+            _request: crate::provider::ProviderRequest,
+        ) -> crate::error::Result<crate::provider::ProviderStream> {
+            let chunks = vec![
+                Ok(crate::provider::StreamChunk {
+                    delta_content: Some("Hel".into()),
+                    ..Default::default()
+                }),
+                Ok(crate::provider::StreamChunk {
+                    delta_content: Some("lo".into()),
+                    finish_reason: Some("stop".into()),
+                    ..Default::default()
+                }),
+            ];
+            Ok(Box::pin(futures::stream::iter(chunks)))
+        }
+        fn supports_streaming(&self) -> bool {
+            true
+        }
+        fn model(&self) -> &str {
+            "fake-stream"
+        }
+        fn name(&self) -> &str {
+            "fake"
+        }
+    }
+
+    fn streaming_state() -> Arc<GatewayState> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let agent =
+            Agent::new(Arc::new(FakeStreamProvider), ToolRegistry::new()).with_store(store);
+        GatewayState::new(
+            Arc::new(agent),
+            "fake-stream".into(),
+            "fake".into(),
+            None,
+            ApprovalRouter::new(),
+        )
+        .expect("state builds")
+    }
+
+    #[tokio::test]
+    async fn test_chat_completions_stream_sse() {
+        let app = router(streaming_state());
+        let request = axum::http::Request::builder()
+            .uri("/v1/chat/completions")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"stream": true, "messages": [{"role": "user", "content": "Hi"}]}"#,
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let ctype = response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(ctype.starts_with("text/event-stream"), "got {}", ctype);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body).to_string();
+        assert!(text.contains(r#""delta":{"role":"assistant"}"#), "role chunk: {}", text);
+        assert!(text.contains(r#""content":"Hel""#), "first delta: {}", text);
+        assert!(text.contains(r#""content":"lo""#), "second delta: {}", text);
+        assert!(text.contains(r#""finish_reason":"stop""#), "finish: {}", text);
+        assert!(text.contains("data: [DONE]"), "done sentinel: {}", text);
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_stream_sse() {
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("stream-test", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state);
+        let request = axum::http::Request::builder()
+            .uri(format!("/api/sessions/{}/chat/stream", sid))
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"message": "Hi"}"#))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body).to_string();
+        assert!(text.contains(r#""content":"Hel""#), "delta: {}", text);
+        assert!(text.contains("data: [DONE]"), "done: {}", text);
     }
 
     #[tokio::test]

@@ -107,6 +107,73 @@ impl Usage {
     }
 }
 
+/// Incremental tool-call fragment in a streaming response (OpenAI chunk
+/// `choices[0].delta.tool_calls[i]`).
+#[derive(Debug, Clone, Default)]
+pub struct ToolCallDelta {
+    /// Position of this tool call within the message.
+    pub index: usize,
+    pub id: Option<String>,
+    /// Function name fragment (usually arrives in one piece).
+    pub name_delta: Option<String>,
+    /// JSON arguments fragment (arrives incrementally).
+    pub arguments_delta: Option<String>,
+}
+
+/// One chunk of a streaming chat completion.
+#[derive(Debug, Clone, Default)]
+pub struct StreamChunk {
+    /// Content (text) delta.
+    pub delta_content: Option<String>,
+    /// Reasoning/thinking delta (models with extended thinking).
+    pub delta_reasoning: Option<String>,
+    /// Tool-call fragments.
+    pub tool_call_deltas: Vec<ToolCallDelta>,
+    /// Set on the final chunk: "stop", "tool_calls", "length", ...
+    pub finish_reason: Option<String>,
+    /// Usage (final chunk when `stream_options.include_usage`).
+    pub usage: Option<Usage>,
+    /// Model echoed by the server.
+    pub model: Option<String>,
+}
+
+/// Accumulate streamed tool-call deltas into complete tool calls.
+pub fn assemble_tool_calls(
+    deltas: &[ToolCallDelta],
+) -> Vec<ToolCall> {
+    let mut by_index: std::collections::BTreeMap<
+        usize,
+        (String, String, String),
+    > = std::collections::BTreeMap::new();
+    for delta in deltas {
+        let entry = by_index
+            .entry(delta.index)
+            .or_insert_with(|| (String::new(), String::new(), String::new()));
+        if let Some(id) = &delta.id {
+            entry.0 = id.clone();
+        }
+        if let Some(name) = &delta.name_delta {
+            entry.1.push_str(name);
+        }
+        if let Some(args) = &delta.arguments_delta {
+            entry.2.push_str(args);
+        }
+    }
+    by_index
+        .into_values()
+        .map(|(id, name, arguments)| ToolCall {
+            id,
+            call_type: "function".to_string(),
+            function: FunctionCall { name, arguments },
+        })
+        .collect()
+}
+
+
+/// A boxed provider stream.
+pub type ProviderStream =
+    std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>;
+
 /// Provider trait - abstraction for AI model backends
 ///
 /// Implementations must be Send + Sync for use across async tasks.
@@ -114,6 +181,19 @@ impl Usage {
 pub trait Provider: Send + Sync {
     /// Send a chat completion request
     async fn chat_completion(&self, request: ProviderRequest) -> Result<ProviderResponse>;
+
+    /// Streaming chat completion (SSE chunks).  Default: unsupported —
+    /// callers fall back to `chat_completion`.
+    async fn chat_completion_stream(&self, _request: ProviderRequest) -> Result<ProviderStream> {
+        Err(AgentError::provider(
+            "this provider does not support streaming (chat_completion_stream)",
+        ))
+    }
+
+    /// Whether `chat_completion_stream` is implemented.
+    fn supports_streaming(&self) -> bool {
+        false
+    }
 
     /// Get the model name
     fn model(&self) -> &str;

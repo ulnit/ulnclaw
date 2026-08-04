@@ -183,11 +183,45 @@ pub struct ToolCallRecord {
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn chat_completion(&self, request: ProviderRequest) -> Result<ProviderResponse>;
+    async fn chat_completion_stream(&self, request: ProviderRequest) -> Result<ProviderStream>;
+    fn supports_streaming(&self) -> bool;
     fn model(&self) -> &str;
     fn name(&self) -> &str;
     async fn is_available(&self) -> bool;
 }
 ```
+
+`chat_completion_stream` defaults to an "unsupported" error; providers opt in
+by implementing it and returning `true` from `supports_streaming()`.
+
+### Streaming Types
+
+```rust
+/// One SSE chunk of a streaming chat completion.
+pub struct StreamChunk {
+    pub delta_content: Option<String>,      // text delta
+    pub delta_reasoning: Option<String>,    // thinking delta (where supported)
+    pub tool_call_deltas: Vec<ToolCallDelta>,
+    pub finish_reason: Option<String>,      // final chunk: stop/tool_calls/length
+    pub usage: Option<Usage>,               // final chunk (include_usage)
+    pub model: Option<String>,
+}
+
+/// Incremental tool-call fragment (OpenAI delta.tool_calls[i]).
+pub struct ToolCallDelta {
+    pub index: usize,
+    pub id: Option<String>,
+    pub name_delta: Option<String>,
+    pub arguments_delta: Option<String>,
+}
+
+pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>;
+
+/// Reassemble streamed tool-call deltas into complete tool calls.
+pub fn assemble_tool_calls(deltas: &[ToolCallDelta]) -> Vec<ToolCall>;
+```
+
+`openai::parse_stream_chunk(data)` parses a single SSE `data:` payload.
 
 ### OpenAiProvider
 
@@ -968,7 +1002,7 @@ Binds and serves until interrupted.
 | GET | `/health/detailed` | no | Rich status (model, provider, auth, runs) |
 | GET | `/v1/models` | yes | Advertised model list |
 | GET | `/v1/capabilities` | yes | Machine-readable endpoint catalog |
-| POST | `/v1/chat/completions` | yes | OpenAI Chat Completions; session continuity via `X-Ulnclaw-Session-Id` (also accepts `X-Hermes-Session-Id`); id echoed back in the response header |
+| POST | `/v1/chat/completions` | yes | OpenAI Chat Completions; session continuity via `X-Ulnclaw-Session-Id` (also accepts `X-Hermes-Session-Id`); id echoed back in the response header; `stream: true` → SSE `chat.completion.chunk` |
 | POST | `/v1/responses` | yes | OpenAI Responses format; `input` string or message array; chain turns with `previous_response_id` |
 | GET | `/v1/responses/:id` | yes | Retrieve a stored response |
 | DELETE | `/v1/responses/:id` | yes | Delete a stored response |
@@ -978,6 +1012,7 @@ Binds and serves until interrupted.
 | DELETE | `/api/sessions/:id` | yes | Hard delete (messages + FTS entries) |
 | GET | `/api/sessions/:id/messages` | yes | Message history |
 | POST | `/api/sessions/:id/chat` | yes | Run one turn inside the session |
+| POST | `/api/sessions/:id/chat/stream` | yes | Same, streamed as SSE chunks |
 | POST | `/v1/runs` | yes | Start async run → `202` + `run_id` |
 | GET | `/v1/runs` | yes | Tracked runs, newest first |
 | GET | `/v1/runs/:id` | yes | Run status/result |
@@ -1016,3 +1051,24 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
 
 The SSE stream (`/v1/runs/:id/events`) emits `approval.request` when the run
 parks, so frontends can prompt without polling.
+
+**Token streaming** (`stream: true`):
+
+```bash
+curl -N -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"stream": true, "messages": [{"role": "user", "content": "Hello"}]}' \
+     http://127.0.0.1:8642/v1/chat/completions
+# data: {"choices":[{"delta":{"role":"assistant"},...}]}
+# data: {"choices":[{"delta":{"content":"He"},...}]}
+# ...
+# event: hermes.tool.progress        (when the agent runs a tool)
+# data: {"tool":"terminal","status":"started"}
+# ...
+# data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{...}}
+# data: [DONE]
+```
+
+Content deltas stream as they are produced; `hermes.tool.progress` events
+report tool start/complete so frontends can show activity without storing
+markers in history.  If the client disconnects mid-stream the agent task is
+aborted.  Keepalive comments (`: keepalive`) are sent every 15s.

@@ -192,11 +192,45 @@ pub struct ToolCallRecord {
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn chat_completion(&self, request: ProviderRequest) -> Result<ProviderResponse>;
+    async fn chat_completion_stream(&self, request: ProviderRequest) -> Result<ProviderStream>;
+    fn supports_streaming(&self) -> bool;
     fn model(&self) -> &str;
     fn name(&self) -> &str;
     async fn is_available(&self) -> bool;
 }
 ```
+
+`chat_completion_stream` 默认返回"不支持"错误；provider 实现该方法并让
+`supports_streaming()` 返回 `true` 即启用流式。
+
+### 流式类型
+
+```rust
+/// 流式 chat completion 的单个 SSE chunk。
+pub struct StreamChunk {
+    pub delta_content: Option<String>,      // 文本增量
+    pub delta_reasoning: Option<String>,    // 思考增量（支持的模型）
+    pub tool_call_deltas: Vec<ToolCallDelta>,
+    pub finish_reason: Option<String>,      // 末块：stop/tool_calls/length
+    pub usage: Option<Usage>,               // 末块（include_usage）
+    pub model: Option<String>,
+}
+
+/// 增量工具调用片段（OpenAI delta.tool_calls[i]）。
+pub struct ToolCallDelta {
+    pub index: usize,
+    pub id: Option<String>,
+    pub name_delta: Option<String>,
+    pub arguments_delta: Option<String>,
+}
+
+pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>;
+
+/// 将流式工具调用增量重组为完整工具调用。
+pub fn assemble_tool_calls(deltas: &[ToolCallDelta]) -> Vec<ToolCall>;
+```
+
+`openai::parse_stream_chunk(data)` 解析单个 SSE `data:` 载荷。
 
 ### OpenAiProvider
 
@@ -969,7 +1003,7 @@ axum 路由表（供 `serve` 与测试使用）。
 | GET | `/health/detailed` | 否 | 详细状态（模型、provider、鉴权、runs） |
 | GET | `/v1/models` | 是 | 对外模型列表 |
 | GET | `/v1/capabilities` | 是 | 机器可读的端点目录 |
-| POST | `/v1/chat/completions` | 是 | OpenAI Chat Completions；经 `X-Ulnclaw-Session-Id` 会话续接（兼容 `X-Hermes-Session-Id`）；id 回显于响应头 |
+| POST | `/v1/chat/completions` | 是 | OpenAI Chat Completions；经 `X-Ulnclaw-Session-Id` 会话续接（兼容 `X-Hermes-Session-Id`）；id 回显于响应头；`stream: true` → SSE `chat.completion.chunk` |
 | POST | `/v1/responses` | 是 | OpenAI Responses 格式；`input` 为字符串或消息数组；经 `previous_response_id` 链式续接 |
 | GET | `/v1/responses/:id` | 是 | 取回已存储的 response |
 | DELETE | `/v1/responses/:id` | 是 | 删除已存储的 response |
@@ -979,6 +1013,7 @@ axum 路由表（供 `serve` 与测试使用）。
 | DELETE | `/api/sessions/:id` | 是 | 硬删除（消息 + FTS 条目） |
 | GET | `/api/sessions/:id/messages` | 是 | 消息历史 |
 | POST | `/api/sessions/:id/chat` | 是 | 在该会话内执行一轮对话 |
+| POST | `/api/sessions/:id/chat/stream` | 是 | 同上，以 SSE chunk 流式返回 |
 | POST | `/v1/runs` | 是 | 启动异步运行 → `202` + `run_id` |
 | GET | `/v1/runs` | 是 | 被跟踪的运行（新→旧） |
 | GET | `/v1/runs/:id` | 是 | 运行状态/结果 |
@@ -1017,6 +1052,26 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
 
 SSE 流（`/v1/runs/:id/events`）在 run 停泊时发出 `approval.request`
 事件，前端无需轮询即可弹出审批提示。
+
+**令牌流式**（`stream: true`）：
+
+```bash
+curl -N -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"stream": true, "messages": [{"role": "user", "content": "你好"}]}' \
+     http://127.0.0.1:8642/v1/chat/completions
+# data: {"choices":[{"delta":{"role":"assistant"},...}]}
+# data: {"choices":[{"delta":{"content":"你"},...}]}
+# ...
+# event: hermes.tool.progress        （agent 执行工具时）
+# data: {"tool":"terminal","status":"started"}
+# ...
+# data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{...}}
+# data: [DONE]
+```
+
+内容增量随生成随推送；`hermes.tool.progress` 事件报告工具开始/完成，
+前端可据此展示活动而不把标记存入历史。客户端中途断开时 agent 任务被
+中止。每 15 秒发送 keepalive 注释（`: keepalive`）。
 
 ## 下一步
 

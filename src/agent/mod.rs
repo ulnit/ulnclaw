@@ -17,6 +17,36 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
+/// Events surfaced to streaming consumers (gateway SSE).
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// Content token delta from the model.
+    Delta(String),
+    /// Tool lifecycle progress (rendered as `hermes.tool.progress` SSE
+    /// events so frontends can show activity without polluting history).
+    ToolProgress { tool: String, status: String },
+}
+
+tokio::task_local! {
+    static STREAM_EMITTER: Arc<dyn Fn(StreamEvent) + Send + Sync>;
+}
+
+/// Emit an event to the active stream consumer, if any (task-local scope
+/// installed by the gateway for streaming requests).
+pub fn emit_stream_event(event: StreamEvent) {
+    if let Ok(emitter) = STREAM_EMITTER.try_with(|e| e.clone()) {
+        emitter(event);
+    }
+}
+
+/// Run a future with a stream emitter installed (gateway streaming scope).
+pub fn stream_scope<F: std::future::Future>(
+    emitter: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    future: F,
+) -> tokio::task::futures::TaskLocalFuture<Arc<dyn Fn(StreamEvent) + Send + Sync>, F> {
+    STREAM_EMITTER.scope(emitter, future)
+}
+
 /// Agent configuration
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -451,11 +481,62 @@ impl Agent {
                 .unwrap_or_else(|| self.provider.model().to_string()),
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
-            stream: false,
+            stream: STREAM_EMITTER.try_with(|_| ()).is_ok(),
             stop: None,
         };
 
-        self.provider.chat_completion(request).await
+        // Non-streaming path (no active stream consumer, or provider
+        // doesn't support streaming).
+        if !request.stream || !self.provider.supports_streaming() {
+            return self.provider.chat_completion(request).await;
+        }
+
+        // Streaming path: accumulate chunks into a ProviderResponse while
+        // emitting content deltas to the stream consumer.
+        use futures::TryStreamExt;
+        let mut stream = self.provider.chat_completion_stream(request).await?;
+        let mut content = String::new();
+        let mut reasoning = String::new();
+        let mut tool_deltas: Vec<crate::provider::ToolCallDelta> = Vec::new();
+        let mut finish_reason: Option<String> = None;
+        let mut usage: Option<Usage> = None;
+        let mut model: Option<String> = None;
+        while let Some(chunk) = stream.try_next().await? {
+            if let Some(delta) = &chunk.delta_content {
+                if !delta.is_empty() {
+                    emit_stream_event(StreamEvent::Delta(delta.clone()));
+                    {
+                        let callbacks = self.callbacks.lock().await;
+                        if let Some(ref on_delta) = callbacks.on_stream_delta {
+                            on_delta(delta);
+                        }
+                    }
+                    content.push_str(delta);
+                }
+            }
+            if let Some(delta) = &chunk.delta_reasoning {
+                reasoning.push_str(delta);
+            }
+            tool_deltas.extend(chunk.tool_call_deltas);
+            if chunk.finish_reason.is_some() {
+                finish_reason = chunk.finish_reason;
+            }
+            if chunk.usage.is_some() {
+                usage = chunk.usage;
+            }
+            if chunk.model.is_some() {
+                model = chunk.model;
+            }
+        }
+        let tool_calls = crate::provider::assemble_tool_calls(&tool_deltas);
+        Ok(crate::provider::ProviderResponse {
+            content: if content.is_empty() { None } else { Some(content) },
+            tool_calls,
+            usage,
+            model: model.unwrap_or_else(|| self.provider.model().to_string()),
+            reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
+            finish_reason,
+        })
     }
 
     /// Approval gate for terminal commands (port of hermes approval flow).
@@ -541,6 +622,11 @@ impl Agent {
                 }
             }
 
+            emit_stream_event(StreamEvent::ToolProgress {
+                tool: tool_call.function.name.clone(),
+                status: "started".to_string(),
+            });
+
             // Approval gate before dispatch.
             let result_value = if let Some(blocked) = self
                 .approval_check(&tool_call.function.name, &args)
@@ -567,6 +653,10 @@ impl Agent {
                     on_tool_complete(&tool_call.function.name, &result_value);
                 }
             }
+            emit_stream_event(StreamEvent::ToolProgress {
+                tool: tool_call.function.name.clone(),
+                status: "completed".to_string(),
+            });
 
             results.push(result_value);
         }

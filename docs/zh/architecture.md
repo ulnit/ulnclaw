@@ -274,11 +274,13 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 - `GET /v1/models`、`GET /v1/capabilities`
 - `POST /v1/chat/completions` - OpenAI 格式；经 `X-Ulnclaw-Session-Id`
   可选会话续接（从 SQLite 加载历史，并通过 `Agent::run_with_session`
-  续用同一会话 id）
+  续用同一会话 id）；`stream: true` 返回 SSE `chat.completion.chunk`
+  事件（令牌增量、`hermes.tool.progress` 事件、usage、`[DONE]`）
 - `POST/GET/DELETE /v1/responses` - OpenAI Responses 格式，经
   `previous_response_id` 有状态续接
 - `GET/POST /api/sessions`、`GET/DELETE /api/sessions/:id`、
-  `GET /api/sessions/:id/messages`、`POST /api/sessions/:id/chat`
+  `GET /api/sessions/:id/messages`、`POST /api/sessions/:id/chat`、
+  `POST /api/sessions/:id/chat/stream`（SSE）
 - `POST /v1/runs`（202 + run_id）、`GET /v1/runs`、`GET /v1/runs/:id`、
   `GET /v1/runs/:id/events`（SSE 生命周期事件，含 `approval.request`）、
   `POST /v1/runs/:id/stop`、`POST /v1/runs/:id/approval`（解决待审批）
@@ -436,8 +438,8 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 ## 未来增强
 
 ### 计划特性
-- **令牌流式输出**：chat completions 的 SSE 令牌流
-  （运行生命周期事件已经由 `/v1/runs/:id/events` 流式输出）
+- **Responses 流式**：`/v1/responses` 的 SSE 流式
+  （chat completions 与会话聊天已支持流式）
 - **消息平台**：hermes 的 Telegram/WhatsApp/QQ 适配器
 - **更多运行环境**：modal/daytona/vercel 终端后端
   （local/docker/ssh 已实现）

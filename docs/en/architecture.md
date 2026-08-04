@@ -249,11 +249,14 @@ a port of hermes' `gateway/platforms/api_server.py` core.
 - `GET /v1/models`, `GET /v1/capabilities`
 - `POST /v1/chat/completions` - OpenAI format; opt-in session continuity
   via `X-Ulnclaw-Session-Id` (history loaded from the SQLite store and the
-  same session id resumed via `Agent::run_with_session`)
+  same session id resumed via `Agent::run_with_session`); `stream: true`
+  returns SSE `chat.completion.chunk` events (token deltas,
+  `hermes.tool.progress` events, usage, `[DONE]`)
 - `POST/GET/DELETE /v1/responses` - OpenAI Responses format, stateful via
   `previous_response_id`
 - `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`,
-  `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`
+  `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`,
+  `POST /api/sessions/:id/chat/stream` (SSE)
 - `POST /v1/runs` (202 + run_id), `GET /v1/runs`, `GET /v1/runs/:id`,
   `GET /v1/runs/:id/events` (SSE lifecycle events incl.
   `approval.request`), `POST /v1/runs/:id/stop`,
@@ -415,8 +418,8 @@ Optional subsystems use registry patterns:
 ## Future Enhancements
 
 ### Planned Features
-- **Token Streaming**: SSE token streaming for chat completions (run
-  lifecycle events already stream via `/v1/runs/:id/events`)
+- **Responses Streaming**: SSE streaming for `/v1/responses` (chat
+  completions and session chat already stream)
 - **Messaging Platforms**: hermes' Telegram/WhatsApp/QQ adapters
 - **More Environments**: modal/daytona/vercel terminal backends
   (local/docker/ssh are implemented)

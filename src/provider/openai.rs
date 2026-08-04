@@ -4,8 +4,10 @@
 //! and any other provider implementing the OpenAI Chat Completions API.
 
 use super::{
-    FunctionCall, Message, Provider, ProviderRequest, ProviderResponse, ToolCall, Usage,
+    FunctionCall, Message, Provider, ProviderRequest, ProviderResponse, ProviderStream, ToolCall,
+    Usage,
 };
+use futures::TryStreamExt;
 use crate::error::{AgentError, Result};
 use crate::tools::ToolDefinition;
 use async_trait::async_trait;
@@ -135,6 +137,10 @@ struct ApiRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -233,6 +239,83 @@ struct ApiErrorDetail {
     code: Option<String>,
 }
 
+// --- Streaming chunk shapes ---
+
+#[derive(Deserialize, Debug)]
+struct ApiStreamChunk {
+    #[serde(default)]
+    choices: Vec<ApiStreamChoice>,
+    #[serde(default)]
+    usage: Option<ApiUsage>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ApiStreamChoice {
+    #[serde(default)]
+    delta: ApiStreamDelta,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+struct ApiStreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ApiStreamToolCall>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ApiStreamToolCall {
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<ApiStreamFunction>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ApiStreamFunction {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// Parse one SSE `data:` payload into a `StreamChunk`.
+pub fn parse_stream_chunk(data: &str) -> crate::error::Result<crate::provider::StreamChunk> {
+    let chunk: ApiStreamChunk = serde_json::from_str(data)
+        .map_err(|e| crate::error::AgentError::Provider(format!("bad stream chunk: {}", e)))?;
+    let mut out = crate::provider::StreamChunk {
+        model: chunk.model,
+        usage: chunk.usage.map(|u| crate::provider::Usage {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            total_tokens: u.total_tokens,
+        }),
+        ..Default::default()
+    };
+    if let Some(choice) = chunk.choices.into_iter().next() {
+        out.delta_content = choice.delta.content;
+        out.delta_reasoning = choice.delta.reasoning_content;
+        out.finish_reason = choice.finish_reason;
+        for tc in choice.delta.tool_calls.unwrap_or_default() {
+            out.tool_call_deltas.push(crate::provider::ToolCallDelta {
+                index: tc.index,
+                id: tc.id,
+                name_delta: tc.function.as_ref().and_then(|f| f.name.clone()),
+                arguments_delta: tc.function.as_ref().and_then(|f| f.arguments.clone()),
+            });
+        }
+    }
+    Ok(out)
+}
+
 // --- Conversion helpers ---
 
 fn message_to_api(msg: &Message) -> ApiMessage {
@@ -289,6 +372,8 @@ impl Provider for OpenAiProvider {
             max_tokens: request.max_tokens.or(self.max_tokens),
             temperature: request.temperature.or(self.temperature),
             stop: request.stop,
+            stream: false,
+            stream_options: None,
         };
 
         let mut req_builder = self.client.post(&url).header("Content-Type", "application/json");
@@ -362,6 +447,86 @@ impl Provider for OpenAiProvider {
         })
     }
 
+    async fn chat_completion_stream(&self, request: ProviderRequest) -> Result<ProviderStream> {
+        let url = self.api_url();
+        debug!("OpenAI streaming call to: {}", url);
+
+        let api_messages: Vec<ApiMessage> = request.messages.iter().map(message_to_api).collect();
+        let api_tools: Option<Vec<ApiTool>> = if request.tools.is_empty() {
+            None
+        } else {
+            Some(request.tools.iter().map(tool_def_to_api).collect())
+        };
+        let api_request = ApiRequest {
+            model: request.model.clone(),
+            messages: api_messages,
+            tools: api_tools,
+            max_tokens: request.max_tokens.or(self.max_tokens),
+            temperature: request.temperature.or(self.temperature),
+            stop: request.stop,
+            stream: true,
+            stream_options: Some(serde_json::json!({"include_usage": true})),
+        };
+
+        let mut req_builder = self.client.post(&url).header("Content-Type", "application/json");
+        if let Some(ref key) = self.api_key {
+            req_builder = req_builder.bearer_auth(key);
+        }
+        let response = req_builder
+            .json(&api_request)
+            .send()
+            .await
+            .map_err(|e| AgentError::Provider(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            if let Ok(api_err) = serde_json::from_str::<ApiError>(&error_body) {
+                return Err(AgentError::Provider(format!(
+                    "API error ({}): {}",
+                    status, api_err.error.message
+                )));
+            }
+            return Err(AgentError::Provider(format!(
+                "API error ({}): {}",
+                status,
+                error_body.chars().take(500).collect::<String>()
+            )));
+        }
+
+        let byte_stream = response.bytes_stream();
+        let reader = SseLineReader {
+            stream: Box::pin(byte_stream),
+            buf: Vec::new(),
+            eof: false,
+        };
+        let chunk_stream = futures::stream::unfold(reader, |mut reader| async move {
+            loop {
+                let line = match reader.next_line().await {
+                    Some(line) => line,
+                    None => return None, // EOF
+                };
+                let line = line.trim().to_string();
+                if line.is_empty() || line.starts_with(':') {
+                    continue; // blank separator / SSE comment (keepalive)
+                }
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue; // event:/id:/retry: lines are not used
+                };
+                let data = data.trim();
+                if data == "[DONE]" {
+                    return None;
+                }
+                return Some((parse_stream_chunk(data), reader));
+            }
+        });
+        Ok(Box::pin(chunk_stream))
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
     fn model(&self) -> &str {
         &self.model
     }
@@ -404,5 +569,120 @@ impl Provider for OpenAiProvider {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .ok_or_else(|| AgentError::provider("vision response missing content"))
+    }
+}
+
+
+/// Incremental SSE line reader over a byte stream.
+struct SseLineReader {
+    stream: std::pin::Pin<
+        Box<dyn futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>,
+    >,
+    buf: Vec<u8>,
+    eof: bool,
+}
+
+impl SseLineReader {
+    /// Next complete line (without trailing \n), or None at EOF.
+    async fn next_line(&mut self) -> Option<String> {
+        loop {
+            if let Some(pos) = self.buf.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = self.buf.drain(..=pos).collect();
+                let line = line
+                    .strip_suffix(b"\n".as_slice())
+                    .map(|l| l.to_vec())
+                    .unwrap_or(line);
+                let line = line
+                    .strip_suffix(b"\r".as_slice())
+                    .map(|l| l.to_vec())
+                    .unwrap_or(line);
+                return Some(String::from_utf8_lossy(&line).to_string());
+            }
+            if self.eof {
+                if self.buf.is_empty() {
+                    return None;
+                }
+                let rest: Vec<u8> = self.buf.drain(..).collect();
+                return Some(String::from_utf8_lossy(&rest).to_string());
+            }
+            match self.stream.try_next().await {
+                Ok(Some(bytes)) => self.buf.extend_from_slice(&bytes),
+                Ok(None) => self.eof = true,
+                Err(_) => self.eof = true, // treat transport errors as EOF
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    use crate::provider::assemble_tool_calls;
+
+    #[test]
+    fn test_parse_content_chunk() {
+        let chunk = parse_stream_chunk(
+            r#"{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(chunk.delta_content.as_deref(), Some("Hel"));
+        assert!(chunk.finish_reason.is_none());
+    }
+
+    #[test]
+    fn test_parse_tool_call_deltas() {
+        let c1 = parse_stream_chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_time","arguments":""}}]}}]}"#,
+        )
+        .unwrap();
+        let c2 = parse_stream_chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"tz\":"}}]}}]}"#,
+        )
+        .unwrap();
+        let c3 = parse_stream_chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"UTC\"}"}}]}}],"model":"m"}"#,
+        )
+        .unwrap();
+        let mut deltas = vec![];
+        deltas.extend(c1.tool_call_deltas);
+        deltas.extend(c2.tool_call_deltas);
+        deltas.extend(c3.tool_call_deltas);
+        let calls = assemble_tool_calls(&deltas);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].function.name, "get_time");
+        assert_eq!(calls[0].function.arguments, r#"{"tz":"UTC"}"#);
+    }
+
+    #[test]
+    fn test_parse_final_usage_chunk() {
+        let chunk = parse_stream_chunk(
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":7,"total_tokens":12}}"#,
+        )
+        .unwrap();
+        assert_eq!(chunk.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(chunk.usage.as_ref().unwrap().total_tokens, 12);
+    }
+
+    #[tokio::test]
+    async fn test_sse_line_reader() {
+        let data = b"data: one\n\ndata: two\n: keepalive\ndata: [DONE]\n";
+        let stream = futures::stream::iter(vec![
+            Ok(bytes::Bytes::from(&data[..11])),
+            Ok(bytes::Bytes::from(&data[11..])),
+        ]);
+        let mut reader = SseLineReader {
+            stream: Box::pin(stream),
+            buf: Vec::new(),
+            eof: false,
+        };
+        let mut lines = Vec::new();
+        while let Some(line) = reader.next_line().await {
+            lines.push(line);
+        }
+        assert_eq!(
+            lines,
+            vec!["data: one", "", "data: two", ": keepalive", "data: [DONE]"]
+        );
     }
 }

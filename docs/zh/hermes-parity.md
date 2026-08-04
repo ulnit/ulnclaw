@@ -50,7 +50,7 @@
 | MCP 客户端（`mcp_tool.py`） | ✅ 核心 | stdio JSON-RPC：initialize/tools/list/tools/call；`[[mcp.servers]]` 配置；工具注册为 `mcp__<server>__<tool>` |
 | CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL、一次性 `run`、sessions/tools/skills/cron 子命令、`init` |
 | 委派（delegation） | ✅ | SubAgentRunner trait、深度限制、子会话 |
-| HTTP 网关（`gateway/platforms/api_server.py`） | ✅ 核心 | `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接）、`/v1/responses`（经 `previous_response_id` 有状态续接）、`/v1/models`、`/v1/capabilities`、`/v1/runs`（异步运行 + SSE 事件 + 停止）、`/api/sessions` 增删查改 + 会话聊天、Bearer 令牌鉴权 |
+| HTTP 网关（`gateway/platforms/api_server.py`） | ✅ 核心 | `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接、`stream: true` SSE 令牌流 + `hermes.tool.progress` 事件）、`/v1/responses`（经 `previous_response_id` 有状态续接）、`/v1/models`、`/v1/capabilities`、`/v1/runs`（异步运行 + SSE 事件 + 停止 + 审批）、`/api/sessions` 增删查改 + 会话聊天 + chat/stream、Bearer 令牌鉴权 |
 | 消息平台（Telegram/WhatsApp/QQ 等） | ⬜ 暂缓 | hermes 的平台适配器未移植；HTTP 网关已覆盖 OpenAI 兼容前端 |
 | TUI/web/app | ⬜ 暂缓 | hermes 提供 TUI 与 web 应用；ulnclaw 目前是库 + CLI + HTTP 网关 |
 | 环境（`tools/environments/`） | ✅ 核心 | `terminal` 后端：local（默认）、docker（`ensure_docker_container` inspect→run）、ssh（BatchMode、identity 文件）；`[terminal] backend/container/image/ssh_host/...`；modal/daytona/vercel 暂缓 |
@@ -82,8 +82,8 @@
   run 上下文，确认级命令按设计自动拒绝。
 - 浏览器监督器直接启动本地 Chrome/Chromium；hermes 驱动外部 `agent-browser`
   守护进程（云浏览器 provider 未移植）。
-- 网关实现了 api_server 平台的子集；多 profile 复用（`/p/<profile>/...`）、
-  令牌流式输出未移植。
+- 网关实现了 api_server 平台的子集；多 profile 复用（`/p/<profile>/...`）
+  未移植。流式覆盖 chat-completions 与会话聊天；`/v1/responses` 流式未移植。
 - 压缩使用 字符数/4 的 token 估算而非分词器。
 - `patch` 模糊链实现了全部 9 种 hermes 策略；相似度基于 LCS 比率
   （difflib.SequenceMatcher 的等价实现），边界阈值与 CPython 实现可能略有差异。
