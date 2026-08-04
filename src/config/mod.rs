@@ -117,6 +117,14 @@ pub struct ModelConfig {
     /// Fallback chain of "provider:model" strings.
     #[serde(default)]
     pub fallbacks: Vec<String>,
+    /// Retry transient provider errors (429/5xx/network) this many times
+    /// with exponential backoff before giving up.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: usize,
+}
+
+fn default_max_retries() -> usize {
+    2
 }
 
 fn default_provider() -> String {
@@ -136,6 +144,7 @@ impl Default for ModelConfig {
             temperature: None,
             max_tokens: None,
             fallbacks: Vec::new(),
+            max_retries: default_max_retries(),
         }
     }
 }

@@ -633,6 +633,10 @@ fn stream_agent_response(
                         .unwrap();
                     return Some((Ok(event), st));
                 }
+                Some(crate::agent::StreamEvent::ToolStarted { .. })
+                | Some(crate::agent::StreamEvent::ToolCompleted { .. }) => {
+                    // Chat-completions clients only get hermes.tool.progress.
+                }
                 None => {
                     // Emitter dropped → the agent task finished. Await it and
                     // queue the terminal events: [error delta] + final chunk
@@ -715,6 +719,8 @@ struct ResponsesRequest {
     input: Value,
     #[serde(default)]
     previous_response_id: Option<String>,
+    #[serde(default)]
+    stream: bool,
 }
 
 fn input_to_messages(input: &Value) -> Vec<ChatMessage> {
@@ -734,6 +740,335 @@ fn input_to_messages(input: &Value) -> Vec<ChatMessage> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Pending `function_call` item awaiting its completion event.
+struct PendingFnCall {
+    call_id: String,
+    name: String,
+    arguments: String,
+    item_id: String,
+    output_index: u64,
+}
+
+struct ResponsesSseState {
+    rx: tokio::sync::mpsc::UnboundedReceiver<crate::agent::StreamEvent>,
+    guard: AbortGuard,
+    gateway: Arc<GatewayState>,
+    response_id: String,
+    created_at: u64,
+    model: String,
+    prev_response_id: Option<String>,
+    started: bool,
+    pending_events: std::collections::VecDeque<axum::response::sse::Event>,
+    finished: bool,
+    seq: u64,
+    output_index: u64,
+    message_item_id: String,
+    message_open: bool,
+    text_parts: Vec<String>,
+    emitted_items: Vec<Value>,
+    pending_tool_calls: Vec<PendingFnCall>,
+}
+
+impl ResponsesSseState {
+    fn envelope(&self, status: &str) -> Value {
+        json!({
+            "id": self.response_id,
+            "object": "response",
+            "status": status,
+            "created_at": self.created_at,
+            "model": self.model,
+        })
+    }
+
+    /// Queue a typed Responses SSE event with a monotonic sequence_number.
+    fn queue_event(&mut self, event_type: &str, mut data: Value) {
+        data["sequence_number"] = json!(self.seq);
+        self.seq += 1;
+        if let Ok(event) = axum::response::sse::Event::default()
+            .event(event_type)
+            .json_data(data)
+        {
+            self.pending_events.push_back(event);
+        }
+    }
+
+    fn open_message_item(&mut self) {
+        if self.message_open {
+            return;
+        }
+        self.message_open = true;
+        let item = json!({
+            "id": self.message_item_id,
+            "type": "message",
+            "status": "in_progress",
+            "role": "assistant",
+            "content": [],
+        });
+        self.queue_event(
+            "response.output_item.added",
+            json!({"type": "response.output_item.added", "output_index": self.output_index, "item": item}),
+        );
+    }
+}
+
+/// Stream a `/v1/responses` run as OpenAI Responses SSE events (hermes
+/// `_write_responses_sse_stream` port): `response.created`,
+/// `response.output_text.delta`, `response.output_item.added/done` for
+/// `function_call` + `function_call_output` items, and a terminal
+/// `response.completed` / `response.failed` carrying the full envelope.
+fn stream_responses_response(
+    state: Arc<GatewayState>,
+    prompt: String,
+    history: Option<Vec<Message>>,
+    session_id: Option<String>,
+    prev_response_id: Option<String>,
+) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<crate::agent::StreamEvent>();
+    let emitter: Arc<dyn Fn(crate::agent::StreamEvent) + Send + Sync> =
+        Arc::new(move |event| {
+            let _ = tx.send(event);
+        });
+
+    let runner = state.agent.clone();
+    let run_session_id = session_id.clone();
+    let task = tokio::spawn(crate::agent::stream_scope(
+        emitter,
+        async move { runner.run_with_session(&prompt, history, run_session_id.as_deref()).await },
+    ));
+
+    let gateway_state = state.clone();
+    let sse_state = ResponsesSseState {
+        rx,
+        guard: AbortGuard { handle: Some(task) },
+        gateway: gateway_state,
+        response_id: format!("resp_{}", uuid::Uuid::new_v4()),
+        created_at: now_secs() as u64,
+        model: state.model_name.clone(),
+        prev_response_id,
+        started: false,
+        pending_events: std::collections::VecDeque::new(),
+        finished: false,
+        seq: 0,
+        output_index: 0,
+        message_item_id: format!("msg_{}", uuid::Uuid::new_v4().simple()),
+        message_open: false,
+        text_parts: Vec::new(),
+        emitted_items: Vec::new(),
+        pending_tool_calls: Vec::new(),
+    };
+
+    let stream = futures::stream::unfold(sse_state, |mut st| async move {
+        loop {
+            if !st.started {
+                st.started = true;
+                let mut env = st.envelope("in_progress");
+                env["output"] = json!([]);
+                st.queue_event(
+                    "response.created",
+                    json!({"type": "response.created", "response": env}),
+                );
+            }
+            if let Some(event) = st.pending_events.pop_front() {
+                return Some((Ok::<_, std::convert::Infallible>(event), st));
+            }
+            if st.finished {
+                return None;
+            }
+            match st.rx.recv().await {
+                Some(crate::agent::StreamEvent::Delta(delta)) => {
+                    let message_output_index = st.output_index;
+                    st.open_message_item();
+                    if !st.message_open {
+                        continue;
+                    }
+                    st.text_parts.push(delta.clone());
+                    st.queue_event(
+                        "response.output_text.delta",
+                        json!({
+                            "type": "response.output_text.delta",
+                            "item_id": st.message_item_id,
+                            "output_index": message_output_index,
+                            "content_index": 0,
+                            "delta": delta,
+                            "logprobs": [],
+                        }),
+                    );
+                }
+                Some(crate::agent::StreamEvent::ToolProgress { .. }) => {
+                    // Responses clients get structured items instead.
+                }
+                Some(crate::agent::StreamEvent::ToolStarted { name, call_id, arguments }) => {
+                    let item_id = format!("fc_{}", uuid::Uuid::new_v4().simple());
+                    let idx = st.output_index;
+                    st.output_index += 1;
+                    let item = json!({
+                        "id": item_id,
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "name": name,
+                        "call_id": call_id,
+                        "arguments": arguments,
+                    });
+                    st.emitted_items.push(json!({
+                        "type": "function_call",
+                        "name": name,
+                        "arguments": arguments,
+                        "call_id": call_id,
+                    }));
+                    st.pending_tool_calls.push(PendingFnCall {
+                        call_id,
+                        name,
+                        arguments,
+                        item_id,
+                        output_index: idx,
+                    });
+                    st.queue_event(
+                        "response.output_item.added",
+                        json!({"type": "response.output_item.added", "output_index": idx, "item": item}),
+                    );
+                }
+                Some(crate::agent::StreamEvent::ToolCompleted { call_id, result }) => {
+                    let pending = st
+                        .pending_tool_calls
+                        .iter()
+                        .position(|p| p.call_id == call_id)
+                        .map(|i| st.pending_tool_calls.remove(i));
+                    let Some(pending) = pending else { continue };
+                    let done_item = json!({
+                        "id": pending.item_id,
+                        "type": "function_call",
+                        "status": "completed",
+                        "name": pending.name,
+                        "call_id": pending.call_id,
+                        "arguments": pending.arguments,
+                    });
+                    st.queue_event(
+                        "response.output_item.done",
+                        json!({"type": "response.output_item.done", "output_index": pending.output_index, "item": done_item}),
+                    );
+                    let output_parts = json!([{"type": "input_text", "text": result}]);
+                    let output_item = json!({
+                        "id": format!("fco_{}", uuid::Uuid::new_v4().simple()),
+                        "type": "function_call_output",
+                        "call_id": pending.call_id,
+                        "output": output_parts,
+                        "status": "completed",
+                    });
+                    let idx = st.output_index;
+                    st.output_index += 1;
+                    st.emitted_items.push(json!({
+                        "type": "function_call_output",
+                        "call_id": pending.call_id,
+                        "output": output_parts,
+                    }));
+                    st.queue_event(
+                        "response.output_item.added",
+                        json!({"type": "response.output_item.added", "output_index": idx, "item": output_item}),
+                    );
+                    st.queue_event(
+                        "response.output_item.done",
+                        json!({"type": "response.output_item.done", "output_index": idx, "item": output_item}),
+                    );
+                }
+                None => {
+                    // Agent finished — emit terminal events.
+                    let outcome = match st.guard.handle.take() {
+                        Some(handle) => handle.await,
+                        None => Ok(Err(AgentError::provider("agent task vanished"))),
+                    };
+                    let final_text = st.text_parts.join("");
+                    if st.message_open {
+                        st.queue_event(
+                            "response.output_text.done",
+                            json!({
+                                "type": "response.output_text.done",
+                                "item_id": st.message_item_id,
+                                "output_index": 0u64.max(st.output_index.saturating_sub(1)),
+                                "content_index": 0,
+                                "text": final_text,
+                                "logprobs": [],
+                            }),
+                        );
+                    }
+                    match outcome {
+                        Ok(Ok(result)) => {
+                            let mut output: Vec<Value> = st.emitted_items.clone();
+                            if !final_text.is_empty() {
+                                let message_item = json!({
+                                    "type": "message",
+                                    "id": st.message_item_id,
+                                    "role": "assistant",
+                                    "status": "completed",
+                                    "content": [{"type": "output_text", "text": final_text}],
+                                });
+                                if st.message_open {
+                                    st.queue_event(
+                                        "response.output_item.done",
+                                        json!({"type": "response.output_item.done", "output_index": 0, "item": message_item}),
+                                    );
+                                }
+                                output.push(message_item);
+                            }
+                            let mut env = st.envelope("completed");
+                            env["output"] = json!(output);
+                            env["usage"] = json!({
+                                "input_tokens": result.usage.prompt_tokens,
+                                "output_tokens": result.usage.completion_tokens,
+                                "total_tokens": result.usage.total_tokens,
+                            });
+                            env["session_id"] = json!(result.session_id);
+                            env["previous_response_id"] = json!(st.prev_response_id);
+                            st.queue_event(
+                                "response.completed",
+                                json!({"type": "response.completed", "response": env.clone()}),
+                            );
+                            st.gateway
+                                .responses
+                                .lock()
+                                .await
+                                .insert(st.response_id.clone(), env);
+                        }
+                        Ok(Err(e)) => {
+                            let mut env = st.envelope("failed");
+                            env["error"] = json!({"message": e.to_string(), "type": "agent_error"});
+                            st.queue_event(
+                                "response.failed",
+                                json!({"type": "response.failed", "response": env}),
+                            );
+                        }
+                        Err(e) => {
+                            let mut env = st.envelope("failed");
+                            env["error"] = json!({"message": format!("agent task aborted: {}", e), "type": "agent_error"});
+                            st.queue_event(
+                                "response.failed",
+                                json!({"type": "response.failed", "response": env}),
+                            );
+                        }
+                    }
+                    st.finished = true;
+                }
+            }
+        }
+    });
+
+    let sse = axum::response::Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("keepalive"),
+    );
+    let mut response = sse.into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    if let Some(ref sid) = session_id {
+        if let Ok(value) = sid.parse() {
+            response.headers_mut().insert(SESSION_HEADER, value);
+        }
+    }
+    response
 }
 
 async fn create_response(
@@ -783,6 +1118,16 @@ async fn create_response(
                 .collect::<Vec<_>>()
         })
         .filter(|h| !h.is_empty());
+
+    if request.stream {
+        return stream_responses_response(
+            state,
+            prompt,
+            history,
+            session_id,
+            request.previous_response_id,
+        );
+    }
 
     match state
         .agent
@@ -1533,6 +1878,136 @@ mod tests {
         let text = String::from_utf8_lossy(&body).to_string();
         assert!(text.contains(r#""content":"Hel""#), "delta: {}", text);
         assert!(text.contains("data: [DONE]"), "done: {}", text);
+    }
+
+    struct FakeToolStreamProvider {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::provider::Provider for FakeToolStreamProvider {
+        async fn chat_completion(
+            &self,
+            request: crate::provider::ProviderRequest,
+        ) -> crate::error::Result<crate::provider::ProviderResponse> {
+            Ok(crate::provider::ProviderResponse {
+                content: Some("Done.".into()),
+                tool_calls: vec![],
+                usage: Some(crate::provider::Usage::default()),
+                model: request.model,
+                reasoning: None,
+                finish_reason: Some("stop".into()),
+            })
+        }
+        async fn chat_completion_stream(
+            &self,
+            _request: crate::provider::ProviderRequest,
+        ) -> crate::error::Result<crate::provider::ProviderStream> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                let chunks = vec![
+                    Ok(crate::provider::StreamChunk {
+                        tool_call_deltas: vec![crate::provider::ToolCallDelta {
+                            index: 0,
+                            id: Some("call_1".into()),
+                            name_delta: Some("echo".into()),
+                            arguments_delta: Some("{}".into()),
+                        }],
+                        ..Default::default()
+                    }),
+                    Ok(crate::provider::StreamChunk {
+                        finish_reason: Some("tool_calls".into()),
+                        ..Default::default()
+                    }),
+                ];
+                Ok(Box::pin(futures::stream::iter(chunks)))
+            } else {
+                let chunks = vec![Ok(crate::provider::StreamChunk {
+                    delta_content: Some("Done.".into()),
+                    finish_reason: Some("stop".into()),
+                    ..Default::default()
+                })];
+                Ok(Box::pin(futures::stream::iter(chunks)))
+            }
+        }
+        fn supports_streaming(&self) -> bool {
+            true
+        }
+        fn model(&self) -> &str {
+            "fake-tool-stream"
+        }
+        fn name(&self) -> &str {
+            "fake"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_responses_stream_sse_with_tool_call() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(
+                crate::tools::tool("echo")
+                    .description("echo tool")
+                    .handler(|_args, _ctx| async move { Ok(serde_json::json!({"echoed": true})) })
+                    .build()
+                    .expect("tool builds"),
+            );
+        let provider = Arc::new(FakeToolStreamProvider {
+            calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        });
+        let agent = Agent::new(provider, registry).with_store(store);
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "fake-tool-stream".into(),
+            "fake".into(),
+            None,
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+
+        let app = router(state.clone());
+        let request = axum::http::Request::builder()
+            .uri("/v1/responses")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"stream": true, "input": "run echo"}"#))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8_lossy(&body).to_string();
+
+        assert!(text.contains("event: response.created"), "created: {}", text);
+        assert!(text.contains("event: response.output_item.added"), "item added: {}", text);
+        assert!(text.contains(r#""type":"function_call""#), "function_call: {}", text);
+        assert!(text.contains(r#""type":"function_call_output""#), "fn output: {}", text);
+        assert!(text.contains("event: response.output_text.delta"), "text delta: {}", text);
+        assert!(text.contains("event: response.output_text.done"), "text done: {}", text);
+        assert!(text.contains("event: response.completed"), "completed: {}", text);
+        assert!(text.contains(r#""sequence_number""#), "seq: {}", text);
+
+        let responses = state.responses.lock().await;
+        assert_eq!(responses.len(), 1);
+        let stored = responses.values().next().unwrap();
+        assert_eq!(stored["status"], "completed");
+    }
+
+    #[tokio::test]
+    async fn test_responses_stream_validation() {
+        let app = router(streaming_state());
+        let request = axum::http::Request::builder()
+            .uri("/v1/responses")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"stream": true, "input": ""}"#))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

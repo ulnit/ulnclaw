@@ -418,8 +418,6 @@ Optional subsystems use registry patterns:
 ## Future Enhancements
 
 ### Planned Features
-- **Responses Streaming**: SSE streaming for `/v1/responses` (chat
-  completions and session chat already stream)
 - **Messaging Platforms**: hermes' Telegram/WhatsApp/QQ adapters
 - **More Environments**: modal/daytona/vercel terminal backends
   (local/docker/ssh are implemented)

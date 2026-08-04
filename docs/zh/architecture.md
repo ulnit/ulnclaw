@@ -438,8 +438,6 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 ## 未来增强
 
 ### 计划特性
-- **Responses 流式**：`/v1/responses` 的 SSE 流式
-  （chat completions 与会话聊天已支持流式）
 - **消息平台**：hermes 的 Telegram/WhatsApp/QQ 适配器
 - **更多运行环境**：modal/daytona/vercel 终端后端
   （local/docker/ssh 已实现）

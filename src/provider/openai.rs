@@ -24,6 +24,7 @@ pub struct OpenAiProvider {
     name: String,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
+    max_retries: usize,
 }
 
 impl OpenAiProvider {
@@ -42,6 +43,70 @@ impl OpenAiProvider {
             format!("{}/v1/chat/completions", base)
         }
     }
+
+    /// Statuses worth retrying (rate limits + transient server errors).
+    fn retriable_status(status: reqwest::StatusCode) -> bool {
+        matches!(
+            status.as_u16(),
+            408 | 429 | 500 | 502 | 503 | 504
+        )
+    }
+
+    /// Exponential backoff with a small jitter: 500ms, 1s, 2s, ... capped.
+    fn retry_delay(attempt: usize) -> std::time::Duration {
+        let base_ms = 500u64.saturating_mul(1 << attempt.min(4));
+        let jitter_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::from(d.subsec_nanos() % 250))
+            .unwrap_or(0);
+        std::time::Duration::from_millis(base_ms.min(8000) + jitter_ms)
+    }
+
+    /// POST the request body, retrying transient failures (network errors,
+    /// 429/5xx).  Returns the successful response; non-retriable HTTP errors
+    /// are parsed into `AgentError::Provider`.
+    async fn send_api_request(&self, url: &str, api_request: &ApiRequest) -> Result<reqwest::Response> {
+        let mut last_error: Option<AgentError> = None;
+        for attempt in 0..=self.max_retries {
+            if attempt > 0 {
+                let delay = Self::retry_delay(attempt - 1);
+                debug!(
+                    "provider retry {}/{} after {:?} ({})",
+                    attempt,
+                    self.max_retries,
+                    delay,
+                    last_error.as_ref().map(|e| e.to_string()).unwrap_or_default()
+                );
+                tokio::time::sleep(delay).await;
+            }
+            let mut req_builder = self.client.post(url).header("Content-Type", "application/json");
+            if let Some(ref key) = self.api_key {
+                req_builder = req_builder.bearer_auth(key);
+            }
+            let response = match req_builder.json(api_request).send().await {
+                Ok(response) => response,
+                Err(e) => {
+                    // Network-level failure are always retryable.
+                    last_error = Some(AgentError::Provider(format!("HTTP request failed: {}", e)));
+                    continue;
+                }
+            };
+            let status = response.status();
+            if status.is_success() {
+                return Ok(response);
+            }
+            let error_body = response.text().await.unwrap_or_default();
+            let message = serde_json::from_str::<ApiError>(&error_body)
+                .map(|api_err| api_err.error.message)
+                .unwrap_or_else(|_| error_body.chars().take(500).collect::<String>());
+            if Self::retriable_status(status) && attempt < self.max_retries {
+                last_error = Some(AgentError::Provider(format!("API error ({}): {}", status, message)));
+                continue;
+            }
+            return Err(AgentError::Provider(format!("API error ({}): {}", status, message)));
+        }
+        Err(last_error.unwrap_or_else(|| AgentError::Provider("request failed after retries".into())))
+    }
 }
 
 pub struct OpenAiProviderBuilder {
@@ -51,6 +116,7 @@ pub struct OpenAiProviderBuilder {
     name: Option<String>,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
+    max_retries: usize,
 }
 
 impl Default for OpenAiProviderBuilder {
@@ -62,6 +128,7 @@ impl Default for OpenAiProviderBuilder {
             name: None,
             max_tokens: None,
             temperature: None,
+            max_retries: 2,
         }
     }
 }
@@ -97,6 +164,13 @@ impl OpenAiProviderBuilder {
         self
     }
 
+    /// Retry transient errors (429/5xx/network) up to `n` extra times with
+    /// exponential backoff. Default 2.
+    pub fn max_retries(mut self, n: usize) -> Self {
+        self.max_retries = n;
+        self
+    }
+
     pub fn build(self) -> Result<OpenAiProvider> {
         let endpoint = self
             .endpoint
@@ -119,6 +193,7 @@ impl OpenAiProviderBuilder {
             name,
             max_tokens: self.max_tokens,
             temperature: self.temperature,
+            max_retries: self.max_retries,
         })
     }
 }
@@ -376,34 +451,7 @@ impl Provider for OpenAiProvider {
             stream_options: None,
         };
 
-        let mut req_builder = self.client.post(&url).header("Content-Type", "application/json");
-
-        if let Some(ref key) = self.api_key {
-            req_builder = req_builder.bearer_auth(key);
-        }
-
-        let response = req_builder
-            .json(&api_request)
-            .send()
-            .await
-            .map_err(|e| AgentError::Provider(format!("HTTP request failed: {}", e)))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            // Try to parse structured error
-            if let Ok(api_err) = serde_json::from_str::<ApiError>(&error_body) {
-                return Err(AgentError::Provider(format!(
-                    "API error ({}): {}",
-                    status, api_err.error.message
-                )));
-            }
-            return Err(AgentError::Provider(format!(
-                "API error ({}): {}",
-                status,
-                error_body.chars().take(500).collect::<String>()
-            )));
-        }
+        let response = self.send_api_request(&url, &api_request).await?;
 
         let api_response: ApiResponse = response
             .json()
@@ -468,31 +516,7 @@ impl Provider for OpenAiProvider {
             stream_options: Some(serde_json::json!({"include_usage": true})),
         };
 
-        let mut req_builder = self.client.post(&url).header("Content-Type", "application/json");
-        if let Some(ref key) = self.api_key {
-            req_builder = req_builder.bearer_auth(key);
-        }
-        let response = req_builder
-            .json(&api_request)
-            .send()
-            .await
-            .map_err(|e| AgentError::Provider(format!("HTTP request failed: {}", e)))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            if let Ok(api_err) = serde_json::from_str::<ApiError>(&error_body) {
-                return Err(AgentError::Provider(format!(
-                    "API error ({}): {}",
-                    status, api_err.error.message
-                )));
-            }
-            return Err(AgentError::Provider(format!(
-                "API error ({}): {}",
-                status,
-                error_body.chars().take(500).collect::<String>()
-            )));
-        }
+        let response = self.send_api_request(&url, &api_request).await?;
 
         let byte_stream = response.bytes_stream();
         let reader = SseLineReader {
@@ -662,6 +686,126 @@ mod streaming_tests {
         .unwrap();
         assert_eq!(chunk.finish_reason.as_deref(), Some("stop"));
         assert_eq!(chunk.usage.as_ref().unwrap().total_tokens, 12);
+    }
+
+    #[test]
+    fn test_retriable_status() {
+        use reqwest::StatusCode;
+        assert!(OpenAiProvider::retriable_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(OpenAiProvider::retriable_status(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(OpenAiProvider::retriable_status(StatusCode::BAD_GATEWAY));
+        assert!(OpenAiProvider::retriable_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(OpenAiProvider::retriable_status(StatusCode::GATEWAY_TIMEOUT));
+        assert!(!OpenAiProvider::retriable_status(StatusCode::BAD_REQUEST));
+        assert!(!OpenAiProvider::retriable_status(StatusCode::UNAUTHORIZED));
+        assert!(!OpenAiProvider::retriable_status(StatusCode::NOT_FOUND));
+    }
+
+    #[tokio::test]
+    async fn test_retry_on_500_then_success() {
+        use axum::extract::State;
+        use axum::routing::post;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counter = attempts.clone();
+        let app = axum::Router::new()
+            .route(
+                "/v1/chat/completions",
+                post(|State(counter): State<Arc<AtomicUsize>>| async move {
+                    let n = counter.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            r#"{"error": {"message": "boom"}}"#,
+                        )
+                    } else {
+                        (
+                            axum::http::StatusCode::OK,
+                            r#"{"choices":[{"message":{"content":"recovered"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#,
+                        )
+                    }
+                }),
+            )
+            .with_state(counter);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let provider = OpenAiProvider::builder()
+            .endpoint(&format!("http://{}/v1", addr))
+            .model("retry-model")
+            .max_retries(2)
+            .build()
+            .unwrap();
+        let request = crate::provider::ProviderRequest {
+            messages: vec![crate::provider::Message {
+                role: crate::provider::Role::User,
+                content: Some("hi".into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            }],
+            tools: vec![],
+            model: "retry-model".into(),
+            max_tokens: None,
+            temperature: None,
+            stream: false,
+            stop: None,
+        };
+        let response = provider.chat_completion(request).await.unwrap();
+        assert_eq!(response.content.as_deref(), Some("recovered"));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_retry_exhausted_returns_error() {
+        use axum::routing::post;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counter = attempts.clone();
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            post(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    (
+                        axum::http::StatusCode::TOO_MANY_REQUESTS,
+                        r#"{"error": {"message": "rate limited"}}"#,
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let provider = OpenAiProvider::builder()
+            .endpoint(&format!("http://{}/v1", addr))
+            .model("retry-model")
+            .max_retries(1)
+            .build()
+            .unwrap();
+        let request = crate::provider::ProviderRequest {
+            messages: vec![],
+            tools: vec![],
+            model: "retry-model".into(),
+            max_tokens: None,
+            temperature: None,
+            stream: false,
+            stop: None,
+        };
+        let err = provider.chat_completion(request).await.unwrap_err();
+        assert!(err.to_string().contains("429"), "got: {}", err);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2); // initial + 1 retry
     }
 
     #[tokio::test]

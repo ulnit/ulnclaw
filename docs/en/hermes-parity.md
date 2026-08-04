@@ -51,7 +51,7 @@ performance and a single static binary.
 | MCP client (`mcp_tool.py`) | ✅ core | stdio JSON-RPC: initialize/tools/list/tools/call; `[[mcp.servers]]` config; tools registered as `mcp__<server>__<tool>` |
 | CLI (`hermes_cli/`) | ✅ core | chat REPL with slash commands (incl. `/rollback [N|hash] [file]`, `/rollback diff <N>`, `/diff` checkpoint commands), one-shot `run`, sessions/tools/skills/cron/checkpoints subcommands, `init` |
 | Delegation | ✅ | SubAgentRunner trait, depth limit, child sessions |
-| HTTP gateway (`gateway/platforms/api_server.py`) | ✅ core | `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` (session continuity via `X-Ulnclaw-Session-Id`, `stream: true` SSE token streaming with `hermes.tool.progress` events), `/v1/responses` (stateful via `previous_response_id`), `/v1/models`, `/v1/capabilities`, `/v1/runs` (async runs + SSE events + stop + approval), `/api/sessions` CRUD + chat + chat/stream, bearer-token auth |
+| HTTP gateway (`gateway/platforms/api_server.py`) | ✅ core | `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` (session continuity via `X-Ulnclaw-Session-Id`, `stream: true` SSE token streaming with `hermes.tool.progress` events), `/v1/responses` (stateful via `previous_response_id`, `stream: true` Responses-API SSE events), `/v1/models`, `/v1/capabilities`, `/v1/runs` (async runs + SSE events + stop + approval), `/api/sessions` CRUD + chat + chat/stream, bearer-token auth |
 | Messaging platforms (Telegram/WhatsApp/QQ/…) | ⬜ deferred | hermes' platform adapters are not ported; the HTTP gateway covers OpenAI-compatible frontends |
 | TUI/web/app surfaces | ⬜ deferred | hermes ships a TUI and web apps; ulnclaw is a library + CLI + HTTP gateway today |
 | Environments (`tools/environments/`) | ✅ core | `terminal` backends: local (default), docker (`ensure_docker_container` inspect→run), ssh (BatchMode, identity file); `[terminal] backend/container/image/ssh_host/...`; modal/daytona/vercel deferred |
@@ -85,8 +85,7 @@ performance and a single static binary.
 - Browser supervisor launches a local Chrome/Chromium directly; hermes drives
   an external `agent-browser` daemon (cloud browser providers are not ported).
 - The gateway implements the api_server platform subset; profile multiplexing
-  (`/p/<profile>/...`) is not ported.  Streaming covers chat-completions and
-  session chat; `/v1/responses` streaming is not ported.
+  (`/p/<profile>/...`) is not ported.
 - Compression uses a char/4 token estimate instead of a tokenizer.
 - `patch` fuzzy chain implements all 9 hermes strategies; similarity is an
   LCS-based ratio (difflib.SequenceMatcher stand-in), so edge-case thresholds

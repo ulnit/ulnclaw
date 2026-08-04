@@ -145,7 +145,8 @@ fn build_provider(config: &UlncLawConfig) -> Result<Arc<OpenAiProvider>, String>
     let mut builder = OpenAiProvider::builder()
         .endpoint(&config.resolve_base_url())
         .model(&config.model.model)
-        .name(&config.model.provider);
+        .name(&config.model.provider)
+        .max_retries(config.model.max_retries);
     // Local providers (ollama, llama.cpp) run keyless.
     if let Some(api_key) = config.resolve_api_key() {
         builder = builder.api_key(&api_key);

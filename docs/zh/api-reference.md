@@ -1006,7 +1006,7 @@ axum 路由表（供 `serve` 与测试使用）。
 | GET | `/v1/models` | 是 | 对外模型列表 |
 | GET | `/v1/capabilities` | 是 | 机器可读的端点目录 |
 | POST | `/v1/chat/completions` | 是 | OpenAI Chat Completions；经 `X-Ulnclaw-Session-Id` 会话续接（兼容 `X-Hermes-Session-Id`）；id 回显于响应头；`stream: true` → SSE `chat.completion.chunk` |
-| POST | `/v1/responses` | 是 | OpenAI Responses 格式；`input` 为字符串或消息数组；经 `previous_response_id` 链式续接 |
+| POST | `/v1/responses` | 是 | OpenAI Responses 格式；`input` 为字符串或消息数组；经 `previous_response_id` 链式续接；`stream: true` → Responses-API SSE 事件 |
 | GET | `/v1/responses/:id` | 是 | 取回已存储的 response |
 | DELETE | `/v1/responses/:id` | 是 | 删除已存储的 response |
 | GET | `/api/sessions?limit=N` | 是 | 最近会话（新→旧） |
@@ -1074,6 +1074,32 @@ curl -N -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
 内容增量随生成随推送；`hermes.tool.progress` 事件报告工具开始/完成，
 前端可据此展示活动而不把标记存入历史。客户端中途断开时 agent 任务被
 中止。每 15 秒发送 keepalive 注释（`: keepalive`）。
+
+**Responses 流式**（`POST /v1/responses` 带 `stream: true`）在 agent 运行
+过程中发出符合规范的事件：
+
+```
+event: response.created                  # 信封，status=in_progress
+event: response.output_item.added        # item.type = "function_call"
+event: response.output_item.done         # 最终 arguments
+event: response.output_item.added        # item.type = "function_call_output"
+event: response.output_item.done
+event: response.output_text.delta        # 流式助手文本
+event: response.output_text.done
+event: response.completed                # 完整信封：output + usage
+```
+
+每个事件携带单调递增的 `sequence_number`。终态 `response.completed` 载荷
+与非流式响应同形并持久化，`GET /v1/responses/{id}` 与
+`previous_response_id` 链式续接照常可用。agent 出错时以
+`response.failed` 事件终止流。客户端断连会中止 agent 任务。
+
+### Provider 重试
+
+`OpenAiProvider` 对瞬态故障——网络错误与 HTTP 408/429/500/502/503/504——
+按指数退避（500ms → 1s → 2s……，上限 8s，附抖动）重试后才上抛错误。
+非流式与流式路径都会重试初始请求。经 `[model] max_retries`（默认 2）或
+`OpenAiProviderBuilder::max_retries` 配置。
 
 ## 下一步
 

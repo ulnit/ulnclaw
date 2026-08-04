@@ -25,6 +25,14 @@ pub enum StreamEvent {
     /// Tool lifecycle progress (rendered as `hermes.tool.progress` SSE
     /// events so frontends can show activity without polluting history).
     ToolProgress { tool: String, status: String },
+    /// Tool call about to run (Responses API `function_call` items).
+    ToolStarted {
+        name: String,
+        call_id: String,
+        arguments: String,
+    },
+    /// Tool call finished (Responses API `function_call_output` items).
+    ToolCompleted { call_id: String, result: String },
 }
 
 tokio::task_local! {
@@ -626,6 +634,11 @@ impl Agent {
                 tool: tool_call.function.name.clone(),
                 status: "started".to_string(),
             });
+            emit_stream_event(StreamEvent::ToolStarted {
+                name: tool_call.function.name.clone(),
+                call_id: tool_call.id.clone(),
+                arguments: tool_call.function.arguments.clone(),
+            });
 
             // Approval gate before dispatch.
             let result_value = if let Some(blocked) = self
@@ -656,6 +669,10 @@ impl Agent {
             emit_stream_event(StreamEvent::ToolProgress {
                 tool: tool_call.function.name.clone(),
                 status: "completed".to_string(),
+            });
+            emit_stream_event(StreamEvent::ToolCompleted {
+                call_id: tool_call.id.clone(),
+                result: serde_json::to_string(&result_value).unwrap_or_default(),
             });
 
             results.push(result_value);

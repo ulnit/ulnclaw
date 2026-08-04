@@ -1005,7 +1005,7 @@ Binds and serves until interrupted.
 | GET | `/v1/models` | yes | Advertised model list |
 | GET | `/v1/capabilities` | yes | Machine-readable endpoint catalog |
 | POST | `/v1/chat/completions` | yes | OpenAI Chat Completions; session continuity via `X-Ulnclaw-Session-Id` (also accepts `X-Hermes-Session-Id`); id echoed back in the response header; `stream: true` → SSE `chat.completion.chunk` |
-| POST | `/v1/responses` | yes | OpenAI Responses format; `input` string or message array; chain turns with `previous_response_id` |
+| POST | `/v1/responses` | yes | OpenAI Responses format; `input` string or message array; chain turns with `previous_response_id`; `stream: true` → Responses-API SSE events |
 | GET | `/v1/responses/:id` | yes | Retrieve a stored response |
 | DELETE | `/v1/responses/:id` | yes | Delete a stored response |
 | GET | `/api/sessions?limit=N` | yes | Recent sessions (newest first) |
@@ -1074,3 +1074,32 @@ Content deltas stream as they are produced; `hermes.tool.progress` events
 report tool start/complete so frontends can show activity without storing
 markers in history.  If the client disconnects mid-stream the agent task is
 aborted.  Keepalive comments (`: keepalive`) are sent every 15s.
+
+**Responses streaming** (`POST /v1/responses` with `stream: true`) emits
+spec-compliant events as the agent runs:
+
+```
+event: response.created                  # envelope, status=in_progress
+event: response.output_item.added        # item.type = "function_call"
+event: response.output_item.done         # finalized arguments
+event: response.output_item.added        # item.type = "function_call_output"
+event: response.output_item.done
+event: response.output_text.delta        # streamed assistant text
+event: response.output_text.done
+event: response.completed                # full envelope: output + usage
+```
+
+Every event carries a monotonically increasing `sequence_number`.  The
+terminal `response.completed` payload has the same shape as the
+non-streaming response and is persisted, so `GET /v1/responses/{id}` and
+`previous_response_id` chaining keep working.  On agent error a
+`response.failed` event terminates the stream.  Client disconnect aborts
+the agent task.
+
+### Provider Retry
+
+`OpenAiProvider` retries transient failures — network errors and HTTP
+408/429/500/502/503/504 — with exponential backoff (500ms → 1s → 2s…,
+capped at 8s, plus jitter) before surfacing the error.  Both the
+non-streaming and streaming paths retry the initial request.  Configure via
+`[model] max_retries` (default 2) or `OpenAiProviderBuilder::max_retries`.
