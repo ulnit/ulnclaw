@@ -262,7 +262,7 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 
 **关键类型：**
 - `GatewayState` - agent + store + 模型标识 + 可选 bearer 密钥 +
-  运行记录表 + 审批 router
+  运行记录表 + 审批 router + 可选 cron 存储 / skills 目录
 - `RunState` - 被跟踪的异步运行（`/v1/runs`）：状态、结果、停止标志、
   待审批载荷
 - `ApprovalRouter` - run_id → 审批通道；`once`/`session`/`always`
@@ -279,8 +279,15 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 - `POST/GET/DELETE /v1/responses` - OpenAI Responses 格式，经
   `previous_response_id` 有状态续接
 - `GET/POST /api/sessions`、`GET/DELETE /api/sessions/:id`、
+  `PATCH /api/sessions/:id`（title/end_reason）、
+  `POST /api/sessions/:id/fork`（分叉为子会话）、
   `GET /api/sessions/:id/messages`、`POST /api/sessions/:id/chat`、
   `POST /api/sessions/:id/chat/stream`（SSE）
+- `GET/POST /api/jobs`、`GET/PATCH/DELETE /api/jobs/:id`、
+  `POST /api/jobs/:id/pause|resume|run` — 经 HTTP 管理定时任务
+  （与 CLI 共用 SQLite 任务存储）
+- `GET /v1/skills`、`GET /v1/toolsets` — 已安装技能与解析后工具集的
+  发现端点
 - `POST /v1/runs`（202 + run_id）、`GET /v1/runs`、`GET /v1/runs/:id`、
   `GET /v1/runs/:id/events`（SSE 生命周期事件，含 `approval.request`）、
   `POST /v1/runs/:id/stop`、`POST /v1/runs/:id/approval`（解决待审批）

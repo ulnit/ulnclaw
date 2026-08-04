@@ -1025,10 +1025,22 @@ Binds and serves until interrupted.
 | GET | `/api/sessions?limit=N` | yes | Recent sessions (newest first) |
 | POST | `/api/sessions` | yes | Create an empty session |
 | GET | `/api/sessions/:id` | yes | Session row |
+| PATCH | `/api/sessions/:id` | yes | Update `title` and/or `end_reason` (unknown fields → 400) |
 | DELETE | `/api/sessions/:id` | yes | Hard delete (messages + FTS entries) |
+| POST | `/api/sessions/:id/fork` | yes | Branch a session → `201` child session (transcript copied, source marked `branched`) |
 | GET | `/api/sessions/:id/messages` | yes | Message history |
 | POST | `/api/sessions/:id/chat` | yes | Run one turn inside the session |
 | POST | `/api/sessions/:id/chat/stream` | yes | Same, streamed as SSE chunks |
+| GET | `/api/jobs?include_disabled=true` | yes | Cron jobs (disabled hidden unless asked) |
+| POST | `/api/jobs` | yes | Create cron job (`name`, `schedule`, `prompt`, optional `skills`, `repeat`, `deliver="local"`) |
+| GET | `/api/jobs/:id` | yes | Single job |
+| PATCH | `/api/jobs/:id` | yes | Update whitelisted fields (`name`, `schedule`, `prompt`, `skills`, `repeat`, `enabled`) |
+| DELETE | `/api/jobs/:id` | yes | Delete job |
+| POST | `/api/jobs/:id/pause` | yes | Disable job (clears `next_run`) |
+| POST | `/api/jobs/:id/resume` | yes | Re-enable job (recomputes `next_run`) |
+| POST | `/api/jobs/:id/run` | yes | Trigger one immediate execution as a tracked run |
+| GET | `/v1/skills` | yes | Installed skills (`<home>/skills/*/SKILL.md`) |
+| GET | `/v1/toolsets` | yes | Toolsets with resolved tool lists and enabled state |
 | POST | `/v1/runs` | yes | Start async run → `202` + `run_id` |
 | GET | `/v1/runs` | yes | Tracked runs, newest first |
 | GET | `/v1/runs/:id` | yes | Run status/result |
@@ -1109,6 +1121,59 @@ non-streaming response and is persisted, so `GET /v1/responses/{id}` and
 `previous_response_id` chaining keep working.  On agent error a
 `response.failed` event terminates the stream.  Client disconnect aborts
 the agent task.
+
+**Cron jobs API** (`/api/jobs`, hermes parity):
+
+Jobs live in the gateway's state DB (`<home>/state.db`, `cron_jobs` table —
+the same store the `ulnclaw cron` CLI uses).  Schedules accept interval
+shorthands (`30m`, `every 2h`, `1d`), 5-field cron expressions
+(`0 9 * * *`), and ISO timestamps for one-shot runs.  Validation limits:
+name ≤ 200 chars, prompt ≤ 5000 chars, `repeat` a positive integer.
+`deliver` only supports `"local"` (the default).
+
+```bash
+# Create + inspect
+JOB=$(curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"name":"morning digest","schedule":"0 9 * * *","prompt":"summarize the news"}' \
+     http://127.0.0.1:8642/api/jobs | jq -r .job.id)
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8642/api/jobs/$JOB
+
+# Trigger one immediate execution (runs as a tracked run):
+RUN=$(curl -s -X POST -H "Authorization: Bearer $KEY" \
+     http://127.0.0.1:8642/api/jobs/$JOB/run | jq -r .run_id)
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8642/v1/runs/$RUN
+```
+
+`POST /api/jobs/:id/run` returns `{"job": ..., "run_id": ...}`; the job row
+records `last_run` and settles `last_status` to `ok` / `error: ...` when the
+run finishes.  Errors use a plain `{"error": "message"}` envelope with the
+matching HTTP status (400 validation, 404 unknown job, 503 when the cron
+store is not attached).
+
+**Session patch & fork** (hermes `_handle_patch_session` /
+`_handle_fork_session` parity):
+
+```bash
+# Rename / end a session:
+curl -s -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"title":"my session"}' http://127.0.0.1:8642/api/sessions/$SID
+
+# Fork: marks the source ended with reason "branched" and creates a child
+# session carrying the full transcript forward (201):
+curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"id":"my-fork","title":"exploration branch"}' \
+     http://127.0.0.1:8642/api/sessions/$SID/fork
+```
+
+Fork accepts an optional `id`/`session_id` (default: generated
+`api_<ts>_<rand>`) and `title` (default: `"<source title> fork"`).  Existing
+target id → `409 session_exists`; ids containing newline/NUL → `400`.
+
+**Discovery endpoints**: `GET /v1/skills` returns
+`{"object":"list","data":[{name, description, category, path}]}` from the
+gateway's skills directory.  `GET /v1/toolsets` returns each toolset with
+its description, resolved `tools` list, and `enabled` — true when the
+gateway agent actually exposes at least one of the toolset's tools.
 
 ### Provider Retry
 

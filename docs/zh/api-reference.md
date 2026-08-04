@@ -1024,10 +1024,22 @@ axum 路由表（供 `serve` 与测试使用）。
 | GET | `/api/sessions?limit=N` | 是 | 最近会话（新→旧） |
 | POST | `/api/sessions` | 是 | 创建空会话 |
 | GET | `/api/sessions/:id` | 是 | 会话行 |
+| PATCH | `/api/sessions/:id` | 是 | 更新 `title` 和/或 `end_reason`（未知字段 → 400） |
 | DELETE | `/api/sessions/:id` | 是 | 硬删除（消息 + FTS 条目） |
+| POST | `/api/sessions/:id/fork` | 是 | 分叉会话 → `201` 子会话（转录复制，源会话标记 `branched`） |
 | GET | `/api/sessions/:id/messages` | 是 | 消息历史 |
 | POST | `/api/sessions/:id/chat` | 是 | 在该会话内执行一轮对话 |
 | POST | `/api/sessions/:id/chat/stream` | 是 | 同上，以 SSE chunk 流式返回 |
+| GET | `/api/jobs?include_disabled=true` | 是 | 定时任务列表（默认隐藏已停用任务） |
+| POST | `/api/jobs` | 是 | 创建定时任务（`name`、`schedule`、`prompt`，可选 `skills`、`repeat`、`deliver="local"`） |
+| GET | `/api/jobs/:id` | 是 | 单个任务 |
+| PATCH | `/api/jobs/:id` | 是 | 更新白名单字段（`name`、`schedule`、`prompt`、`skills`、`repeat`、`enabled`） |
+| DELETE | `/api/jobs/:id` | 是 | 删除任务 |
+| POST | `/api/jobs/:id/pause` | 是 | 停用任务（清空 `next_run`） |
+| POST | `/api/jobs/:id/resume` | 是 | 重新启用任务（重算 `next_run`） |
+| POST | `/api/jobs/:id/run` | 是 | 立即触发一次执行（作为被跟踪的运行） |
+| GET | `/v1/skills` | 是 | 已安装技能（`<home>/skills/*/SKILL.md`） |
+| GET | `/v1/toolsets` | 是 | 工具集及其解析后的工具列表与启用状态 |
 | POST | `/v1/runs` | 是 | 启动异步运行 → `202` + `run_id` |
 | GET | `/v1/runs` | 是 | 被跟踪的运行（新→旧） |
 | GET | `/v1/runs/:id` | 是 | 运行状态/结果 |
@@ -1105,6 +1117,56 @@ event: response.completed                # 完整信封：output + usage
 与非流式响应同形并持久化，`GET /v1/responses/{id}` 与
 `previous_response_id` 链式续接照常可用。agent 出错时以
 `response.failed` 事件终止流。客户端断连会中止 agent 任务。
+
+**定时任务 API**（`/api/jobs`，对标 hermes）：
+
+任务存于网关状态库（`<home>/state.db` 的 `cron_jobs` 表——与
+`ulnclaw cron` CLI 共用同一存储）。调度支持间隔简写（`30m`、
+`every 2h`、`1d`）、5 段 cron 表达式（`0 9 * * *`）以及 ISO 时间戳
+一次性任务。校验上限：name ≤ 200 字符、prompt ≤ 5000 字符、
+`repeat` 为正整数。`deliver` 仅支持 `"local"`（默认）。
+
+```bash
+# 创建 + 查看
+JOB=$(curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"name":"morning digest","schedule":"0 9 * * *","prompt":"summarize the news"}' \
+     http://127.0.0.1:8642/api/jobs | jq -r .job.id)
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8642/api/jobs/$JOB
+
+# 立即触发一次执行（作为被跟踪的运行）：
+RUN=$(curl -s -X POST -H "Authorization: Bearer $KEY" \
+     http://127.0.0.1:8642/api/jobs/$JOB/run | jq -r .run_id)
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8642/v1/runs/$RUN
+```
+
+`POST /api/jobs/:id/run` 返回 `{"job": ..., "run_id": ...}`；任务行记录
+`last_run`，运行结束后 `last_status` 落为 `ok` / `error: ...`。
+错误使用朴素 `{"error": "message"}` 信封并匹配 HTTP 状态码
+（400 校验失败、404 任务不存在、503 未挂载 cron 存储）。
+
+**会话补丁与分叉**（对标 hermes `_handle_patch_session` /
+`_handle_fork_session`）：
+
+```bash
+# 重命名 / 结束会话：
+curl -s -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"title":"my session"}' http://127.0.0.1:8642/api/sessions/$SID
+
+# 分叉：源会话以 "branched" 结束，创建携带完整转录的子会话（201）：
+curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"id":"my-fork","title":"exploration branch"}' \
+     http://127.0.0.1:8642/api/sessions/$SID/fork
+```
+
+fork 可传 `id`/`session_id`（缺省生成 `api_<ts>_<rand>`）与 `title`
+（缺省 `"<源标题> fork"`）。目标 id 已存在 → `409 session_exists`；
+含换行/NUL 的 id → `400`。
+
+**发现端点**：`GET /v1/skills` 返回
+`{"object":"list","data":[{name, description, category, path}]}`，
+来自网关 skills 目录。`GET /v1/toolsets` 返回每个工具集的描述、
+解析后的 `tools` 列表与 `enabled`（网关 agent 实际暴露该工具集至少
+一个工具时为 true）。
 
 ### Provider 重试
 

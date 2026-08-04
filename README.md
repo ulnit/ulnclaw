@@ -26,7 +26,7 @@ full feature-by-feature mapping.
 - **⏰ Cron** — `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules with a poll scheduler
 - **🔌 MCP client** — stdio JSON-RPC: any MCP server's tools appear as `mcp__<server>__<tool>`
 - **🌍 Browser automation** — CDP WebSocket client with a built-in supervisor (auto-launches headless Chrome/Chromium, or point `ULNCLAW_BROWSER_CDP` at your own): accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs
-- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), `stream: true` SSE streaming on both (token deltas, tool-progress/function-call events), async `/v1/runs` with SSE events + approval resolution, sessions API, bearer auth
+- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), `stream: true` SSE streaming on both (token deltas, tool-progress/function-call events), async `/v1/runs` with SSE events + approval resolution, sessions API (incl. `PATCH`/fork), `/api/jobs` cron management (CRUD + pause/resume/run), `/v1/skills` + `/v1/toolsets` discovery, bearer auth
 - **🖥️ Terminal environments** — run `terminal` locally (default), in docker (auto container creation), or over ssh (`[terminal] backend`)
 - **📸 Checkpoints** — transparent git-backed snapshots before file edits (shared shadow store, per-project chains), `ulnclaw checkpoints list/restore/diff/prune`
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp), keyless local providers
@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 99 tests
+cargo test                     # 107 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -169,7 +169,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **⏰ 定时任务** —— `30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划 + 轮询调度器
 - **🔌 MCP 客户端** —— stdio JSON-RPC：任意 MCP 服务器的工具以 `mcp__<server>__<tool>` 注册
 - **🌍 浏览器自动化** —— CDP WebSocket 客户端 + 内置监督器（自动启动无头 Chrome/Chromium，或用 `ULNCLAW_BROWSER_CDP` 指向自有浏览器）：带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框
-- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、两者均支持 `stream: true` SSE 流式（令牌增量、工具进度/函数调用事件）、带 SSE 事件 + 审批处理的异步 `/v1/runs`、会话 API、Bearer 鉴权
+- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、两者均支持 `stream: true` SSE 流式（令牌增量、工具进度/函数调用事件）、带 SSE 事件 + 审批处理的异步 `/v1/runs`、会话 API（含 `PATCH`/fork）、`/api/jobs` 定时任务管理（增删查改 + pause/resume/run）、`/v1/skills` + `/v1/toolsets` 发现端点、Bearer 鉴权
 - **🖥️ 终端环境** —— `terminal` 可在本地（默认）、docker（自动创建容器）或 ssh 上执行（`[terminal] backend`）
 - **📸 检查点** —— 文件编辑前的透明 git 快照（共享 shadow 存储、按项目快照链），`ulnclaw checkpoints list/restore/diff/prune`
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp），本地 provider 免密钥
@@ -243,7 +243,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 99 个测试
+cargo test                     # 107 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

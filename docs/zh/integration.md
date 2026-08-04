@@ -121,9 +121,10 @@ ulnclaw::gateway::serve(state, "127.0.0.1", 8642).await?;
 
 端点：`/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接）、
 `/v1/responses`、`/v1/models`、`/v1/capabilities`、`/api/sessions`
-增删查改 + 会话内聊天、`/v1/runs` 异步运行（SSE 事件 +
-运行审批 `POST /v1/runs/:id/approval`）。完整列表见
-[API 参考](api-reference.md#http-网关-gateway)。
+增删查改 + patch/fork + 会话内聊天、`/api/jobs` 定时任务管理
+（增删查改 + pause/resume/run）、`/v1/skills` 与 `/v1/toolsets` 发现端点、
+`/v1/runs` 异步运行（SSE 事件 + 运行审批 `POST /v1/runs/:id/approval`）。
+完整列表见 [API 参考](api-reference.md#http-网关-gateway)。
 
 
 ### Axum 示例

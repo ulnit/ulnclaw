@@ -200,6 +200,10 @@ async fn gateway_cmd(
     )
     .map_err(|e| e.to_string())?;
     state_holder.set(state.clone()).ok();
+    let cron_store =
+        ulnclaw::cron::CronStore::open(&home.join("state.db")).map_err(|e| e.to_string())?;
+    state.cron.set(std::sync::Arc::new(cron_store)).ok();
+    state.skills_dir.set(home.join("skills")).ok();
     ulnclaw::gateway::serve(state, &gateway.host, gateway.port)
         .await
         .map_err(|e| e.to_string())

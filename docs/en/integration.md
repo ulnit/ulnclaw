@@ -122,8 +122,10 @@ ulnclaw::gateway::serve(state, "127.0.0.1", 8642).await?;
 
 Endpoints: `/v1/chat/completions` (with `X-Ulnclaw-Session-Id` session
 continuity), `/v1/responses`, `/v1/models`, `/v1/capabilities`,
-`/api/sessions` CRUD + per-session chat, `/v1/runs` async runs with SSE
-events and run-approval resolution (`POST /v1/runs/:id/approval`). See the
+`/api/sessions` CRUD + patch/fork + per-session chat, `/api/jobs` cron job
+management (CRUD + pause/resume/run), `/v1/skills` and `/v1/toolsets`
+discovery, and `/v1/runs` async runs with SSE events and run-approval
+resolution (`POST /v1/runs/:id/approval`). See the
 [API reference](api-reference.md#http-gateway-gateway) for the full table.
 
 ### Axum Example (Custom Routes)

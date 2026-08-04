@@ -9,8 +9,13 @@
 //!   - `POST /api/sessions/{id}/chat/stream` — SSE variant of session chat
 //!   - `GET/POST /api/sessions`, `GET/DELETE /api/sessions/{id}`,
 //!     `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`
+//!   - `PATCH /api/sessions/:id` — update title / end_reason
+//!   - `POST /api/sessions/:id/fork` — branch a session into a child
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
 //!     `POST /v1/runs/:id/stop`
+//!   - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/{id}`,
+//!     `POST /api/jobs/{id}/pause|resume|run` — cron job management
+//!   - `GET /v1/skills`, `GET /v1/toolsets` — discovery endpoints
 //!
 //! Bearer-token auth via `[gateway] key` / `ULNCLAW_GATEWAY_KEY` (optional;
 //! when unset the gateway is open — bind it to localhost).
@@ -26,10 +31,12 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 
 use crate::agent::Agent;
+use crate::cron::{CronJob, CronStore};
 use crate::error::{AgentError, Result};
 use crate::provider::{Message, Role};
 use crate::session::sqlite::SqliteSessionStore;
@@ -299,6 +306,10 @@ pub struct GatewayState {
     pub router: Arc<ApprovalRouter>,
     /// Unresolved approval responders, keyed by run id.
     pub pending_approvals: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>,
+    /// Cron job store backing `/api/jobs` (set when the gateway owns a home dir).
+    pub cron: OnceLock<Arc<CronStore>>,
+    /// Skills directory backing `GET /v1/skills`.
+    pub skills_dir: OnceLock<PathBuf>,
 }
 
 impl GatewayState {
@@ -323,6 +334,8 @@ impl GatewayState {
             responses: Arc::new(Mutex::new(HashMap::new())),
             router,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            cron: OnceLock::new(),
+            skills_dir: OnceLock::new(),
         }))
     }
 }
@@ -344,11 +357,22 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route(
             "/api/sessions/:id",
-            get(get_session).delete(delete_session),
+            get(get_session).patch(patch_session).delete(delete_session),
         )
+        .route("/api/sessions/:id/fork", post(fork_session))
         .route("/api/sessions/:id/messages", get(session_messages))
         .route("/api/sessions/:id/chat", post(session_chat))
         .route("/api/sessions/:id/chat/stream", post(session_chat_stream))
+        .route("/api/jobs", get(list_jobs).post(create_job))
+        .route(
+            "/api/jobs/:id",
+            get(get_job).patch(update_job).delete(delete_job),
+        )
+        .route("/api/jobs/:id/pause", post(pause_job))
+        .route("/api/jobs/:id/resume", post(resume_job))
+        .route("/api/jobs/:id/run", post(run_job_now))
+        .route("/v1/skills", get(skills_list))
+        .route("/v1/toolsets", get(toolsets_list))
         .route("/v1/runs", get(list_runs).post(start_run))
         .route("/v1/runs/:id", get(get_run))
         .route("/v1/runs/:id/events", get(run_events))
@@ -479,6 +503,11 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "runs_events_sse": true,
             "run_approval": true,
             "sessions": true,
+            "session_patch": true,
+            "session_fork": true,
+            "jobs": true,
+            "skills": true,
+            "toolsets": true,
             "streaming": true,
         },
     }))
@@ -1423,6 +1452,569 @@ async fn session_chat_stream(
     stream_agent_response(state, request.message, history_arg, Some(id))
 }
 
+/// `PATCH /api/sessions/:id` — update client-safe session metadata
+/// (hermes `_handle_patch_session`). Only `title` and `end_reason` are
+/// accepted; unknown fields are rejected.
+async fn patch_session(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.store.get_session_row(&id) {
+        Ok(None) => return not_found(&format!("session {} not found", id)),
+        Err(e) => return server_error(&e.to_string()),
+        Ok(Some(_)) => {}
+    }
+    let Some(obj) = body.as_object() else {
+        return bad_request("body must be a JSON object", None);
+    };
+    let unknown: Vec<&String> = obj
+        .keys()
+        .filter(|k| k.as_str() != "title" && k.as_str() != "end_reason")
+        .collect();
+    if !unknown.is_empty() {
+        let names = unknown
+            .iter()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return bad_request(
+            &format!("Unsupported session fields: {}", names),
+            Some("unsupported_session_field"),
+        );
+    }
+    if let Some(title) = obj.get("title") {
+        let title = match title {
+            Value::Null => String::new(),
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        if let Err(e) = state.store.set_session_title(&id, &title) {
+            return bad_request(&e.to_string(), Some("invalid_title"));
+        }
+    }
+    if let Some(reason) = obj.get("end_reason").and_then(|v| v.as_str()) {
+        if !reason.is_empty() {
+            if let Err(e) = state.store.end_session(&id, reason) {
+                return server_error(&e.to_string());
+            }
+        }
+    }
+    match state.store.get_session_row(&id) {
+        Ok(Some(row)) => Json(json!({"object": "ulnclaw.session", "session": row})).into_response(),
+        Ok(None) => not_found(&format!("session {} not found", id)),
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+/// `POST /api/sessions/:id/fork` — branch a session (hermes
+/// `_handle_fork_session`). Marks the source as `branched` and creates a
+/// child session carrying the transcript forward.
+async fn fork_session(
+    State(state): State<Arc<GatewayState>>,
+    Path(source_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let source = match state.store.get_session_row(&source_id) {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(&format!("session {} not found", source_id)),
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let fork_id = body
+        .get("id")
+        .or_else(|| body.get("session_id"))
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "api_{}_{}",
+                now_secs() as u64,
+                &uuid::Uuid::new_v4().simple().to_string()[..8]
+            )
+        });
+    if fork_id.contains(['\r', '\n', '\0']) {
+        return bad_request("Invalid session ID", Some("invalid_session_id"));
+    }
+    match state.store.get_session_row(&fork_id) {
+        Ok(Some(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({"error": {"message": format!("Session already exists: {}", fork_id), "type": "invalid_request_error", "code": "session_exists"}})),
+            )
+                .into_response()
+        }
+        Err(e) => return server_error(&e.to_string()),
+        Ok(None) => {}
+    }
+    if let Err(e) = state.store.end_session(&source_id, "branched") {
+        return server_error(&e.to_string());
+    }
+    if let Err(e) = state.store.create_named_session(
+        &fork_id,
+        "gateway",
+        source.model.as_deref(),
+        Some(&source_id),
+    ) {
+        return server_error(&e.to_string());
+    }
+    match state.store.load_messages(&source_id) {
+        Ok(messages) => {
+            for message in &messages {
+                if let Err(e) = state.store.append_message(&fork_id, message) {
+                    return server_error(&e.to_string());
+                }
+            }
+        }
+        Err(e) => return server_error(&e.to_string()),
+    }
+    let title = body
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| {
+            format!("{} fork", source.title.as_deref().unwrap_or("fork"))
+        });
+    if let Err(e) = state.store.set_session_title(&fork_id, &title) {
+        return bad_request(&e.to_string(), Some("invalid_title"));
+    }
+    match state.store.get_session_row(&fork_id) {
+        Ok(Some(row)) => (
+            StatusCode::CREATED,
+            Json(json!({"object": "ulnclaw.session", "session": row})),
+        )
+            .into_response(),
+        Ok(None) => server_error("fork created but not found"),
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cron jobs API (/api/jobs — hermes `_handle_*_job` parity)
+// ---------------------------------------------------------------------------
+
+const MAX_JOB_NAME_LENGTH: usize = 200;
+const MAX_JOB_PROMPT_LENGTH: usize = 5000;
+
+fn jobs_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({"error": message}))).into_response()
+}
+
+fn cron_store(state: &GatewayState) -> std::result::Result<Arc<CronStore>, Response> {
+    state.cron.get().cloned().ok_or_else(|| {
+        jobs_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cron jobs are not enabled on this gateway",
+        )
+    })
+}
+
+fn job_value(job: &CronJob) -> Value {
+    serde_json::to_value(job).unwrap_or(Value::Null)
+}
+
+#[derive(Deserialize)]
+struct JobsQuery {
+    #[serde(default)]
+    include_disabled: Option<String>,
+}
+
+async fn list_jobs(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<JobsQuery>,
+) -> Response {
+    let store = match cron_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    let include_disabled = query
+        .include_disabled
+        .map(|v| matches!(v.to_lowercase().as_str(), "true" | "1"))
+        .unwrap_or(false);
+    match store.list() {
+        Ok(jobs) => {
+            let jobs: Vec<Value> = jobs
+                .into_iter()
+                .filter(|job| include_disabled || job.enabled)
+                .map(|job| job_value(&job))
+                .collect();
+            Json(json!({"jobs": jobs})).into_response()
+        }
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateJobRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    schedule: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    deliver: Option<String>,
+    #[serde(default)]
+    skills: Option<Vec<String>>,
+    #[serde(default)]
+    repeat: Option<i64>,
+}
+
+fn validate_job_fields(name: &str, prompt: &str) -> std::result::Result<(), Response> {
+    if name.is_empty() {
+        return Err(jobs_error(StatusCode::BAD_REQUEST, "Name is required"));
+    }
+    if name.chars().count() > MAX_JOB_NAME_LENGTH {
+        return Err(jobs_error(
+            StatusCode::BAD_REQUEST,
+            &format!("Name must be ≤ {} characters", MAX_JOB_NAME_LENGTH),
+        ));
+    }
+    if prompt.chars().count() > MAX_JOB_PROMPT_LENGTH {
+        return Err(jobs_error(
+            StatusCode::BAD_REQUEST,
+            &format!("Prompt must be ≤ {} characters", MAX_JOB_PROMPT_LENGTH),
+        ));
+    }
+    Ok(())
+}
+
+async fn create_job(State(state): State<Arc<GatewayState>>, Json(request): Json<CreateJobRequest>) -> Response {
+    let store = match cron_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    let name = request.name.unwrap_or_default().trim().to_string();
+    let schedule = request.schedule.unwrap_or_default().trim().to_string();
+    let prompt = request.prompt.unwrap_or_default();
+    if schedule.is_empty() {
+        return jobs_error(StatusCode::BAD_REQUEST, "Schedule is required");
+    }
+    if let Err(response) = validate_job_fields(&name, &prompt) {
+        return response;
+    }
+    if let Some(repeat) = request.repeat {
+        if repeat < 1 {
+            return jobs_error(
+                StatusCode::BAD_REQUEST,
+                "Repeat must be a positive integer",
+            );
+        }
+    }
+    if let Some(deliver) = request.deliver.as_deref().filter(|d| *d != "local") {
+        return jobs_error(
+            StatusCode::BAD_REQUEST,
+            &format!("Unsupported deliver target: {}", deliver),
+        );
+    }
+    let parsed = match crate::cron::parse_schedule(&schedule) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return jobs_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid schedule: {}", e),
+            )
+        }
+    };
+    let job = CronJob {
+        id: uuid::Uuid::new_v4().simple().to_string()[..12].to_string(),
+        name,
+        schedule,
+        prompt,
+        skills: request.skills.unwrap_or_default(),
+        enabled: true,
+        repeat: request.repeat,
+        next_run: crate::cron::next_run(&parsed),
+        created_at: now_secs(),
+        last_run: None,
+        last_status: None,
+    };
+    match store.add(&job) {
+        Ok(()) => Json(json!({"job": job_value(&job)})).into_response(),
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+async fn get_job(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    let store = match cron_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    match store.get(&id) {
+        Ok(Some(job)) => Json(json!({"job": job_value(&job)})).into_response(),
+        Ok(None) => jobs_error(StatusCode::NOT_FOUND, "Job not found"),
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+async fn update_job(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let store = match cron_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    let mut job = match store.get(&id) {
+        Ok(Some(job)) => job,
+        Ok(None) => return jobs_error(StatusCode::NOT_FOUND, "Job not found"),
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let Some(obj) = body.as_object() else {
+        return jobs_error(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    };
+    // Whitelist of mutable fields (hermes `_UPDATE_ALLOWED_FIELDS`, minus
+    // deliver which this port does not persist).
+    let allowed = ["name", "schedule", "prompt", "skills", "repeat", "enabled"];
+    let updates: Vec<(&String, &Value)> = obj
+        .iter()
+        .filter(|(key, _)| allowed.contains(&key.as_str()))
+        .collect();
+    if updates.is_empty() {
+        return jobs_error(StatusCode::BAD_REQUEST, "No valid fields to update");
+    }
+    for (key, value) in updates {
+        match key.as_str() {
+            "name" => {
+                let name = value.as_str().unwrap_or("").trim().to_string();
+                if let Err(response) = validate_job_fields(&name, &job.prompt) {
+                    return response;
+                }
+                job.name = name;
+            }
+            "prompt" => {
+                let prompt = value.as_str().unwrap_or("").to_string();
+                if let Err(response) = validate_job_fields(&job.name, &prompt) {
+                    return response;
+                }
+                job.prompt = prompt;
+            }
+            "schedule" => {
+                let schedule = value.as_str().unwrap_or("").trim().to_string();
+                if schedule.is_empty() {
+                    return jobs_error(StatusCode::BAD_REQUEST, "Schedule is required");
+                }
+                match crate::cron::parse_schedule(&schedule) {
+                    Ok(parsed) => {
+                        job.next_run = crate::cron::next_run(&parsed);
+                        job.schedule = schedule;
+                    }
+                    Err(e) => {
+                        return jobs_error(
+                            StatusCode::BAD_REQUEST,
+                            &format!("Invalid schedule: {}", e),
+                        )
+                    }
+                }
+            }
+            "skills" => {
+                if let Some(list) = value.as_array() {
+                    job.skills = list
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                }
+            }
+            "repeat" => match value {
+                Value::Null => job.repeat = None,
+                Value::Number(n) if n.as_i64().map(|v| v >= 1).unwrap_or(false) => {
+                    job.repeat = n.as_i64();
+                }
+                _ => {
+                    return jobs_error(
+                        StatusCode::BAD_REQUEST,
+                        "Repeat must be a positive integer",
+                    )
+                }
+            },
+            "enabled" => {
+                if let Some(flag) = value.as_bool() {
+                    job.enabled = flag;
+                    if flag {
+                        if let Ok(parsed) = crate::cron::parse_schedule(&job.schedule) {
+                            job.next_run = crate::cron::next_run(&parsed);
+                        }
+                    } else {
+                        job.next_run = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    match store.update(&job) {
+        Ok(()) => Json(json!({"job": job_value(&job)})).into_response(),
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+async fn delete_job(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    let store = match cron_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    match store.remove(&id) {
+        Ok(true) => Json(json!({"ok": true})).into_response(),
+        Ok(false) => jobs_error(StatusCode::NOT_FOUND, "Job not found"),
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+async fn set_job_enabled(state: &GatewayState, id: &str, enabled: bool) -> Response {
+    let store = match cron_store(state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    let mut job = match store.get(id) {
+        Ok(Some(job)) => job,
+        Ok(None) => return jobs_error(StatusCode::NOT_FOUND, "Job not found"),
+        Err(e) => return server_error(&e.to_string()),
+    };
+    job.enabled = enabled;
+    job.next_run = if enabled {
+        crate::cron::parse_schedule(&job.schedule)
+            .ok()
+            .and_then(|parsed| crate::cron::next_run(&parsed))
+    } else {
+        None
+    };
+    match store.update(&job) {
+        Ok(()) => Json(json!({"job": job_value(&job)})).into_response(),
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
+async fn pause_job(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    set_job_enabled(&state, &id, false).await
+}
+
+async fn resume_job(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    set_job_enabled(&state, &id, true).await
+}
+
+/// `POST /api/jobs/:id/run` — trigger one immediate execution as a tracked
+/// run (hermes `_handle_run_job`).
+async fn run_job_now(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    let store = match cron_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    let mut job = match store.get(&id) {
+        Ok(Some(job)) => job,
+        Ok(None) => return jobs_error(StatusCode::NOT_FOUND, "Job not found"),
+        Err(e) => return server_error(&e.to_string()),
+    };
+    if job.prompt.trim().is_empty() {
+        return jobs_error(StatusCode::BAD_REQUEST, "Job has no prompt to run");
+    }
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let session_id = state
+        .store
+        .create_session("cron-run", Some(&state.model_name), None)
+        .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+    let run = RunState {
+        run_id: run_id.clone(),
+        status: "running".to_string(),
+        session_id: Some(session_id.clone()),
+        message: job.prompt.clone(),
+        created_at: now_secs(),
+        finished_at: None,
+        result: None,
+        error: None,
+        iterations: None,
+        stop_requested: false,
+        approval: None,
+    };
+    state.runs.lock().await.insert(run_id.clone(), run);
+    job.last_run = Some(now_secs());
+    job.last_status = Some("running".to_string());
+    store.update(&job).ok();
+
+    // Record the outcome on the job row once the run finishes.
+    let job_store = store.clone();
+    let job_id = job.id.clone();
+    let runs = state.runs.clone();
+    let outcome_run_id = run_id.clone();
+    tokio::spawn(async move {
+        let outcome = loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let snapshot = runs
+                .lock()
+                .await
+                .get(&outcome_run_id)
+                .map(|run| (run.status.clone(), run.error.clone()));
+            match snapshot {
+                None => break ("failed".to_string(), Some("run lost".to_string())),
+                Some((status, error))
+                    if matches!(status.as_str(), "completed" | "failed") =>
+                {
+                    break (status, error)
+                }
+                Some(_) => continue,
+            }
+        };
+        if let Ok(Some(mut job)) = job_store.get(&job_id) {
+            job.last_status = Some(match outcome.0.as_str() {
+                "completed" => "ok".to_string(),
+                other => format!(
+                    "error: {}",
+                    outcome.1.clone().unwrap_or_else(|| other.to_string())
+                ),
+            });
+            job_store.update(&job).ok();
+        }
+    });
+
+    spawn_tracked_run(state, run_id.clone(), session_id, job.prompt.clone());
+    Json(json!({"job": job_value(&job), "run_id": run_id})).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Discovery: skills + toolsets
+// ---------------------------------------------------------------------------
+
+/// `GET /v1/skills` — list installed skills (hermes `_handle_skills`).
+async fn skills_list(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let dir = state
+        .skills_dir
+        .get()
+        .cloned()
+        .or_else(|| crate::config::ensure_home().ok().map(|home| home.join("skills")));
+    let skills = dir
+        .map(|dir| crate::skills::list_skills(&dir))
+        .unwrap_or_default();
+    Json(json!({"object": "list", "data": skills}))
+}
+
+/// `GET /v1/toolsets` — list toolsets and their resolved tools
+/// (hermes `_handle_toolsets`). A toolset counts as enabled when the agent
+/// actually exposes at least one of its tools.
+async fn toolsets_list(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let registered: std::collections::HashSet<String> =
+        state.agent.tool_names().into_iter().collect();
+    let definitions = crate::toolsets::toolsets();
+    let mut names: Vec<&str> = definitions.keys().copied().collect();
+    names.sort_unstable();
+    let data: Vec<Value> = names
+        .into_iter()
+        .map(|name| {
+            let definition = &definitions[name];
+            let mut tools = crate::toolsets::resolve_toolset(name);
+            tools.sort();
+            tools.dedup();
+            let enabled = tools.iter().any(|tool| registered.contains(tool));
+            json!({
+                "name": name,
+                "description": definition.description,
+                "enabled": enabled,
+                "tools": tools,
+            })
+        })
+        .collect();
+    Json(json!({"object": "list", "data": data}))
+}
+
 // ---------------------------------------------------------------------------
 // Async runs API
 // ---------------------------------------------------------------------------
@@ -1470,6 +2062,15 @@ async fn start_run(
     };
     state.runs.lock().await.insert(run_id.clone(), run.clone());
 
+    spawn_tracked_run(state, run_id.clone(), session_id.clone(), request.message.clone());
+
+    (StatusCode::ACCEPTED, Json(json!({"run_id": run_id, "status": "running", "session_id": session_id}))).into_response()
+}
+
+/// Execute one agent turn as a tracked background run: registers approval
+/// routing, pumps pending approvals into run state, and updates the run row
+/// when the turn finishes. Shared by `/v1/runs` and `/api/jobs/:id/run`.
+fn spawn_tracked_run(state: Arc<GatewayState>, run_id: String, session_id: String, message: String) {
     // Approval plumbing: channel from the approve callback into run state.
     let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<PendingApproval>();
     state.router.register(&run_id, &session_id, approval_tx);
@@ -1497,10 +2098,7 @@ async fn start_run(
 
     let runner = state.clone();
     let spawn_run_id = run_id.clone();
-    let message = request.message.clone();
-    let run_session_id = session_id.clone();
     tokio::spawn(RUN_ID.scope(run_id.clone(), async move {
-        let session_id = run_session_id;
         let history = runner
             .store
             .load_messages(&session_id)
@@ -1532,8 +2130,6 @@ async fn start_run(
         drop(runs);
         runner.router.unregister(&spawn_run_id);
     }));
-
-    (StatusCode::ACCEPTED, Json(json!({"run_id": run_id, "status": "running", "session_id": session_id}))).into_response()
 }
 
 async fn list_runs(State(state): State<Arc<GatewayState>>) -> Json<Value> {
@@ -1687,6 +2283,13 @@ fn not_found(message: &str) -> Response {
         .into_response()
 }
 
+fn bad_request(message: &str, code: Option<&str>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": {"message": message, "type": "invalid_request_error", "code": code}})),
+    )
+        .into_response()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2169,5 +2772,356 @@ mod tests {
         headers.insert("x-hermes-session-id", "legacy".parse().unwrap());
         assert_eq!(session_id_from_headers(&headers), Some("legacy".into()));
         assert_eq!(session_id_from_headers(&HeaderMap::new()), None);
+    }
+
+    async fn send_json(
+        app: Router,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let mut request = axum::http::Request::builder().uri(uri).method(method);
+        if let Some(token) = token {
+            request = request.header("authorization", format!("Bearer {}", token));
+        }
+        let request = request
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    /// State with a cron store + skills dir attached (phase 9 endpoints).
+    fn jobs_state() -> (Arc<GatewayState>, tempfile::TempDir) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        let provider = Arc::new(
+            OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let agent = Agent::new(provider, ToolRegistry::new()).with_store(store);
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "test-model".into(),
+            "test".into(),
+            Some("sekret".into()),
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+        let cron = CronStore::open(&temp.path().join("state.db")).expect("cron store opens");
+        state.cron.set(Arc::new(cron)).ok();
+        state.skills_dir.set(temp.path().join("skills")).ok();
+        (state, temp)
+    }
+
+    #[tokio::test]
+    async fn test_jobs_unavailable_without_store() {
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/jobs", Some("sekret")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body["error"].as_str().unwrap().contains("not enabled"));
+    }
+
+    #[tokio::test]
+    async fn test_jobs_crud_lifecycle() {
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Validation errors.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"schedule": "30m", "prompt": "x"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "Name is required");
+
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "j", "schedule": "not-a-schedule", "prompt": "x"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "j", "schedule": "30m", "prompt": "x", "repeat": 0}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Create.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "daily digest", "schedule": "30m", "prompt": "summarize news", "repeat": 3}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let job = body["job"].clone();
+        let job_id = job["id"].as_str().unwrap().to_string();
+        assert_eq!(job["name"], "daily digest");
+        assert_eq!(job["enabled"], true);
+        assert_eq!(job["repeat"], 3);
+        assert!(job["next_run"].as_f64().unwrap() > 0.0);
+
+        // List hides disabled jobs unless asked.
+        let (status, body) = get_json(app.clone(), "/api/jobs", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["jobs"].as_array().unwrap().len(), 1);
+
+        // Get + 404.
+        let (status, body) = get_json(app.clone(), &format!("/api/jobs/{}", job_id), Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["job"]["id"], job_id);
+        let (status, _) = get_json(app.clone(), "/api/jobs/nope", Some(token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Patch name + schedule; unknown fields are dropped.
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/jobs/{}", job_id), Some(token),
+            json!({"name": "renamed", "schedule": "0 9 * * *", "bogus": 1}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["job"]["name"], "renamed");
+        assert_eq!(body["job"]["schedule"], "0 9 * * *");
+
+        // Patch with only unknown fields → 400.
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/jobs/{}", job_id), Some(token),
+            json!({"bogus": 1}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "No valid fields to update");
+
+        // Pause → hidden from list, visible with include_disabled.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/jobs/{}/pause", job_id), Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["job"]["enabled"], false);
+        let (_, body) = get_json(app.clone(), "/api/jobs", Some(token)).await;
+        assert_eq!(body["jobs"].as_array().unwrap().len(), 0);
+        let (_, body) = get_json(app.clone(), "/api/jobs?include_disabled=true", Some(token)).await;
+        assert_eq!(body["jobs"].as_array().unwrap().len(), 1);
+
+        // Resume recomputes next_run.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/jobs/{}/resume", job_id), Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["job"]["enabled"], true);
+        assert!(body["job"]["next_run"].as_f64().unwrap() > 0.0);
+
+        // Delete.
+        let (status, body) = send_json(
+            app.clone(), "DELETE", &format!("/api/jobs/{}", job_id), Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let (status, _) = get_json(app.clone(), &format!("/api/jobs/{}", job_id), Some(token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_job_run_creates_tracked_run() {
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let (_, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "runnable", "schedule": "1h", "prompt": "say hi"}),
+        ).await;
+        let job_id = body["job"]["id"].as_str().unwrap().to_string();
+
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/jobs/{}/run", job_id), Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let run_id = body["run_id"].as_str().expect("run id returned").to_string();
+
+        // The run is tracked; the provider is unreachable so it settles to
+        // failed quickly.
+        let mut settled = String::new();
+        for _ in 0..40 {
+            let (_, run) = get_json(app.clone(), &format!("/v1/runs/{}", run_id), Some(token)).await;
+            settled = run["status"].as_str().unwrap_or("").to_string();
+            if settled == "completed" || settled == "failed" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(matches!(settled.as_str(), "completed" | "failed"));
+
+        // The job row recorded the trigger.
+        let (_, body) = get_json(app.clone(), &format!("/api/jobs/{}", job_id), Some(token)).await;
+        assert!(body["job"]["last_run"].as_f64().is_some());
+
+        // Unknown job → 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/jobs/nope/run", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_skills_listing() {
+        let (state, temp) = jobs_state();
+        let skill_dir = temp.path().join("skills").join("demo");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: demo\ndescription: A demo skill\n---\nbody\n",
+        )
+        .unwrap();
+
+        let app = router(state);
+        let (status, body) = get_json(app, "/v1/skills", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["object"], "list");
+        let data = body["data"].as_array().unwrap();
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["name"], "demo");
+        assert_eq!(data[0]["description"], "A demo skill");
+    }
+
+    #[tokio::test]
+    async fn test_toolsets_listing() {
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/v1/toolsets", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let data = body["data"].as_array().unwrap();
+        assert!(!data.is_empty());
+        let coding = data.iter().find(|t| t["name"] == "coding").expect("coding toolset");
+        assert!(coding["tools"].as_array().unwrap().len() > 1);
+        // test_state's agent has an empty registry → nothing enabled.
+        assert_eq!(coding["enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn test_session_patch_title_and_end_reason() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let id = state.store.create_session("gateway", None, None).unwrap();
+
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"title": "My session"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["object"], "ulnclaw.session");
+        assert_eq!(body["session"]["title"], "My session");
+
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"end_reason": "done"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["session"]["end_reason"], "done");
+
+        // Unknown fields are rejected.
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"title": "x", "hacked": true}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "unsupported_session_field");
+
+        // Invalid title (newline) → 400.
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"title": "bad\ntitle"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "invalid_title");
+
+        let (status, _) = send_json(
+            app.clone(), "PATCH", "/api/sessions/missing", Some(token), json!({"title": "x"}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_session_fork() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let id = state.store.create_session("gateway", Some("m"), None).unwrap();
+        state
+            .store
+            .append_message(
+                &id,
+                &Message {
+                    role: Role::User,
+                    content: Some("hello fork".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+
+        // Fork with explicit id + title.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/sessions/{}/fork", id), Some(token),
+            json!({"id": "fork-1", "title": "branch"}),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["session"]["id"], "fork-1");
+        assert_eq!(body["session"]["parent_session_id"], id);
+        assert_eq!(body["session"]["title"], "branch");
+
+        // Transcript carried forward.
+        let (_, body) = get_json(app.clone(), "/api/sessions/fork-1/messages", Some(token)).await;
+        let messages = body["data"].as_array().unwrap();
+        assert!(messages.iter().any(|m| m["content"].as_str().unwrap_or("").contains("hello fork")));
+
+        // Source marked branched.
+        let source = state.store.get_session_row(&id).unwrap().unwrap();
+        assert_eq!(source.end_reason.as_deref(), Some("branched"));
+
+        // Same id again → 409.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/sessions/{}/fork", id), Some(token),
+            json!({"id": "fork-1"}),
+        ).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "session_exists");
+
+        // Invalid id → 400.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/sessions/{}/fork", id), Some(token),
+            json!({"id": "bad\nid"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "invalid_session_id");
+
+        // Missing source → 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/sessions/ghost/fork", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_lists_phase9_endpoints() {
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/v1/capabilities", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        for flag in ["jobs", "skills", "toolsets", "session_fork", "session_patch"] {
+            assert_eq!(body["endpoints"][flag], true, "missing capability {}", flag);
+        }
     }
 }

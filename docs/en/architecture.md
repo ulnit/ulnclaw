@@ -237,7 +237,7 @@ a port of hermes' `gateway/platforms/api_server.py` core.
 
 **Key Types:**
 - `GatewayState` - agent + store + model identity + optional bearer key +
-  run registry + approval router
+  run registry + approval router + optional cron store / skills dir
 - `RunState` - tracked async run (`/v1/runs`): status, result, stop flag,
   pending approval payload
 - `ApprovalRouter` - run_id → approval channel; `once`/`session`/`always`
@@ -255,8 +255,15 @@ a port of hermes' `gateway/platforms/api_server.py` core.
 - `POST/GET/DELETE /v1/responses` - OpenAI Responses format, stateful via
   `previous_response_id`
 - `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`,
+  `PATCH /api/sessions/:id` (title/end_reason),
+  `POST /api/sessions/:id/fork` (branch into a child session),
   `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`,
   `POST /api/sessions/:id/chat/stream` (SSE)
+- `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/:id`,
+  `POST /api/jobs/:id/pause|resume|run` — cron job management over HTTP
+  (shares the CLI's SQLite job store)
+- `GET /v1/skills`, `GET /v1/toolsets` — discovery of installed skills and
+  resolved toolsets
 - `POST /v1/runs` (202 + run_id), `GET /v1/runs`, `GET /v1/runs/:id`,
   `GET /v1/runs/:id/events` (SSE lifecycle events incl.
   `approval.request`), `POST /v1/runs/:id/stop`,

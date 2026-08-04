@@ -222,6 +222,11 @@ impl Agent {
         self.store.clone()
     }
 
+    /// Names of all tools currently registered on this agent.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.try_lock().map(|r| r.names()).unwrap_or_default()
+    }
+
     /// Wire this agent as its own delegation + cron runner. Call once after
     /// wrapping the agent in an Arc.
     pub fn wire_runners(self: &Arc<Self>) {

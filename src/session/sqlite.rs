@@ -212,6 +212,25 @@ impl SqliteSessionStore {
         Ok(id)
     }
 
+    /// Create a session with a caller-chosen id (fork API). `parent` links
+    /// the new session into an existing lineage.
+    pub fn create_named_session(
+        &self,
+        id: &str,
+        source: &str,
+        model: Option<&str>,
+        parent: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, parent_session_id, started_at, last_activity_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![id, source, model, parent, now_secs()],
+        )
+        .map_err(|e| AgentError::session(format!("create named session: {}", e)))?;
+        Ok(())
+    }
+
     /// Append one message to a session.
     pub fn append_message(&self, session_id: &str, message: &Message) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
@@ -467,6 +486,21 @@ impl SqliteSessionStore {
         conn.execute(
             "UPDATE sessions SET ended_at = ?2, end_reason = ?3 WHERE id = ?1",
             params![session_id, now_secs(), reason],
+        )
+        .map_err(|e| AgentError::session(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Set (or clear, with an empty string) a session title. Titles must not
+    /// contain newlines or NUL bytes.
+    pub fn set_session_title(&self, session_id: &str, title: &str) -> Result<()> {
+        if title.contains(['\r', '\n', '\0']) {
+            return Err(AgentError::session("invalid session title"));
+        }
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "UPDATE sessions SET title = ?2 WHERE id = ?1",
+            params![session_id, title],
         )
         .map_err(|e| AgentError::session(e.to_string()))?;
         Ok(())
