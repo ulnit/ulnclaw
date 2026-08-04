@@ -29,7 +29,8 @@ full feature-by-feature mapping.
 - **🛡️ Skills guard** — `skills scan <name>` runs the `skills-guard-v1` static scanner (119 threat patterns, invisible-unicode + structural checks, source trust levels) before you install or run third-party skills; dangerous skills are blocked even from trusted sources
 - **🔌 MCP client** — stdio JSON-RPC: any MCP server's tools appear as `mcp__<server>__<tool>`; npx/uvx launches get an OSV malware preflight (MAL-* advisories block, fail-open)
 - **🌍 Browser automation** — CDP WebSocket client with a built-in supervisor (auto-launches headless Chrome/Chromium, or point `ULNCLAW_BROWSER_CDP` at your own): accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs
-- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), `stream: true` SSE streaming on both (token deltas, tool-progress/function-call events), async `/v1/runs` with SSE events + approval resolution, sessions API (incl. `PATCH`/fork + enforced per-session model lock), `/api/jobs` cron management (CRUD + pause/resume/run), `/v1/skills` + `/v1/toolsets` discovery, `/api/model/options`, Prometheus `/metrics`, token accounting `/api/usage`, background-delegation registry `/v1/delegations`, bearer auth
+- **🌐 Browser automation** — 12 `browser_*` tools over a CDP WebSocket client (accessibility snapshots with element refs, click/type/scroll/press, screenshots + vision, console/eval, raw CDP, dialogs); managed headless Chrome (`ULNCLAW_BROWSER_CDP=auto`) or any existing DevTools endpoint, with hermes-grade SSRF guards (metadata floor, private-address gating, redirect rechecks, raw-CDP allowlist) and forced secret redaction on browser output
+- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), `stream: true` SSE streaming on both (token deltas, tool-progress/function-call events), async `/v1/runs` with SSE events + approval resolution, sessions API (incl. `PATCH`/fork + enforced per-session model lock), `/api/jobs` cron management (CRUD + pause/resume/run), `/v1/skills` + `/v1/toolsets` discovery, `/api/model/options`, Prometheus `/metrics`, token accounting `/api/usage`, background-delegation registry `/v1/delegations`, live browser CDP control `/v1/browser/status|connect|disconnect`, bearer auth
 - **🖥️ Terminal environments** — run `terminal` locally (default), in docker (auto container creation), or over ssh (`[terminal] backend`)
 - **🩺 Terminal failure intelligence** — failed commands carry actionable guidance: benign exit codes are explained (`grep=1` → "no matches, not an error" as `exit_code_meaning`) and well-known failure shapes get one recovery `hint` (command/module not found, git conflicts, gh field drift & rate limits, permission errors, exits 124/126/137)
 - **🔬 Environment probe** — when the terminal backend is local, one deterministic Python-toolchain line (pip/python3 mismatch, missing pip module, PEP 668, missing bare `python`) is injected into the system prompt — silent on healthy machines, background-probed with fail-open timeout (`[agent] environment_probe`)
@@ -188,7 +189,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 289 tests
+cargo test                     # 298 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -222,7 +223,8 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🛡️ 技能守卫** —— `skills scan <name>` 运行 `skills-guard-v1` 静态扫描器（119 条威胁模式、不可见 Unicode 与结构检查、来源信任等级），在安装/运行第三方技能前把关；dangerous 技能即使来自受信任仓库也会被拦截
 - **🔌 MCP 客户端** —— stdio JSON-RPC：任意 MCP 服务器的工具以 `mcp__<server>__<tool>` 注册；npx/uvx 启动前经 OSV 恶意软件检查（MAL-* 通告阻止、fail-open）
 - **🌍 浏览器自动化** —— CDP WebSocket 客户端 + 内置监督器（自动启动无头 Chrome/Chromium，或用 `ULNCLAW_BROWSER_CDP` 指向自有浏览器）：带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框
-- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、两者均支持 `stream: true` SSE 流式（令牌增量、工具进度/函数调用事件）、带 SSE 事件 + 审批处理的异步 `/v1/runs`、会话 API（含 `PATCH`/fork + 逐轮生效的会话级模型锁）、`/api/jobs` 定时任务管理（增删查改 + pause/resume/run）、`/v1/skills` + `/v1/toolsets` 发现端点、`/api/model/options`、Prometheus `/metrics`、令牌核算 `/api/usage`、后台委派登记 `/v1/delegations`、Bearer 鉴权
+- **🌐 浏览器自动化** —— 12 个 `browser_*` 工具，基于 CDP WebSocket 客户端（带元素引用的可访问性快照、点击/输入/滚动/按键、截图 + 视觉、console/eval、原始 CDP、对话框）；托管无头 Chrome（`ULNCLAW_BROWSER_CDP=auto`）或任意已有 DevTools 端点，内置 hermes 级 SSRF 防护（元数据底线、私网地址门控、重定向复检、原始 CDP 白名单）并对浏览器输出强制脱敏
+- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、两者均支持 `stream: true` SSE 流式（令牌增量、工具进度/函数调用事件）、带 SSE 事件 + 审批处理的异步 `/v1/runs`、会话 API（含 `PATCH`/fork + 逐轮生效的会话级模型锁）、`/api/jobs` 定时任务管理（增删查改 + pause/resume/run）、`/v1/skills` + `/v1/toolsets` 发现端点、`/api/model/options`、Prometheus `/metrics`、令牌核算 `/api/usage`、后台委派登记 `/v1/delegations`、浏览器 CDP 实时控制 `/v1/browser/status|connect|disconnect`、Bearer 鉴权
 - **🖥️ 终端环境** —— `terminal` 可在本地（默认）、docker（自动创建容器）或 ssh 上执行（`[terminal] backend`）
 - **🩺 终端失败提示** —— 失败命令自带可执行提示：良性退出码会被解释（`grep=1` → "无匹配（非错误）"，`exit_code_meaning`），常见失败形态附加一条恢复建议（`hint`）：命令/模块未找到、git 冲突、gh 字段漂移与限流、权限错误、退出码 124/126/137
 - **🔬 环境探针** —— 终端后端为本地时，向系统提示注入一行确定性的 Python 工具链说明（pip/python3 版本错配、缺 pip 模块、PEP 668、缺少裸 `python`）；健康环境保持静默，后台探测 + 超时即放行（`[agent] environment_probe`）
@@ -311,7 +313,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 289 个测试
+cargo test                     # 298 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

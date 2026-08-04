@@ -256,6 +256,17 @@ registry.register(tool);
 - 浏览器监督器：`ULNCLAW_BROWSER_CDP=auto`（默认）启动托管的无头
   Chrome/Chromium（`find_browser_binary`、`launch_managed_browser`、
   `stop_managed_browser`），等待 DevTools 端口就绪后再连接
+- SSRF/私有页面防护（`browser/guard.rs`，hermes 浏览器工具防护移植）：
+  敏感查询参数与云元数据底线无条件拦截；非回环端点或容器化终端启用
+  私网地址防护（`[security] allow_private_urls` 可退出）；重定向落地复检，
+  落入受限地址即清空页面；console/eval 表达式预筛私网 URL 字面量；页面
+  处于私网时原始 `browser_cdp` 仅放行白名单方法；浏览器输出进入模型前
+  强制脱敏
+- 实时端点切换：REPL `/browser connect <url>` 与网关
+  `POST /v1/browser/connect`（先经 `/json/version` 验证再生效）设置进程级
+  覆盖，优先于 `ULNCLAW_BROWSER_CDP`；`/browser disconnect` 与
+  `POST /v1/browser/disconnect` 清除；`GET /v1/browser/status` 报告
+  来源/模式
 
 **流程：**
 ```

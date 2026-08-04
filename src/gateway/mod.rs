@@ -580,6 +580,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/toolsets", get(toolsets_list))
         .route("/v1/delegations", get(list_delegations_http))
         .route("/v1/delegations/:id", get(get_delegation_http))
+        .route("/v1/browser/status", get(browser_status))
+        .route("/v1/browser/connect", post(browser_connect))
+        .route("/v1/browser/disconnect", post(browser_disconnect))
         .route("/v1/runs", get(list_runs).post(start_run))
         .route("/v1/runs/:id", get(get_run))
         .route("/v1/runs/:id/events", get(run_events))
@@ -902,6 +905,100 @@ async fn get_delegation_http(
         .into_response()
 }
 
+/// `GET /v1/browser/status` — current browser CDP endpoint configuration
+/// (ulnclaw ops extension over hermes `/browser` UX).
+async fn browser_status(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let _ = state;
+    let managed_running = crate::browser::managed_running().await;
+    match crate::browser::endpoint_with_source() {
+        Some((source, raw)) => {
+            let mode = if crate::browser::is_auto_mode(&raw) {
+                "managed"
+            } else {
+                "endpoint"
+            };
+            Json(json!({
+                "configured": true,
+                "source": source,
+                "endpoint": raw,
+                "mode": mode,
+                "managed_running": managed_running,
+            }))
+        }
+        None => Json(json!({
+            "configured": false,
+            "source": null,
+            "endpoint": null,
+            "mode": "none",
+            "managed_running": managed_running,
+        })),
+    }
+}
+
+#[derive(Deserialize)]
+struct BrowserConnectRequest {
+    #[serde(default)]
+    url: String,
+}
+
+/// `POST /v1/browser/connect` — point the browser tools at a CDP endpoint
+/// for the process lifetime (hermes `/browser connect`, which live-sets
+/// `BROWSER_CDP_URL`). Accepts ws://, wss://, http(s):// discovery bases,
+/// or `auto` (managed local browser). The endpoint is verified before the
+/// override sticks.
+async fn browser_connect(Json(request): Json<BrowserConnectRequest>) -> Response {
+    let url = request.url.trim().to_string();
+    if url.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"message": "url is required", "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    }
+    if let Err(e) = crate::browser::set_cdp_override(&url) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"message": e.to_string(), "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    }
+    // Verify reachability before the override sticks (auto mode defers the
+    // managed launch to first use).
+    if !crate::browser::is_auto_mode(&url) {
+        let reachable = match crate::browser::resolve_endpoint(&url) {
+            Ok(endpoint) => {
+                if let Some(http_base) = &endpoint.http_base {
+                    crate::browser::discover_browser_ws(http_base).await.is_ok()
+                } else if let Some(ws) = &endpoint.browser_ws {
+                    crate::browser::CdpClient::connect(ws).await.is_ok()
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        };
+        if !reachable {
+            crate::browser::clear_cdp_override();
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": {
+                    "message": format!("browser endpoint '{url}' is unreachable (no DevTools discovery response)"),
+                    "type": "invalid_request_error"
+                }})),
+            )
+                .into_response();
+        }
+    }
+    Json(json!({"connected": true, "endpoint": url})).into_response()
+}
+
+/// `POST /v1/browser/disconnect` — clear the live CDP override (hermes
+/// `/browser disconnect`); the tools fall back to `ULNCLAW_BROWSER_CDP`.
+async fn browser_disconnect() -> Json<Value> {
+    crate::browser::clear_cdp_override();
+    Json(json!({"disconnected": true}))
+}
+
 async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     Json(json!({
         "service": "ulnclaw-gateway",
@@ -924,6 +1021,7 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "session_model_lock": true,
             "session_recap": true,
             "delegations": true,
+            "browser": true,
             "metrics": true,
             "usage": true,
             "streaming": true,
@@ -3845,5 +3943,106 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(body["sessions"].as_array().unwrap().is_empty());
         assert_eq!(body["store"]["sessions"], json!(1));
+    }
+
+    // ------------------------------------------------------------------
+    // Browser CDP layer (status / connect / disconnect)
+    // ------------------------------------------------------------------
+
+    /// Minimal DevTools discovery server: answers `/json/version` with a
+    /// `webSocketDebuggerUrl` so `discover_browser_ws` succeeds.
+    async fn spawn_mock_devtools() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind mock");
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    let body = format!(
+                        "{{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:{port}/devtools/browser/mock\"}}"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        port
+    }
+
+    async fn post_json(app: Router, uri: &str, body: &str, token: &str) -> (StatusCode, Value) {
+        let request = axum::http::Request::builder()
+            .uri(uri)
+            .method("POST")
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    #[tokio::test]
+    async fn test_browser_status_connect_disconnect() {
+        // The override slot is process-global; keep this test the only
+        // consumer of it (serialized within this single function).
+        crate::browser::clear_cdp_override();
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Default: unconfigured.
+        let (status, body) = get_json(app.clone(), "/v1/browser/status", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["configured"], false);
+        assert_eq!(body["mode"], "none");
+
+        // Connect with an unreachable endpoint -> 502 and no override.
+        let (status, body) = post_json(
+            app.clone(),
+            "/v1/browser/connect",
+            "{\"url\":\"http://127.0.0.1:9\"}",
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(body["error"]["message"].as_str().unwrap().contains("unreachable"));
+        let (_, body) = get_json(app.clone(), "/v1/browser/status", Some(token)).await;
+        assert_eq!(body["configured"], false);
+
+        // Connect against the mock discovery endpoint -> verified override.
+        let port = spawn_mock_devtools().await;
+        let url = format!("http://127.0.0.1:{port}");
+        let (status, body) = post_json(
+            app.clone(),
+            "/v1/browser/connect",
+            &format!("{{\"url\":\"{url}\"}}"),
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["connected"], true);
+        let (_, body) = get_json(app.clone(), "/v1/browser/status", Some(token)).await;
+        assert_eq!(body["configured"], true);
+        assert_eq!(body["source"], "override");
+        assert_eq!(body["mode"], "endpoint");
+
+        // Disconnect clears the override.
+        let (status, body) = post_json(app.clone(), "/v1/browser/disconnect", "{}", token).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["disconnected"], true);
+        let (_, body) = get_json(app.clone(), "/v1/browser/status", Some(token)).await;
+        assert_eq!(body["configured"], false);
+        crate::browser::clear_cdp_override();
     }
 }

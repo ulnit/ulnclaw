@@ -654,6 +654,28 @@ fn browser_configured() -> ToolAvailability {
     }
 }
 
+/// hermes `_blocked_private_page_action` / snapshot current-page guard:
+/// refuse to read or operate on a page sitting on a private address.
+async fn private_page_block(
+    session: &std::sync::Arc<crate::browser::BrowserSession>,
+    guard: bool,
+) -> Option<serde_json::Value> {
+    if !guard {
+        return None;
+    }
+    let info = session.page_info().await.unwrap_or(json!({}));
+    let url = info.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    if !url.is_empty() && crate::browser::guard::is_private_url(url) {
+        return Some(json!({
+            "success": false,
+            "error": format!(
+                "Blocked: page URL targets a private or internal address ({url}).                  Refusing to read or interact with this page in this browser mode."
+            )
+        }));
+    }
+    None
+}
+
 fn register_browser(registry: &mut ToolRegistry) {
     let specs: [(&str, &str, serde_json::Value); 12] = [
         ("browser_navigate", "Navigate the browser to a URL.", json!({
@@ -729,15 +751,49 @@ fn register_browser(registry: &mut ToolRegistry) {
                     let tool_name = name.to_string();
                     async move {
                         use crate::browser::with_session;
+                        // Hermes browser SSRF guard: active for non-local endpoints
+                        // (or containerized terminals); the metadata floor and the
+                        // sensitive-query check fire unconditionally.
+                        let endpoint_raw = crate::browser::configured_endpoint_raw();
+                        let terminal_local = matches!(
+                            ctx.config.terminal.backend.as_deref(),
+                            None | Some("local") | Some("")
+                        );
+                        let guard = crate::browser::guard::guard_active(
+                            endpoint_raw.as_deref(),
+                            terminal_local,
+                        );
                         match tool_name.as_str() {
                             "browser_navigate" => {
                                 let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
                                 if url.is_empty() {
                                     return Ok(json!({"success": false, "error": "url is required"}));
                                 }
+                                if let Some(error) = crate::browser::guard::blocked_navigate(&url, guard) {
+                                    return Ok(json!({"success": false, "error": error}));
+                                }
                                 with_session(move |session| async move {
                                     session.navigate(&url).await?;
                                     let info = session.page_info().await.unwrap_or(json!({}));
+                                    // Post-redirect SSRF check (hermes): refuse a redirect
+                                    // that landed on the metadata floor (always) or a
+                                    // private address (when guarded), and blank the page
+                                    // so later snapshots cannot leak the content.
+                                    let final_url = info
+                                        .get("url")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    if !final_url.is_empty() && final_url != url {
+                                        if crate::url_safety::is_always_blocked_url_sync(&final_url) {
+                                            let _ = session.navigate("about:blank").await;
+                                            return Ok(json!({"success": false, "error": "Blocked: redirect landed on a cloud metadata endpoint"}));
+                                        }
+                                        if guard && !crate::url_safety::is_safe_url_sync(&final_url) {
+                                            let _ = session.navigate("about:blank").await;
+                                            return Ok(json!({"success": false, "error": "Blocked: redirect landed on a private/internal address"}));
+                                        }
+                                    }
                                     Ok(json!({
                                         "success": true,
                                         "url": info.get("url").cloned().unwrap_or(json!("")),
@@ -747,22 +803,31 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 })
                                 .await
                             }
-                            "browser_snapshot" => with_session(|session| async move {
-                                let (text, refs) = session.snapshot().await?;
-                                Ok(json!({
-                                    "success": true,
-                                    "snapshot": text,
-                                    "elements": refs.len(),
-                                    "hint": "interact via browser_click/browser_type with element refs like \"3\""
-                                }))
-                            })
-                            .await,
+                            "browser_snapshot" => {
+                                let guard = guard;
+                                with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
+                                    let (text, refs) = session.snapshot().await?;
+                                    Ok(json!({
+                                        "success": true,
+                                        "snapshot": crate::browser::guard::redact_value(json!(text)),
+                                        "elements": refs.len(),
+                                        "hint": "interact via browser_click/browser_type with element refs like \"3\""
+                                    }))
+                                })
+                                .await
+                            }
                             "browser_click" => {
                                 let element = args.get("element").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
                                 if element.is_empty() {
                                     return Ok(json!({"success": false, "error": "element is required"}));
                                 }
                                 with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
                                     let result = session.click(&element).await?;
                                     Ok(json!({"success": true, "clicked": result.get("clicked").cloned()}))
                                 })
@@ -775,6 +840,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                     return Ok(json!({"success": false, "error": "element is required"}));
                                 }
                                 with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
                                     session.type_text(&element, &text).await?;
                                     Ok(json!({"success": true, "typed_chars": text.len(), "into": element}))
                                 })
@@ -784,33 +852,51 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("down").to_string();
                                 let pixels = args.get("pixels").and_then(|v| v.as_u64()).unwrap_or(800);
                                 with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
                                     session.scroll(&direction, pixels).await?;
                                     Ok(json!({"success": true, "direction": direction, "pixels": pixels}))
                                 })
                                 .await
                             }
-                            "browser_back" => with_session(|session| async move {
-                                session.go_back().await?;
-                                let info = session.page_info().await.unwrap_or(json!({}));
-                                Ok(json!({"success": true, "url": info.get("url").cloned()}))
-                            })
-                            .await,
+                            "browser_back" => {
+                                let guard = guard;
+                                with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
+                                    session.go_back().await?;
+                                    let info = session.page_info().await.unwrap_or(json!({}));
+                                    Ok(json!({"success": true, "url": info.get("url").cloned()}))
+                                })
+                                .await
+                            }
                             "browser_press" => {
                                 let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
                                 if key.is_empty() {
                                     return Ok(json!({"success": false, "error": "key is required"}));
                                 }
                                 with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
                                     session.press(&key).await?;
                                     Ok(json!({"success": true, "pressed": key}))
                                 })
                                 .await
                             }
-                            "browser_get_images" => with_session(|session| async move {
-                                let images = session.get_images().await?;
-                                Ok(json!({"success": true, "images": images}))
-                            })
-                            .await,
+                            "browser_get_images" => {
+                                let guard = guard;
+                                with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
+                                    let images = session.get_images().await?;
+                                    Ok(json!({"success": true, "images": images}))
+                                })
+                                .await
+                            }
                             "browser_vision" => {
                                 let prompt = args
                                     .get("prompt")
@@ -834,6 +920,9 @@ fn register_browser(registry: &mut ToolRegistry) {
                                     }
                                 };
                                 with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
                                     let png = session.screenshot().await?;
                                     let image_url = format!("data:image/png;base64,{}", png);
                                     match provider.analyze_image(&prompt, &image_url).await {
@@ -848,9 +937,27 @@ fn register_browser(registry: &mut ToolRegistry) {
                                 if expression.is_empty() {
                                     return Ok(json!({"success": false, "error": "expression is required"}));
                                 }
+                                if guard {
+                                    if let Some(literal) =
+                                        crate::browser::guard::expression_targets_private_url(&expression)
+                                    {
+                                        return Ok(json!({
+                                            "success": false,
+                                            "error": format!(
+                                                "Blocked: expression targets a private or internal address ({literal})."
+                                            )
+                                        }));
+                                    }
+                                }
                                 with_session(move |session| async move {
+                                    if let Some(blocked) = private_page_block(&session, guard).await {
+                                        return Ok(blocked);
+                                    }
                                     let value = session.evaluate(&expression, None).await?;
-                                    Ok(json!({"success": true, "result": value}))
+                                    Ok(json!({
+                                        "success": true,
+                                        "result": crate::browser::guard::redact_value(value)
+                                    }))
                                 })
                                 .await
                             }
@@ -861,8 +968,32 @@ fn register_browser(registry: &mut ToolRegistry) {
                                     return Ok(json!({"success": false, "error": "method is required"}));
                                 }
                                 with_session(move |session| async move {
+                                    // hermes `_browser_cdp_private_guard`: raw CDP must not
+                                    // become the sibling bypass of the guarded tools.
+                                    let current_url = if guard {
+                                        session
+                                            .page_info()
+                                            .await
+                                            .ok()
+                                            .and_then(|info| {
+                                                info.get("url").and_then(|v| v.as_str()).map(String::from)
+                                            })
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(error) = crate::browser::guard::blocked_cdp(
+                                        &method,
+                                        &params,
+                                        current_url.as_deref(),
+                                        guard,
+                                    ) {
+                                        return Ok(json!({"success": false, "error": error}));
+                                    }
                                     let result = session.client().call(&method, params).await?;
-                                    Ok(json!({"success": true, "result": result}))
+                                    Ok(json!({
+                                        "success": true,
+                                        "result": crate::browser::guard::redact_value(result)
+                                    }))
                                 })
                                 .await
                             }

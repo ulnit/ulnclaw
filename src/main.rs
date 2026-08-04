@@ -630,7 +630,7 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect <url>|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -681,6 +681,35 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/tools" => {
             println!("(use `ulnclaw tools` outside the REPL)");
+        }
+        "/browser" => {
+            // hermes `/browser` UX: live CDP endpoint control.
+            let mut parts = rest.splitn(2, ' ');
+            match parts.next().unwrap_or("") {
+                "status" | "" => match ulnclaw::browser::endpoint_with_source() {
+                    Some((source, raw)) => {
+                        let mode = if ulnclaw::browser::is_auto_mode(&raw) { "managed" } else { "endpoint" };
+                        println!("browser: configured via {source} — {raw} (mode: {mode})");
+                    }
+                    None => println!("browser: not configured (set ULNCLAW_BROWSER_CDP or /browser connect <url>)"),
+                },
+                "connect" => {
+                    let url = parts.next().unwrap_or("").trim();
+                    if url.is_empty() {
+                        println!("usage: /browser connect <ws://…|http://host:port|auto>");
+                    } else {
+                        match ulnclaw::browser::set_cdp_override(url) {
+                            Ok(()) => println!("browser endpoint set to {url} (live until disconnect/exit)"),
+                            Err(e) => println!("connect failed: {e}"),
+                        }
+                    }
+                }
+                "disconnect" => {
+                    ulnclaw::browser::clear_cdp_override();
+                    println!("browser endpoint override cleared");
+                }
+                other => println!("unknown /browser subcommand: {other} (status|connect|disconnect)"),
+            }
         }
         "/gitdiff" => {
             let (mode, rest) = match rest.split_whitespace().next() {

@@ -231,6 +231,19 @@ Chrome DevTools Protocol client backing the `browser_*` tools.
   managed headless Chrome/Chromium (`find_browser_binary`,
   `launch_managed_browser`, `stop_managed_browser`) and waits for the
   DevTools port before connecting
+- SSRF/private-page guard (`browser/guard.rs`, hermes browser-tool guards):
+  sensitive-query and cloud-metadata floors fire unconditionally; the
+  private-address guard activates for non-loopback endpoints or
+  containerized terminals (`[security] allow_private_urls` opts out);
+  post-redirect recheck blanks pages that land on blocked addresses;
+  console/eval expressions are pre-screened for private URL literals; raw
+  `browser_cdp` calls are allowlisted while the page is private; browser
+  outputs are force-redacted before reaching the model
+- Live endpoint override: REPL `/browser connect <url>` and gateway
+  `POST /v1/browser/connect` (verified against `/json/version` before it
+  sticks) set a process-lifetime override ahead of `ULNCLAW_BROWSER_CDP`;
+  `/browser disconnect` + `POST /v1/browser/disconnect` clear it;
+  `GET /v1/browser/status` reports source/mode
 
 **Flow:**
 ```

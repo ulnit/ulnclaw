@@ -11,6 +11,8 @@
 //! element refs (`[3] button "Submit"`); click/type resolve refs through
 //! `DOM.resolveNode` + `Runtime.callFunctionOn`.
 
+pub mod guard;
+
 use crate::error::{AgentError, Result};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -896,10 +898,49 @@ fn global_session_slot() -> &'static RwLock<Option<Arc<BrowserSession>>> {
     SLOT.get_or_init(|| RwLock::new(None))
 }
 
-/// Read the configured CDP endpoint (env/config), if any.
+// Live CDP endpoint override — hermes `/browser connect` sets
+// BROWSER_CDP_URL for the process lifetime; the gateway exposes the same
+// via POST /v1/browser/connect. Precedence: live override > env var.
+fn override_slot() -> &'static std::sync::RwLock<Option<String>> {
+    static SLOT: std::sync::OnceLock<std::sync::RwLock<Option<String>>> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+/// Set the live CDP endpoint override (validated). Hermes `/browser connect`.
+pub fn set_cdp_override(raw: &str) -> Result<()> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(AgentError::tool("browser connect: URL is required"));
+    }
+    if !is_auto_mode(raw) {
+        resolve_endpoint(raw)?;
+    }
+    *override_slot().write().unwrap() = Some(raw.to_string());
+    Ok(())
+}
+
+/// Clear the live CDP endpoint override. Hermes `/browser disconnect`.
+pub fn clear_cdp_override() {
+    *override_slot().write().unwrap() = None;
+}
+
+/// Current live override + its source, if any: ("override" | "env", raw).
+pub fn endpoint_with_source() -> Option<(&'static str, String)> {
+    if let Some(raw) = override_slot().read().unwrap().clone() {
+        return Some(("override", raw));
+    }
+    crate::config::get_env_value("ULNCLAW_BROWSER_CDP").map(|raw| ("env", raw))
+}
+
+/// Whether a managed (auto-launched) browser is currently running.
+pub async fn managed_running() -> bool {
+    managed_slot().read().await.is_some()
+}
+
+/// Read the configured CDP endpoint (live override > env), if any.
 /// Absent or `auto`/`launch`/`managed` means "launch a local browser".
 pub fn configured_endpoint_raw() -> Option<String> {
-    crate::config::get_env_value("ULNCLAW_BROWSER_CDP")
+    endpoint_with_source().map(|(_, raw)| raw)
 }
 
 /// Get (or open) the shared browser session.
