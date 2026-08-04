@@ -28,6 +28,110 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register(read_terminal_tool());
     registry.register(focus_pane_tool());
     registry.register(open_preview_tool());
+    registry.register(react_to_message_tool());
+}
+
+fn react_to_message_tool() -> crate::tools::Tool {
+    tool("react_to_message")
+        .description(
+            "React to a message with a single emoji, the way you'd tapback in iMessage.              Reach for it when a reaction is what a person would do: something funny gets              a 😂, warmth gets a ❤️, a plan you're on board with gets a 👍 — then just              carry on with whatever the message actually needs. If a reaction says it              all, it can BE the reply (skip the redundant 'sounds good!' turn). Use it              like a person would: occasionally, when felt — not on every message, and              never as a status signal. NEVER narrate or explain a reaction ('I reacted              with...', 'Reacting now') — the emoji appearing on the bubble is the whole              point, and commentary kills it. Defaults to the user's most recent message.              One reaction per message: a different emoji replaces yours, an empty string              retracts it.",
+        )
+        .parameters(json!({
+            "type": "object",
+            "properties": {
+                "emoji": {
+                    "type": "string",
+                    "description": "The emoji to react with (e.g. '❤️', '😂', '👍'). Pass an empty string to remove your reaction."
+                },
+                "message_row_id": {
+                    "type": "integer",
+                    "description": "Optional. The specific message to react to. Omit to react to the user's latest message, which is almost always what you want."
+                },
+                "messages_back": {
+                    "type": "integer",
+                    "description": "Optional. React to an EARLIER user message: 1 = the one before the latest, 2 = two before, and so on."
+                }
+            },
+            "required": ["emoji"]
+        }))
+        .handler(|args, ctx| async move {
+            if !ctx.config.display.message_reactions {
+                return Ok(json!({
+                    "success": false,
+                    "error": "Message reactions are disabled (set [display] message_reactions = true to enable)."
+                }));
+            }
+            let emoji = args
+                .get("emoji")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let Some(store) = ctx.store.as_ref() else {
+                return Ok(json!({
+                    "success": false,
+                    "error": "No active session — reactions need a persisted conversation."
+                }));
+            };
+            let session_key = ctx.session_id.clone();
+
+            // Default target: the latest user message (hermes photon
+            // precedent — the model never threads row ids). `messages_back`
+            // steps to earlier user turns for retroactive reactions.
+            let mut target_role = "user".to_string();
+            let row_id: i64 = if let Some(id) = args.get("message_row_id").and_then(|v| v.as_i64()) {
+                match store.message_role(&session_key, id) {
+                    Some(role) => {
+                        target_role = role;
+                        id
+                    }
+                    None => {
+                        return Ok(json!({
+                            "success": false,
+                            "error": format!("Message {id} is not part of this conversation.")
+                        }))
+                    }
+                }
+            } else {
+                let back = args.get("messages_back").and_then(|v| v.as_i64()).unwrap_or(0).max(0);
+                match store.latest_message_row_id(&session_key, "user", back, true) {
+                    Some(id) => id,
+                    None => {
+                        let error = if back > 0 {
+                            format!("No user message found {back} back.")
+                        } else {
+                            "No user message to react to yet.".to_string()
+                        };
+                        return Ok(json!({"success": false, "error": error}));
+                    }
+                }
+            };
+
+            let emoji_opt = if emoji.is_empty() { None } else { Some(emoji.as_str()) };
+            let Some(reactions) = store.set_message_reaction(&session_key, row_id, emoji_opt, "agent") else {
+                return Ok(json!({
+                    "success": false,
+                    "error": format!("Message {row_id} is not part of this conversation.")
+                }));
+            };
+
+            // Paint it live. A missing bridge (non-desktop surface) is not an
+            // error — the reaction is persisted either way and shows on the
+            // next load. `role` lets the renderer match a live message that
+            // doesn't know its durable row id yet.
+            crate::desktop::emit(
+                &session_key,
+                "message.reaction",
+                &json!({"row_id": row_id, "reactions": reactions, "role": target_role}),
+            );
+
+            Ok(json!({"success": true, "row_id": row_id, "reactions": reactions}))
+        })
+        .toolset("terminal")
+        .emoji("💛")
+        .check_fn(check_desktop_requirements)
+        .build()
+        .expect("react_to_message builds")
 }
 
 fn close_terminal_tool() -> crate::tools::Tool {

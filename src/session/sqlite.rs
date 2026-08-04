@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS messages (
     timestamp REAL NOT NULL,
     token_count INTEGER,
     finish_reason TEXT,
-    active INTEGER NOT NULL DEFAULT 1
+    active INTEGER NOT NULL DEFAULT 1,
+    display_metadata TEXT
 );
 
 CREATE TABLE IF NOT EXISTS state_meta (
@@ -142,6 +143,24 @@ pub fn initialize_schema(conn: &Connection) -> Result<bool> {
     Ok(has_fts)
 }
 
+/// Add `messages.display_metadata` (JSON) on pre-existing databases —
+/// reactions live inside it (hermes `display_metadata` semantics).
+fn ensure_display_metadata_column(conn: &Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(messages)")
+        .map_err(|e| AgentError::session(e.to_string()))?;
+    let has_column = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AgentError::session(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "display_metadata");
+    if !has_column {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN display_metadata TEXT;")
+            .map_err(|e| AgentError::session(format!("add display_metadata: {}", e)))?;
+    }
+    Ok(())
+}
+
 impl SqliteSessionStore {
     /// Open (or create) the state database at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -154,6 +173,7 @@ impl SqliteSessionStore {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .map_err(|e| AgentError::session(format!("pragmas: {}", e)))?;
         let has_fts = initialize_schema(&conn)?;
+        ensure_display_metadata_column(&conn)?;
 
         let store = Self {
             conn: Mutex::new(conn),
@@ -299,6 +319,145 @@ impl SqliteSessionStore {
             .ok();
         }
         Ok(())
+    }
+
+    /// Row id of the most recent active message with `role` (hermes
+    /// `latest_message_row_id`). `offset` steps to earlier turns (1 = the
+    /// one before the latest). `require_text` skips empty-content rows so a
+    /// reaction never lands on an invisible (tool-call-only) bubble.
+    pub fn latest_message_row_id(
+        &self,
+        session_id: &str,
+        role: &str,
+        offset: i64,
+        require_text: bool,
+    ) -> Option<i64> {
+        if session_id.is_empty() || !matches!(role, "user" | "assistant") || offset < 0 {
+            return None;
+        }
+        let conn = self.conn.lock().ok()?;
+        let text_filter = if require_text {
+            "AND content IS NOT NULL AND TRIM(content) != '' "
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT id FROM messages WHERE session_id = ?1 AND role = ?2
+             AND active = 1 {text_filter}ORDER BY id DESC LIMIT 1 OFFSET ?3"
+        );
+        conn.query_row(&sql, params![session_id, role, offset], |row| row.get(0))
+            .ok()
+    }
+
+    /// Role of the active message at `row_id` in `session_id` (hermes
+    /// `get_message_role`).
+    pub fn message_role(&self, session_id: &str, row_id: i64) -> Option<String> {
+        if session_id.is_empty() {
+            return None;
+        }
+        let conn = self.conn.lock().ok()?;
+        conn.query_row(
+            "SELECT role FROM messages WHERE id = ?1 AND session_id = ?2 AND active = 1",
+            params![row_id, session_id],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    /// Set (or with `emoji = None` clear) `author`'s reaction on one
+    /// message — iOS Tapback semantics (hermes `set_message_reaction`):
+    /// one reaction per author per message; re-sending the same emoji
+    /// retracts it, a different emoji replaces it. Returns the full
+    /// reaction list after the write, or `None` when the row does not
+    /// belong to the session.
+    pub fn set_message_reaction(
+        &self,
+        session_id: &str,
+        row_id: i64,
+        emoji: Option<&str>,
+        author: &str,
+    ) -> Option<Vec<serde_json::Value>> {
+        if session_id.is_empty() {
+            return None;
+        }
+        let conn = self.conn.lock().ok()?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT display_metadata FROM messages WHERE id = ?1 AND session_id = ?2",
+                params![row_id, session_id],
+                |row| row.get(0),
+            )
+            .ok()?;
+
+        let mut meta: serde_json::Value = raw
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let existing: Vec<serde_json::Value> = meta
+            .get("reactions")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let previous = existing.iter().find(|r| r.get("author").and_then(|a| a.as_str()) == Some(author));
+        let toggling_off = emoji.map_or(false, |e| {
+            previous.map_or(false, |p| p.get("emoji").and_then(|x| x.as_str()) == Some(e))
+        });
+
+        let mut reactions: Vec<serde_json::Value> = existing
+            .into_iter()
+            .filter(|r| r.get("author").and_then(|a| a.as_str()) != Some(author))
+            .collect();
+        if let Some(emoji) = emoji.filter(|e| !e.is_empty()) {
+            if !toggling_off {
+                reactions.push(serde_json::json!({
+                    "emoji": emoji,
+                    "author": author,
+                    "at": now_secs(),
+                }));
+            }
+        }
+
+        if reactions.is_empty() {
+            if let Some(obj) = meta.as_object_mut() {
+                obj.remove("reactions");
+            }
+        } else {
+            meta["reactions"] = serde_json::Value::Array(reactions.clone());
+        }
+
+        let encoded = if meta.as_object().map_or(true, |o| o.is_empty()) {
+            None
+        } else {
+            Some(meta.to_string())
+        };
+        conn.execute(
+            "UPDATE messages SET display_metadata = ?1 WHERE id = ?2",
+            params![encoded, row_id],
+        )
+        .ok()?;
+        Some(reactions)
+    }
+
+    /// Current reactions on a message (hermes `get_message_reactions`).
+    pub fn get_message_reactions(&self, session_id: &str, row_id: i64) -> Vec<serde_json::Value> {
+        let Some(conn) = self.conn.lock().ok() else {
+            return Vec::new();
+        };
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT display_metadata FROM messages WHERE id = ?1 AND session_id = ?2",
+                params![row_id, session_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        raw.as_deref()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|meta| meta.get("reactions").and_then(|v| v.as_array()).cloned())
+            .unwrap_or_default()
     }
 
     /// Load all active messages of a session as `Message` values.
@@ -769,6 +928,137 @@ impl SessionStore for SqliteSessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn store_with(dir: &std::path::Path) -> SqliteSessionStore {
+        SqliteSessionStore::open(dir.join("state.db")).unwrap()
+    }
+
+    fn user_msg(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: Some(text.into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    #[test]
+    fn latest_message_row_id_role_offset_and_text_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let sid = store.create_session("cli", Some("m"), None).unwrap();
+        store.append_message(&sid, &user_msg("first")).unwrap();
+        store
+            .append_message(
+                &sid,
+                &Message {
+                    role: Role::Assistant,
+                    content: Some("reply".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        store.append_message(&sid, &user_msg("second")).unwrap();
+        // Tool-call-only assistant row: no text, must be skipped.
+        store
+            .append_message(
+                &sid,
+                &Message {
+                    role: Role::Assistant,
+                    content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+
+        let latest_user = store.latest_message_row_id(&sid, "user", 0, true).unwrap();
+        let previous_user = store.latest_message_row_id(&sid, "user", 1, true).unwrap();
+        assert!(latest_user > previous_user);
+        assert!(store.latest_message_row_id(&sid, "user", 2, true).is_none());
+        // The latest assistant row with text is the "reply" row.
+        let assistant = store.latest_message_row_id(&sid, "assistant", 0, true).unwrap();
+        assert_eq!(store.message_role(&sid, assistant).as_deref(), Some("assistant"));
+        assert_eq!(store.message_role(&sid, latest_user).as_deref(), Some("user"));
+        // Bad inputs.
+        assert!(store.latest_message_row_id(&sid, "tool", 0, true).is_none());
+        assert!(store.latest_message_row_id(&sid, "user", -1, true).is_none());
+        assert!(store.latest_message_row_id("", "user", 0, true).is_none());
+    }
+
+    #[test]
+    fn reactions_tapback_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let sid = store.create_session("cli", Some("m"), None).unwrap();
+        store.append_message(&sid, &user_msg("hello")).unwrap();
+        let row = store.latest_message_row_id(&sid, "user", 0, true).unwrap();
+
+        // Agent sets a reaction.
+        let reactions = store
+            .set_message_reaction(&sid, row, Some("👍"), "agent")
+            .unwrap();
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0]["emoji"], "👍");
+        assert_eq!(reactions[0]["author"], "agent");
+
+        // User adds theirs — both coexist (one per author).
+        let reactions = store
+            .set_message_reaction(&sid, row, Some("❤️"), "user")
+            .unwrap();
+        assert_eq!(reactions.len(), 2);
+
+        // Same emoji again retracts (tapback toggle).
+        let reactions = store
+            .set_message_reaction(&sid, row, Some("👍"), "agent")
+            .unwrap();
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0]["author"], "user");
+
+        // A different emoji replaces.
+        let reactions = store
+            .set_message_reaction(&sid, row, Some("😂"), "agent")
+            .unwrap();
+        assert_eq!(reactions.len(), 2);
+        let agent = reactions.iter().find(|r| r["author"] == "agent").unwrap();
+        assert_eq!(agent["emoji"], "😂");
+
+        // Empty emoji retracts.
+        let reactions = store.set_message_reaction(&sid, row, Some(""), "agent").unwrap();
+        assert_eq!(reactions.len(), 1);
+        // None clears explicitly.
+        let reactions = store.set_message_reaction(&sid, row, None, "user").unwrap();
+        assert!(reactions.is_empty());
+        assert!(store.get_message_reactions(&sid, row).is_empty());
+
+        // Row outside the session → None.
+        assert!(store.set_message_reaction("other-session", row, Some("👍"), "agent").is_none());
+        assert!(store.set_message_reaction(&sid, row + 999, Some("👍"), "agent").is_none());
+        assert!(store.message_role(&sid, row + 999).is_none());
+    }
+
+    #[test]
+    fn reactions_survive_reopen_and_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let sid = {
+            let store = SqliteSessionStore::open(&path).unwrap();
+            let sid = store.create_session("cli", Some("m"), None).unwrap();
+            store.append_message(&sid, &user_msg("persist me")).unwrap();
+            let row = store.latest_message_row_id(&sid, "user", 0, true).unwrap();
+            store.set_message_reaction(&sid, row, Some("🎉"), "agent").unwrap();
+            sid
+        };
+        let store = SqliteSessionStore::open(&path).unwrap();
+        let row = store.latest_message_row_id(&sid, "user", 0, true).unwrap();
+        let reactions = store.get_message_reactions(&sid, row);
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0]["emoji"], "🎉");
+    }
 
     #[test]
     fn test_sqlite_roundtrip() {

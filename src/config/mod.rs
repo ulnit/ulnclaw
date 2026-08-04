@@ -606,6 +606,19 @@ pub struct UlncLawConfig {
     /// URL/SSRF safety settings (hermes `security:`).
     #[serde(default)]
     pub security: SecurityConfig,
+    /// Presentation toggles for GUI hosts (hermes `display:`).
+    #[serde(default)]
+    pub display: DisplayConfig,
+}
+
+/// `[display]` — presentation toggles for GUI hosts (hermes `display.*`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct DisplayConfig {
+    /// Enable message reactions (tapbacks) in desktop GUIs — off by
+    /// default, enabled from the desktop app's settings (hermes
+    /// `display.message_reactions`).
+    pub message_reactions: bool,
 }
 
 /// `[security]` — URL safety toggles (port of hermes `security.*`).
