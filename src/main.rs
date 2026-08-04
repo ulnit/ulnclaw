@@ -3,6 +3,7 @@
 
 use clap::{Parser, Subcommand};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use ulnclaw::agent::{Agent, AgentConfig};
 use ulnclaw::config::UlncLawConfig;
@@ -81,6 +82,16 @@ enum SessionAction {
     Show { id: String },
     /// Full-text search across sessions
     Search { query: Vec<String> },
+    /// Export a session as verifiable Markdown (hermes session export)
+    Export {
+        id: String,
+        /// Output directory (default: <home>/exports)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Skip the SHA256 verification footer
+        #[arg(long)]
+        no_verification: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -670,6 +681,35 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
             for (session_id, snippet) in hits {
                 println!("[{}] {}", session_id, snippet);
             }
+        }
+        SessionAction::Export { id, out, no_verification } => {
+            let row = store
+                .get_session_row(&id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("session '{}' not found", id))?;
+            let messages = store
+                .load_messages_with_timestamps(&id)
+                .map_err(|e| e.to_string())?;
+            let session = ulnclaw::session::export::ExportSession {
+                id: row.id.clone(),
+                title: row.title.clone(),
+                source: row.source.clone(),
+                model: row.model.clone(),
+                cwd: row.cwd.clone(),
+                started_at: row.started_at,
+                ended_at: row.ended_at,
+                messages,
+            };
+            if no_verification {
+                let body = ulnclaw::session::export::render_session_markdown(&session, false);
+                println!("{}", body);
+                return Ok(());
+            }
+            let dir = out.unwrap_or_else(|| home.join("exports"));
+            let path =
+                ulnclaw::session::export::write_session_markdown(&dir, &session)
+                    .map_err(|e| e.to_string())?;
+            println!("✅ Exported {} messages to {}", session.messages.len(), path.display());
         }
     }
     Ok(())

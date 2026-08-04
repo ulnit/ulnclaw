@@ -3,6 +3,7 @@
 //! Inspired by Hermes Agent's hermes_state.py - SQLite session storage
 //! with FTS5 full-text search and session lineage.
 
+pub mod export;
 pub mod sqlite;
 
 pub use sqlite::SqliteSessionStore;

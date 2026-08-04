@@ -318,6 +318,54 @@ impl SqliteSessionStore {
         Ok(messages)
     }
 
+    /// Load messages with their stored timestamps (session export).
+    pub fn load_messages_with_timestamps(&self, session_id: &str) -> Result<Vec<(f64, Message)>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT timestamp, role, content, tool_call_id, tool_calls, tool_name
+                 FROM messages WHERE session_id = ?1 AND active = 1 ORDER BY id",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let mut messages = Vec::new();
+        for row in rows {
+            let (timestamp, role, content, tool_call_id, tool_calls, name) =
+                row.map_err(|e| AgentError::session(e.to_string()))?;
+            let role = match role.as_str() {
+                "system" => Role::System,
+                "user" => Role::User,
+                "assistant" => Role::Assistant,
+                _ => Role::Tool,
+            };
+            let tool_calls: Option<Vec<ToolCall>> = tool_calls
+                .map(|s| serde_json::from_str(&s))
+                .transpose()
+                .map_err(|e| AgentError::session(e.to_string()))?;
+            messages.push((
+                timestamp,
+                Message {
+                    role,
+                    content,
+                    tool_calls,
+                    tool_call_id,
+                    name,
+                },
+            ));
+        }
+        Ok(messages)
+    }
     /// Full-text search over all messages. Returns (session_id, snippet, rank).
     pub fn search_messages(
         &self,

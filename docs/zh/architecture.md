@@ -176,6 +176,9 @@ registry.register(tool);
   回退；父子谱系；面向网关 API 的会话行查询）
 - `Session` - 带元数据的对话状态
 - `SessionMetadata` - 用户 ID、平台、模型信息
+- `export` - 可校验的 Markdown 会话导出（移植 hermes
+  `session_export_md.py`）：frontmatter + 消息标题 + 工具调用块 +
+  SHA256 校验页脚 + `manifest.jsonl`
 
 **会话生命周期：**
 ```

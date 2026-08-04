@@ -150,6 +150,9 @@ Conversation persistence with lineage tracking for compression scenarios.
   the gateway API)
 - `Session` - Conversation state with metadata
 - `SessionMetadata` - User ID, platform, model info
+- `export` - verifiable Markdown session export (hermes
+  `session_export_md.py` port): frontmatter + message headings +
+  tool-call blocks + SHA256 verification footer + `manifest.jsonl`
 
 **Session Lifecycle:**
 ```
