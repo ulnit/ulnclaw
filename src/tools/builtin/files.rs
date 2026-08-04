@@ -148,6 +148,20 @@ fn read_file_impl(
             "error": format!("'{}' is a directory — use search_files with target='files' to list it", path.display())
         }));
     }
+    // Binary file guard (hermes binary_extensions): block by extension, no I/O.
+    if crate::binary_ext::has_binary_extension(&path.display().to_string()) {
+        let ext = path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy().to_ascii_lowercase()))
+            .unwrap_or_default();
+        return Ok(json!({
+            "success": false,
+            "error": format!(
+                "Cannot read binary file '{}' ({}). Use vision_analyze for images, or terminal to inspect binary files.",
+                raw_path, ext
+            )
+        }));
+    }
 
     let content = match std::fs::read(&path) {
         Ok(bytes) => {
@@ -893,5 +907,18 @@ mod tests {
         let diff = make_diff("f.txt", "a\nb\nc", "a\nB\nc");
         assert!(diff.contains("-b"));
         assert!(diff.contains("+B"));
+    }
+
+    #[test]
+    fn test_read_file_rejects_binary_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("logo.png");
+        std::fs::write(&png, b"\x89PNG fake bytes").unwrap();
+        let ctx = Arc::new(ToolContext::new().with_workdir(dir.path()));
+        let result = read_file_impl(&ctx, "logo.png", 1, 100).unwrap();
+        assert_eq!(result["success"], json!(false));
+        let err = result["error"].as_str().unwrap();
+        assert!(err.contains("Cannot read binary file"), "got: {err}");
+        assert!(err.contains("vision_analyze"), "got: {err}");
     }
 }
