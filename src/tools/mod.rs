@@ -6,6 +6,7 @@
 
 pub mod approval;
 pub mod fuzzy;
+pub mod hints;
 pub mod builtin;
 pub mod context;
 

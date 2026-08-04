@@ -9,7 +9,8 @@
 
 | hermes 工具 | ulnclaw | 说明 |
 |---|---|---|
-| `terminal`, `process` | ✅ 完整 | 前台/后台执行、超时、工作目录跟踪、后台会话管理（list/log/wait/kill） |
+| `terminal`, `process` | ✅ 完整 | 前台/后台执行、超时、工作目录跟踪、后台会话管理（list/log/wait/kill）、失败智能（良性退出码语义 + 输出模式恢复提示） |
+| 终端失败提示（`terminal_hints.py`、`_interpret_exit_code`） | ✅ | 良性非零退出码给出 `exit_code_meaning`（grep/rg/diff/find/test/curl/git 语义表，取管道/链的最后一段，跳过 `VAR=val` 前缀）；失败命令至多附加一条 `hint`，按生产频率排序的输出模式扫描（gh JSON 字段漂移、合并冲突、命令未找到——python/pip 特判、ModuleNotFoundError/ImportError、"already exists"、gh 限流、权限拒绝）+ 退出码 124/126/137 专属提示；扫描窗口限 4000 字符，首个匹配生效 |
 | `read_file`, `write_file`, `patch`, `search_files` | ✅ 完整 | 带行号读取与 `next_offset` 分页、模糊替换（容忍空白/缩进差异）、V4A 多文件补丁、unified diff、ripgrep 风格搜索 |
 | `web_search`, `web_extract` | ✅ 完整 | 可插拔后端：Tavily / Brave / SearXNG / 内置 DuckDuckGo；HTML→文本抽取 |
 | `memory` | ✅ 完整 | `MEMORY.md` + `USER.md`，原子批量 `operations`，字符上限（2200/1375），每轮注入系统提示词 |

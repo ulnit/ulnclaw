@@ -250,12 +250,24 @@ async fn terminal_exec(
             } else {
                 format!("{}\n[stderr]\n{}", stdout, stderr)
             };
-            Ok(json!({
+            let exit_code = status.code().unwrap_or(-1);
+            let output = truncate_output(combined.trim_end());
+            let mut result = json!({
                 "success": status.success(),
-                "exit_code": status.code().unwrap_or(-1),
-                "output": truncate_output(combined.trim_end()),
+                "exit_code": exit_code,
+                "output": output,
                 "duration_seconds": duration,
-            }))
+            });
+            if !status.success() {
+                // hermes terminal_tool.py: explain benign exit codes, else
+                // attach one actionable failure hint (tools/hints.rs).
+                if let Some(note) = crate::tools::hints::interpret_exit_code(&command, exit_code) {
+                    result["exit_code_meaning"] = json!(note);
+                } else if let Some(hint) = crate::tools::hints::annotate_failure(&command, exit_code, &output) {
+                    result["hint"] = json!(hint);
+                }
+            }
+            Ok(result)
         }
         Ok(Err(e)) => Ok(json!({"success": false, "error": format!("wait failed: {}", e)})),
         Err(_) => {
@@ -528,5 +540,41 @@ mod tests {
         .unwrap();
         assert_eq!(result["success"], json!(true));
         assert_eq!(ctx.cwd(), dir.path().canonicalize().unwrap_or(dir.path().to_path_buf()));
+    }
+
+    #[tokio::test]
+    async fn test_benign_exit_code_meaning() {
+        let ctx = Arc::new(ToolContext::new());
+        let result = terminal_exec(
+            ctx,
+            "grep -q ulnclaw-no-match-zzz /dev/null".into(),
+            false,
+            10,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["exit_code"], json!(1));
+        assert_eq!(result["exit_code_meaning"], json!("No matches found (not an error)"));
+        assert!(result.get("hint").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_failure_hint_command_not_found() {
+        let ctx = Arc::new(ToolContext::new());
+        let result = terminal_exec(
+            ctx,
+            "ulnclaw-no-such-cmd-xyz".into(),
+            false,
+            10,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["exit_code"], json!(127));
+        let hint = result["hint"].as_str().expect("hint present");
+        assert!(hint.contains("ulnclaw-no-such-cmd-xyz"), "got: {hint}");
     }
 }

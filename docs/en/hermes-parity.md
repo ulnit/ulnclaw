@@ -10,7 +10,8 @@ performance and a single static binary.
 
 | hermes tool | ulnclaw | Notes |
 |---|---|---|
-| `terminal`, `process` | ✅ full | foreground/background, timeouts, workdir tracking, background session registry (list/log/wait/kill) |
+| `terminal`, `process` | ✅ full | foreground/background, timeouts, workdir tracking, background session registry (list/log/wait/kill), failure intelligence (benign exit-code semantics + output-pattern recovery hints) |
+| Terminal failure hints (`terminal_hints.py`, `_interpret_exit_code`) | ✅ | `exit_code_meaning` for benign non-zero exits (grep/rg/diff/find/test/curl/git semantics, last pipeline/chain segment wins, `VAR=val` prefixes skipped); at most one `hint` per failed command from an ordered output-pattern scan (gh JSON-field drift, merge conflicts, command not found — python/pip special-cased, ModuleNotFoundError/ImportError, "already exists", gh rate limits, permission denied) plus exit-code-only hints 124/126/137; bounded 4000-char scan window, first match wins |
 | `read_file`, `write_file`, `patch`, `search_files` | ✅ full | line-numbered reads with `next_offset` pagination, fuzzy replace (whitespace/indent tolerant), V4A multi-file patches, unified diffs, ripgrep-style search |
 | `web_search`, `web_extract` | ✅ full | pluggable backends: Tavily / Brave / SearXNG / built-in DuckDuckGo; HTML→text extraction |
 | `memory` | ✅ full | `MEMORY.md` + `USER.md`, atomic batched `operations`, char limits (2200/1375), injected into every system prompt |
