@@ -615,6 +615,11 @@ impl GatewayConfig {
 pub struct UlncLawConfig {
     #[serde(default)]
     pub model: ModelConfig,
+    /// IANA timezone for prompt timestamps (hermes config.yaml
+    /// `timezone`); `ULNCLAW_TIMEZONE`/`HERMES_TIMEZONE` env vars take
+    /// priority, blank/unset falls back to server-local time.
+    #[serde(default)]
+    pub timezone: Option<String>,
     #[serde(default)]
     pub agent: AgentSettings,
     #[serde(default)]

@@ -19,6 +19,9 @@ pub struct ContextCompressor {
     pub target_ratio: f32,
     /// Number of recent messages always kept verbatim.
     pub keep_recent: usize,
+    /// IANA timezone for the summary's temporal anchoring (hermes
+    /// compressor `Current date` line via hermes_time).
+    pub timezone: Option<String>,
 }
 
 impl Default for ContextCompressor {
@@ -33,7 +36,14 @@ impl ContextCompressor {
             max_context_tokens,
             target_ratio: 0.5,
             keep_recent: 12,
+            timezone: None,
         }
+    }
+
+    /// Set the timezone used for the summary's `Current date` anchor.
+    pub fn with_timezone(mut self, timezone: Option<String>) -> Self {
+        self.timezone = timezone;
+        self
     }
 
     /// Estimate token count (rough approximation: 4 chars per token).
@@ -110,7 +120,12 @@ impl ContextCompressor {
         let summary_request = crate::provider::ProviderRequest {
             messages: vec![Message {
                 role: Role::User,
-                content: Some(format!("{}{}", SUMMARY_PROMPT, segment)),
+                content: Some(format!(
+                    "Current date: {}\n\n{}{}",
+                    crate::hermes_time::today_iso(self.timezone.as_deref()),
+                    SUMMARY_PROMPT,
+                    segment
+                )),
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,

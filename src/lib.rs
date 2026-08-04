@@ -88,6 +88,7 @@ pub mod environments;
 pub mod error;
 pub mod gateway;
 pub mod git_diff;
+pub mod hermes_time;
 pub mod mcp;
 pub mod moa;
 pub mod models_dev;

@@ -427,6 +427,16 @@ impl Agent {
             }
         }
         parts.push(env_section);
+        // Volatile timestamp block (hermes system_prompt.py): date-only so
+        // the prompt stays byte-stable for the whole day (prefix-cache
+        // stability, hermes PR #20451), rendered in the user's configured
+        // timezone (hermes_time).
+        let mut stamp = crate::hermes_time::conversation_started_line(
+            self.context.config.timezone.as_deref(),
+        );
+        stamp.push_str(&format!("\nModel: {}", self.effective_model()));
+        stamp.push_str(&format!("\nProvider: {}", self.provider.name()));
+        parts.push(stamp);
         Some(parts.join("\n\n"))
     }
 
@@ -523,7 +533,8 @@ impl Agent {
             }
         }
 
-        let compressor = crate::context::ContextCompressor::new(self.config.context_budget_tokens);
+        let compressor = crate::context::ContextCompressor::new(self.config.context_budget_tokens)
+            .with_timezone(self.context.config.timezone.clone());
 
         // Main conversation loop
         for iteration in 0..self.config.max_iterations {
