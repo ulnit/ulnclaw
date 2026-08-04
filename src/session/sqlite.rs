@@ -123,6 +123,25 @@ fn now_secs() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Initialize the current schema (and FTS5 when supported) on `conn`.
+/// Returns whether the FTS virtual table is available. Shared by the store
+/// and the offline session-recovery path.
+pub fn initialize_schema(conn: &Connection) -> Result<bool> {
+    conn.execute_batch(SCHEMA_SQL)
+        .map_err(|e| AgentError::session(format!("schema: {}", e)))?;
+    // FTS5 probe — same pattern as hermes_state_schema's _fts5_available.
+    let has_fts = conn.execute_batch(FTS_SQL).is_ok();
+    let version: Option<i64> = conn
+        .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| r.get(0))
+        .optional()
+        .map_err(|e| AgentError::session(e.to_string()))?;
+    if version.is_none() {
+        conn.execute("INSERT INTO schema_version (version) VALUES (?1)", params![1])
+            .map_err(|e| AgentError::session(e.to_string()))?;
+    }
+    Ok(has_fts)
+}
+
 impl SqliteSessionStore {
     /// Open (or create) the state database at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -134,14 +153,7 @@ impl SqliteSessionStore {
             .map_err(|e| AgentError::session(format!("open {}: {}", path.display(), e)))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .map_err(|e| AgentError::session(format!("pragmas: {}", e)))?;
-        conn.execute_batch(SCHEMA_SQL)
-            .map_err(|e| AgentError::session(format!("schema: {}", e)))?;
-
-        // FTS5 probe — same pattern as hermes_state_schema's _fts5_available.
-        let has_fts = conn
-            .execute_batch(FTS_SQL)
-            .map(|_| true)
-            .unwrap_or(false);
+        let has_fts = initialize_schema(&conn)?;
 
         let store = Self {
             conn: Mutex::new(conn),

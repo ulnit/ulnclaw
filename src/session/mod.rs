@@ -5,6 +5,7 @@
 
 pub mod export;
 pub mod recap;
+pub mod recovery;
 pub mod sqlite;
 
 pub use sqlite::SqliteSessionStore;

@@ -20,7 +20,7 @@ full feature-by-feature mapping.
 - **🔧 50+ built-in tools** — terminal/process, file read/write/patch/search, web search/extract, memory, todo, session search, clarify, skills, delegation, execute_code, cronjob, vision, image generation, TTS, Home Assistant, kanban, tool search
 - **🧰 Toolsets** — hermes-compatible grouping (`coding`, `web`, `file`, `safe`, `debugging`, ...) with composition and enable/disable policy
 - **🛡️ Approval system** — command normalization, hardline floor (auto-block), confirm-before-run for costly operations; REPL prompts plus gateway run approvals over HTTP with fail-closed timeout and persisted `always` grants
-- **💾 SQLite state** — sessions/messages with FTS5 full-text search, lineage (parent/child sessions), cron jobs, kanban board
+- **💾 SQLite state** — sessions/messages with FTS5 full-text search, lineage (parent/child sessions), cron jobs, kanban board; offline non-destructive `sessions recover` for damaged databases (rowid salvage, orphan-session reconstruction, FTS rebuild)
 - **🗜️ Context compression** — budget-triggered middle-turn summarization via a secondary model call
 - **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits
 - **🧬 Mixture of Agents** — `[moa]` presets fan a prompt out to reference models in parallel and synthesize their answers via an aggregator (`ulnclaw moa run/list/delete`, REPL `/moa`)
@@ -51,6 +51,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions list    # recent sessions from state.db
 ./ulnclaw sessions search "auth refactor"
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
+./ulnclaw sessions recover ./damaged-state.db   # offline db recovery
 ./ulnclaw skills list
 ./ulnclaw cron list
 ./ulnclaw moa list           # MoA presets (run: ./ulnclaw moa run "<prompt>")
@@ -158,7 +159,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 146 tests
+cargo test                     # 150 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -183,7 +184,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🔧 50+ 内置工具** —— terminal/process、文件读/写/补丁/搜索、web 搜索/抽取、记忆、todo、会话搜索、clarify、技能、委派、execute_code、cronjob、视觉、图像生成、TTS、Home Assistant、kanban、工具搜索
 - **🧰 工具集** —— hermes 兼容分组（`coding`、`web`、`file`、`safe`、`debugging`……），支持组合与启用/禁用策略
 - **🛡️ 审批系统** —— 命令归一化、硬性底线（自动阻止）、高成本操作先确认再执行；REPL 提示 + 网关 HTTP 运行审批（fail-closed 超时、`always` 授权持久化）
-- **💾 SQLite 状态库** —— 会话/消息 FTS5 全文检索、会话血缘（父子会话）、定时任务、kanban 看板
+- **💾 SQLite 状态库** —— 会话/消息 FTS5 全文检索、会话血缘（父子会话）、定时任务、kanban 看板；受损数据库的离线非破坏性 `sessions recover`（rowid 抢救、孤儿会话重建、FTS 重建）
 - **🗜️ 上下文压缩** —— 预算触发，中段对话经二次模型调用摘要
 - **🤝 委派** —— 并行子代理，隔离上下文，深度限制
 - **🧬 混合智能体（MoA）** —— `[moa]` 预设将提示词并行扇出给参考模型，经聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa`）
@@ -214,6 +215,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions list    # state.db 中的最近会话
 ./ulnclaw sessions search "认证重构"
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
+./ulnclaw sessions recover ./damaged-state.db   # 离线数据库恢复
 ./ulnclaw skills list
 ./ulnclaw cron list
 ./ulnclaw moa list           # MoA 预设（运行：./ulnclaw moa run "<prompt>"）
@@ -266,7 +268,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 146 个测试
+cargo test                     # 150 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

@@ -103,6 +103,15 @@ enum SessionAction {
     },
     /// Recap recent activity in a session (local, no LLM call)
     Recap { id: String },
+    /// Offline non-destructive recovery of a damaged state.db
+    /// (hermes session_recovery)
+    Recover {
+        /// Damaged database file (copied first; never opened in place)
+        source: PathBuf,
+        /// Output path (must not exist; default: <source>.recovered.db)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -764,6 +773,42 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
             let path = ulnclaw::session::export::write_session_export(&dir, &session, &format)
                 .map_err(|e| e.to_string())?;
             println!("✅ Exported {} messages to {}", session.messages.len(), path.display());
+        }
+        SessionAction::Recover { source, out } => {
+            let output = out.unwrap_or_else(|| {
+                let stem = source
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("state");
+                source.with_file_name(format!("{}.recovered.db", stem))
+            });
+            match ulnclaw::session::recovery::recover_session_database(&source, &output) {
+                Ok(report) => {
+                    println!("Recovery complete:");
+                    println!("  source:      {}", report.source);
+                    println!("  output:      {}", report.output);
+                    println!("  sessions:    {}", report.sessions);
+                    println!("  messages:    {}", report.messages);
+                    println!(
+                        "  rebuilt session rows for orphaned messages: {}",
+                        report.reconstructed_sessions
+                    );
+                    for (table, stats) in &report.tables {
+                        let mode = if stats.salvaged { "salvaged" } else { "copied" };
+                        println!(
+                            "  table {:<20} {} rows {} ({} skipped)",
+                            table, mode, stats.copied, stats.skipped
+                        );
+                    }
+                    println!("  integrity:   {}", if report.integrity_ok { "ok" } else { "FAILED" });
+                    println!("  fts rebuilt: {}", report.fts_rebuilt);
+                    match ulnclaw::session::recovery::write_recovery_report(&report) {
+                        Ok(path) => println!("  report:      {}", path.display()),
+                        Err(e) => eprintln!("  (report write failed: {})", e),
+                    }
+                }
+                Err(e) => return Err(e.to_string()),
+            }
         }
         SessionAction::Recap { id } => {
             let row = store
