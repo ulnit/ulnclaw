@@ -158,6 +158,19 @@ enum SkillAction {
     },
     /// Remove the cron job created for a blueprint skill
     Unschedule { name: String },
+    /// Security-scan an installed skill (hermes skills_guard)
+    Scan {
+        name: String,
+        /// Source identifier for trust resolution (e.g. openai/skills)
+        #[arg(long, default_value = "community")]
+        source: String,
+        /// Emit the scan result as JSON
+        #[arg(long)]
+        json: bool,
+        /// Evaluate the install policy with force override
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1079,6 +1092,28 @@ async fn skills_cmd(action: SkillAction) -> Result<(), String> {
             for job in matches {
                 store.remove(&job.id).map_err(|e| e.to_string())?;
                 println!("removed job {} ({})", job.id, job.name);
+            }
+        }
+        SkillAction::Scan { name, source, json, force } => {
+            let Some(skill_dir) = ulnclaw::skills::guard::find_skill_dir(&dir, &name) else {
+                return Err(format!("skill '{}' not found in {}", name, dir.display()));
+            };
+            let result = ulnclaw::skills::guard::scan_skill(&skill_dir, &source);
+            if json {
+                let mut value = serde_json::to_value(&result).map_err(|e| e.to_string())?;
+                let (allowed, reason) = ulnclaw::skills::guard::should_allow_install(&result, force);
+                value["decision"] = serde_json::json!({
+                    "allowed": allowed,
+                    "reason": reason,
+                    "scanner": ulnclaw::skills::guard::SCANNER_VERSION,
+                });
+                println!("{}", serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?);
+            } else {
+                println!("{}", ulnclaw::skills::guard::format_scan_report(&result));
+            }
+            let (allowed, _) = ulnclaw::skills::guard::should_allow_install(&result, force);
+            if allowed == Some(false) {
+                return Err("scan blocked the skill".to_string());
             }
         }
         SkillAction::View { name } => {

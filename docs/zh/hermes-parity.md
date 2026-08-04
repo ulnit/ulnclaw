@@ -23,6 +23,7 @@
 | `clarify` | ✅ 完整 | 单选/多选/开放式提问（经前端回调） |
 | `skills_list`, `skill_view`, `skill_manage` | ✅ 完整 | SKILL.md frontmatter、关联文件（references/templates/scripts）、路径穿越防护 |
 | 蓝图 Blueprints（`tools/blueprints.py`） | ✅ 核心 | 在 frontmatter 声明 `metadata.hermes.blueprint.schedule` 的技能可排程：`skills blueprints`（列表）、`skills schedule <name>`（创建 `blueprint:<skill>` 定时任务并挂载技能）、`skills unschedule <name>`；畸形 blueprint 块显式报错；`skills list` 以日程标注蓝图。hermes 的建议队列与 `export_blueprint` 发布路径未移植（以显式命令代替） |
+| 技能守卫（`tools/skills_guard.py`） | ✅ 核心 | `skills scan <name> [--source <repo>] [--json] [--force]`：静态扫描器 `skills-guard-v1`，扫描 SKILL.md 及关联文件——119 条威胁模式（外泄/破坏/持久化/供应链/提示注入）、不可见 Unicode 检测、结构限制（50 文件 / 1 MB / 单文件 256 KB、符号链接逃逸与可执行位检查）、信任等级（builtin / agent-created / 受信任仓库含前缀别名 / community）、裁定策略（critical→dangerous、high→caution；community+caution 拦截，trusted 源遇 dangerous 同样拦截，`--force` 仅对非 community 的 caution 可覆盖） |
 | `delegate_task` | ✅ 完整 | 并行子代理、深度限制、隔离上下文、子会话 |
 | `execute_code` | ✅ 完整 | python3 子进程沙箱，120 秒上限 |
 | `cronjob` | ✅ 完整 | create/list/update/pause/resume/remove/run；`30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划；SQLite 任务存储；调度循环 |

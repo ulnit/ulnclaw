@@ -5,6 +5,7 @@
 //! references/, templates/, scripts/.
 
 pub mod blueprint;
+pub mod guard;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
