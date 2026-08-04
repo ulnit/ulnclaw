@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
+pub mod osv;
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -182,6 +184,16 @@ pub async fn register_mcp_server(
     registry: &mut ToolRegistry,
     config: &McpServerConfig,
 ) -> Result<usize> {
+    // OSV malware preflight for npx/uvx-launched servers (hermes
+    // `tools/osv_check.py`): only confirmed MAL-* advisories block.
+    if let Some(reason) =
+        osv::check_package_for_malware(&config.command, &config.args).await
+    {
+        return Err(AgentError::config(format!(
+            "MCP server '{}' refused: {}",
+            config.name, reason
+        )));
+    }
     let mut client = McpClient::connect(config).await?;
     let tools = client.list_tools().await?;
     let client = Arc::new(Mutex::new(client));

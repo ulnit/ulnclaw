@@ -51,7 +51,7 @@ performance and a single static binary.
 | Skills system | ✅ | discovery, frontmatter, linked files |
 | Memory system | ✅ | MEMORY.md/USER.md with prompt injection |
 | Cron scheduler | ✅ | job store + schedule parsing + poll loop (`cron::run_scheduler`) |
-| MCP client (`mcp_tool.py`) | ✅ core | stdio JSON-RPC: initialize/tools/list/tools/call; `[[mcp.servers]]` config; tools registered as `mcp__<server>__<tool>` |
+| MCP client (`mcp_tool.py`) | ✅ core | stdio JSON-RPC: initialize/tools/list/tools/call; `[[mcp.servers]]` config; tools registered as `mcp__<server>__<tool>`; OSV malware preflight for npx/uvx/pipx launches (`osv_check.py` port: MAL-* advisories block, fail-open, 1h verdict cache, `OSV_ENDPOINT`/`OSV_CHECK_CACHE_TTL` overrides) |
 | CLI (`hermes_cli/`) | ✅ core | chat REPL with slash commands (incl. `/rollback [N|hash] [file]`, `/rollback diff <N>`, `/diff` checkpoint commands, `/recap`), one-shot `run`, sessions/tools/skills/cron/checkpoints subcommands (incl. `sessions export --format md\|html` — SHA256-verified Markdown or standalone HTML + manifest —, `sessions recap`, and `sessions recover`), `moa run/list/delete`, `init` |
 | Delegation | ✅ | SubAgentRunner trait, depth limit, child sessions |
 | Mixture of Agents (`moa_loop.py`, `moa_config.py`) | ✅ core | `[moa.presets.<name>]` reference fan-out + aggregator synthesis (`ulnclaw moa run/list/delete`, REPL `/moa <prompt>`); parallel references, loud/silent degraded policy, all-failed early return, joined-fallback on aggregator failure; the persistent `provider: moa` facade, traces, and privacy filter are not ported |
