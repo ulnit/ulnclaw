@@ -19,9 +19,12 @@
 //! given a terminal `unknown` outcome whose consolidated result is
 //! delivered through the normal path. `drain_completions` claims both the
 //! in-memory queue (same-process, ownership-filtered) and undelivered DB
-//! rows (claim-all: ulnclaw runs one consumer per process and session keys
-//! are per-process UUIDs, so recovered rows are delivered to the session
-//! that drains first), marking rows `delivered` exactly when claimed.
+//! rows through the durable delivery-claim lifecycle (hermes
+//! `claim_completion_delivery` / `release_completion_delivery`): each claim
+//! increments `delivery_attempts`, stale claims (>300s) are re-claimable,
+//! completions whose origin session is gone are released and converge to
+//! terminal `dropped` after 8 attempts, and successfully injected rows are
+//! marked `delivered` under the claim token.
 //! Live transcripts under `cache/delegation/live/` remain the inspectable
 //! artifact.
 
@@ -305,24 +308,50 @@ pub fn drain_completions(store: Option<&SqliteSessionStore>, session_key: &str) 
     }
 
     // Durability catch-up (hermes delivery claim): undelivered rows from a
-    // previous process, or from a crash between finalize and drain. Claim
-    // ALL of them — ulnclaw runs one consumer per process and session keys
-    // are per-process UUIDs, so ownership matching across restarts is
-    // impossible; the first drain adopts the pending results.
+    // previous process, or from a crash between finalize and drain. Rows
+    // are claimed with a delivery token (incrementing delivery_attempts),
+    // then completed or released:
+    // - origin session gone from the store → release; after
+    //   MAX_DELIVERY_ATTEMPTS failed claims the row converges to terminal
+    //   `dropped` instead of replaying on every restart (hermes
+    //   release_completion_delivery convergence).
+    // - parse failure → release for a later retry.
     if let Some(store) = store {
         for (id, origin_session, result_json) in store.undelivered_delegations() {
+            let claim_id = format!("drain:{}:{}", std::process::id(), uuid::Uuid::new_v4());
+            let Ok(claimed_now) = store.claim_delegation_delivery(&id, &claim_id) else {
+                continue;
+            };
+            if !claimed_now {
+                continue; // another consumer holds the claim
+            }
+            // Delivery target must still exist: delegations are only
+            // persisted when a store is wired, and the agent stamps its
+            // session row before dispatching, so a missing origin row
+            // means the session was deleted/pruned — permanently
+            // undeliverable.
+            let deliverable = matches!(store.get_session_row(&origin_session), Ok(Some(_)));
+            if !deliverable {
+                let _ = store.release_delegation_delivery(&id, &claim_id);
+                continue;
+            }
             let Ok(consolidated) = serde_json::from_str::<serde_json::Value>(&result_json) else {
+                let _ = store.release_delegation_delivery(&id, &claim_id);
                 continue;
             };
             let message = format_consolidated_report(&id, &consolidated);
-            let _ = store.mark_delegation_delivered(&id);
-            claimed.push(Completion {
-                delegation_id: id,
-                session_key: origin_session,
-                message,
-                result: consolidated,
-                finished_ms: now_ms(),
-            });
+            match store.complete_delegation_delivery(&id, &claim_id) {
+                Ok(true) => claimed.push(Completion {
+                    delegation_id: id,
+                    session_key: origin_session,
+                    message,
+                    result: consolidated,
+                    finished_ms: now_ms(),
+                }),
+                _ => {
+                    let _ = store.release_delegation_delivery(&id, &claim_id);
+                }
+            }
         }
     }
     claimed
@@ -550,14 +579,17 @@ mod tests {
 
         // Simulate a previous process (different session key): one
         // delegation still running, one completed but never delivered.
+        // The origin session row must exist — delivery is refused (and
+        // eventually dropped) when the target session is gone.
+        let old_sess = store.create_session("cli", None, None).unwrap();
         store
             .persist_delegation_dispatch(
                 "d-abandoned",
-                "old-sess",
+                &old_sess,
                 "[{\"goal\":\"old work\",\"context\":\"\"}]",
             )
             .unwrap();
-        store.persist_delegation_dispatch("d-finished", "old-sess", "[]").unwrap();
+        store.persist_delegation_dispatch("d-finished", &old_sess, "[]").unwrap();
         store
             .finish_delegation(
                 "d-finished",
@@ -572,7 +604,7 @@ mod tests {
         let states: std::collections::HashMap<String, String> = store
             .delegation_rows(10)
             .into_iter()
-            .map(|(id, _, st, _, _, _)| (id, st))
+            .map(|(id, _, st, _, _, _, _)| (id, st))
             .collect();
         assert_eq!(states.get("d-abandoned").map(String::as_str), Some("unknown"));
         assert_eq!(states.get("d-finished").map(String::as_str), Some("completed"));
@@ -617,7 +649,7 @@ mod tests {
         // Row persisted end-to-end: dispatch -> completed -> delivered.
         let rows = store.delegation_rows(10);
         assert_eq!(rows.len(), 1);
-        let (id, origin, row_state, _, _, result_json) = &rows[0];
+        let (id, origin, row_state, _, _, result_json, _) = &rows[0];
         assert_eq!(id, &record.id);
         assert_eq!(origin, "sess-persist");
         assert_eq!(row_state, "delivered");
@@ -625,6 +657,98 @@ mod tests {
         // Delivery claim prevents any second delivery.
         assert!(store.undelivered_delegations().is_empty());
         assert!(drain_completions(Some(&store), "sess-persist").is_empty());
+    }
+
+    #[test]
+    fn delivery_claim_lifecycle() {
+        let _guard = STORE_LOCK.lock().unwrap();
+        let home = unique_home("claim-lifecycle");
+        let store = SqliteSessionStore::open(home.join("state.db")).unwrap();
+        store.persist_delegation_dispatch("d-claim", "sess-x", "[]").unwrap();
+        store
+            .finish_delegation("d-claim", "completed", "{\"results\":[]}")
+            .unwrap();
+
+        // Claim wins once; competing claims lose while it is held.
+        assert!(store.claim_delegation_delivery("d-claim", "claim-a").unwrap());
+        assert!(!store.claim_delegation_delivery("d-claim", "claim-b").unwrap());
+        // Release clears the claim; attempts were counted at claim time.
+        assert!(!store.release_delegation_delivery("d-claim", "claim-a").unwrap());
+        assert_eq!(store.delegation_delivery_attempts("d-claim"), 1);
+
+        // Re-claim + complete under the claim token only.
+        assert!(store.claim_delegation_delivery("d-claim", "claim-c").unwrap());
+        assert!(!store.complete_delegation_delivery("d-claim", "wrong-claim").unwrap());
+        assert!(store.complete_delegation_delivery("d-claim", "claim-c").unwrap());
+        let states: std::collections::HashMap<String, String> = store
+            .delegation_rows(10)
+            .into_iter()
+            .map(|(id, _, st, _, _, _, _)| (id, st))
+            .collect();
+        assert_eq!(states.get("d-claim").map(String::as_str), Some("delivered"));
+        // Delivered rows are not re-claimable.
+        assert!(!store.claim_delegation_delivery("d-claim", "claim-d").unwrap());
+
+        // drop_delegation_delivery: terminal drop of a claimed row.
+        store.persist_delegation_dispatch("d-drop", "sess-y", "[]").unwrap();
+        store
+            .finish_delegation("d-drop", "completed", "{\"results\":[]}")
+            .unwrap();
+        assert!(store.claim_delegation_delivery("d-drop", "claim-e").unwrap());
+        assert!(store.drop_delegation_delivery("d-drop", "claim-e").unwrap());
+        assert!(store
+            .undelivered_delegations()
+            .iter()
+            .all(|(id, _, _)| id != "d-drop"));
+        assert!(!store.claim_delegation_delivery("d-drop", "claim-f").unwrap());
+    }
+
+    #[tokio::test]
+    async fn undeliverable_completion_converges_to_dropped() {
+        let _guard = STORE_LOCK.lock().unwrap();
+        let home = unique_home("dropped");
+        let store = Arc::new(SqliteSessionStore::open(home.join("state.db")).unwrap());
+        // Finished delegation whose origin session never existed in this
+        // store (deleted/pruned session): permanently undeliverable.
+        store
+            .persist_delegation_dispatch("d-orphan", "ghost-sess", "[]")
+            .unwrap();
+        store
+            .finish_delegation(
+                "d-orphan",
+                "completed",
+                "{\"delegation_id\":\"d-orphan\",\"status\":\"completed\",\"subagents\":1,\"failed\":0,\"results\":[]}",
+            )
+            .unwrap();
+
+        // Each drain claims (attempts++) and releases — nothing delivered.
+        for expected_attempts in 1..=7i64 {
+            assert!(drain_completions(Some(&store), "new-sess").is_empty());
+            assert_eq!(
+                store.delegation_delivery_attempts("d-orphan"),
+                expected_attempts
+            );
+            assert_eq!(
+                store.undelivered_delegations().len(),
+                1,
+                "still pending before the budget is exhausted"
+            );
+        }
+        // The 8th attempt exhausts the budget → terminal `dropped`.
+        assert!(drain_completions(Some(&store), "new-sess").is_empty());
+        assert_eq!(store.delegation_delivery_attempts("d-orphan"), 8);
+        assert!(
+            store.undelivered_delegations().is_empty(),
+            "dropped rows never replay"
+        );
+        let states: std::collections::HashMap<String, String> = store
+            .delegation_rows(10)
+            .into_iter()
+            .map(|(id, _, st, _, _, _, _)| (id, st))
+            .collect();
+        assert_eq!(states.get("d-orphan").map(String::as_str), Some("dropped"));
+        // Further drains stay empty forever (no replay across restarts).
+        assert!(drain_completions(Some(&store), "new-sess").is_empty());
     }
 
     #[test]

@@ -936,7 +936,7 @@ async fn list_delegations_http(State(state): State<Arc<GatewayState>>) -> Json<V
     // Cross-restart history from the durable registry (in-memory wins on
     // id collisions; DB rows cover delegations from previous processes).
     let home = state.agent.context().home.clone();
-    for (id, origin, row_state, dispatched_at, completed_at, _result_json) in
+    for (id, origin, row_state, dispatched_at, completed_at, _result_json, delivery_attempts) in
         state.store.delegation_rows(200)
     {
         if known_ids.contains(&id) {
@@ -952,6 +952,7 @@ async fn list_delegations_http(State(state): State<Arc<GatewayState>>) -> Json<V
                 .join(&id)
                 .display()
                 .to_string(),
+            "delivery_attempts": delivery_attempts,
             "persisted": true,
         }));
     }
@@ -980,11 +981,11 @@ async fn get_delegation_http(
     .into_response();
     }
     // Durable-registry fallback: delegations from previous processes.
-    if let Some((_, origin, row_state, dispatched_at, completed_at, result_json)) = state
+    if let Some((_, origin, row_state, dispatched_at, completed_at, result_json, delivery_attempts)) = state
         .store
         .delegation_rows(500)
         .into_iter()
-        .find(|(row_id, _, _, _, _, _)| row_id == &id)
+        .find(|(row_id, _, _, _, _, _, _)| row_id == &id)
     {
         let home = state.agent.context().home.clone();
         let result = crate::async_delegation::read_result(&home, &id)
@@ -1000,6 +1001,7 @@ async fn get_delegation_http(
                 .display()
                 .to_string(),
             "result": result,
+            "delivery_attempts": delivery_attempts,
             "persisted": true,
         }))
         .into_response();

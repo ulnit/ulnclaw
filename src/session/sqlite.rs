@@ -145,6 +145,35 @@ pub fn initialize_schema(conn: &Connection) -> Result<bool> {
 
 /// Add `messages.display_metadata` (JSON) on pre-existing databases —
 /// reactions live inside it (hermes `display_metadata` semantics).
+/// Add the durable delivery-claim columns to stores created before the
+/// hermes delivery-attempts hardening (idempotent).
+fn ensure_delegation_delivery_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(async_delegations)")
+        .map_err(|e| AgentError::session(e.to_string()))?;
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AgentError::session(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut alters = Vec::new();
+    if !columns.iter().any(|c| c == "delivery_attempts") {
+        alters.push("ALTER TABLE async_delegations ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0;");
+    }
+    if !columns.iter().any(|c| c == "delivery_claim") {
+        alters.push("ALTER TABLE async_delegations ADD COLUMN delivery_claim TEXT;");
+    }
+    if !columns.iter().any(|c| c == "delivery_claimed_at") {
+        alters.push("ALTER TABLE async_delegations ADD COLUMN delivery_claimed_at REAL;");
+    }
+    if !alters.is_empty() {
+        conn.execute_batch(&alters.join("
+"))
+            .map_err(|e| AgentError::session(format!("add delegation delivery columns: {}", e)))?;
+    }
+    Ok(())
+}
+
 fn ensure_display_metadata_column(conn: &Connection) -> Result<()> {
     let mut stmt = conn
         .prepare("PRAGMA table_info(messages)")
@@ -174,6 +203,7 @@ impl SqliteSessionStore {
             .map_err(|e| AgentError::session(format!("pragmas: {}", e)))?;
         let has_fts = initialize_schema(&conn)?;
         ensure_display_metadata_column(&conn)?;
+        ensure_delegation_delivery_columns(&conn)?;
 
         let store = Self {
             conn: Mutex::new(conn),
@@ -487,6 +517,121 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Hermes `_MAX_DELIVERY_ATTEMPTS`: after this many failed delivery
+    /// attempts a completion converges to terminal `dropped` instead of
+    /// replaying on every restart.
+    pub const MAX_DELIVERY_ATTEMPTS: i64 = 8;
+    /// Hermes claim TTL: a claim older than this is considered abandoned
+    /// and may be taken over by another consumer.
+    const CLAIM_STALE_SECS: f64 = 300.0;
+
+    /// Claim one pending completion across competing consumers (hermes
+    /// `claim_completion_delivery`). Increments `delivery_attempts`; stale
+    /// claims (older than 300s) are re-claimable. Returns true when this
+    /// caller now owns the delivery.
+    pub fn claim_delegation_delivery(&self, delegation_id: &str, claim_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let now = now_secs();
+        let rows = conn
+            .execute(
+                "UPDATE async_delegations
+                 SET delivery_claim = ?2, delivery_claimed_at = ?3,
+                     delivery_attempts = delivery_attempts + 1, updated_at = ?3
+                 WHERE delegation_id = ?1 AND state IN ('completed', 'unknown')
+                   AND (delivery_claim IS NULL OR delivery_claimed_at < ?4)",
+                params![delegation_id, claim_id, now, now - Self::CLAIM_STALE_SECS],
+            )
+            .map_err(|e| AgentError::session(format!("claim delegation: {}", e)))?;
+        Ok(rows == 1)
+    }
+
+    /// Acknowledge delivery for the consumer holding the claim (hermes
+    /// `complete_completion_delivery`).
+    pub fn complete_delegation_delivery(&self, delegation_id: &str, claim_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let now = now_secs();
+        let rows = conn
+            .execute(
+                "UPDATE async_delegations
+                 SET state = 'delivered', updated_at = ?3,
+                     delivery_claim = NULL, delivery_claimed_at = NULL
+                 WHERE delegation_id = ?1 AND state IN ('completed', 'unknown')
+                   AND delivery_claim = ?2",
+                params![delegation_id, claim_id, now],
+            )
+            .map_err(|e| AgentError::session(format!("complete delegation delivery: {}", e)))?;
+        Ok(rows == 1)
+    }
+
+    /// Release a failed delivery claim (hermes `release_completion_delivery`).
+    /// Attempts are counted at claim time, so once the budget is exhausted
+    /// the row converges to terminal `dropped` — otherwise an undeliverable
+    /// completion replays on every restart forever. Returns true when the
+    /// row was terminally dropped.
+    pub fn release_delegation_delivery(&self, delegation_id: &str, claim_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let now = now_secs();
+        let capped = conn
+            .execute(
+                "UPDATE async_delegations
+                 SET state = 'dropped', updated_at = ?3,
+                     delivery_claim = NULL, delivery_claimed_at = NULL
+                 WHERE delegation_id = ?1 AND state IN ('completed', 'unknown')
+                   AND delivery_claim = ?2 AND delivery_attempts >= ?4",
+                params![delegation_id, claim_id, now, Self::MAX_DELIVERY_ATTEMPTS],
+            )
+            .map_err(|e| AgentError::session(format!("drop delegation delivery: {}", e)))?;
+        if capped == 1 {
+            tracing::warn!(
+                "delegation {delegation_id} exhausted {} delivery attempts; marking terminally dropped (result remains queryable)",
+                Self::MAX_DELIVERY_ATTEMPTS
+            );
+            return Ok(true);
+        }
+        conn.execute(
+            "UPDATE async_delegations
+             SET delivery_claim = NULL, delivery_claimed_at = NULL, updated_at = ?3
+             WHERE delegation_id = ?1 AND state IN ('completed', 'unknown')
+               AND delivery_claim = ?2",
+            params![delegation_id, claim_id, now],
+        )
+        .map_err(|e| AgentError::session(format!("release delegation delivery: {}", e)))?;
+        Ok(false)
+    }
+
+    /// Terminally drop a claimed completion whose delivery target is
+    /// permanently gone (hermes `drop_completion_delivery`). `dropped`
+    /// (not `delivered`) keeps the ack honest and restart recovery from
+    /// replaying it.
+    pub fn drop_delegation_delivery(&self, delegation_id: &str, claim_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let now = now_secs();
+        let rows = conn
+            .execute(
+                "UPDATE async_delegations
+                 SET state = 'dropped', updated_at = ?3,
+                     delivery_claim = NULL, delivery_claimed_at = NULL
+                 WHERE delegation_id = ?1 AND state IN ('completed', 'unknown')
+                   AND delivery_claim = ?2",
+                params![delegation_id, claim_id, now],
+            )
+            .map_err(|e| AgentError::session(format!("drop delegation delivery: {}", e)))?;
+        Ok(rows == 1)
+    }
+
+    /// Delivery attempts recorded for a delegation (ops/test visibility).
+    pub fn delegation_delivery_attempts(&self, delegation_id: &str) -> i64 {
+        let Ok(conn) = self.conn.lock() else {
+            return 0;
+        };
+        conn.query_row(
+            "SELECT delivery_attempts FROM async_delegations WHERE delegation_id = ?1",
+            params![delegation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+    }
+
     /// Undelivered finished delegations: (id, origin_session, result_json).
     pub fn undelivered_delegations(&self) -> Vec<(String, String, String)> {
         let Ok(conn) = self.conn.lock() else {
@@ -588,12 +733,16 @@ impl SqliteSessionStore {
 
     /// All persisted delegation rows (newest first), for the gateway
     /// registry endpoint across restarts.
-    pub fn delegation_rows(&self, limit: usize) -> Vec<(String, String, String, f64, Option<f64>, Option<String>)> {
+    pub fn delegation_rows(
+        &self,
+        limit: usize,
+    ) -> Vec<(String, String, String, f64, Option<f64>, Option<String>, i64)> {
         let Ok(conn) = self.conn.lock() else {
             return Vec::new();
         };
         let mut stmt = match conn.prepare(
-            "SELECT delegation_id, origin_session, state, dispatched_at, completed_at, result_json
+            "SELECT delegation_id, origin_session, state, dispatched_at, completed_at,
+                    result_json, delivery_attempts
              FROM async_delegations ORDER BY dispatched_at DESC LIMIT ?1",
         ) {
             Ok(s) => s,
@@ -607,6 +756,7 @@ impl SqliteSessionStore {
                 row.get::<_, f64>(3)?,
                 row.get::<_, Option<f64>>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, i64>(6)?,
             ))
         }) {
             Ok(r) => r,
