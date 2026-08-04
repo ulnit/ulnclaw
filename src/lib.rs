@@ -82,6 +82,7 @@ pub mod environments;
 pub mod error;
 pub mod gateway;
 pub mod mcp;
+pub mod moa;
 pub mod provider;
 pub mod session;
 pub mod skills;

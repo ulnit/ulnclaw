@@ -381,6 +381,118 @@ impl AuxiliaryTaskConfig {
     }
 }
 
+/// Mixture-of-Agents slot — one provider/model selection (reference or
+/// aggregator). Port of hermes' MoA preset slots (`moa_config.py`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoaSlot {
+    pub provider: String,
+    pub model: String,
+    /// Disabled slots are skipped in the fan-out (hermes `enabled`).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Endpoint override; blank uses the provider default.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// API key; blank falls back to `key_env`, then the main runtime key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Environment variable holding the API key.
+    #[serde(default)]
+    pub key_env: Option<String>,
+}
+
+impl MoaSlot {
+    /// `provider:model` display label (hermes `_slot_label`).
+    pub fn label(&self) -> String {
+        format!("{}:{}", self.provider.trim(), self.model.trim())
+    }
+
+    /// Resolve the slot API key: literal, else `key_env`, else main key.
+    pub fn resolved_api_key(&self, config: &UlncLawConfig) -> Option<String> {
+        if let Some(key) = self.api_key.as_ref().map(|k| k.trim()).filter(|k| !k.is_empty()) {
+            return Some(key.to_string());
+        }
+        if let Some(name) = self.key_env.as_ref().map(|k| k.trim()).filter(|k| !k.is_empty()) {
+            if let Some(key) = get_env_value(name) {
+                return Some(key);
+            }
+        }
+        config.resolve_api_key()
+    }
+}
+
+/// One MoA preset: fan-out references + a synthesizing aggregator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoaPreset {
+    /// Reference models run in parallel on the user prompt.
+    #[serde(default)]
+    pub reference_models: Vec<MoaSlot>,
+    /// Aggregator synthesizes the reference outputs.
+    pub aggregator: MoaSlot,
+    /// Optional sampling overrides for the reference fan-out.
+    #[serde(default)]
+    pub reference_temperature: Option<f32>,
+    #[serde(default)]
+    pub reference_max_tokens: Option<u32>,
+    #[serde(default)]
+    pub aggregator_temperature: Option<f32>,
+    /// "loud" (default) reports failed references; "silent" hides them.
+    #[serde(default = "default_degraded_policy")]
+    pub degraded_reference_policy: String,
+}
+
+fn default_degraded_policy() -> String {
+    "loud".to_string()
+}
+
+/// `[moa]` config section (hermes `moa:` presets).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MoaConfig {
+    /// Preset used when none is requested (hermes `default_preset`).
+    #[serde(default)]
+    pub default_preset: Option<String>,
+    /// Named presets.
+    #[serde(default)]
+    pub presets: HashMap<String, MoaPreset>,
+}
+
+impl MoaConfig {
+    /// Resolve a preset by name, falling back to `default_preset` then
+    /// `"default"` (hermes `resolve_moa_preset` semantics).
+    pub fn resolve_preset(&self, name: Option<&str>) -> Result<(String, &MoaPreset)> {
+        let wanted = name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                self.default_preset
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "default".to_string());
+        if let Some(preset) = self.presets.get(&wanted) {
+            return Ok((wanted, preset));
+        }
+        let mut available: Vec<&String> = self.presets.keys().collect();
+        available.sort();
+        let listed = if available.is_empty() {
+            "(none configured)".to_string()
+        } else {
+            available
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        Err(AgentError::config(format!(
+            "MoA preset '{}' was not found. Available presets: {}",
+            wanted, listed
+        )))
+    }
+}
+
 
 /// HTTP gateway settings (`[gateway]`) — port of hermes' api_server platform.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -475,6 +587,9 @@ pub struct UlncLawConfig {
     /// `[auxiliary.compression]`, `[auxiliary.vision]`, ...
     #[serde(default)]
     pub auxiliary: HashMap<String, AuxiliaryTaskConfig>,
+    /// Mixture-of-Agents presets (`[moa]`, hermes `moa:`).
+    #[serde(default)]
+    pub moa: MoaConfig,
 }
 
 /// `[approvals]` config section.

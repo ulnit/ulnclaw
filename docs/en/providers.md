@@ -13,6 +13,7 @@ Complete guide to ulnclaw's provider abstraction and implementation.
 - [Error Handling](#error-handling)
 - [Best Practices](#best-practices)
 - [Auxiliary Model Routing](#auxiliary-model-routing)
+- [Mixture of Agents (MoA)](#mixture-of-agents-moa)
 
 ## Overview
 
@@ -714,6 +715,61 @@ Resolution rules (`provider::auxiliary::resolve_aux_task`):
 
 Wired tasks: `compression` (context compressor summary call) and `vision`
 (`vision_analyze`, `browser_vision`).
+
+## Mixture of Agents (MoA)
+
+MoA fans a prompt out to several *reference* models in parallel, then asks an
+*aggregator* model to synthesize their answers into concise guidance — a port
+of hermes' `moa_loop.py` synthesis path (`aggregate_moa_context`).
+
+Configure presets in `config.toml`:
+
+```toml
+[moa]
+default_preset = "default"
+
+[[moa.presets.default.reference_models]]
+provider = "ollama"
+model = "qwen3:32b"
+
+[[moa.presets.default.reference_models]]
+provider = "openai"
+model = "gpt-5.2"
+# optional per-slot: base_url, api_key, key_env, enabled = false
+
+[moa.presets.default.aggregator]
+provider = "openai"
+model = "gpt-5.2"
+# optional preset keys: reference_temperature, reference_max_tokens,
+# aggregator_temperature, degraded_reference_policy = "loud" | "silent"
+```
+
+Usage:
+
+```bash
+ulnclaw moa list                      # show presets
+ulnclaw moa run "your question"       # fan-out + synthesis (stdout)
+ulnclaw moa run "..." --preset other  # explicit preset
+ulnclaw moa delete other              # remove a preset (rewrites config)
+# inside the REPL:
+/moa your question
+```
+
+Behavior (mirrors hermes):
+
+- References run in parallel; each slot builds its own client (Anthropic
+  slots use the Messages API transport). Credentials fall back
+  slot `api_key` → `key_env` → main runtime key; keyless locals need none.
+- Failed references are excluded from synthesis; with the default `loud`
+  policy the aggregator prompt carries
+  `[Reference models unavailable: <labels>]`.
+- If every reference fails, the aggregator call is skipped and a notice is
+  returned instead.
+- If the aggregator itself fails, the joined reference outputs are returned
+  as the synthesis.
+
+Not ported: the persistent `provider: moa` client facade (MoA as the acting
+model for whole sessions), MoA traces, and the privacy filter.
 
 ## Troubleshooting
 

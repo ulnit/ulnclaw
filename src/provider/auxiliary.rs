@@ -40,11 +40,13 @@ pub struct AuxTaskResolution {
 }
 
 /// Providers that run locally and need no API key (mirrors `build_provider`).
-fn is_keyless(provider: &str) -> bool {
+pub fn is_keyless(provider: &str) -> bool {
     matches!(provider, "ollama" | "llamacpp" | "llama_cpp" | "local")
 }
 
-fn build_task_provider(
+/// Build a provider instance for an explicit (provider, model, endpoint,
+/// key) tuple. Shared by auxiliary task resolution and MoA slot runtimes.
+pub fn build_task_provider(
     provider_name: &str,
     model: &str,
     base_url: &str,

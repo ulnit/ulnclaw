@@ -13,6 +13,7 @@ ulnclaw 提供商抽象和实现的完整指南。
 - [错误处理](#错误处理)
 - [最佳实践](#最佳实践)
 - [辅助模型路由](#辅助模型路由)
+- [混合智能体（MoA）](#混合智能体moa)
 
 ## 概述
 
@@ -708,6 +709,58 @@ model = "gpt-5.2"
 
 已接入的任务：`compression`（上下文压缩摘要调用）与 `vision`
 （`vision_analyze`、`browser_vision`）。
+
+## 混合智能体（MoA）
+
+MoA 将提示词并行扇出给多个*参考*模型，再由*聚合器*模型把它们的回答
+综合成简明指引——移植自 hermes `moa_loop.py` 的综合路径
+（`aggregate_moa_context`）。
+
+在 `config.toml` 中配置预设：
+
+```toml
+[moa]
+default_preset = "default"
+
+[[moa.presets.default.reference_models]]
+provider = "ollama"
+model = "qwen3:32b"
+
+[[moa.presets.default.reference_models]]
+provider = "openai"
+model = "gpt-5.2"
+# 每个槽位可选：base_url、api_key、key_env、enabled = false
+
+[moa.presets.default.aggregator]
+provider = "openai"
+model = "gpt-5.2"
+# 预设可选键：reference_temperature、reference_max_tokens、
+# aggregator_temperature、degraded_reference_policy = "loud" | "silent"
+```
+
+用法：
+
+```bash
+ulnclaw moa list                      # 查看预设
+ulnclaw moa run "你的问题"             # 扇出 + 综合（输出到 stdout）
+ulnclaw moa run "..." --preset other  # 指定预设
+ulnclaw moa delete other              # 删除预设（回写配置）
+# REPL 内：
+/moa 你的问题
+```
+
+行为（对齐 hermes）：
+
+- 参考模型并行执行；每个槽位构建独立客户端（Anthropic 槽位走 Messages
+  API 传输）。密钥回退顺序：槽位 `api_key` → `key_env` → 主运行时密钥；
+  本地 provider 免密钥。
+- 失败的参考不参与综合；默认 `loud` 策略会在聚合器提示词中附加
+  `[Reference models unavailable: <labels>]`。
+- 所有参考都失败时跳过聚合器调用，直接返回告知文本。
+- 聚合器自身失败时，回退返回拼接后的参考输出。
+
+未移植：持久 `provider: moa` 客户端门面（整会话以 MoA 为执行模型）、
+MoA trace 与隐私过滤。
 
 ## 故障排除
 

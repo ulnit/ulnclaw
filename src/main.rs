@@ -70,6 +70,12 @@ enum Commands {
         #[command(subcommand)]
         action: CheckpointAction,
     },
+    /// Mixture-of-Agents: fan out reference models + aggregator synthesis
+    /// (hermes `moa` presets / `/moa` one-shot)
+    Moa {
+        #[command(subcommand)]
+        action: Option<MoaAction>,
+    },
     /// Write a default config.toml
     Init,
 }
@@ -97,6 +103,21 @@ enum SessionAction {
     },
     /// Recap recent activity in a session (local, no LLM call)
     Recap { id: String },
+}
+
+#[derive(Subcommand)]
+enum MoaAction {
+    /// Run one prompt through a MoA preset and print the synthesis
+    Run {
+        prompt: Vec<String>,
+        /// Preset name (default: `moa.default_preset` or "default")
+        #[arg(long)]
+        preset: Option<String>,
+    },
+    /// Show configured presets
+    List,
+    /// Delete a preset from config.toml
+    Delete { name: String },
 }
 
 #[derive(Subcommand)]
@@ -327,6 +348,9 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Cron { action } => cron_cmd(action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
+        Commands::Moa { action } => {
+            moa_cmd(&config, action.unwrap_or(MoaAction::List), cli.config.as_deref()).await
+        }
         Commands::Init => {
             let path = UlncLawConfig::write_default_if_missing().map_err(|e| e.to_string())?;
             println!("config written to {}", path.display());
@@ -500,7 +524,7 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /quit           exit"
             );
         }
         "/history" => {
@@ -508,6 +532,26 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/recap" => {
             println!("{}", ulnclaw::session::recap::build_recap(history, None, None));
+        }
+        "/moa" => {
+            if rest.is_empty() {
+                println!("usage: /moa <prompt>  (runs one prompt through the default MoA preset)");
+            } else {
+                let config = agent.tool_context().config.clone();
+                match ulnclaw::moa::run_moa(&config, rest, None).await {
+                    Ok(outcome) => {
+                        for reference in &outcome.references {
+                            if reference.failed() {
+                                eprintln!("  ✗ {} failed", reference.label);
+                            } else {
+                                eprintln!("  ✓ {}", reference.label);
+                            }
+                        }
+                        println!("{}", outcome.synthesis);
+                    }
+                    Err(e) => println!("moa failed: {}", e),
+                }
+            }
         }
         "/usage" => {
             println!("(usage is tracked per session in state.db; see `ulnclaw sessions list`)");
@@ -735,6 +779,92 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
                     Some(&row.id)
                 )
             );
+        }
+    }
+    Ok(())
+}
+
+fn print_moa_presets(config: &UlncLawConfig) {
+    let moa = &config.moa;
+    println!("Mixture of Agents presets");
+    let default_name = moa
+        .default_preset
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    println!("Default: {}", default_name);
+    let mut names: Vec<&String> = moa.presets.keys().collect();
+    names.sort();
+    if names.is_empty() {
+        println!("(none configured — add [moa.presets.<name>] to config.toml)");
+    }
+    for name in names {
+        let preset = &moa.presets[name];
+        let marker = if *name == default_name { "*" } else { " " };
+        println!("\n{} {}", marker, name);
+        println!("  Reference models:");
+        for (idx, slot) in preset.reference_models.iter().enumerate() {
+            let state = if slot.enabled { "" } else { " [disabled]" };
+            println!("    {}. {}{}", idx + 1, slot.label(), state);
+        }
+        println!("  Aggregator: {}", preset.aggregator.label());
+    }
+}
+
+async fn moa_cmd(
+    config: &UlncLawConfig,
+    action: MoaAction,
+    config_path: Option<&str>,
+) -> Result<(), String> {
+    match action {
+        MoaAction::List => {
+            print_moa_presets(config);
+        }
+        MoaAction::Run { prompt, preset } => {
+            let prompt = prompt.join(" ");
+            if prompt.trim().is_empty() {
+                return Err("usage: ulnclaw moa run <prompt> [--preset <name>]".into());
+            }
+            let outcome = ulnclaw::moa::run_moa(config, &prompt, preset.as_deref())
+                .await
+                .map_err(|e| e.to_string())?;
+            for reference in &outcome.references {
+                if reference.failed() {
+                    eprintln!("  ✗ {} failed", reference.label);
+                } else {
+                    eprintln!("  ✓ {}", reference.label);
+                }
+            }
+            eprintln!("  ⇢ aggregator: {}", outcome.aggregator_label);
+            println!("{}", outcome.synthesis);
+        }
+        MoaAction::Delete { name } => {
+            let mut updated = config.clone();
+            if updated.moa.presets.remove(&name).is_none() {
+                return Err(format!("Unknown MoA preset: {}", name));
+            }
+            if updated.moa.presets.is_empty() {
+                return Err("Cannot delete the only MoA preset".into());
+            }
+            let is_default = updated
+                .moa
+                .default_preset
+                .as_deref()
+                .map(|d| d == name)
+                .unwrap_or(name == "default");
+            if is_default {
+                let next = updated.moa.presets.keys().next().cloned();
+                updated.moa.default_preset = next;
+            }
+            let path = config_path
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| ulnclaw::config::ulnclaw_home().join("config.toml"));
+            let content = toml::to_string_pretty(&updated)
+                .map_err(|e| format!("serialize config: {}", e))?;
+            std::fs::write(&path, content)
+                .map_err(|e| format!("write {}: {}", path.display(), e))?;
+            println!("Deleted MoA preset: {}", name);
+            print_moa_presets(&updated);
         }
     }
     Ok(())

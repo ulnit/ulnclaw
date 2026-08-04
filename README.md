@@ -23,6 +23,7 @@ full feature-by-feature mapping.
 - **💾 SQLite state** — sessions/messages with FTS5 full-text search, lineage (parent/child sessions), cron jobs, kanban board
 - **🗜️ Context compression** — budget-triggered middle-turn summarization via a secondary model call
 - **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits
+- **🧬 Mixture of Agents** — `[moa]` presets fan a prompt out to reference models in parallel and synthesize their answers via an aggregator (`ulnclaw moa run/list/delete`, REPL `/moa`)
 - **⏰ Cron** — `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules with a poll scheduler
 - **🔌 MCP client** — stdio JSON-RPC: any MCP server's tools appear as `mcp__<server>__<tool>`
 - **🌍 Browser automation** — CDP WebSocket client with a built-in supervisor (auto-launches headless Chrome/Chromium, or point `ULNCLAW_BROWSER_CDP` at your own): accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs
@@ -52,6 +53,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw skills list
 ./ulnclaw cron list
+./ulnclaw moa list           # MoA presets (run: ./ulnclaw moa run "<prompt>")
 ./ulnclaw checkpoints list   # filesystem snapshots ([checkpoints] enabled = true)
 
 # Browser automation: auto mode launches a managed headless Chrome/Chromium;
@@ -109,6 +111,16 @@ port = 8642
 # model = "gpt-5.2-mini"
 # [auxiliary.vision]        # image analysis (vision_analyze / browser_vision)
 # model = "gpt-5.2"
+
+# Mixture of Agents: parallel reference fan-out + aggregator synthesis
+# [moa]
+# default_preset = "default"
+# [[moa.presets.default.reference_models]]
+# provider = "ollama"
+# model = "qwen3:32b"
+# [moa.presets.default.aggregator]
+# provider = "openai"
+# model = "gpt-5.2"
 ```
 
 ### Library Quick Start
@@ -146,7 +158,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 139 tests
+cargo test                     # 146 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -174,6 +186,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **💾 SQLite 状态库** —— 会话/消息 FTS5 全文检索、会话血缘（父子会话）、定时任务、kanban 看板
 - **🗜️ 上下文压缩** —— 预算触发，中段对话经二次模型调用摘要
 - **🤝 委派** —— 并行子代理，隔离上下文，深度限制
+- **🧬 混合智能体（MoA）** —— `[moa]` 预设将提示词并行扇出给参考模型，经聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa`）
 - **⏰ 定时任务** —— `30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划 + 轮询调度器
 - **🔌 MCP 客户端** —— stdio JSON-RPC：任意 MCP 服务器的工具以 `mcp__<server>__<tool>` 注册
 - **🌍 浏览器自动化** —— CDP WebSocket 客户端 + 内置监督器（自动启动无头 Chrome/Chromium，或用 `ULNCLAW_BROWSER_CDP` 指向自有浏览器）：带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框
@@ -203,6 +216,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw skills list
 ./ulnclaw cron list
+./ulnclaw moa list           # MoA 预设（运行：./ulnclaw moa run "<prompt>"）
 ./ulnclaw checkpoints list   # 文件系统快照（[checkpoints] enabled = true）
 
 # 浏览器自动化：auto 模式自动启动托管的无头 Chrome/Chromium；
@@ -252,7 +266,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 139 个测试
+cargo test                     # 146 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 
