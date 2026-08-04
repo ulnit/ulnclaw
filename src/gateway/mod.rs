@@ -2490,6 +2490,21 @@ async fn run_job_now(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
     if job.prompt.trim().is_empty() {
         return jobs_error(StatusCode::BAD_REQUEST, "Job has no prompt to run");
     }
+    let Some(run_id) = spawn_job_run(state.clone(), &mut job, store).await else {
+        return server_error("failed to start job run");
+    };
+    Json(json!({"job": job_value(&job), "run_id": run_id})).into_response()
+}
+
+/// Dispatch one cron job as a tracked run (shared by `POST /api/jobs/:id/run`
+/// and the scheduler): creates the cron-run session + run row, records the
+/// outcome back onto the job when the run finishes, and executes the turn
+/// inside the cron approval scope. Returns the run id.
+async fn spawn_job_run(
+    state: Arc<GatewayState>,
+    job: &mut CronJob,
+    store: Arc<CronStore>,
+) -> Option<String> {
     let run_id = uuid::Uuid::new_v4().to_string();
     let session_id = state
         .store
@@ -2511,10 +2526,10 @@ async fn run_job_now(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
     state.runs.lock().await.insert(run_id.clone(), run);
     job.last_run = Some(now_secs());
     job.last_status = Some("running".to_string());
-    store.update(&job).ok();
+    store.update(job).ok();
 
     // Record the outcome on the job row once the run finishes.
-    let job_store = store.clone();
+    let job_store = Arc::clone(&store);
     let job_id = job.id.clone();
     let runs = state.runs.clone();
     let outcome_run_id = run_id.clone();
@@ -2549,7 +2564,35 @@ async fn run_job_now(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
     });
 
     spawn_tracked_run(state, run_id.clone(), session_id, job.prompt.clone(), true);
-    Json(json!({"job": job_value(&job), "run_id": run_id})).into_response()
+    Some(run_id)
+}
+
+/// Start the cron scheduler loop (hermes scheduler): every `poll_secs`
+/// dispatch each due job as a tracked cron run. Called from the gateway
+/// command once the cron store is wired; does nothing when absent.
+pub fn spawn_cron_scheduler(state: Arc<GatewayState>, poll_secs: u64) -> Option<tokio::task::JoinHandle<()>> {
+    let store = state.cron.get().cloned()?;
+    Some(tokio::spawn(crate::cron::run_scheduler(
+        store,
+        poll_secs,
+        move |job| {
+            let state = state.clone();
+            async move {
+                if job.prompt.trim().is_empty() {
+                    return Err(crate::error::AgentError::config("job has no prompt to run"));
+                }
+                let store = match state.cron.get().cloned() {
+                    Some(store) => store,
+                    None => return Err(crate::error::AgentError::config("cron store unavailable")),
+                };
+                let mut job = job;
+                match spawn_job_run(state, &mut job, store).await {
+                    Some(run_id) => Ok(format!("running (run {})", run_id)),
+                    None => Err(crate::error::AgentError::config("failed to start job run")),
+                }
+            }
+        },
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -3988,6 +4031,72 @@ mod tests {
             }
         });
         port
+    }
+
+    #[tokio::test]
+    async fn test_cron_scheduler_runs_due_jobs() {
+        // State with the fake provider so the cron run actually completes.
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            SqliteSessionStore::open(&temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let agent =
+            Agent::new(Arc::new(FakeStreamProvider), ToolRegistry::new()).with_store(store);
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "fake-stream".into(),
+            "test".into(),
+            None,
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+        let dir = tempfile::tempdir().unwrap();
+        let cron_store = Arc::new(
+            CronStore::open(&dir.path().join("state.db")).expect("cron store opens"),
+        );
+        state.cron.set(cron_store.clone()).ok();
+        let job = CronJob {
+            id: "sched-1".into(),
+            name: "sched".into(),
+            schedule: "60s".into(),
+            prompt: "say hello".to_string(),
+            skills: vec![],
+            enabled: true,
+            repeat: None,
+            next_run: Some(crate::gateway::now_secs() - 5.0),
+            created_at: crate::gateway::now_secs(),
+            last_run: None,
+            last_status: None,
+        };
+        cron_store.add(&job).unwrap();
+
+        let handle = spawn_cron_scheduler(state.clone(), 5).expect("scheduler spawns");
+        // Scheduler dispatches the due job as a tracked run; the fake
+        // provider completes the turn, and the outcome recorder marks the
+        // job ok.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let status = cron_store
+                .get("sched-1")
+                .unwrap()
+                .and_then(|j| j.last_status.clone());
+            if status.as_deref() == Some("ok") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "job never completed (last: {:?})",
+                status
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        handle.abort();
+        // The run executed and a cron-run session exists.
+        let runs = state.runs.lock().await;
+        let run = runs.values().next().expect("run recorded");
+        assert_eq!(run.status, "completed");
+        assert_eq!(run.result.as_deref(), Some("Hello"));
     }
 
     async fn post_json(app: Router, uri: &str, body: &str, token: &str) -> (StatusCode, Value) {

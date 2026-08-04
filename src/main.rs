@@ -179,6 +179,8 @@ enum CronAction {
     Remove { id: String },
     Pause { id: String },
     Resume { id: String },
+    /// Run a job once, immediately (unattended: cron approval mode applies)
+    Run { id: String },
 }
 
 #[derive(Subcommand)]
@@ -308,6 +310,9 @@ async fn gateway_cmd(
         ulnclaw::cron::CronStore::open(&home.join("state.db")).map_err(|e| e.to_string())?;
     state.cron.set(std::sync::Arc::new(cron_store)).ok();
     state.skills_dir.set(home.join("skills")).ok();
+    // Cron scheduler: dispatch due jobs as tracked cron runs (hermes
+    // scheduler loop). 30s polling matches the job-timing granularity.
+    ulnclaw::gateway::spawn_cron_scheduler(state.clone(), 30);
     ulnclaw::gateway::serve(state, &gateway.host, gateway.port)
         .await
         .map_err(|e| e.to_string())
@@ -393,7 +398,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Sessions { action } => sessions_cmd(action).await,
         Commands::Tools => tools_cmd(&config),
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
-        Commands::Cron { action } => cron_cmd(action.unwrap_or(CronAction::List)).await,
+        Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
         Commands::Diff { staged, all, dir, paths } => {
@@ -1186,7 +1191,7 @@ async fn skills_cmd(action: SkillAction) -> Result<(), String> {
     Ok(())
 }
 
-async fn cron_cmd(action: CronAction) -> Result<(), String> {
+async fn cron_cmd(config: &UlncLawConfig, action: CronAction) -> Result<(), String> {
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
     let store = ulnclaw::cron::CronStore::open(&home.join("state.db")).map_err(|e| e.to_string())?;
     match action {
@@ -1224,6 +1229,40 @@ async fn cron_cmd(action: CronAction) -> Result<(), String> {
             }
             store.update(&job).map_err(|e| e.to_string())?;
             println!("resumed {}", id);
+        }
+        CronAction::Run { id } => {
+            let Some(mut job) = store.get(&id).map_err(|e| e.to_string())? else {
+                return Err(format!("no cron job named '{}' found", id));
+            };
+            if job.prompt.trim().is_empty() {
+                return Err("job has no prompt to run".into());
+            }
+            // Unattended execution: the agent runs inside the cron
+            // approval scope (`approvals.cron_mode` applies).
+            use ulnclaw::tools::context::CronRunner;
+            let agent = make_agent(config, false, None).await?;
+            let started = std::time::Instant::now();
+            match agent.run_prompt(&job.prompt, &job.skills).await {
+                Ok(answer) => {
+                    job.last_run = Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or(0.0),
+                    );
+                    job.last_status = Some(format!(
+                        "ok (manual run, {}s)",
+                        started.elapsed().as_secs()
+                    ));
+                    store.update(&job).map_err(|e| e.to_string())?;
+                    println!("{}", answer);
+                }
+                Err(e) => {
+                    job.last_status = Some(format!("error: {}", e));
+                    store.update(&job).ok();
+                    return Err(e.to_string());
+                }
+            }
         }
     }
     Ok(())

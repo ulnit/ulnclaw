@@ -403,7 +403,10 @@ where
             let result = runner(job.clone()).await;
             job.last_run = Some(now());
             job.last_status = Some(match &result {
-                Ok(_) => "ok".to_string(),
+                // The runner reports its own status text (e.g. "running
+                // (run <id>)" when dispatched as a tracked gateway run);
+                // the final outcome is recorded by whoever owns the run.
+                Ok(status) => status.clone(),
                 Err(e) => format!("error: {}", e),
             });
             // Reschedule or disable.
@@ -490,5 +493,45 @@ mod tests {
         assert!(store.get("job-1").unwrap().is_some());
         assert!(store.remove("job-1").unwrap());
         assert_eq!(store.list().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_dispatches_due_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(CronStore::open(&dir.path().join("state.db")).unwrap());
+        let job = CronJob {
+            id: "job-due".into(),
+            name: "due".into(),
+            schedule: "60s".into(),
+            prompt: "tick".into(),
+            skills: vec![],
+            enabled: true,
+            repeat: None,
+            next_run: Some(now() - 5.0), // already due
+            created_at: now(),
+            last_run: None,
+            last_status: None,
+        };
+        store.add(&job).unwrap();
+
+        let seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let seen_in = seen.clone();
+        let handle = tokio::spawn(run_scheduler(store.clone(), 5, move |job| {
+            let seen = seen_in.clone();
+            async move {
+                seen.lock().await.push(job.id.clone());
+                Ok(format!("dispatched {}", job.id))
+            }
+        }));
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        handle.abort();
+
+        assert_eq!(*seen.lock().await, vec!["job-due".to_string()]);
+        let updated = store.get("job-due").unwrap().unwrap();
+        assert_eq!(updated.last_status.as_deref(), Some("dispatched job-due"));
+        assert!(updated.last_run.is_some());
+        // Rescheduled into the future, still enabled.
+        assert!(updated.next_run.unwrap() > now());
+        assert!(updated.enabled);
     }
 }
