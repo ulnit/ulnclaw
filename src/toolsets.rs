@@ -27,6 +27,11 @@ pub fn toolsets() -> &'static std::collections::HashMap<&'static str, ToolsetDef
             tools: &["web_search"],
             includes: &[],
         });
+        map.insert("x_search", ToolsetDef {
+            description: "Search X (Twitter) posts and threads via xAI's built-in x_search                           Responses tool. Read-only public X discovery. Available when xAI                           credentials are configured (XAI_API_KEY). Off by default: add                           x_search to enabled_toolsets (hermes parity).",
+            tools: &["x_search"],
+            includes: &[],
+        });
         map.insert("vision", ToolsetDef {
             description: "Image analysis and vision tools",
             tools: &["vision_analyze"],

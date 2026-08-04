@@ -16,6 +16,7 @@ pub mod terminal;
 pub mod todo;
 pub mod tool_search;
 pub mod web;
+pub mod x_search;
 
 use crate::tools::ToolRegistry;
 
@@ -37,6 +38,7 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     platform::register(registry);
     tool_search::register(registry);
     desktop::register(registry);
+    x_search::register(registry);
 }
 
 /// Names of all built-in tools (for tests/docs).
@@ -60,6 +62,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "tool_search",
         "discord", "discord_admin", "feishu_doc_read", "spotify_playback",
         "close_terminal", "read_terminal", "focus_pane", "open_preview",
+        "x_search",
     ]
 }
 

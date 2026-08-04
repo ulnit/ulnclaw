@@ -609,6 +609,35 @@ pub struct UlncLawConfig {
     /// Presentation toggles for GUI hosts (hermes `display:`).
     #[serde(default)]
     pub display: DisplayConfig,
+    /// X (Twitter) search via xAI (hermes `x_search:`).
+    #[serde(default)]
+    pub x_search: XSearchConfig,
+}
+
+/// `[x_search]` — xAI X-search tuning (port of hermes `x_search.*`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct XSearchConfig {
+    /// Responses-API model used for the x_search server tool
+    /// (hermes default `grok-4.5`).
+    pub model: String,
+    /// Optional reasoning effort: low | medium | high | xhigh.
+    pub reasoning_effort: String,
+    /// Request timeout in seconds (floor 30, hermes default 180).
+    pub timeout_seconds: u64,
+    /// Retries on 5xx / transient failures (hermes default 2).
+    pub retries: u32,
+}
+
+impl Default for XSearchConfig {
+    fn default() -> Self {
+        Self {
+            model: "grok-4.5".to_string(),
+            reasoning_effort: String::new(),
+            timeout_seconds: 180,
+            retries: 2,
+        }
+    }
 }
 
 /// `[display]` — presentation toggles for GUI hosts (hermes `display.*`).
