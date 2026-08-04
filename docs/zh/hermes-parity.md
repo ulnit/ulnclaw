@@ -29,6 +29,7 @@
 | `ha_*`（4 个 Home Assistant 工具） | ✅ 完整 | Home Assistant REST API，依赖 `HASS_URL` + `HASS_TOKEN` |
 | `kanban_*`（12 个工具） | ✅ 完整 | 本地 SQLite 协作看板：create/list/show/complete/block/unblock/comment/heartbeat/link/attach/attach_url/attachments |
 | `browser_*`（12 个工具） | ✅ 完整 | CDP WebSocket 客户端（`browser` 模块）：端点发现、页面会话、带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框；`ULNCLAW_BROWSER_CDP` 支持 ws://、http://host:port 或 `auto`（监督器启动托管的无头 Chrome/Chromium） |
+| `close_terminal`、`read_terminal`、`focus_pane`、`open_preview` | ✅ 核心 | 桌面 GUI 工具（hermes `close_terminal_tool.py` / `read_terminal_tool.py` / `focus_pane_tool.py` / `open_preview_tool.py`）：仅在 `ULNCLAW_DESKTOP=1` 下注册，经 `desktop` 桥接层路由——宿主应用安装事件发射器（`ulnclaw::desktop::set_emitter`）接收 `(ui_session_id, event, payload)` 事件（`terminal.close`、`pane.reveal`、`preview.open`）及阻塞式 `read_terminal` 回调；未接入宿主时返回 "desktop only"，从不杀进程，并规范化裸域名（`www.cnn.com` → https、`localhost:3000` → http） |
 | `computer_use` | 🟡 门控 | 需要 computer-use 驱动（hermes：cua-driver） |
 | `discord`, `discord_admin`, `feishu_doc_read`, `spotify_*`, `yuanbao` | 🟡 门控 | 已注册，依赖平台凭据门控；后端待实现 |
 | `x_search`, `video_analyze`, `video_generate`, `bfl_flux3_*` | ⬜ 暂缓 | 依赖特定供应商（xAI/BFL）；凭据就绪后再补 |
@@ -60,7 +61,7 @@
 | 混合智能体 MoA（`moa_loop.py`、`moa_config.py`） | ✅ 核心 | `[moa.presets.<name>]` 参考模型并行扇出 + 聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa <prompt>`）；loud/silent 降级策略、全部失败提前返回、聚合失败回退拼接结果；持久 `provider: moa` 门面、trace 与隐私过滤未移植 |
 | HTTP 网关（`gateway/platforms/api_server.py`） | ✅ 核心 | `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接、`stream: true` SSE 令牌流 + `hermes.tool.progress` 事件）、`/v1/responses`（经 `previous_response_id` 有状态续接、`stream: true` Responses-API SSE 事件）、`/v1/models`、`/api/model/options`、`/v1/capabilities`、`/v1/runs`（异步运行 + SSE 事件 + 停止 + 审批）、`/api/sessions` 增删查改 + 会话聊天 + chat/stream + `PATCH`（title/end_reason）+ `fork` + 会话级模型锁（每轮生效）+ `recap`、`/api/jobs` 定时任务 HTTP API（增删查改 + pause/resume/run）、`/v1/skills`、`/v1/toolsets`、`/metrics`（Prometheus 计数器/量表——ulnclaw 运维扩展）、Bearer 令牌鉴权 |
 | 消息平台（Telegram/WhatsApp/QQ 等） | ⬜ 暂缓 | hermes 的平台适配器未移植；HTTP 网关已覆盖 OpenAI 兼容前端 |
-| TUI/web/app | ⬜ 暂缓 | hermes 提供 TUI 与 web 应用；ulnclaw 目前是库 + CLI + HTTP 网关 |
+| TUI/web/app | ⬜ 暂缓 | hermes 提供 TUI 与 web 应用；ulnclaw 目前是库 + CLI + HTTP 网关——`desktop` 桥接层是 GUI 宿主安装事件发射器的嵌入接缝 |
 | 环境（`tools/environments/`） | ✅ 核心 | `terminal` 后端：local（默认）、docker（`ensure_docker_container` inspect→run）、ssh（BatchMode、identity 文件）；`[terminal] backend/container/image/ssh_host/...`；modal/daytona/vercel 暂缓 |
 | 检查点管理器（`checkpoint_manager.py`） | ✅ | v2 共享 shadow git 存储（`<home>/checkpoints/store`）：按项目 ref/index，编辑前透明快照（每轮 `write_file`/`patch` 前一次），list/restore/diff/prune CLI，容量上限、超大文件过滤、孤儿/过期自动清理 |
 | 浏览器监督器 | ✅ | `ULNCLAW_BROWSER_CDP=auto` 时自动启动受管 headless Chrome/Chromium |

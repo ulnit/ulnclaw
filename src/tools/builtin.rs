@@ -3,6 +3,7 @@
 
 pub mod clarify;
 pub mod cronjob;
+pub mod desktop;
 pub mod delegate;
 pub mod execute_code;
 pub mod files;
@@ -35,6 +36,7 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     media::register(registry);
     platform::register(registry);
     tool_search::register(registry);
+    desktop::register(registry);
 }
 
 /// Names of all built-in tools (for tests/docs).
@@ -57,6 +59,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "computer_use",
         "tool_search",
         "discord", "discord_admin", "feishu_doc_read", "spotify_playback",
+        "close_terminal", "read_terminal", "focus_pane", "open_preview",
     ]
 }
 

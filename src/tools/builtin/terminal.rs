@@ -48,6 +48,55 @@ fn process_registry() -> &'static Mutex<HashMap<String, Arc<BackgroundProcess>>>
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Close-view sink set by a driver (desktop bridge): called with
+/// `(ui_session_id, process_is_running, process_id)` when the agent asks
+/// to close a read-only terminal tab. Distinct from kill — the process
+/// keeps running; only the UI view is dropped (port of hermes
+/// `process_registry.on_close`).
+pub type CloseSink = Arc<dyn Fn(&str, bool, &str) + Send + Sync>;
+
+fn close_sink_slot() -> &'static Mutex<Option<CloseSink>> {
+    static SINK: OnceLock<Mutex<Option<CloseSink>>> = OnceLock::new();
+    SINK.get_or_init(|| Mutex::new(None))
+}
+
+/// Install (or clear) the desktop close-view sink.
+pub fn set_close_sink(sink: Option<CloseSink>) {
+    *close_sink_slot().lock().unwrap() = sink;
+}
+
+/// Ask the desktop GUI to close the read-only terminal tab mirroring a
+/// background process (port of hermes `request_close_terminal`).
+///
+/// This does NOT kill the process — it only drops the view. Output keeps
+/// buffering and the user can reopen the tab. Desktop-only: returns an
+/// error if no UI close sink is wired (e.g. CLI / gateway).
+pub fn request_close_terminal(ui_session_id: &str, process_id: &str) -> serde_json::Value {
+    let sink = close_sink_slot().lock().unwrap().clone();
+    let Some(sink) = sink else {
+        return json!({
+            "status": "error",
+            "error": "close_terminal is only available in the ulnclaw desktop app.",
+        });
+    };
+    // The session may already be finished (or pruned) — the tab can still
+    // linger and be closed, so a missing session is not an error here.
+    let running = process_registry()
+        .lock()
+        .map(|reg| {
+            reg.get(process_id)
+                .map(|proc| proc.exit_code.lock().map(|g| g.is_none()).unwrap_or(false))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    sink(ui_session_id, running, process_id);
+    json!({
+        "status": "ok",
+        "closed": process_id,
+        "note": "Closed the read-only terminal tab. The process was not killed;                  its output remains available and the user can reopen the tab                  from the status stack.",
+    })
+}
+
 fn now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
