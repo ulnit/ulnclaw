@@ -310,6 +310,9 @@ impl Agent {
         for iteration in 0..self.config.max_iterations {
             debug!("Agent iteration {}", iteration);
 
+            // Reset checkpoint per-turn dedup (hermes new_turn()).
+            self.context.checkpoint_manager().new_turn();
+
             // Context compression when over budget.
             if compressor.needs_compression(&messages) {
                 if let Some(compressed) = compressor
@@ -482,13 +485,7 @@ impl Agent {
                 }
                 let approve = self.context.approve.clone();
                 let approved = match approve {
-                    Some(callback) => {
-                        callback(format!(
-                            "Approve dangerous command? [{}]\n{}",
-                            reason, command
-                        ))
-                        .await
-                    }
+                    Some(callback) => callback(reason.to_string(), command.to_string()).await,
                     None => false,
                 };
                 if approved {
@@ -520,6 +517,27 @@ impl Agent {
                 let callbacks = self.callbacks.lock().await;
                 if let Some(ref on_tool_start) = callbacks.on_tool_start {
                     on_tool_start(&tool_call.function.name, &args);
+                }
+            }
+
+            // Transparent checkpoint before file-mutating tools (hermes
+            // checkpoint_manager hook): snapshot the project once per turn
+            // before the first write_file/patch.
+            if matches!(tool_call.function.name.as_str(), "write_file" | "patch") {
+                let manager = self.context.checkpoint_manager();
+                if manager.enabled() {
+                    let target = args
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .map(|raw| self.context.resolve_path(raw))
+                        .unwrap_or_else(|| self.context.cwd());
+                    let workdir = manager.working_dir_for_path(&target);
+                    manager
+                        .ensure_checkpoint(
+                            &workdir.to_string_lossy(),
+                            &format!("before {} ({})", tool_call.function.name, target.display()),
+                        )
+                        .await;
                 }
             }
 

@@ -858,15 +858,100 @@ async fn main() -> Result<()> {
 获取（或打开）进程级共享会话并在其上执行 `func`。
 所有 `browser_*` 工具处理器以此为入口。
 
+## 环境 (`environments`)
+
+`terminal` 工具的执行后端（hermes `tools/environments/`）。
+
+#### `enum TerminalBackend { Local, Docker { container, image }, Ssh { host, user, port, identity } }`
+
+#### `resolve(config: &TerminalConfig) -> TerminalBackend`
+
+读取 `[terminal] backend`（默认 `"local"`，可选 `"docker"`、`"ssh"`）。
+
+#### `async ensure_docker_container(container: &str, image: &str) -> Result<()>`
+
+先 `docker inspect`；不存在则 `docker run -d --name <container> <image> sleep infinity`。
+
+#### `wrap_command(backend: &TerminalBackend, command: &str) -> Vec<String>`
+
+Local → 普通 shell；Docker → `docker exec --workdir <cwd> <container> bash -lc <quoted>`；
+Ssh → `ssh -o BatchMode=yes [-i identity] [-p port] [user@]host cd <cwd> && <command>`。
+
+配置（`config.toml`）：
+
+```toml
+[terminal]
+backend = "docker"          # "local"（默认）| "docker" | "ssh"
+container = "ulnclaw-dev"   # docker 容器名
+image = "ubuntu:24.04"      # 容器不存在时用于创建的镜像
+ssh_host = "build-box"
+ssh_user = "dev"
+ssh_port = 22
+ssh_identity = "~/.ssh/id_ed25519"
+```
+
+## 检查点 (`checkpoint`)
+
+透明文件系统快照（hermes `checkpoint_manager.py`）。`<home>/checkpoints/store`
+下的单个共享 bare git 存储，以 `refs/hermes/<hash16>` 维护按项目的快照链、
+按项目独立 index —— LLM 完全感知不到该子系统。
+
+#### `CheckpointManager::new(base: PathBuf, config: &CheckpointsConfig) -> Self`
+
+#### `new_turn(&self)`
+
+重置每轮去重（agent 每个迭代开始时调用）。
+
+#### `async ensure_checkpoint(&self, working_dir: &str, reason: &str) -> bool`
+
+每轮每目录最多一次快照；跳过 `/`、`$HOME`、超过 5 万文件的目录、
+大于 `max_file_size_mb` 的文件。agent 在 `write_file`/`patch` 分发前调用。
+
+#### `async list_checkpoints(&self, working_dir: &str) -> Vec<CheckpointEntry>`
+
+#### `async restore(&self, working_dir: &str, commit_hash: &str, file_path: Option<&str>) -> Result<Value, String>`
+
+先做一次回滚前快照（可撤销撤销），再 `git checkout <hash> -- <path|.`。
+
+#### `async diff(&self, ...) / session_diff(&self, ...)`
+
+工作区对指定检查点 / 对最早保留检查点的 diff。
+
+#### `async status(&self) -> StoreStatus` / `async prune(&self, retention_days: u64, delete_orphans: bool) -> PruneStats` / `async maybe_auto_prune(&self)`
+
+CLI：`ulnclaw checkpoints list [dir] | status | restore <hash> [file] [--dir D] | diff <hash> [--dir D] | prune [--days N]`。
+
+配置（`config.toml`）：
+
+```toml
+[checkpoints]
+enabled = false          # 总开关（默认关闭）
+max_snapshots = 20       # 每项目最多保留 N 个检查点
+max_total_size_mb = 500  # 存储总量上限（跨项目丢最旧）
+max_file_size_mb = 10    # 跳过大于该值的文件
+retention_days = 7       # 过期项目自动清理窗口
+auto_prune_hours = 24    # 自动清理周期
+```
+
 ## HTTP 网关 (`gateway/`)
 
 OpenAI 兼容 API 服务器（`ulnclaw gateway`）。
 
 ### 库 API
 
-#### `GatewayState::new(agent: Arc<Agent>, model_name: String, provider_name: String, key: Option<String>) -> Result<Arc<GatewayState>>`
+#### `GatewayState::new(agent: Arc<Agent>, model_name: String, provider_name: String, key: Option<String>, router: Arc<ApprovalRouter>) -> Result<Arc<GatewayState>>`
 
 从已装配的 agent 构建网关状态（必须附加 SQLite 存储）。
+`ApprovalRouter` 将 agent 的审批回调连接到 run 级 HTTP 审批处理（见下）。
+
+#### `ApprovalRouter::new() -> Arc<ApprovalRouter>` / `current_run_id() -> Option<String>`
+
+运行审批管线。router 维护 `run_id → (session_id, channel)` 映射；
+CLI 启动网关时为 agent 安装的审批回调读取 task-local 的 run id，
+并等待 `router.request(run_id, reason, command)`。`once` 单次放行，
+`session` 在该 run 所属会话内记住命令，`always` 在网关生命周期内记住，
+`deny` 拒绝。没有 run 上下文的请求（如 `/v1/chat/completions`）
+对确认级命令按设计自动拒绝。
 
 #### `router(state: Arc<GatewayState>) -> Router`
 
@@ -897,8 +982,9 @@ axum 路由表（供 `serve` 与测试使用）。
 | POST | `/v1/runs` | 是 | 启动异步运行 → `202` + `run_id` |
 | GET | `/v1/runs` | 是 | 被跟踪的运行（新→旧） |
 | GET | `/v1/runs/:id` | 是 | 运行状态/结果 |
-| GET | `/v1/runs/:id/events` | 是 | SSE 生命周期事件（`run.progress` → `run.completed`/`run.failed`），终态后关闭 |
+| GET | `/v1/runs/:id/events` | 是 | SSE 生命周期事件（`run.progress`、`approval.request` → `run.completed`/`run.failed`），终态后关闭 |
 | POST | `/v1/runs/:id/stop` | 是 | 尽力而为的停止请求 |
+| POST | `/v1/runs/:id/approval` | 是 | 解决待审批请求：`{"decision": "once"\|"session"\|"always"\|"deny"}` |
 
 **鉴权：** 设置 `[gateway] key` / `ULNCLAW_GATEWAY_KEY` 后需
 `Authorization: Bearer <key>`；未设置则开放。
@@ -910,6 +996,27 @@ curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \
      -d '{"messages":[{"role":"user","content":"你好"}]}' \
      http://127.0.0.1:8642/v1/chat/completions
 ```
+
+**运行审批流程**（需 `[agent] approval = true`）：
+
+```bash
+# 1. 启动 run；模型命中确认级命令（sudo、rm -rf、强制推送等）时
+#    run 停泊在 waiting_for_approval：
+RUN=$(curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"message":"run sudo whoami in the terminal"}' \
+     http://127.0.0.1:8642/v1/runs | jq -r .run_id)
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8642/v1/runs/$RUN
+# {"status":"waiting_for_approval",
+#  "approval":{"command":"sudo whoami","reason":"sudo (elevated privileges)",
+#              "choices":["once","session","always","deny"]}, ...}
+
+# 2. 解决审批，run 按决定恢复执行：
+curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"decision":"once"}' http://127.0.0.1:8642/v1/runs/$RUN/approval
+```
+
+SSE 流（`/v1/runs/:id/events`）在 run 停泊时发出 `approval.request`
+事件，前端无需轮询即可弹出审批提示。
 
 ## 下一步
 

@@ -230,6 +230,27 @@ pub struct TerminalConfig {
     pub foreground_max_timeout: u64,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Execution backend: "local" (default), "docker", or "ssh".
+    #[serde(default)]
+    pub backend: Option<String>,
+    /// Docker container name (backend="docker").
+    #[serde(default)]
+    pub container: Option<String>,
+    /// Docker image to auto-create the container from when missing.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// SSH host (backend="ssh").
+    #[serde(default)]
+    pub ssh_host: Option<String>,
+    /// SSH user (backend="ssh").
+    #[serde(default)]
+    pub ssh_user: Option<String>,
+    /// SSH port (backend="ssh").
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
+    /// SSH identity file (backend="ssh").
+    #[serde(default)]
+    pub ssh_identity: Option<String>,
 }
 
 fn default_terminal_timeout() -> u64 {
@@ -245,6 +266,13 @@ impl Default for TerminalConfig {
             timeout: default_terminal_timeout(),
             foreground_max_timeout: default_fg_max(),
             cwd: None,
+            backend: None,
+            container: None,
+            image: None,
+            ssh_host: None,
+            ssh_user: None,
+            ssh_port: None,
+            ssh_identity: None,
         }
     }
 }
@@ -339,6 +367,9 @@ pub struct UlncLawConfig {
     pub delegation: DelegationConfig,
     #[serde(default)]
     pub terminal: TerminalConfig,
+    /// Transparent filesystem checkpoints (hermes checkpoint_manager).
+    #[serde(default)]
+    pub checkpoints: crate::checkpoint::CheckpointsConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
     #[serde(default)]

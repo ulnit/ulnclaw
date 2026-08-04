@@ -19,14 +19,16 @@ full feature-by-feature mapping.
 - **🤖 Agent loop** — tool calling with iteration budgets, usage accounting, memory injection, step/tool callbacks
 - **🔧 50+ built-in tools** — terminal/process, file read/write/patch/search, web search/extract, memory, todo, session search, clarify, skills, delegation, execute_code, cronjob, vision, image generation, TTS, Home Assistant, kanban, tool search
 - **🧰 Toolsets** — hermes-compatible grouping (`coding`, `web`, `file`, `safe`, `debugging`, ...) with composition and enable/disable policy
-- **🛡️ Approval system** — command normalization, hardline floor (auto-block), confirm-before-run for costly operations
+- **🛡️ Approval system** — command normalization, hardline floor (auto-block), confirm-before-run for costly operations; REPL prompts plus gateway run approvals over HTTP
 - **💾 SQLite state** — sessions/messages with FTS5 full-text search, lineage (parent/child sessions), cron jobs, kanban board
 - **🗜️ Context compression** — budget-triggered middle-turn summarization via a secondary model call
 - **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits
 - **⏰ Cron** — `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules with a poll scheduler
 - **🔌 MCP client** — stdio JSON-RPC: any MCP server's tools appear as `mcp__<server>__<tool>`
 - **🌍 Browser automation** — CDP WebSocket client with a built-in supervisor (auto-launches headless Chrome/Chromium, or point `ULNCLAW_BROWSER_CDP` at your own): accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs
-- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), async `/v1/runs` with SSE events, sessions API, bearer auth
+- **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), async `/v1/runs` with SSE events + approval resolution, sessions API, bearer auth
+- **🖥️ Terminal environments** — run `terminal` locally (default), in docker (auto container creation), or over ssh (`[terminal] backend`)
+- **📸 Checkpoints** — transparent git-backed snapshots before file edits (shared shadow store, per-project chains), `ulnclaw checkpoints list/restore/diff/prune`
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp), keyless local providers
 
 ### CLI Quick Start
@@ -49,6 +51,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions search "auth refactor"
 ./ulnclaw skills list
 ./ulnclaw cron list
+./ulnclaw checkpoints list   # filesystem snapshots ([checkpoints] enabled = true)
 
 # Browser automation: auto mode launches a managed headless Chrome/Chromium;
 # or point browser_* tools at an existing browser with remote debugging
@@ -86,6 +89,14 @@ max_concurrent_children = 3
 host = "127.0.0.1"
 port = 8642
 # key = "sk-..."        # bearer token; env ULNCLAW_GATEWAY_KEY overrides
+
+# [terminal]
+# backend = "docker"    # "local" (default) | "docker" | "ssh"
+# container = "ulnclaw-dev"
+# image = "ubuntu:24.04"
+
+# [checkpoints]
+# enabled = true        # transparent snapshots before write_file/patch
 ```
 
 ### Library Quick Start
@@ -123,7 +134,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 70 tests
+cargo test                     # 85 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -147,14 +158,16 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🤖 Agent 循环** —— 工具调用、迭代预算、用量统计、记忆注入、步骤/工具回调
 - **🔧 50+ 内置工具** —— terminal/process、文件读/写/补丁/搜索、web 搜索/抽取、记忆、todo、会话搜索、clarify、技能、委派、execute_code、cronjob、视觉、图像生成、TTS、Home Assistant、kanban、工具搜索
 - **🧰 工具集** —— hermes 兼容分组（`coding`、`web`、`file`、`safe`、`debugging`……），支持组合与启用/禁用策略
-- **🛡️ 审批系统** —— 命令归一化、硬性底线（自动阻止）、高成本操作先确认再执行
+- **🛡️ 审批系统** —— 命令归一化、硬性底线（自动阻止）、高成本操作先确认再执行；REPL 提示 + 网关 HTTP 运行审批
 - **💾 SQLite 状态库** —— 会话/消息 FTS5 全文检索、会话血缘（父子会话）、定时任务、kanban 看板
 - **🗜️ 上下文压缩** —— 预算触发，中段对话经二次模型调用摘要
 - **🤝 委派** —— 并行子代理，隔离上下文，深度限制
 - **⏰ 定时任务** —— `30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划 + 轮询调度器
 - **🔌 MCP 客户端** —— stdio JSON-RPC：任意 MCP 服务器的工具以 `mcp__<server>__<tool>` 注册
 - **🌍 浏览器自动化** —— CDP WebSocket 客户端 + 内置监督器（自动启动无头 Chrome/Chromium，或用 `ULNCLAW_BROWSER_CDP` 指向自有浏览器）：带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框
-- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、带 SSE 事件的异步 `/v1/runs`、会话 API、Bearer 鉴权
+- **🚪 HTTP 网关** —— `ulnclaw gateway`：OpenAI 兼容 `/v1/chat/completions` + `/v1/responses`（会话续接）、带 SSE 事件 + 审批处理的异步 `/v1/runs`、会话 API、Bearer 鉴权
+- **🖥️ 终端环境** —— `terminal` 可在本地（默认）、docker（自动创建容器）或 ssh 上执行（`[terminal] backend`）
+- **📸 检查点** —— 文件编辑前的透明 git 快照（共享 shadow 存储、按项目快照链），`ulnclaw checkpoints list/restore/diff/prune`
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp），本地 provider 免密钥
 
 ### CLI 快速开始
@@ -177,6 +190,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions search "认证重构"
 ./ulnclaw skills list
 ./ulnclaw cron list
+./ulnclaw checkpoints list   # 文件系统快照（[checkpoints] enabled = true）
 
 # 浏览器自动化：auto 模式自动启动托管的无头 Chrome/Chromium；
 # 也可将 browser_* 工具指向已开启远程调试的浏览器
@@ -225,7 +239,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 70 个测试
+cargo test                     # 85 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

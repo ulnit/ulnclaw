@@ -106,18 +106,24 @@ ulnclaw gateway
 
 ```rust
 // ...or embed it in your own binary:
+let router = ulnclaw::gateway::ApprovalRouter::new();
+// Install an approve callback on the agent's tool context that routes
+// confirm-tier commands into the run (see main.rs gateway_cmd for the
+// full wiring), then:
 let state = ulnclaw::gateway::GatewayState::new(
     agent,                       // Arc<Agent> with the SQLite store attached
     "my-agent".to_string(),      // advertised model name
     "openai".to_string(),        // provider label
     Some("sk-...".to_string()),  // bearer key (None = open)
+    router,                      // run-approval router
 )?;
 ulnclaw::gateway::serve(state, "127.0.0.1", 8642).await?;
 ```
 
 Endpoints: `/v1/chat/completions` (with `X-Ulnclaw-Session-Id` session
-continuity), `/v1/models`, `/v1/capabilities`, `/api/sessions` CRUD +
-per-session chat, `/v1/runs` async runs. See the
+continuity), `/v1/responses`, `/v1/models`, `/v1/capabilities`,
+`/api/sessions` CRUD + per-session chat, `/v1/runs` async runs with SSE
+events and run-approval resolution (`POST /v1/runs/:id/approval`). See the
 [API reference](api-reference.md#http-gateway-gateway) for the full table.
 
 ### Axum Example (Custom Routes)

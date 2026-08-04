@@ -36,6 +36,120 @@ use crate::session::SessionStore;
 /// Header carrying the session id (request + response).
 pub const SESSION_HEADER: &str = "x-ulnclaw-session-id";
 
+tokio::task_local! {
+    static RUN_ID: String;
+}
+
+/// The run id of the current task (set for agent runs started via
+/// `/v1/runs`); `None` in chat-completions and other contexts.
+pub fn current_run_id() -> Option<String> {
+    RUN_ID.try_with(|r| r.clone()).ok()
+}
+
+/// A dangerous-command approval waiting for `POST /v1/runs/:id/approval`.
+pub struct PendingApproval {
+    pub command: String,
+    pub reason: String,
+    pub respond: tokio::sync::oneshot::Sender<String>,
+}
+
+/// Routes approval requests raised inside agent runs to the HTTP approval
+/// flow (and remembers `always`/`session` decisions).
+pub struct ApprovalRouter {
+    channels: std::sync::Mutex<HashMap<String, (String, tokio::sync::mpsc::UnboundedSender<PendingApproval>)>>,
+    allow_always: tokio::sync::Mutex<std::collections::HashSet<String>>,
+    allow_session: tokio::sync::Mutex<HashMap<String, std::collections::HashSet<String>>>,
+}
+
+impl ApprovalRouter {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            channels: std::sync::Mutex::new(HashMap::new()),
+            allow_always: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            allow_session: tokio::sync::Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Wire a run's approval channel (called when the run starts).
+    pub fn register(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        sender: tokio::sync::mpsc::UnboundedSender<PendingApproval>,
+    ) {
+        self.channels
+            .lock()
+            .unwrap()
+            .insert(run_id.to_string(), (session_id.to_string(), sender));
+    }
+
+    pub fn unregister(&self, run_id: &str) {
+        self.channels.lock().unwrap().remove(run_id);
+    }
+
+    /// Raised by the agent's approve callback inside a run task. Blocks until
+    /// the HTTP client resolves the approval (or the channel disappears).
+    pub async fn request(&self, run_id: &str, reason: String, command: String) -> bool {
+        if self.allow_always.lock().await.contains(&command) {
+            return true;
+        }
+        let (session_id, send_result) = {
+            let channels = self.channels.lock().unwrap();
+            match channels.get(run_id) {
+                Some((session_id, sender)) => {
+                    let (respond, response) = tokio::sync::oneshot::channel();
+                    let sent = sender
+                        .send(PendingApproval {
+                            command: command.clone(),
+                            reason,
+                            respond,
+                        })
+                        .is_ok();
+                    (Some(session_id.clone()), sent.then_some(response))
+                }
+                None => (None, None),
+            }
+        };
+        if let Some(session_id) = &session_id {
+            if self
+                .allow_session
+                .lock()
+                .await
+                .get(session_id)
+                .map(|allowed| allowed.contains(&command))
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        let Some(response) = send_result else {
+            return false;
+        };
+        match response.await {
+            Ok(decision) => match decision.as_str() {
+                "once" => true,
+                "always" => {
+                    self.allow_always.lock().await.insert(command);
+                    true
+                }
+                "session" => {
+                    if let Some(session_id) = session_id {
+                        self.allow_session
+                            .lock()
+                            .await
+                            .entry(session_id)
+                            .or_default()
+                            .insert(command);
+                    }
+                    true
+                }
+                _ => false,
+            },
+            Err(_) => false,
+        }
+    }
+}
+
 fn now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -56,6 +170,8 @@ pub struct RunState {
     pub error: Option<String>,
     pub iterations: Option<usize>,
     pub stop_requested: bool,
+    /// Pending (or last resolved) approval request for this run.
+    pub approval: Option<Value>,
 }
 
 /// Shared gateway state.
@@ -68,6 +184,10 @@ pub struct GatewayState {
     pub runs: Arc<Mutex<HashMap<String, RunState>>>,
     /// Stored `/v1/responses` objects, keyed by response id.
     pub responses: Arc<Mutex<HashMap<String, Value>>>,
+    /// Approval routing for dangerous terminal commands.
+    pub router: Arc<ApprovalRouter>,
+    /// Unresolved approval responders, keyed by run id.
+    pub pending_approvals: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>,
 }
 
 impl GatewayState {
@@ -77,6 +197,7 @@ impl GatewayState {
         model_name: String,
         provider_name: String,
         key: Option<String>,
+        router: Arc<ApprovalRouter>,
     ) -> Result<Arc<Self>> {
         let store = agent.store().ok_or_else(|| {
             AgentError::config("gateway requires the SQLite session store (agent.store())")
@@ -89,6 +210,8 @@ impl GatewayState {
             key,
             runs: Arc::new(Mutex::new(HashMap::new())),
             responses: Arc::new(Mutex::new(HashMap::new())),
+            router,
+            pending_approvals: Arc::new(Mutex::new(HashMap::new())),
         }))
     }
 }
@@ -117,6 +240,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/runs", get(list_runs).post(start_run))
         .route("/v1/runs/:id", get(get_run))
         .route("/v1/runs/:id/events", get(run_events))
+        .route("/v1/runs/:id/approval", post(resolve_approval))
         .route("/v1/runs/:id/stop", post(stop_run))
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
@@ -241,6 +365,7 @@ async fn capabilities(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             "responses": true,
             "runs": true,
             "runs_events_sse": true,
+            "run_approval": true,
             "sessions": true,
             "streaming": false,
         },
@@ -670,10 +795,19 @@ async fn start_run(
             .into_response();
     }
     let run_id = uuid::Uuid::new_v4().to_string();
+    // Runs always own a session so approvals can be session-scoped and the
+    // conversation stays continuable.
+    let session_id = match request.session_id.clone() {
+        Some(sid) if !sid.trim().is_empty() => sid,
+        _ => state
+            .store
+            .create_session("gateway-run", Some(&state.model_name), None)
+            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string()),
+    };
     let run = RunState {
         run_id: run_id.clone(),
         status: "running".to_string(),
-        session_id: request.session_id.clone(),
+        session_id: Some(session_id.clone()),
         message: request.message.clone(),
         created_at: now_secs(),
         finished_at: None,
@@ -681,28 +815,52 @@ async fn start_run(
         error: None,
         iterations: None,
         stop_requested: false,
+        approval: None,
     };
     state.runs.lock().await.insert(run_id.clone(), run.clone());
 
+    // Approval plumbing: channel from the approve callback into run state.
+    let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<PendingApproval>();
+    state.router.register(&run_id, &session_id, approval_tx);
+    let pump = state.clone();
+    let pump_run_id = run_id.clone();
+    tokio::spawn(async move {
+        while let Some(pending) = approval_rx.recv().await {
+            {
+                let mut runs = pump.runs.lock().await;
+                if let Some(run) = runs.get_mut(&pump_run_id) {
+                    run.status = "waiting_for_approval".to_string();
+                    run.approval = Some(json!({
+                        "command": pending.command,
+                        "reason": pending.reason,
+                        "choices": ["once", "session", "always", "deny"],
+                    }));
+                }
+            }
+            pump.pending_approvals
+                .lock()
+                .await
+                .insert(pump_run_id.clone(), pending.respond);
+        }
+    });
+
     let runner = state.clone();
     let spawn_run_id = run_id.clone();
-    tokio::spawn(async move {
-        let history = request
-            .session_id
-            .as_ref()
-            .map(|sid| {
-                runner
-                    .store
-                    .load_messages(sid)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|m| m.role != Role::System)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|h| !h.is_empty());
+    let message = request.message.clone();
+    let run_session_id = session_id.clone();
+    tokio::spawn(RUN_ID.scope(run_id.clone(), async move {
+        let session_id = run_session_id;
+        let history = runner
+            .store
+            .load_messages(&session_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.role != Role::System)
+            .collect::<Vec<_>>();
+        let history = if history.is_empty() { None } else { Some(history) };
         let outcome = runner
             .agent
-            .run_with_session(&request.message, history, request.session_id.as_deref())
+            .run_with_session(&message, history, Some(session_id.as_str()))
             .await;
         let mut runs = runner.runs.lock().await;
         if let Some(run) = runs.get_mut(&spawn_run_id) {
@@ -720,9 +878,11 @@ async fn start_run(
             }
             run.finished_at = Some(now_secs());
         }
-    });
+        drop(runs);
+        runner.router.unregister(&spawn_run_id);
+    }));
 
-    (StatusCode::ACCEPTED, Json(json!({"run_id": run_id, "status": "running"}))).into_response()
+    (StatusCode::ACCEPTED, Json(json!({"run_id": run_id, "status": "running", "session_id": session_id}))).into_response()
 }
 
 async fn list_runs(State(state): State<Arc<GatewayState>>) -> Json<Value> {
@@ -764,6 +924,7 @@ async fn run_events(
                         let event_name = match run.status.as_str() {
                             "completed" => "run.completed",
                             "failed" => "run.failed",
+                            "waiting_for_approval" => "approval.request",
                             _ => "run.progress",
                         };
                         let data = serde_json::to_string(&run).unwrap_or_default();
@@ -791,6 +952,46 @@ async fn run_events(
                 .text("keep-alive"),
         )
         .into_response()
+}
+
+#[derive(Deserialize)]
+struct ApprovalDecision {
+    decision: String,
+}
+
+/// Resolve a run's pending approval: once | session | always | deny.
+async fn resolve_approval(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Json(request): Json<ApprovalDecision>,
+) -> Response {
+    let decision = request.decision.trim().to_string();
+    if !matches!(decision.as_str(), "once" | "session" | "always" | "deny") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"message": "decision must be one of: once, session, always, deny", "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    }
+    let responder = state.pending_approvals.lock().await.remove(&id);
+    let Some(responder) = responder else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": {"message": format!("run {} has no pending approval", id), "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    };
+    responder.send(decision.clone()).ok();
+    let mut runs = state.runs.lock().await;
+    if let Some(run) = runs.get_mut(&id) {
+        if run.status == "waiting_for_approval" {
+            run.status = "running".to_string();
+        }
+        if let Some(approval) = run.approval.as_mut() {
+            approval["resolved"] = json!(decision);
+        }
+    }
+    Json(json!({"run_id": id, "decision": decision})).into_response()
 }
 
 async fn stop_run(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
@@ -857,7 +1058,7 @@ mod tests {
                 .expect("provider builds"),
         );
         let agent = Agent::new(provider, ToolRegistry::new()).with_store(store);
-        GatewayState::new(Arc::new(agent), "test-model".into(), "test".into(), Some("sekret".into()))
+        GatewayState::new(Arc::new(agent), "test-model".into(), "test".into(), Some("sekret".into()), ApprovalRouter::new())
             .expect("state builds")
     }
 

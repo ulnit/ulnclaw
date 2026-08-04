@@ -64,6 +64,11 @@ enum Commands {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Filesystem checkpoint management (snapshot list/restore/prune)
+    Checkpoints {
+        #[command(subcommand)]
+        action: CheckpointAction,
+    },
     /// Write a default config.toml
     Init,
 }
@@ -90,6 +95,41 @@ enum CronAction {
     Remove { id: String },
     Pause { id: String },
     Resume { id: String },
+}
+
+#[derive(Subcommand)]
+enum CheckpointAction {
+    /// List checkpoints for a directory (default: cwd)
+    List {
+        /// Directory to inspect (default: current directory)
+        dir: Option<String>,
+    },
+    /// Show the shared checkpoint store status (projects, sizes)
+    Status,
+    /// Restore a directory (or a single file) to a checkpoint
+    Restore {
+        /// Checkpoint hash (short or full)
+        hash: String,
+        /// Optional single file to restore
+        file: Option<String>,
+        /// Directory the checkpoint belongs to (default: cwd)
+        #[arg(long)]
+        dir: Option<String>,
+    },
+    /// Preview the diff between the working tree and a checkpoint
+    Diff {
+        /// Checkpoint hash (short or full)
+        hash: String,
+        /// Directory the checkpoint belongs to (default: cwd)
+        #[arg(long)]
+        dir: Option<String>,
+    },
+    /// Delete orphan/stale checkpoints and reclaim store space
+    Prune {
+        /// Retention window in days (default: [checkpoints] retention_days)
+        #[arg(long)]
+        days: Option<u64>,
+    },
 }
 
 fn load_config(cli: &Cli) -> UlncLawConfig {
@@ -141,17 +181,84 @@ async fn gateway_cmd(
     if let Some(port) = port {
         gateway.port = port;
     }
-    let agent = make_agent(config, false).await?;
+    let router = ulnclaw::gateway::ApprovalRouter::new();
+    let router_approve = router.clone();
+    let approve: ulnclaw::tools::context::ApproveFn = Arc::new(move |reason, command| {
+        let router = router_approve.clone();
+        Box::pin(async move {
+            match ulnclaw::gateway::current_run_id() {
+                Some(run_id) => router.request(&run_id, reason, command).await,
+                // No run context (e.g. chat-completions path): deny by design.
+                None => false,
+            }
+        })
+    });
+    let agent = make_agent(config, false, Some(approve)).await?;
     let state = ulnclaw::gateway::GatewayState::new(
         agent,
         config.model.model.clone(),
         config.model.provider.clone(),
         gateway.key.clone(),
+        router,
     )
     .map_err(|e| e.to_string())?;
     ulnclaw::gateway::serve(state, &gateway.host, gateway.port)
         .await
         .map_err(|e| e.to_string())
+}
+
+async fn checkpoints_cmd(config: &UlncLawConfig, action: CheckpointAction) -> Result<(), String> {
+    let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    let manager =
+        ulnclaw::checkpoint::CheckpointManager::new(home.join("checkpoints"), &config.checkpoints);
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+    match action {
+        CheckpointAction::List { dir } => {
+            let dir = dir.unwrap_or(cwd);
+            let checkpoints = manager.list_checkpoints(&dir).await;
+            println!("{}", ulnclaw::checkpoint::format_checkpoint_list(&checkpoints, &dir));
+        }
+        CheckpointAction::Status => {
+            let status = manager.status().await;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&status).map_err(|e| e.to_string())?
+            );
+        }
+        CheckpointAction::Restore { hash, file, dir } => {
+            let dir = dir.unwrap_or(cwd);
+            let result = manager
+                .restore(&dir, &hash, file.as_deref())
+                .await
+                .map_err(|e| e.to_string())?;
+            println!(
+                "✅ Restored {} to {} ({})",
+                dir,
+                result["restored_to"].as_str().unwrap_or("?"),
+                result["reason"].as_str().unwrap_or("?")
+            );
+        }
+        CheckpointAction::Diff { hash, dir } => {
+            let dir = dir.unwrap_or(cwd);
+            let result = manager.diff(&dir, &hash).await.map_err(|e| e.to_string())?;
+            let stat = result["stat"].as_str().unwrap_or("");
+            if !stat.is_empty() {
+                println!("{}", stat);
+            }
+            println!("{}", result["diff"].as_str().unwrap_or(""));
+        }
+        CheckpointAction::Prune { days } => {
+            let days = days.unwrap_or(config.checkpoints.retention_days);
+            let stats = manager.prune(days, true).await;
+            println!(
+                "scanned: {}, deleted orphan: {}, deleted stale: {}, freed: {} bytes",
+                stats.scanned, stats.deleted_orphan, stats.deleted_stale, stats.bytes_freed
+            );
+        }
+    }
+    Ok(())
 }
 
 fn init_logging(verbose: bool) {
@@ -182,6 +289,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
         Commands::Cron { action } => cron_cmd(action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
+        Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
         Commands::Init => {
             let path = UlncLawConfig::write_default_if_missing().map_err(|e| e.to_string())?;
             println!("config written to {}", path.display());
@@ -190,7 +298,11 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
     }
 }
 
-async fn make_agent(config: &UlncLawConfig, interactive: bool) -> Result<Arc<Agent>, String> {
+async fn make_agent(
+    config: &UlncLawConfig,
+    interactive: bool,
+    approve_override: Option<ulnclaw::tools::context::ApproveFn>,
+) -> Result<Arc<Agent>, String> {
     let provider = build_provider(config)?;
     let mut registry = ToolRegistry::new();
     register_builtin_tools(&mut registry);
@@ -239,9 +351,10 @@ async fn make_agent(config: &UlncLawConfig, interactive: bool) -> Result<Arc<Age
                 Ok(answer)
             })
         }));
-        context = context.with_approve(Arc::new(|prompt| {
+        if context.approve.is_none() {
+            context = context.with_approve(Arc::new(|reason, command| {
             Box::pin(async move {
-                println!("\n⚠️  {}\nApprove? [y/N]", prompt);
+                println!("\n⚠️  Approve dangerous command? [{}]\n{}\nApprove? [y/N]", reason, command);
                 print!("> ");
                 std::io::stdout().flush().ok();
                 let mut line = String::new();
@@ -249,6 +362,18 @@ async fn make_agent(config: &UlncLawConfig, interactive: bool) -> Result<Arc<Age
                 matches!(line.trim(), "y" | "Y" | "yes" | "YES")
             })
         }));
+        }
+    }
+    if let Some(approve) = approve_override {
+        context = context.with_approve(approve);
+    }
+
+    // Checkpoint auto-maintenance in the background (hermes startup hook).
+    if config.checkpoints.enabled {
+        let manager = context.checkpoint_manager();
+        tokio::spawn(async move {
+            manager.maybe_auto_prune().await;
+        });
     }
 
     // Capture the tool catalog snapshot for tool_search (before registry moves).
@@ -272,14 +397,14 @@ async fn make_agent(config: &UlncLawConfig, interactive: bool) -> Result<Arc<Age
 }
 
 async fn one_shot(config: &UlncLawConfig, prompt: &str) -> Result<(), String> {
-    let agent = make_agent(config, false).await?;
+    let agent = make_agent(config, false, None).await?;
     let result = agent.run(prompt, None).await.map_err(|e| e.to_string())?;
     println!("{}", result.content);
     Ok(())
 }
 
 async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
-    let agent = make_agent(config, true).await?;
+    let agent = make_agent(config, true, None).await?;
     println!(
         "ulnclaw {} — model: {} ({})",
         ulnclaw::VERSION,

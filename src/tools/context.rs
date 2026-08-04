@@ -25,9 +25,9 @@ pub type ClarifyFn = Arc<
         + Sync,
 >;
 
-/// Callback used by the approval system: prompt -> approved?
+/// Callback used by the approval system: (reason, command) -> approved?
 pub type ApproveFn = Arc<
-    dyn Fn(String) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
+    dyn Fn(String, String) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
 >;
 
 /// Backend that can run delegated sub-agents (implemented by `Agent`).
@@ -68,6 +68,8 @@ pub struct ToolContext {
     pub provider: Option<Arc<dyn Provider>>,
     /// Snapshot of tool definitions (for tool_search).
     tool_definitions: Arc<std::sync::RwLock<Vec<crate::tools::ToolDefinition>>>,
+    /// Transparent filesystem checkpoints (lazily built from config).
+    checkpoints: Arc<std::sync::RwLock<Option<Arc<crate::checkpoint::CheckpointManager>>>>,
 }
 
 impl Default for ToolContext {
@@ -86,6 +88,7 @@ impl Default for ToolContext {
             cron_runner: Arc::new(RwLock::new(None)),
             provider: None,
             tool_definitions: Arc::new(std::sync::RwLock::new(Vec::new())),
+            checkpoints: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 }
@@ -183,6 +186,22 @@ impl ToolContext {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    /// Checkpoint manager for this context (lazily built from `home` +
+    /// `[checkpoints]` config on first use).
+    pub fn checkpoint_manager(&self) -> Arc<crate::checkpoint::CheckpointManager> {
+        if let Some(manager) = self.checkpoints.read().ok().and_then(|g| g.clone()) {
+            return manager;
+        }
+        let manager = Arc::new(crate::checkpoint::CheckpointManager::new(
+            self.home.join("checkpoints"),
+            &self.config.checkpoints,
+        ));
+        if let Ok(mut guard) = self.checkpoints.write() {
+            *guard = Some(manager.clone());
+        }
+        manager
     }
 
     /// Current working directory snapshot.

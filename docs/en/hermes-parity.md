@@ -39,7 +39,7 @@ performance and a single static binary.
 | Agent loop with tool calling | ✅ | iteration budget, usage accounting, step callbacks |
 | SQLite state store (`hermes_state.py`) | ✅ | sessions/messages/system_prompts/state_meta/async_delegations schema, FTS5 with LIKE fallback, lineage (parent sessions) |
 | Context compression (`conversation_compression.py`) | ✅ | budget-triggered, middle-turn summarization via secondary model call, keeps system prompt + first user message + recent tail |
-| Approval system (`approval.py`) | ✅ core | command normalization (backslash-joins, `${IFS}`, comment strip), hardline floor (block), recoverable-costly (confirm) |
+| Approval system (`approval.py`) | ✅ | command normalization (backslash-joins, `${IFS}`, comment strip), hardline floor (block), recoverable-costly (confirm); REPL y/N prompt; gateway run approvals (`POST /v1/runs/:id/approval`, once/session/always/deny, SSE `approval.request`) |
 | Threat-pattern scanning (`threat_patterns.py`) | ✅ core | advisory injection scan for tool results re-entering context |
 | Toolsets (`toolsets.py`) | ✅ | all 33 toolset definitions incl. composition (`includes`), `coding` default |
 | Tool registry (`registry.py`) | ✅ | check_fn gating, toolset grouping, max result size truncation |
@@ -54,8 +54,10 @@ performance and a single static binary.
 | HTTP gateway (`gateway/platforms/api_server.py`) | ✅ core | `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` (session continuity via `X-Ulnclaw-Session-Id`), `/v1/responses` (stateful via `previous_response_id`), `/v1/models`, `/v1/capabilities`, `/v1/runs` (async runs + SSE events + stop), `/api/sessions` CRUD + chat, bearer-token auth |
 | Messaging platforms (Telegram/WhatsApp/QQ/…) | ⬜ deferred | hermes' platform adapters are not ported; the HTTP gateway covers OpenAI-compatible frontends |
 | TUI/web/app surfaces | ⬜ deferred | hermes ships a TUI and web apps; ulnclaw is a library + CLI + HTTP gateway today |
-| Environments (docker/ssh/modal/daytona/vercel) | ⬜ deferred | terminal runs locally; remote backends pending |
-| Checkpoint manager, browser supervisor, computer-use CUA | ⬜ deferred | heavyweight subsystems |
+| Environments (`tools/environments/`) | ✅ core | `terminal` backends: local (default), docker (`ensure_docker_container` inspect→run), ssh (BatchMode, identity file); `[terminal] backend/container/image/ssh_host/...`; modal/daytona/vercel deferred |
+| Checkpoint manager (`checkpoint_manager.py`) | ✅ | v2 shared shadow git store (`<home>/checkpoints/store`): per-project refs/indexes, transparent pre-edit snapshots (once per turn before `write_file`/`patch`), list/restore/diff/prune CLI, size caps, oversize-file filter, orphan/stale auto-prune |
+| Browser supervisor | ✅ | auto-launches managed headless Chrome/Chromium for `ULNCLAW_BROWSER_CDP=auto` |
+| computer-use CUA | ⬜ deferred | requires a computer-use driver |
 
 ## Storage layout
 
@@ -70,17 +72,25 @@ performance and a single static binary.
 ├── skills/<name>/SKILL.md  skills
 ├── sessions/*.todos.json   per-session todo lists
 ├── images/  audio/         generated artifacts
-└── sandboxes/              execute_code scripts
+├── sandboxes/              execute_code scripts
+└── checkpoints/store/      shared shadow git store (per-project refs/indexes)
 ```
 
 ## Known differences
 
-- Approval UX is a terminal y/N prompt (hermes has richer platform-specific flows).
+- Approval UX is a terminal y/N prompt on the CLI (hermes has richer
+  platform-specific flows); the gateway exposes run approvals over HTTP with
+  once/session/always/deny semantics.  Chat-completions requests have no run
+  context and auto-deny confirm-tier commands by design.
 - Browser supervisor launches a local Chrome/Chromium directly; hermes drives
   an external `agent-browser` daemon (cloud browser providers are not ported).
 - The gateway implements the api_server platform subset; profile multiplexing
-  (`/p/<profile>/...`), run approval resolution, and token streaming are not ported.
+  (`/p/<profile>/...`) and token streaming are not ported.
 - Compression uses a char/4 token estimate instead of a tokenizer.
 - `patch` fuzzy chain implements all 9 hermes strategies; similarity is an
   LCS-based ratio (difflib.SequenceMatcher stand-in), so edge-case thresholds
   can differ slightly from CPython's matcher.
+- Environments cover local/docker/ssh; hermes' modal/daytona/vercel backends
+  and their credential flows are not ported.
+- Checkpoints skip hermes' legacy pre-v2 store migration (fresh stores only)
+  and the volume-identity orphan heuristic (workdir existence is used).

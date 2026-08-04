@@ -237,8 +237,11 @@ a port of hermes' `gateway/platforms/api_server.py` core.
 
 **Key Types:**
 - `GatewayState` - agent + store + model identity + optional bearer key +
-  run registry
-- `RunState` - tracked async run (`/v1/runs`): status, result, stop flag
+  run registry + approval router
+- `RunState` - tracked async run (`/v1/runs`): status, result, stop flag,
+  pending approval payload
+- `ApprovalRouter` - run_id → approval channel; `once`/`session`/`always`
+  grants are remembered per scope; task-local `current_run_id()`
 - `router()` / `serve()` - route table and listener
 
 **Endpoints:**
@@ -252,13 +255,16 @@ a port of hermes' `gateway/platforms/api_server.py` core.
 - `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`,
   `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`
 - `POST /v1/runs` (202 + run_id), `GET /v1/runs`, `GET /v1/runs/:id`,
-  `GET /v1/runs/:id/events` (SSE lifecycle events),
-  `POST /v1/runs/:id/stop`
+  `GET /v1/runs/:id/events` (SSE lifecycle events incl.
+  `approval.request`), `POST /v1/runs/:id/stop`,
+  `POST /v1/runs/:id/approval` (resolve pending approval)
 
 **Security:** bearer-token middleware (constant-time compare) on all routes
 except health probes; key comes from `[gateway] key` or
-`ULNCLAW_GATEWAY_KEY`. Non-interactive by design: approval callbacks are
-unset, so dangerous terminal commands are denied rather than prompted.
+`ULNCLAW_GATEWAY_KEY`. Runs always own a session; confirm-tier commands
+park the run in `waiting_for_approval` until resolved over HTTP
+(`once`/`session`/`always`/`deny`). Requests without a run context
+(chat-completions) auto-deny confirm-tier commands.
 
 ### Supporting Modules
 
@@ -271,6 +277,10 @@ unset, so dangerous terminal commands are denied rather than prompted.
 - `skills/` - SKILL.md discovery and prompt injection
 - `mcp/` - MCP stdio client; server tools register as
   `mcp__<server>__<tool>`
+- `environments.rs` - terminal backends: local / docker (auto container
+  creation) / ssh; command wrapping + shell quoting
+- `checkpoint.rs` - transparent git-backed snapshots (shared bare store,
+  per-project refs/indexes, pre-edit hooks, restore/diff/prune)
 
 ## Data Flow
 
@@ -408,9 +418,8 @@ Optional subsystems use registry patterns:
 - **Token Streaming**: SSE token streaming for chat completions (run
   lifecycle events already stream via `/v1/runs/:id/events`)
 - **Messaging Platforms**: hermes' Telegram/WhatsApp/QQ adapters
-- **Environments**: docker/ssh terminal backends
-- **Run Approval Resolution**: `/v1/runs/:id/approval` for interactive
-  approval flows over the gateway
+- **More Environments**: modal/daytona/vercel terminal backends
+  (local/docker/ssh are implemented)
 - **Anthropic Native**: Direct Claude API support
 - **Retry Logic**: Automatic retry with backoff
 - **Metrics**: Prometheus/OpenTelemetry integration
@@ -418,7 +427,6 @@ Optional subsystems use registry patterns:
 ### Architecture Evolution
 - **Plugin System**: Dynamic tool/provider loading
 - **Distributed Agents**: Multi-node agent coordination
-- **Checkpoint Manager**: hermes-style run checkpointing
 
 ## References
 

@@ -853,15 +853,104 @@ Terminates the managed browser and drops the shared session.
 Gets (or opens) the process-wide shared session and runs `func` against it.
 This is the entry point used by every `browser_*` tool handler.
 
+## Environments (`environments`)
+
+Terminal backends for the `terminal` tool (hermes `tools/environments/`).
+
+#### `enum TerminalBackend { Local, Docker { container, image }, Ssh { host, user, port, identity } }`
+
+#### `resolve(config: &TerminalConfig) -> TerminalBackend`
+
+Reads `[terminal] backend` (`"local"` default, `"docker"`, `"ssh"`).
+
+#### `async ensure_docker_container(container: &str, image: &str) -> Result<()>`
+
+`docker inspect` first; when missing, `docker run -d --name <container> <image> sleep infinity`.
+
+#### `wrap_command(backend: &TerminalBackend, command: &str) -> Vec<String>`
+
+Local → plain shell; Docker → `docker exec --workdir <cwd> <container> bash -lc <quoted>`;
+Ssh → `ssh -o BatchMode=yes [-i identity] [-p port] [user@]host cd <cwd> && <command>`.
+
+Config (`config.toml`):
+
+```toml
+[terminal]
+backend = "docker"          # "local" (default) | "docker" | "ssh"
+container = "ulnclaw-dev"   # docker container name
+image = "ubuntu:24.04"      # image used to create the container if missing
+ssh_host = "build-box"
+ssh_user = "dev"
+ssh_port = 22
+ssh_identity = "~/.ssh/id_ed25519"
+```
+
+## Checkpoints (`checkpoint`)
+
+Transparent filesystem snapshots (hermes `checkpoint_manager.py`).  A single
+shared bare git store under `<home>/checkpoints/store` keeps per-project
+snapshot chains in `refs/hermes/<hash16>` with per-project indexes — the LLM
+never sees this subsystem.
+
+#### `CheckpointManager::new(base: PathBuf, config: &CheckpointsConfig) -> Self`
+
+#### `new_turn(&self)`
+
+Reset per-turn dedup (called by the agent at the start of every iteration).
+
+#### `async ensure_checkpoint(&self, working_dir: &str, reason: &str) -> bool`
+
+Snapshot once per directory per turn; skips `/`, `$HOME`, >50k-file dirs,
+files larger than `max_file_size_mb`.  The agent calls this before
+`write_file`/`patch` dispatch.
+
+#### `async list_checkpoints(&self, working_dir: &str) -> Vec<CheckpointEntry>`
+
+#### `async restore(&self, working_dir: &str, commit_hash: &str, file_path: Option<&str>) -> Result<Value, String>`
+
+Takes a pre-rollback snapshot first (undo the undo), then `git checkout <hash> -- <path|.`.
+
+#### `async diff(&self, ...) / session_diff(&self, ...)`
+
+Diff the working tree against a checkpoint / against the earliest retained checkpoint.
+
+#### `async status(&self) -> StoreStatus` / `async prune(&self, retention_days: u64, delete_orphans: bool) -> PruneStats` / `async maybe_auto_prune(&self)`
+
+CLI: `ulnclaw checkpoints list [dir] | status | restore <hash> [file] [--dir D] | diff <hash> [--dir D] | prune [--days N]`.
+
+Config (`config.toml`):
+
+```toml
+[checkpoints]
+enabled = false          # master switch (opt-in)
+max_snapshots = 20       # keep at most N checkpoints per project
+max_total_size_mb = 500  # store size cap (oldest dropped across projects)
+max_file_size_mb = 10    # skip files larger than this
+retention_days = 7       # auto-prune stale projects
+auto_prune_hours = 24    # auto-prune cadence
+```
+
 ## HTTP Gateway (`gateway/`)
 
 OpenAI-compatible API server (`ulnclaw gateway`).
 
 ### Library API
 
-#### `GatewayState::new(agent: Arc<Agent>, model_name: String, provider_name: String, key: Option<String>) -> Result<Arc<GatewayState>>`
+#### `GatewayState::new(agent: Arc<Agent>, model_name: String, provider_name: String, key: Option<String>, router: Arc<ApprovalRouter>) -> Result<Arc<GatewayState>>`
 
 Builds gateway state from a wired agent (SQLite store must be attached).
+The `ApprovalRouter` connects the agent's approve callback to run-scoped
+HTTP approval resolution (see below).
+
+#### `ApprovalRouter::new() -> Arc<ApprovalRouter>` / `current_run_id() -> Option<String>`
+
+Run-approval plumbing.  The router maps `run_id → (session_id, channel)`;
+the agent's approve callback (installed by the CLI when starting the
+gateway) reads the task-local run id and awaits `router.request(run_id,
+reason, command)`.  `once` grants a single use, `session` remembers the
+command for the run's session, `always` remembers it for the gateway's
+lifetime, `deny` rejects.  Requests without a run context (e.g.
+`/v1/chat/completions`) auto-deny confirm-tier commands.
 
 #### `router(state: Arc<GatewayState>) -> Router`
 
@@ -892,8 +981,9 @@ Binds and serves until interrupted.
 | POST | `/v1/runs` | yes | Start async run → `202` + `run_id` |
 | GET | `/v1/runs` | yes | Tracked runs, newest first |
 | GET | `/v1/runs/:id` | yes | Run status/result |
-| GET | `/v1/runs/:id/events` | yes | SSE lifecycle events (`run.progress` → `run.completed`/`run.failed`), closes at terminal state |
+| GET | `/v1/runs/:id/events` | yes | SSE lifecycle events (`run.progress`, `approval.request` → `run.completed`/`run.failed`), closes at terminal state |
 | POST | `/v1/runs/:id/stop` | yes | Best-effort stop request |
+| POST | `/v1/runs/:id/approval` | yes | Resolve a pending approval: `{"decision": "once"\|"session"\|"always"\|"deny"}` |
 
 **Auth:** `Authorization: Bearer <key>` when `[gateway] key` /
 `ULNCLAW_GATEWAY_KEY` is set; open otherwise.
@@ -905,3 +995,24 @@ curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \
      -d '{"messages":[{"role":"user","content":"Hello"}]}' \
      http://127.0.0.1:8642/v1/chat/completions
 ```
+
+**Run approval flow** (requires `[agent] approval = true`):
+
+```bash
+# 1. Start a run; if the model hits a confirm-tier command (sudo, rm -rf,
+#    force-push, ...) the run parks in waiting_for_approval:
+RUN=$(curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"message":"run sudo whoami in the terminal"}' \
+     http://127.0.0.1:8642/v1/runs | jq -r .run_id)
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8642/v1/runs/$RUN
+# {"status":"waiting_for_approval",
+#  "approval":{"command":"sudo whoami","reason":"sudo (elevated privileges)",
+#              "choices":["once","session","always","deny"]}, ...}
+
+# 2. Resolve it; the run resumes with the decision:
+curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"decision":"once"}' http://127.0.0.1:8642/v1/runs/$RUN/approval
+```
+
+The SSE stream (`/v1/runs/:id/events`) emits `approval.request` when the run
+parks, so frontends can prompt without polling.

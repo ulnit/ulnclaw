@@ -262,8 +262,11 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 
 **关键类型：**
 - `GatewayState` - agent + store + 模型标识 + 可选 bearer 密钥 +
-  运行记录表
-- `RunState` - 被跟踪的异步运行（`/v1/runs`）：状态、结果、停止标志
+  运行记录表 + 审批 router
+- `RunState` - 被跟踪的异步运行（`/v1/runs`）：状态、结果、停止标志、
+  待审批载荷
+- `ApprovalRouter` - run_id → 审批通道；`once`/`session`/`always`
+  授权按作用域记忆；task-local `current_run_id()`
 - `router()` / `serve()` - 路由表与监听器
 
 **端点：**
@@ -277,11 +280,14 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 - `GET/POST /api/sessions`、`GET/DELETE /api/sessions/:id`、
   `GET /api/sessions/:id/messages`、`POST /api/sessions/:id/chat`
 - `POST /v1/runs`（202 + run_id）、`GET /v1/runs`、`GET /v1/runs/:id`、
-  `GET /v1/runs/:id/events`（SSE 生命周期事件）、`POST /v1/runs/:id/stop`
+  `GET /v1/runs/:id/events`（SSE 生命周期事件，含 `approval.request`）、
+  `POST /v1/runs/:id/stop`、`POST /v1/runs/:id/approval`（解决待审批）
 
 **安全：** 除健康探测外所有路由经 bearer 令牌中间件（常量时间比较）；
-密钥来自 `[gateway] key` 或 `ULNCLAW_GATEWAY_KEY`。非交互设计：
-不设置审批回调，危险终端命令直接被拒绝而非弹出提示。
+密钥来自 `[gateway] key` 或 `ULNCLAW_GATEWAY_KEY`。run 总是拥有自己的
+会话；确认级命令使 run 停泊在 `waiting_for_approval`，经 HTTP 解决
+（`once`/`session`/`always`/`deny`）。没有 run 上下文的请求
+（chat-completions）对确认级命令自动拒绝。
 
 ### 支撑模块
 
@@ -292,6 +298,10 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
   任务存储 + 轮询调度器
 - `skills/` - SKILL.md 发现与提示注入
 - `mcp/` - MCP stdio 客户端；服务器工具注册为 `mcp__<server>__<tool>`
+- `environments.rs` - terminal 后端：local / docker（自动创建容器）/
+  ssh；命令包装 + shell 引号
+- `checkpoint.rs` - 透明的 git 快照（共享 bare 存储、按项目
+  ref/index、编辑前钩子、restore/diff/prune）
 
 ## 数据流
 
@@ -429,8 +439,8 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 - **令牌流式输出**：chat completions 的 SSE 令牌流
   （运行生命周期事件已经由 `/v1/runs/:id/events` 流式输出）
 - **消息平台**：hermes 的 Telegram/WhatsApp/QQ 适配器
-- **运行环境**：docker/ssh 终端后端
-- **运行审批处理**：网关上的交互式审批 `/v1/runs/:id/approval`
+- **更多运行环境**：modal/daytona/vercel 终端后端
+  （local/docker/ssh 已实现）
 - **Anthropic 原生**：直接 Claude API 支持
 - **重试逻辑**：带退避的自动重试
 - **指标**：Prometheus/OpenTelemetry 集成
@@ -438,7 +448,6 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 ### 架构演进
 - **插件系统**：动态工具/提供商加载
 - **分布式代理**：多节点代理协调
-- **检查点管理器**：hermes 风格的运行检查点
 
 ## 参考资料
 

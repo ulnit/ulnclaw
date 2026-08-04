@@ -106,18 +106,23 @@ ulnclaw gateway
 
 ```rust
 // ……或嵌入你自己的二进制：
+let router = ulnclaw::gateway::ApprovalRouter::new();
+// 在 agent 的工具上下文上安装审批回调，把确认级命令路由进 run
+// （完整接线见 main.rs 的 gateway_cmd），然后：
 let state = ulnclaw::gateway::GatewayState::new(
     agent,                       // 已附加 SQLite 存储的 Arc<Agent>
     "my-agent".to_string(),      // 对外模型名
     "openai".to_string(),        // provider 标签
     Some("sk-...".to_string()),  // bearer 密钥（None = 开放）
+    router,                      // 运行审批 router
 )?;
 ulnclaw::gateway::serve(state, "127.0.0.1", 8642).await?;
 ```
 
 端点：`/v1/chat/completions`（`X-Ulnclaw-Session-Id` 会话续接）、
-`/v1/models`、`/v1/capabilities`、`/api/sessions` 增删查改 + 会话内聊天、
-`/v1/runs` 异步运行。完整列表见
+`/v1/responses`、`/v1/models`、`/v1/capabilities`、`/api/sessions`
+增删查改 + 会话内聊天、`/v1/runs` 异步运行（SSE 事件 +
+运行审批 `POST /v1/runs/:id/approval`）。完整列表见
 [API 参考](api-reference.md#http-网关-gateway)。
 
 

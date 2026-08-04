@@ -152,12 +152,18 @@ async fn terminal_exec(
         }));
     }
 
+    let backend = match crate::environments::resolve(&ctx.config.terminal) {
+        Ok(backend) => backend,
+        Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+    };
+
     // Bare `cd` updates the session working directory (hermes local env tracks cwd).
     let trimmed = command.trim();
     if let Some(target) = trimmed.strip_prefix("cd ") {
         let target = target.trim().trim_matches('"');
         let path = ctx.resolve_path(target);
-        if path.is_dir() {
+        let remote = backend != crate::environments::TerminalBackend::Local;
+        if remote || path.is_dir() {
             ctx.set_cwd(path.clone());
             return Ok(json!({
                 "success": true,
@@ -181,7 +187,7 @@ async fn terminal_exec(
     };
 
     if background {
-        return spawn_background(ctx, command, cwd).await;
+        return spawn_background(ctx, command, cwd, &backend).await;
     }
 
     if timeout > FOREGROUND_MAX_TIMEOUT {
@@ -195,8 +201,15 @@ async fn terminal_exec(
     }
 
     let started = std::time::Instant::now();
-    let mut cmd = shell_command(&command);
-    cmd.current_dir(&cwd);
+    let effective = crate::environments::wrap_command(
+        &backend,
+        &command,
+        cwd.to_str(),
+    );
+    let mut cmd = shell_command(&effective);
+    if backend == crate::environments::TerminalBackend::Local {
+        cmd.current_dir(&cwd);
+    }
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => return Ok(json!({"success": false, "error": format!("spawn failed: {}", e)})),
@@ -260,10 +273,14 @@ async fn spawn_background(
     ctx: Arc<ToolContext>,
     command: String,
     cwd: PathBuf,
+    backend: &crate::environments::TerminalBackend,
 ) -> Result<serde_json::Value> {
     let session_id = format!("bg-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let mut cmd = shell_command(&command);
-    cmd.current_dir(&cwd);
+    let effective = crate::environments::wrap_command(backend, &command, cwd.to_str());
+    let mut cmd = shell_command(&effective);
+    if *backend == crate::environments::TerminalBackend::Local {
+        cmd.current_dir(&cwd);
+    }
     let child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => return Ok(json!({"success": false, "error": format!("spawn failed: {}", e)})),
