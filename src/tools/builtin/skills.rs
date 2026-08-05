@@ -117,6 +117,8 @@ fn skill_view_tool() -> crate::tools::Tool {
                 // credentials are refused).
                 let declared = skills::required_env_vars(&content);
                 let accepted = ctx.register_env_passthrough(&declared);
+                // Usage telemetry (hermes skills_tool bump_view).
+                crate::skill_usage::bump_view(&ctx.home, &skill.name);
                 let mut result = json!({
                     "success": true,
                     "skill": skill.name,
@@ -176,6 +178,11 @@ fn skill_manage_tool() -> crate::tools::Tool {
                     );
                     std::fs::write(skill_path.join("SKILL.md"), body)
                         .map_err(|e| crate::error::AgentError::tool(format!("write skill: {}", e)))?;
+                    if action == "create" {
+                        crate::skill_usage::mark_agent_created(&ctx.home, name);
+                    } else {
+                        crate::skill_usage::bump_patch(&ctx.home, name);
+                    }
                     Ok(json!({
                         "success": true,
                         "action": action,
@@ -189,6 +196,7 @@ fn skill_manage_tool() -> crate::tools::Tool {
                     }
                     std::fs::remove_dir_all(&skill_path)
                         .map_err(|e| crate::error::AgentError::tool(format!("delete skill: {}", e)))?;
+                    crate::skill_usage::forget(&ctx.home, name);
                     Ok(json!({"success": true, "action": "delete", "skill": name}))
                 }
                 other => Ok(json!({"success": false, "error": format!("Unknown action: {}", other)})),

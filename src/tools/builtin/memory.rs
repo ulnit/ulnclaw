@@ -71,29 +71,25 @@ fn memory_file(home: &std::path::Path, target: &str) -> PathBuf {
     }
 }
 
-fn load_entries(path: &std::path::Path) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .map(|content| {
-            content
-                .lines()
-                .filter_map(|line| {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() || trimmed.starts_with('#') {
-                        None
-                    } else {
-                        Some(trimmed.trim_start_matches("- ").to_string())
-                    }
-                })
-                .collect()
+/// Parse `- ` bullet entries from memory file content (shared with the
+/// learning graph / journey mutations so indices stay aligned).
+pub fn read_entries(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                None
+            } else {
+                Some(trimmed.trim_start_matches("- ").to_string())
+            }
         })
-        .unwrap_or_default()
+        .collect()
 }
 
-fn save_entries(path: &std::path::Path, entries: &[String]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let content = if entries.is_empty() {
+/// Serialize entries back to the bullet file format.
+pub fn entries_to_content(entries: &[String]) -> String {
+    if entries.is_empty() {
         String::new()
     } else {
         entries
@@ -102,7 +98,20 @@ fn save_entries(path: &std::path::Path, entries: &[String]) -> Result<()> {
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"
-    };
+    }
+}
+
+fn load_entries(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .map(|content| read_entries(&content))
+        .unwrap_or_default()
+}
+
+fn save_entries(path: &std::path::Path, entries: &[String]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let content = entries_to_content(entries);
     std::fs::write(path, content)
         .map_err(|e| crate::error::AgentError::tool(format!("write memory: {}", e)))?;
     Ok(())
