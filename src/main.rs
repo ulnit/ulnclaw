@@ -474,6 +474,23 @@ enum PetsAction {
     },
     /// Check pet setup + terminal graphics support
     Doctor,
+    /// Generate ("hatch") a brand-new pet from a description
+    Hatch {
+        /// What the pet is (e.g. "a tiny cyber fox")
+        description: Vec<String>,
+        /// Style: auto/pixel/plush/clay/sticker/flat-vector/3d-toy/painterly
+        #[arg(long)]
+        style: Option<String>,
+        /// Display name (default: first words of the description)
+        #[arg(long)]
+        name: Option<String>,
+        /// Use an existing image as the base look (skip draft generation)
+        #[arg(long)]
+        base: Option<String>,
+        /// Generate N base drafts, save them, and stop (no hatch)
+        #[arg(long, default_value = "0")]
+        drafts: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -3851,6 +3868,16 @@ async fn pets_cmd(action: PetsAction) -> Result<(), String> {
             PetsAction::Scale { factor } => ulnclaw::pets::cmd_scale(&factor),
             PetsAction::Remove { slug } => ulnclaw::pets::cmd_remove(&home, &slug),
             PetsAction::Doctor => ulnclaw::pets::cmd_doctor(&home),
+            PetsAction::Hatch { description, style, name, base, drafts } => {
+                ulnclaw::pets_generate::cmd_hatch(
+                    &home,
+                    &description.join(" "),
+                    style.as_deref(),
+                    name.as_deref(),
+                    base.as_deref(),
+                    drafts,
+                )
+            }
         }
     })
     .await

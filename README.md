@@ -51,7 +51,7 @@ skill sync, and a Tauri desktop GUI (`desktop/`).
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`, `[auxiliary.title_generation]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
 - **📡 Messaging platforms** — Telegram/Discord/Slack/Signal adapters run inside `ulnclaw gateway` (`[messaging.*]`, Signal via a signal-cli HTTP daemon), WhatsApp Cloud + Microsoft Graph ingress mount as gateway webhook routes (`/webhooks/whatsapp` HMAC-verified, `/webhooks/msgraph` clientState-verified), plus a generic signed-webhook platform (`[messaging.webhook]` routes at `/webhooks/hook/<name>` — Svix/GitHub/GitLab/HMAC-V2 signature schemes, per-route rate limits, delivery-id idempotency, `deliver_only` zero-LLM push), and BlueBubbles iMessage (`[messaging.bluebubbles]` → `/webhooks/bluebubbles` password-authenticated webhook, LRU-cached chat-GUID resolution, REST text/attachment sends), and Weixin personal accounts (`[messaging.weixin]` — Tencent iLink Bot API long-polling, QR login via `ulnclaw weixin login`, AES-128-ECB CDN media both ways, context_token echo sends), and QQ (`[messaging.qq]` — official QQ Bot API v2 WebSocket gateway + REST, markdown replies, chunked media uploads, `asr_refer_text` voice transcripts), and Yuanbao (`[messaging.yuanbao]` — Tencent Yuanbao app bots over a WebSocket gateway with a hand-rolled protobuf wire codec, HMAC-SHA256 sign-token auth, markdown-aware chunked text replies): allowlist-gated pairing (fail closed) plus hermes-style interactive pairing codes (`pairing list/approve/revoke/clear-pending`), media attachments cached under `media-cache/` and delivered as path references (outbound `MEDIA:` tags upload natively on Telegram/Discord/Slack; WhatsApp media rides the Graph `/media` endpoint both ways), one persistent session per chat, hermes-style reply chunking. The `clarify` tool works in chats: WhatsApp renders native buttons/list sheets, other platforms numbered text; button taps and follow-up text resolve the pending question
 - **🎙️ Voice-note transcription (STT)** — inbound audio/voice messages are transcribed before the agent turn (`[stt]` config): built-in `local_command` / `groq` / `openai` / `mistral` / `xai` / `elevenlabs` / `deepinfra` providers plus custom `[stt.providers.<name>]` command providers, transcripts echoed back as 🎙️ messages and injected into the turn with hermes fallback/sentinel semantics; a `transcribe_audio` tool (opt-in `stt` toolset) covers arbitrary files. The Python-only faster-whisper `local` provider is replaced by `stt.local.command` / cloud backends
-- **🐾 Pets (petdex)** — `ulnclaw pets list|install|select|show|off|scale|remove|doctor`: adopt animated petdex mascots (live gallery of thousands, host-pinned installs under `<home>/pets/`), animate them in the terminal via kitty/iTerm2/sixel graphics or a truecolor half-block fallback, one `[display.pet]` scale knob resizes every surface
+- **🐾 Pets (petdex)** — `ulnclaw pets list|install|select|show|off|scale|remove|doctor|hatch`: adopt animated petdex mascots (live gallery of thousands, host-pinned installs under `<home>/pets/`), animate them in the terminal via kitty/iTerm2/sixel graphics or a truecolor half-block fallback, one `[display.pet]` scale knob resizes every surface — or `hatch` a brand-new pet from a text description: LLM base drafts → grounded animation rows → sliced/normalized spritesheet → auto-adopted (OpenAI-compatible images endpoint via `[pets]` config)
 - **📋 Kanban engine** — `ulnclaw kanban`: multi-board task engine in `kanban.db` (hermes statuses todo/ready/running/scheduled/blocked/done/archived with icons), TTL claim locks with stale takeover + heartbeats, comments + event trail, board CRUD; lifecycle transitions fire the `kanban_task_*` plugin hooks
 - **🔌 Plugins & hooks** — directory plugins (`~/.ulnclaw/plugins/<name>/plugin.toml`: hooks + subprocess tools) and `[hooks]` config shell hooks with hermes first-use consent (`plugins list/enable/disable/accept-hooks`, `hooks list/test/revoke/doctor`); the core fires all 13 hook events hermes emits at runtime (pre/post tool & LLM calls, API request lifecycle, session boundaries, gateway dispatch gating)
 - **🔑 Secrets vaults** — external secret sources applied at startup before providers read env (`secrets status/sync`): command helper, Bitwarden Secrets Manager (`bws` — pinned auto-install, AES-GCM-encrypted TTL cache, `secrets bitwarden setup` wizard), 1Password (`op://` refs, `secrets onepassword setup/set`) with full hermes precedence semantics
@@ -96,7 +96,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw diff               # git working-tree diff (--staged / --all)
 ./ulnclaw doctor             # diagnose config/deps (--fix, --online, --json)
 ./ulnclaw insights           # usage analytics over sessions (--days, --source, --json)
-./ulnclaw pets               # petdex mascots: list/install/select/show/scale/doctor
+./ulnclaw pets               # petdex mascots: list/install/select/show/scale/doctor/hatch
 ./ulnclaw status             # status of all components (--deep)
 ./ulnclaw logs               # tail/filter logs (-f, -n, --level, --since, --component)
 ./ulnclaw update --check   # check for updates (ulnclaw update applies: stash -> ff pull -> rebuild)
@@ -257,7 +257,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 936 tests
+cargo test                     # 946 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -311,7 +311,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`、`[auxiliary.title_generation]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
 - **📡 消息平台** —— Telegram/Discord/Slack/Signal 适配器运行于 `ulnclaw gateway` 内（`[messaging.*]`，Signal 经 signal-cli HTTP 守护进程），WhatsApp Cloud 与 Microsoft Graph 接入挂载为网关 webhook 路由（`/webhooks/whatsapp` HMAC 校验、`/webhooks/msgraph` clientState 校验），另有通用签名 webhook 平台（`[messaging.webhook]` 路由 `/webhooks/hook/<name>` —— Svix/GitHub/GitLab/HMAC-V2 签名方案、每路由限流、投递 id 幂等、`deliver_only` 零 LLM 推送）、BlueBubbles iMessage（`[messaging.bluebubbles]` → `/webhooks/bluebubbles` 密码校验 webhook、LRU 缓存的 chat-GUID 解析、REST 文本/附件发送）、微信个人号（`[messaging.weixin]` —— 腾讯 iLink Bot API 长轮询、`ulnclaw weixin login` 扫码登录、双向 AES-128-ECB 加密 CDN 媒体、context_token 回显发送）、QQ（`[messaging.qq]` —— 官方 QQ Bot API v2 WebSocket 网关 + REST、markdown 回复、分块媒体上传、`asr_refer_text` 语音转写）、元宝（`[messaging.yuanbao]` —— 腾讯元宝 App 机器人 WS 网关 + 手写 protobuf 线格式编解码、HMAC-SHA256 sign-token 认证、markdown 感知分块文本回复）：白名单配对（fail closed）+ hermes 风格交互式配对码（`pairing list/approve/revoke/clear-pending`）、媒体附件缓存于 `media-cache/` 并以路径引用交付（出站 `MEDIA:` 标签在 Telegram/Discord/Slack 原生上传；WhatsApp 媒体双向经 Graph `/media` 端点）、每聊天一条持久会话、hermes 风格回复分块。`clarify` 工具在聊天中可用：WhatsApp 渲染原生按钮/列表，其余平台编号文本；点按与后续文本应答待决提问
 - **🎙️ 语音转写（STT）** —— 入站语音/音频消息在 agent 回合前转写（`[stt]` 配置）：内置 `local_command` / `groq` / `openai` / `mistral` / `xai` / `elevenlabs` / `deepinfra` provider，另支持自定义 `[stt.providers.<name>]` 命令 provider，转写文本以 🎙️ 消息回显并注入回合（复刻 hermes 回退/哨兵语义）；`transcribe_audio` 工具（可选 `stt` 工具集）覆盖任意音频文件。Python 专属的 faster-whisper `local` provider 以 `stt.local.command` / 云后端替代
-- **🐾 宠物（petdex）** —— `ulnclaw pets list|install|select|show|off|scale|remove|doctor`：领养 petdex 动画吉祥物（数千个的在线画廊、主机锁定的 `<home>/pets/` 安装），在终端以 kitty/iTerm2/sixel 图形协议或真彩半块回退播放动画，`[display.pet]` 单一 scale 旋钮同步缩放所有界面
+- **🐾 宠物（petdex）** —— `ulnclaw pets list|install|select|show|off|scale|remove|doctor|hatch`：领养 petdex 动画吉祥物（数千个的在线画廊、主机锁定的 `<home>/pets/` 安装），在终端以 kitty/iTerm2/sixel 图形协议或真彩半块回退播放动画，`[display.pet]` 单一 scale 旋钮同步缩放所有界面 —— 或用 `hatch` 从文字描述孵化全新宠物：LLM 基础草稿 → 锚定动画行 → 切片/归一化精灵图 → 自动领养（OpenAI 兼容图像端点，`[pets]` 配置）
 - **📋 Kanban 引擎** —— `ulnclaw kanban`：`kanban.db` 中的多看板任务引擎（hermes 状态 todo/ready/running/scheduled/blocked/done/archived，带图标），带 TTL 的认领锁 + 过期接管与心跳、评论与事件轨迹、看板增删改查；生命周期流转触发 `kanban_task_*` 插件钩子
 - **🔌 插件与钩子** —— 目录插件（`~/.ulnclaw/plugins/<name>/plugin.toml`：hooks + 子进程工具）与 `[hooks]` 配置式 shell 钩子，复刻 hermes 首次使用同意机制（`plugins list/enable/disable/accept-hooks`、`hooks list/test/revoke/doctor`）；核心触发 hermes 运行期实际发出的全部 13 个钩子事件（工具/LLM 前后、API 请求生命周期、会话边界、网关分发门控）
 - **🔑 Secrets 保险库** —— 外部秘密源在启动时、provider 读取 env 之前应用（`secrets status/sync`）：command 助手、Bitwarden Secrets Manager（`bws` —— 固定版本自动安装、AES-GCM 加密 TTL 缓存、`secrets bitwarden setup` 向导）、1Password（`op://` 引用、`secrets onepassword setup/set`），完整复刻 hermes 优先级语义
@@ -356,7 +356,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw diff               # git 工作区 diff（--staged / --all）
 ./ulnclaw doctor             # 诊断配置与依赖（--fix、--online、--json）
 ./ulnclaw insights           # 会话用量分析（--days、--source、--json）
-./ulnclaw pets               # petdex 宠物：list/install/select/show/scale/doctor
+./ulnclaw pets               # petdex 宠物：list/install/select/show/scale/doctor/hatch
 ./ulnclaw status             # 全组件状态总览（--deep）
 ./ulnclaw logs               # 查看/过滤日志（-f、-n、--level、--since、--component）
 ./ulnclaw update --check   # 检查更新（ulnclaw update 应用：stash -> ff 拉取 -> 重建）
@@ -436,7 +436,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 936 个测试
+cargo test                     # 946 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

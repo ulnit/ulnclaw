@@ -719,6 +719,26 @@ pub struct UlncLawConfig {
     /// Skill sync across devices (hermes `hermes sync`).
     #[serde(default)]
     pub sync: crate::skills_sync::SyncConfig,
+    /// Pet hatch image-generation endpoint overrides (hermes
+    /// `agent/pet/generate` provider config).
+    #[serde(default)]
+    pub pets: PetsConfig,
+}
+
+/// `[pets]` — image-generation endpoint overrides for the pet hatch
+/// pipeline (hermes `agent/pet/generate/imagegen.py` provider settings).
+/// All optional: key falls back to `OPENAI_API_KEY`/`ULNCLAW_API_KEY`,
+/// base URL to `https://api.openai.com/v1`, model to `gpt-image-2`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PetsConfig {
+    /// OpenAI-compatible base URL serving `/images/generations` and
+    /// `/images/edits`.
+    pub image_base_url: Option<String>,
+    /// API key for the images endpoint.
+    pub image_api_key: Option<String>,
+    /// Image model id (hermes default `gpt-image-2`).
+    pub image_model: Option<String>,
 }
 
 /// `[video_gen]` — video generation backend selection (hermes config.yaml

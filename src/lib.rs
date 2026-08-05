@@ -115,6 +115,8 @@ pub mod messaging;
 pub mod oauth;
 pub mod pairing;
 pub mod pets;
+pub mod pets_atlas;
+pub mod pets_generate;
 pub mod skills_sync;
 pub mod memory_cmd;
 pub mod moa;
