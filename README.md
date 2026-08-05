@@ -126,6 +126,8 @@ max_concurrent_children = 3
 host = "127.0.0.1"
 port = 8642
 # key = "sk-..."        # bearer token; env ULNCLAW_GATEWAY_KEY overrides
+# multiplex_profiles = false  # true = serve /p/<profile>/... mirrors, each
+                              # backed by its [profiles.<name>] override
 
 # [terminal]
 # backend = "docker"    # "local" (default) | "docker" | "ssh"
@@ -202,7 +204,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 465 tests
+cargo test                     # 471 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -328,7 +330,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 465 个测试
+cargo test                     # 471 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

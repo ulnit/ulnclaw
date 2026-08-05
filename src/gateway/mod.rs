@@ -592,9 +592,148 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .with_state(state)
 }
 
+// ---------------------------------------------------------------------------
+// Profile multiplexing — `/p/<profile>/...` route mirrors
+// ---------------------------------------------------------------------------
+//
+// Hermes api_server registers every route twice: natively and under
+// `/p/{profile}<path>` (gateway multiplexing). With `[gateway]
+// multiplex_profiles = true` each mirror is backed by its own agent/store
+// built from the `[profiles.<name>]` override and a profile-scoped home
+// (`<home>/profiles/<name>`); unknown profiles 404. With multiplexing OFF
+// the prefix is accepted but ignored — the default profile serves it
+// (hermes `_resolve_request_profile` parity, so a would-be valid route is
+// never 404'd just because multiplexing is disabled).
+
+/// Async factory that builds the router for one profile (lazy, cached).
+pub type ProfileRouterBuilder = Arc<
+    dyn Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Router>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Multiplex hub: default router + per-profile router cache + policy.
+pub struct ProfileHub {
+    /// `[gateway] multiplex_profiles`.
+    multiplex: bool,
+    /// Profile names this gateway serves (`[profiles]` keys).
+    profiles: std::collections::HashSet<String>,
+    /// Default-profile router (serves `/p/*` requests while multiplexing is
+    /// off, mirroring hermes' ignore-the-prefix behavior).
+    default_router: Router,
+    /// Lazily-built per-profile routers.
+    cache: tokio::sync::Mutex<HashMap<String, Router>>,
+    builder: ProfileRouterBuilder,
+}
+
+impl ProfileHub {
+    pub fn new(
+        multiplex: bool,
+        profiles: std::collections::HashSet<String>,
+        default_router: Router,
+        builder: ProfileRouterBuilder,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            multiplex,
+            profiles,
+            default_router,
+            cache: tokio::sync::Mutex::new(HashMap::new()),
+            builder,
+        })
+    }
+
+    /// Resolve the router for a `/p/<profile>` request. `None` = unknown
+    /// profile while multiplexing is on (caller 404s).
+    async fn resolve(&self, profile: &str) -> Option<Router> {
+        if !self.multiplex {
+            return Some(self.default_router.clone());
+        }
+        if !self.profiles.contains(profile) {
+            return None;
+        }
+        {
+            let cache = self.cache.lock().await;
+            if let Some(router) = cache.get(profile) {
+                return Some(router.clone());
+            }
+        }
+        let built = (self.builder)(profile.to_string()).await.ok()?;
+        let mut cache = self.cache.lock().await;
+        cache.insert(profile.to_string(), built.clone());
+        Some(built)
+    }
+}
+
+/// Dispatch handler for `/p/:profile/*rest` — validates the profile,
+/// strips the prefix, and re-dispatches to the profile's router (same
+/// handlers, same bearer auth; hermes profile-prefix middleware parity).
+async fn profile_dispatch(
+    State(hub): State<Arc<ProfileHub>>,
+    Path((profile, rest)): Path<(String, String)>,
+    mut request: axum::extract::Request,
+) -> Response {
+    let Some(target) = hub.resolve(&profile).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Unknown or unconfigured profile"})),
+        )
+            .into_response();
+    };
+    // Rewrite the URI: strip `/p/<profile>` keeping the query string.
+    let path = format!("/{}", rest.trim_start_matches('/'));
+    let query = request.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
+    let new_uri = format!("{}{}", path, query);
+    *request.uri_mut() = match new_uri.parse() {
+        Ok(uri) => uri,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "bad profile path"})))
+                .into_response()
+        }
+    };
+    match tower::ServiceExt::oneshot(target, request).await {
+        Ok(response) => response,
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "profile dispatch failed"})),
+        )
+            .into_response(),
+    }
+}
+
 /// Serve the gateway until interrupted.
 pub async fn serve(state: Arc<GatewayState>, host: &str, port: u16) -> Result<()> {
-    let app = router(state.clone());
+    serve_multiplex(state, None, host, port).await
+}
+
+/// Serve with optional `/p/<profile>` multiplexing.
+pub async fn serve_multiplex(
+    state: Arc<GatewayState>,
+    hub: Option<Arc<ProfileHub>>,
+    host: &str,
+    port: u16,
+) -> Result<()> {
+    let mut app = router(state.clone());
+    if let Some(hub) = hub {
+        // Register the mirror for ALL methods the native table uses.
+        let mirror = Router::new()
+            .route(
+                "/p/:profile/*rest",
+                get(profile_dispatch)
+                    .post(profile_dispatch)
+                    .put(profile_dispatch)
+                    .delete(profile_dispatch)
+                    .patch(profile_dispatch)
+                    .head(profile_dispatch)
+                    .options(profile_dispatch),
+            )
+            .with_state(hub.clone());
+        app = app.merge(mirror);
+        tracing::info!(
+            "gateway profile multiplexing: {} ({} profile(s) configured)",
+            if hub.multiplex { "on" } else { "off (prefix ignored)" },
+            hub.profiles.len()
+        );
+    }
     let addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -4348,5 +4487,78 @@ mod tests {
         let (_, body) = get_json(app.clone(), "/v1/browser/status", Some(token)).await;
         assert_eq!(body["configured"], false);
         crate::browser::clear_cdp_override();
+    }
+
+    // ------------------------------------------------------------------
+    // /p/<profile> multiplexing (hermes api_server parity)
+    // ------------------------------------------------------------------
+
+    fn multiplex_app(multiplex: bool, profiles: &[&str]) -> Router {
+        let state = test_state();
+        let default_router = router(state.clone());
+        let builder: ProfileRouterBuilder = Arc::new(|_name: String| {
+            Box::pin(async move { Ok(router(test_state())) })
+        });
+        let hub = ProfileHub::new(
+            multiplex,
+            profiles.iter().map(|s| s.to_string()).collect(),
+            default_router,
+            builder,
+        );
+        let mirror = Router::new()
+            .route(
+                "/p/:profile/*rest",
+                get(profile_dispatch).post(profile_dispatch),
+            )
+            .with_state(hub);
+        router(state).merge(mirror)
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_off_prefix_served_by_default() {
+        let app = multiplex_app(false, &[]);
+        // Prefix accepted but ignored — default profile serves it.
+        let (status, body) = get_json(app, "/p/anything/health", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_on_unknown_profile_404() {
+        let app = multiplex_app(true, &["work"]);
+        let (status, body) = get_json(app, "/p/nope/health", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "Unknown or unconfigured profile");
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_on_known_profile_routed() {
+        let app = multiplex_app(true, &["work"]);
+        let (status, body) = get_json(app.clone(), "/p/work/health", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "ok");
+        // Second hit reuses the cached profile router.
+        let (status, _) = get_json(app, "/p/work/health", None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_mirror_enforces_auth() {
+        let app = multiplex_app(true, &["work"]);
+        // No token → 401 even through the mirror.
+        let (status, _) = get_json(app.clone(), "/p/work/v1/models", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        // With the bearer token the mirrored route answers.
+        let (status, body) = get_json(app, "/p/work/v1/models", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["data"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_native_routes_unaffected() {
+        let app = multiplex_app(true, &["work"]);
+        let (status, body) = get_json(app, "/health", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "ok");
     }
 }

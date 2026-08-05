@@ -221,12 +221,17 @@ Chrome DevTools Protocol client backing the `browser_*` tools.
 - `BrowserEndpoint` / `resolve_endpoint` - parses `ULNCLAW_BROWSER_CDP`
   (`ws://...` direct endpoint, or `http://host:port` discovery)
 - `CdpClient` - WebSocket JSON-RPC with request/response demultiplexing and
-  prefix-based event subscriptions (`Page.*`, `Runtime.*`, ...)
+  prefix-based event subscriptions (`Page.*`, `Runtime.*`, ...); liveness
+  tracking (`is_connected`) — the read/write loops flip a closed flag on
+  socket loss and fail every in-flight call fast, so a dead browser never
+  wedges later calls on the 30s per-call timeout
 - `BrowserSession` - one attached page target: navigate (load-event
   bounded), accessibility snapshot with numbered element refs, click/type
   through `DOM.resolveNode` + `Runtime.callFunctionOn` (CSS selector
   fallback), scroll/press/images/screenshot/evaluate, JS dialog tracking
-- `with_session` - global shared-session manager used by all browser tools
+- `with_session` - global shared-session manager used by all browser tools;
+  a cached session with a dead CDP connection is dropped and reopened
+  transparently (hermes session-health parity)
 - Browser supervisor: `ULNCLAW_BROWSER_CDP=auto` (the default) launches a
   managed headless Chrome/Chromium (`find_browser_binary`,
   `launch_managed_browser`, `stop_managed_browser`) and waits for the
@@ -298,6 +303,18 @@ a port of hermes' `gateway/platforms/api_server.py` core.
   `GET /v1/runs/:id/events` (SSE lifecycle events incl.
   `approval.request`), `POST /v1/runs/:id/stop`,
   `POST /v1/runs/:id/approval` (resolve pending approval)
+
+**Profile multiplexing (`/p/<profile>`):** every route is additionally
+mirrored under `/p/<profile>/...` (hermes api_server parity). With
+`[gateway] multiplex_profiles = true` each mirror is backed by its own
+gateway stack — agent built from the `[profiles.<name>]` override
+(model/toolsets) with a profile-scoped home (`<home>/profiles/<name>`:
+state.db, approvals.json, cron store, skills dir) — built lazily on first
+use and cached (`ProfileHub`); unknown profiles get a 404
+`Unknown or unconfigured profile`. With multiplexing off the prefix is
+accepted but ignored (the default profile serves it), matching hermes
+`_resolve_request_profile`. Mirrored requests pass through the same
+bearer-auth middleware as native routes.
 
 **Security:** bearer-token middleware (constant-time compare) on all routes
 except health probes; key comes from `[gateway] key` or

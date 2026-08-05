@@ -577,6 +577,12 @@ pub struct GatewayConfig {
     /// Bearer token required on API routes (env ULNCLAW_GATEWAY_KEY wins).
     #[serde(default)]
     pub key: Option<String>,
+    /// Serve every route additionally under `/p/<profile>/...` mirrors,
+    /// each backed by its own agent/store for that `[profiles.<name>]`
+    /// override (hermes `gateway.multiplex_profiles`). Off by default:
+    /// the prefix is accepted but ignored (single-profile behavior).
+    #[serde(default)]
+    pub multiplex_profiles: bool,
 }
 
 fn default_gateway_host() -> String {
@@ -593,6 +599,7 @@ impl Default for GatewayConfig {
             host: default_gateway_host(),
             port: default_gateway_port(),
             key: None,
+            multiplex_profiles: false,
         }
     }
 }

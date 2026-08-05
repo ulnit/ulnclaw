@@ -246,13 +246,16 @@ registry.register(tool);
 **关键类型：**
 - `BrowserEndpoint` / `resolve_endpoint` - 解析 `ULNCLAW_BROWSER_CDP`
   （`ws://...` 直连端点，或 `http://host:port` 发现）
-- `CdpClient` - WebSocket JSON-RPC，请求/响应分流 + 前缀事件订阅
+- `CdpClient` - WebSocket JSON-RPC，请求/响应分流 + 前缀事件订阅；
+  连接存活跟踪（`is_connected`）—— 读/写循环在套接字断开时翻转 closed
+  标志并让所有在途调用快速失败，浏览器挂掉后不会让后续调用空等 30 秒超时
   （`Page.*`、`Runtime.*`……）
 - `BrowserSession` - 单个已附加的页面目标：导航（等待 load 事件）、
   带编号元素引用的可访问性快照、经 `DOM.resolveNode` +
   `Runtime.callFunctionOn` 的点击/输入（CSS 选择器回退）、滚动/按键/
   图片列表/截图/执行 JS、JS 对话框跟踪
-- `with_session` - 全部浏览器工具共用的全局共享会话管理器
+- `with_session` - 全部浏览器工具共用的全局共享会话管理器；缓存会话的
+  CDP 连接已死时会被透明地丢弃并重建（对齐 hermes 会话健康检查）
 - 浏览器监督器：`ULNCLAW_BROWSER_CDP=auto`（默认）启动托管的无头
   Chrome/Chromium（`find_browser_binary`、`launch_managed_browser`、
   `stop_managed_browser`），等待 DevTools 端口就绪后再连接
@@ -317,6 +320,16 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 - `POST /v1/runs`（202 + run_id）、`GET /v1/runs`、`GET /v1/runs/:id`、
   `GET /v1/runs/:id/events`（SSE 生命周期事件，含 `approval.request`）、
   `POST /v1/runs/:id/stop`、`POST /v1/runs/:id/approval`（解决待审批）
+
+**Profile 多路复用（`/p/<profile>`）：** 所有路由额外镜像到
+`/p/<profile>/...`（对齐 hermes api_server）。`[gateway] multiplex_profiles
+= true` 时每个镜像背后是独立的网关栈 —— agent 由 `[profiles.<name>]`
+覆盖（模型/工具集）构建，home 按 profile 隔离（`<home>/profiles/<name>`：
+state.db、approvals.json、cron 存储、skills 目录）—— 首次访问时惰性构建
+并缓存（`ProfileHub`）；未知 profile 返回 404
+`Unknown or unconfigured profile`。多路复用关闭时前缀被接受但忽略
+（由默认 profile 服务），与 hermes `_resolve_request_profile` 一致。
+镜像请求与原生路由经过同一 bearer 鉴权中间件。
 
 **安全：** 除健康探测外所有路由经 bearer 令牌中间件（常量时间比较）；
 密钥来自 `[gateway] key` 或 `ULNCLAW_GATEWAY_KEY`。run 总是拥有自己的

@@ -405,6 +405,43 @@ async fn main() {
     }
 }
 
+/// Build one full gateway stack (approval router + agent + state + cron)
+/// rooted at `home`. Used for the default gateway and for each multiplex
+/// `/p/<profile>` mirror (profile-scoped home).
+async fn build_gateway_stack(
+    config: &UlncLawConfig,
+    home: &std::path::Path,
+    gateway_key: Option<String>,
+) -> Result<Arc<ulnclaw::gateway::GatewayState>, String> {
+    std::fs::create_dir_all(home).ok();
+    let router = ulnclaw::gateway::ApprovalRouter::with_options(
+        std::time::Duration::from_secs(config.approvals.timeout),
+        Some(home.join("approvals.json")),
+    );
+    let state_holder: Arc<tokio::sync::OnceCell<Arc<ulnclaw::gateway::GatewayState>>> =
+        Arc::new(tokio::sync::OnceCell::new());
+    let approve = ulnclaw::gateway::gateway_approve_fn(router.clone(), state_holder.clone());
+    let agent = make_agent_in(config, false, Some(approve), home).await?;
+    agent.context().set_async_delivery(true);
+    let state = ulnclaw::gateway::GatewayState::new(
+        agent,
+        config.model.model.clone(),
+        config.model.provider.clone(),
+        gateway_key,
+        router,
+    )
+    .map_err(|e| e.to_string())?;
+    state_holder.set(state.clone()).ok();
+    let cron_store =
+        ulnclaw::cron::CronStore::open(&home.join("state.db")).map_err(|e| e.to_string())?;
+    state.cron.set(std::sync::Arc::new(cron_store)).ok();
+    state.skills_dir.set(home.join("skills")).ok();
+    // Cron scheduler: dispatch due jobs as tracked cron runs (hermes
+    // scheduler loop). 30s polling matches the job-timing granularity.
+    ulnclaw::gateway::spawn_cron_scheduler(state.clone(), 30);
+    Ok(state)
+}
+
 async fn gateway_cmd(
     config: &UlncLawConfig,
     host: Option<String>,
@@ -418,32 +455,47 @@ async fn gateway_cmd(
         gateway.port = port;
     }
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
-    let router = ulnclaw::gateway::ApprovalRouter::with_options(
-        std::time::Duration::from_secs(config.approvals.timeout),
-        Some(home.join("approvals.json")),
-    );
-    let state_holder: Arc<tokio::sync::OnceCell<Arc<ulnclaw::gateway::GatewayState>>> =
-        Arc::new(tokio::sync::OnceCell::new());
-    let approve = ulnclaw::gateway::gateway_approve_fn(router.clone(), state_holder.clone());
-    let agent = make_agent(config, false, Some(approve)).await?;
-    agent.context().set_async_delivery(true);
-    let state = ulnclaw::gateway::GatewayState::new(
-        agent,
-        config.model.model.clone(),
-        config.model.provider.clone(),
-        gateway.key.clone(),
-        router,
-    )
-    .map_err(|e| e.to_string())?;
-    state_holder.set(state.clone()).ok();
-    let cron_store =
-        ulnclaw::cron::CronStore::open(&home.join("state.db")).map_err(|e| e.to_string())?;
-    state.cron.set(std::sync::Arc::new(cron_store)).ok();
-    state.skills_dir.set(home.join("skills")).ok();
-    // Cron scheduler: dispatch due jobs as tracked cron runs (hermes
-    // scheduler loop). 30s polling matches the job-timing granularity.
-    ulnclaw::gateway::spawn_cron_scheduler(state.clone(), 30);
-    ulnclaw::gateway::serve(state, &gateway.host, gateway.port)
+    let state = build_gateway_stack(config, &home, gateway.key.clone()).await?;
+
+    // `/p/<profile>` multiplexing (hermes api_server parity): every route
+    // is mirrored under `/p/<profile>/...`. With `[gateway]
+    // multiplex_profiles = true` each mirror is backed by its own stack
+    // built from the `[profiles.<name>]` override; otherwise the prefix is
+    // accepted and served by the default profile.
+    let hub = {
+        let multiplex = gateway.multiplex_profiles;
+        let profiles: std::collections::HashSet<String> =
+            config.profiles.keys().cloned().collect();
+        let base_config = config.clone();
+        let base_home = home.clone();
+        let gateway_key = gateway.key.clone();
+        let builder: ulnclaw::gateway::ProfileRouterBuilder = Arc::new(move |name: String| {
+            let config = base_config.clone();
+            let home = base_home.clone();
+            let key = gateway_key.clone();
+            Box::pin(async move {
+                let profile_config = config.with_profile(&name);
+                let profile_home = home.join("profiles").join(&name);
+                let state = build_gateway_stack(&profile_config, &profile_home, key)
+                    .await
+                    .map_err(|e| {
+                        ulnclaw::error::AgentError::config(format!(
+                            "profile '{}' gateway stack: {}",
+                            name, e
+                        ))
+                    })?;
+                Ok(ulnclaw::gateway::router(state))
+            })
+        });
+        ulnclaw::gateway::ProfileHub::new(
+            multiplex,
+            profiles,
+            ulnclaw::gateway::router(state.clone()),
+            builder,
+        )
+    };
+
+    ulnclaw::gateway::serve_multiplex(state, Some(hub), &gateway.host, gateway.port)
         .await
         .map_err(|e| e.to_string())
 }
@@ -595,6 +647,19 @@ async fn make_agent(
     interactive: bool,
     approve_override: Option<ulnclaw::tools::context::ApproveFn>,
 ) -> Result<Arc<Agent>, String> {
+    let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    make_agent_in(config, interactive, approve_override, &home).await
+}
+
+/// Build an agent rooted at an explicit home directory — the multiplex
+/// gateway uses this to scope each `/p/<profile>` agent to
+/// `<home>/profiles/<name>` (hermes profile home scoping).
+async fn make_agent_in(
+    config: &UlncLawConfig,
+    interactive: bool,
+    approve_override: Option<ulnclaw::tools::context::ApproveFn>,
+    home: &std::path::Path,
+) -> Result<Arc<Agent>, String> {
     let provider = build_provider(config)?;
     let mut registry = ToolRegistry::new();
     register_builtin_tools(&mut registry);
@@ -609,7 +674,7 @@ async fn make_agent(
 
     toolsets::apply_toolset_policy(&mut registry, &config.enabled_toolsets, &config.disabled_toolsets);
 
-    let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(home).ok();
     let store = Arc::new(SqliteSessionStore::open(home.join("state.db")).map_err(|e| e.to_string())?);
     // Crash recovery for background delegations (hermes durable registry):
     // rows still running from a previous process become terminal
@@ -619,7 +684,7 @@ async fn make_agent(
     }
 
     let mut context = ToolContext::new()
-        .with_home(home)
+        .with_home(home.to_path_buf())
         .with_config(config.clone())
         .with_async_delivery(interactive)
         .with_env_passthrough(&config.terminal.env_passthrough)

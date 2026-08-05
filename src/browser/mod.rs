@@ -135,6 +135,11 @@ pub struct CdpClient {
     pending: Arc<Mutex<HashMap<u64, Pending>>>,
     next_id: Arc<RwLock<u64>>,
     events: Arc<RwLock<Vec<(String, broadcast::Sender<Value>)>>>,
+    /// Flipped when the read loop sees the socket close. A CDP connection
+    /// has no keepalive of its own — without this flag a dead browser
+    /// would wedge every later call on the 30s timeout (hermes session
+    /// health checks recreate the session instead).
+    closed: Arc<std::sync::atomic::AtomicBool>,
     _reader: tokio::task::JoinHandle<()>,
     _writer: tokio::task::JoinHandle<()>,
 }
@@ -151,15 +156,27 @@ impl CdpClient {
         let pending: Arc<Mutex<HashMap<u64, Pending>>> = Arc::new(Mutex::new(HashMap::new()));
         let events: Arc<RwLock<Vec<(String, broadcast::Sender<Value>)>>> =
             Arc::new(RwLock::new(Vec::new()));
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-        let reader = tokio::spawn(Self::read_loop(stream, pending.clone(), events.clone()));
-        let writer = tokio::spawn(Self::write_loop(sink, out_rx));
+        let reader = tokio::spawn(Self::read_loop(
+            stream,
+            pending.clone(),
+            events.clone(),
+            closed.clone(),
+        ));
+        let writer = tokio::spawn(Self::write_loop(
+            sink,
+            out_rx,
+            pending.clone(),
+            closed.clone(),
+        ));
 
         Ok(Arc::new(Self {
             out_tx,
             pending,
             next_id: Arc::new(RwLock::new(1)),
             events,
+            closed,
             _reader: reader,
             _writer: writer,
         }))
@@ -168,11 +185,23 @@ impl CdpClient {
     async fn write_loop(
         mut sink: SplitSink<WsStream, WsMessage>,
         mut out_rx: tokio::sync::mpsc::UnboundedReceiver<WsMessage>,
+        pending: Arc<Mutex<HashMap<u64, Pending>>>,
+        closed: Arc<std::sync::atomic::AtomicBool>,
     ) {
         while let Some(message) = out_rx.recv().await {
             if sink.send(message).await.is_err() {
                 break;
             }
+        }
+        // The socket is gone — fail every in-flight call fast (covers the
+        // race where a call was queued just as the connection died).
+        closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut pending = pending.lock().await;
+        for (_, entry) in pending.drain() {
+            entry
+                .sender
+                .send(Err(AgentError::Tool("CDP connection closed".into())))
+                .ok();
         }
     }
 
@@ -180,6 +209,7 @@ impl CdpClient {
         mut stream: SplitStream<WsStream>,
         pending: Arc<Mutex<HashMap<u64, Pending>>>,
         events: Arc<RwLock<Vec<(String, broadcast::Sender<Value>)>>>,
+        closed: Arc<std::sync::atomic::AtomicBool>,
     ) {
         while let Some(Ok(message)) = stream.next().await {
             let WsMessage::Text(text) = message else {
@@ -220,6 +250,23 @@ impl CdpClient {
                 }
             }
         }
+        // Socket closed (browser exited / network dropped). Fail pending
+        // requests fast instead of letting them ride out the 30s timeout.
+        closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut pending = pending.lock().await;
+        for (_, entry) in pending.drain() {
+            entry
+                .sender
+                .send(Err(AgentError::Tool("CDP connection closed".into())))
+                .ok();
+        }
+    }
+
+    /// False once the WebSocket has closed. Callers (the shared-session
+    /// manager) use this to drop dead sessions and reconnect instead of
+    /// wedging on per-call timeouts.
+    pub fn is_connected(&self) -> bool {
+        !self.closed.load(std::sync::atomic::Ordering::SeqCst) && !self.out_tx.is_closed()
     }
 
     /// Subscribe to events whose method starts with `prefix`.
@@ -232,6 +279,9 @@ impl CdpClient {
 
     /// Send a CDP command and await its result.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
+        if !self.is_connected() {
+            return Err(AgentError::Tool("CDP connection closed".into()));
+        }
         let id = {
             let mut next = self.next_id.write().await;
             let id = *next;
@@ -962,11 +1012,25 @@ where
         resolve_endpoint(&raw)?
     };
 
-    // Reuse an existing live session.
+    // Reuse an existing live session. A dead CDP connection (browser
+    // restarted, socket dropped) is dropped here so the next open builds a
+    // fresh session — hermes session-health parity.
     {
         let slot = global_session_slot().read().await;
         if let Some(session) = slot.as_ref() {
-            return func(session.clone()).await;
+            if session.client().is_connected() {
+                return func(session.clone()).await;
+            }
+        }
+    }
+    {
+        let mut slot = global_session_slot().write().await;
+        if slot
+            .as_ref()
+            .map(|session| !session.client().is_connected())
+            .unwrap_or(false)
+        {
+            *slot = None;
         }
     }
 
@@ -1066,5 +1130,39 @@ mod tests {
             .await
             .unwrap();
         assert!(clicked.is_object());
+    }
+
+    /// When the browser closes the socket, `is_connected` flips to false
+    /// and in-flight calls fail fast instead of riding out the timeout.
+    #[tokio::test]
+    async fn test_cdp_client_detects_closed_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Accept one connection and drop it immediately.
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            drop(ws);
+        });
+
+        let client = CdpClient::connect(&format!("ws://{}/", addr)).await.unwrap();
+        assert!(client.is_connected());
+
+        // Wait for the read loop to observe the close.
+        for _ in 0..100 {
+            if !client.is_connected() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!client.is_connected());
+
+        // Calls fail fast with a connection-closed error (no 30s wait).
+        let error = client
+            .call("Runtime.evaluate", json!({"expression": "1"}))
+            .await
+            .expect_err("dead connection must error");
+        assert!(error.to_string().contains("closed"));
     }
 }
