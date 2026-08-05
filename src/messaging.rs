@@ -1195,7 +1195,15 @@ pub mod slack {
                         Ok(text) => text,
                         Err(e) => format!("error: {e}"),
                     };
-                    post_message(&bot_token, &message_event.chat_id, &reply).await;
+                    // MEDIA:<path> tags become native Slack file uploads
+                    // (hermes files.upload flow); the rest posts as text.
+                    let (reply_text, media_paths) = extract_media_tags(&reply);
+                    if !reply_text.trim().is_empty() {
+                        post_message(&bot_token, &message_event.chat_id, &reply_text).await;
+                    }
+                    for path in media_paths {
+                        upload_file(&bot_token, &message_event.chat_id, &path).await;
+                    }
                 });
             }
         }
@@ -1235,6 +1243,116 @@ pub mod slack {
                 }
                 Err(e) => eprintln!("[slack] postMessage failed: {e}"),
             }
+        }
+    }
+
+    /// Upload a local file as a native Slack file (MEDIA: delivery).
+    /// Modern three-step flow: `files.getUploadURLExternal` → PUT the
+    /// binary to the signed URL → `files.completeUploadExternal` into the
+    /// channel (the legacy one-shot `files.upload` is retired).
+    pub async fn upload_file(bot_token: &str, channel: &str, path: &std::path::Path) {
+        let data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("[slack] cannot read {}: {e}", path.display());
+                return;
+            }
+        };
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
+        let client = reqwest::Client::new();
+        let auth = format!("Bearer {bot_token}");
+
+        // Step 1: request an upload URL + file id.
+        let url_response = client
+            .get("https://slack.com/api/files.getUploadURLExternal")
+            .header("Authorization", &auth)
+            .query(&[("filename", &file_name), ("length", &data.len().to_string())])
+            .send()
+            .await;
+        let url_value = match url_response {
+            Ok(response) => match response.json::<Value>().await {
+                Ok(value) => value,
+                Err(e) => {
+                    eprintln!("[slack] getUploadURLExternal parse failed: {e}");
+                    return;
+                }
+            },
+            Err(e) => {
+                eprintln!("[slack] getUploadURLExternal failed: {e}");
+                return;
+            }
+        };
+        if !url_value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            eprintln!(
+                "[slack] getUploadURLExternal failed: {}",
+                url_value.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
+            );
+            return;
+        }
+        let upload_url = match url_value.get("upload_url").and_then(|v| v.as_str()) {
+            Some(url) => url.to_string(),
+            None => {
+                eprintln!("[slack] getUploadURLExternal returned no upload_url");
+                return;
+            }
+        };
+        let file_id = match url_value.get("file_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                eprintln!("[slack] getUploadURLExternal returned no file_id");
+                return;
+            }
+        };
+
+        // Step 2: PUT the raw bytes to the signed URL.
+        let put_response = client
+            .put(&upload_url)
+            .header("Content-Type", "application/octet-stream")
+            .body(data)
+            .send()
+            .await;
+        match put_response {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                eprintln!("[slack] file upload PUT failed ({})", response.status());
+                return;
+            }
+            Err(e) => {
+                eprintln!("[slack] file upload PUT failed: {e}");
+                return;
+            }
+        }
+
+        // Step 3: complete the upload, sharing into the channel.
+        let files_json = serde_json::to_string(&json!([{ "id": file_id, "title": file_name }]))
+            .unwrap_or_default();
+        let channels_json = serde_json::to_string(&json!([channel])).unwrap_or_default();
+        let complete = client
+            .post("https://slack.com/api/files.completeUploadExternal")
+            .header("Authorization", &auth)
+            .form(&[
+                ("files", files_json.as_str()),
+                ("channel_id", channel),
+            ])
+            .send()
+            .await;
+        match complete {
+            Ok(response) => match response.json::<Value>().await {
+                Ok(value) => {
+                    if !value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        eprintln!(
+                            "[slack] completeUploadExternal failed: {}",
+                            value.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
+                        );
+                    }
+                    let _ = channels_json;
+                }
+                Err(e) => eprintln!("[slack] completeUploadExternal parse failed: {e}"),
+            },
+            Err(e) => eprintln!("[slack] completeUploadExternal failed: {e}"),
         }
     }
 }

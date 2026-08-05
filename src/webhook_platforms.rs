@@ -135,10 +135,24 @@ fn constant_time_eq_bytes(left: &[u8], right: &[u8]) -> bool {
 
 /// Parse one webhook payload into text message events (hermes inbound
 /// shape: entry[].changes[].value.messages[], type=text).
-pub fn whatsapp_parse_messages(payload: &Value) -> Vec<MessageEvent> {
-    let mut events = Vec::new();
+/// One inbound media object referenced by a WhatsApp message (downloaded
+/// via the Graph `/media` endpoint before dispatch).
+#[derive(Debug, Clone)]
+pub struct WaMediaRef {
+    pub media_id: String,
+    pub mime: String,
+    pub kind: String,
+    pub filename: String,
+}
+
+/// Parse inbound webhook payloads into events plus pending media
+/// references (index-aligned with the returned events). Text messages
+/// carry no media; image/document/audio/video/sticker messages carry
+/// their Graph media ids (hermes inbound media pipeline).
+pub fn whatsapp_parse_messages_full(payload: &Value) -> Vec<(MessageEvent, Vec<WaMediaRef>)> {
+    let mut parsed = Vec::new();
     let Some(entries) = payload.get("entry").and_then(|v| v.as_array()) else {
-        return events;
+        return parsed;
     };
     for entry in entries {
         let Some(changes) = entry.get("changes").and_then(|v| v.as_array()) else {
@@ -152,39 +166,317 @@ pub fn whatsapp_parse_messages(payload: &Value) -> Vec<MessageEvent> {
                 continue;
             };
             for message in messages {
-                if message.get("type").and_then(|v| v.as_str()) != Some("text") {
-                    continue;
-                }
+                let msg_type = message
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let from = message
                     .get("from")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let text = message
-                    .pointer("/text/body")
+                if from.is_empty() {
+                    continue;
+                }
+                let message_id = message
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if from.is_empty() || text.is_empty() {
-                    continue;
+                let text: String;
+                let mut media = Vec::new();
+                match msg_type {
+                    "text" => {
+                        text = message
+                            .pointer("/text/body")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if text.is_empty() {
+                            continue;
+                        }
+                    }
+                    "image" | "document" | "audio" | "video" | "sticker" => {
+                        let Some(body) = message.get(msg_type) else {
+                            continue;
+                        };
+                        let media_id = body
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if media_id.is_empty() {
+                            continue;
+                        }
+                        media.push(WaMediaRef {
+                            media_id,
+                            mime: body
+                                .get("mime_type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            kind: msg_type.to_string(),
+                            filename: body
+                                .get("filename")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        });
+                        // image/document carry optional captions.
+                        text = body
+                            .get("caption")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                    }
+                    _ => {
+                        // interactive/contacts/location/unknown — skipped
+                        // like hermes (text + media are the ported types).
+                        continue;
+                    }
                 }
-                events.push(MessageEvent {
-                    platform: "whatsapp_cloud".into(),
-                    chat_id: from.clone(),
-                    sender_id: from,
-                    sender_name: String::new(),
-                    text,
-                    message_id: message
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    attachments: Vec::new(),
-                });
+                parsed.push((
+                    MessageEvent {
+                        platform: "whatsapp_cloud".into(),
+                        chat_id: from.clone(),
+                        sender_id: from,
+                        sender_name: String::new(),
+                        text,
+                        message_id,
+                        attachments: Vec::new(),
+                    },
+                    media,
+                ));
             }
         }
     }
-    events
+    parsed
+}
+
+/// Text-only view (kept for callers that don't care about media).
+pub fn whatsapp_parse_messages(payload: &Value) -> Vec<MessageEvent> {
+    whatsapp_parse_messages_full(payload)
+        .into_iter()
+        .map(|(event, _)| event)
+        .collect()
+}
+
+/// Per-type size caps documented by Meta for the Cloud API /media
+/// endpoint (hermes `_MEDIA_SIZE_LIMITS`) — refuse downloads/uploads
+/// above them with a clean error instead of round-tripping to Graph.
+pub fn whatsapp_media_cap(kind: &str) -> u64 {
+    match kind {
+        "image" => 5 * 1024 * 1024,
+        "video" => 16 * 1024 * 1024,
+        "audio" => 16 * 1024 * 1024,
+        "sticker" => 500 * 1024,
+        _ => 100 * 1024 * 1024, // document
+    }
+}
+
+/// Default mime when the payload omits one (hermes `_DEFAULT_MIME`).
+fn whatsapp_default_mime(kind: &str) -> &'static str {
+    match kind {
+        "image" => "image/jpeg",
+        "video" => "video/mp4",
+        "audio" => "audio/mpeg",
+        "sticker" => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Download one inbound media object: `GET /media/{id}` → signed URL →
+/// fetch with bearer auth → cache content-addressed (hermes inbound
+/// media pipeline). Returns the cached attachment, or None with a
+/// logged reason.
+pub async fn whatsapp_download_media(
+    client: &reqwest::Client,
+    cfg: &WhatsAppCloudConfig,
+    media_ref: &WaMediaRef,
+) -> Option<crate::messaging::MediaAttachment> {
+    let meta_url = cfg.graph_url(&media_ref.media_id);
+    let meta = match client
+        .get(&meta_url)
+        .header("Authorization", format!("Bearer {}", cfg.access_token))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => {
+            eprintln!(
+                "[whatsapp_cloud] media metadata failed ({})",
+                response.status()
+            );
+            return None;
+        }
+        Err(e) => {
+            eprintln!("[whatsapp_cloud] media metadata request failed: {e}");
+            return None;
+        }
+    };
+    let meta_value: Value = match meta.json().await {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("[whatsapp_cloud] media metadata unparseable: {e}");
+            return None;
+        }
+    };
+    let url = match meta_value.get("url").and_then(|v| v.as_str()) {
+        Some(url) => url.to_string(),
+        None => {
+            eprintln!("[whatsapp_cloud] media metadata missing url");
+            return None;
+        }
+    };
+    let cap = whatsapp_media_cap(&media_ref.kind);
+    let data = match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.access_token))
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())
+    {
+        Ok(response) => match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("[whatsapp_cloud] media download failed: {e}");
+                return None;
+            }
+        },
+        Err(e) => {
+            eprintln!("[whatsapp_cloud] media download failed: {e}");
+            return None;
+        }
+    };
+    if data.len() as u64 > cap {
+        eprintln!(
+            "[whatsapp_cloud] media {} exceeds the {} cap ({} bytes) — skipped",
+            media_ref.kind,
+            cap,
+            data.len()
+        );
+        return None;
+    }
+    let mime = if media_ref.mime.trim().is_empty() {
+        whatsapp_default_mime(&media_ref.kind).to_string()
+    } else {
+        media_ref.mime.clone()
+    };
+    let home = crate::config::ulnclaw_home();
+    match crate::media_cache::cache_media_bytes(&home, &data, &mime, &media_ref.filename) {
+        Ok(path) => Some(crate::messaging::MediaAttachment {
+            path,
+            mime,
+            bytes: data.len() as u64,
+            original_name: media_ref.filename.clone(),
+        }),
+        Err(e) => {
+            eprintln!("[whatsapp_cloud] media cache write failed: {e}");
+            None
+        }
+    }
+}
+
+/// Upload a local file to the Graph `/media` endpoint (hermes
+/// `_upload_media`, step one of the two-step send). Returns the media id.
+pub async fn whatsapp_upload_media(
+    client: &reqwest::Client,
+    cfg: &WhatsAppCloudConfig,
+    path: &std::path::Path,
+) -> Result<String> {
+    let data = std::fs::read(path)
+        .map_err(|e| AgentError::Tool(format!("read {}: {e}", path.display())))?;
+    let kind = crate::media_cache::media_kind(&crate::media_cache::mime_for_ext(path));
+    let cap = whatsapp_media_cap(kind);
+    if data.len() as u64 > cap {
+        return Err(AgentError::Tool(format!(
+            "{} exceeds WhatsApp's {} limit ({} bytes)",
+            path.display(),
+            kind,
+            data.len()
+        )));
+    }
+    let mime = crate::media_cache::mime_for_ext(path);
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".to_string());
+    let part = reqwest::multipart::Part::bytes(data)
+        .file_name(file_name)
+        .mime_str(&mime)
+        .map_err(|e| AgentError::Tool(format!("multipart: {e}")))?;
+    let form = reqwest::multipart::Form::new()
+        .text("messaging_product", "whatsapp")
+        .part("file", part);
+    let response = client
+        .post(cfg.graph_url("media"))
+        .header("Authorization", format!("Bearer {}", cfg.access_token))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| AgentError::Tool(format!("whatsapp media upload: {e}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AgentError::Tool(format!(
+            "whatsapp media upload failed ({status}): {body}"
+        )));
+    }
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|e| AgentError::Tool(format!("whatsapp media upload parse: {e}")))?;
+    value
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| AgentError::Tool("whatsapp media upload returned no id".to_string()))
+}
+
+/// Send an uploaded media object (hermes `_send_media`, step two).
+pub async fn whatsapp_send_media(
+    client: &reqwest::Client,
+    cfg: &WhatsAppCloudConfig,
+    to: &str,
+    media_id: &str,
+    path: &std::path::Path,
+) -> Result<()> {
+    let kind = crate::media_cache::media_kind(&crate::media_cache::mime_for_ext(path));
+    let send_kind = match kind {
+        "image" => "image",
+        "video" => "video",
+        "audio" => "audio",
+        "sticker" => "sticker",
+        _ => "document",
+    };
+    let mut media_obj = json!({ "id": media_id });
+    if send_kind == "document" || send_kind == "image" || send_kind == "video" {
+        if let Some(name) = path.file_name() {
+            media_obj["filename"] = json!(name.to_string_lossy());
+        }
+    }
+    let payload = json!({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": send_kind,
+        send_kind: media_obj,
+    });
+    let response = client
+        .post(cfg.graph_url("messages"))
+        .header("Authorization", format!("Bearer {}", cfg.access_token))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AgentError::Tool(format!("whatsapp media send: {e}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AgentError::Tool(format!(
+            "whatsapp media send failed ({status}): {body}"
+        )));
+    }
+    Ok(())
 }
 
 /// Send a text reply via the Graph API (hermes `send`): chunked, bearer
@@ -245,8 +537,21 @@ pub async fn whatsapp_handle_webhook(
     }
     let payload: Value = serde_json::from_slice(raw_body)
         .map_err(|e| AgentError::config(format!("whatsapp webhook parse: {e}")))?;
-    let events = whatsapp_parse_messages(&payload);
-    for mut event in events {
+    let parsed = whatsapp_parse_messages_full(&payload);
+    for (mut event, media_refs) in parsed {
+        // Download inbound media into the content-addressed cache before
+        // dispatch (hermes inbound media pipeline; failures degrade to a
+        // text note via the attachment pipeline, never fatal).
+        if !media_refs.is_empty() {
+            let client = reqwest::Client::new();
+            for media_ref in &media_refs {
+                if let Some(attachment) =
+                    whatsapp_download_media(&client, cfg, media_ref).await
+                {
+                    event.attachments.push(attachment);
+                }
+            }
+        }
         let authorized = cfg
             .allowed_sender_ids
             .iter()
@@ -288,11 +593,17 @@ pub async fn whatsapp_handle_webhook(
         if let Err(e) = whatsapp_send(&client, cfg, &event.chat_id, &reply_text).await {
             eprintln!("[whatsapp_cloud] reply failed: {e}");
         }
-        if !media_paths.is_empty() {
-            eprintln!(
-                "[whatsapp_cloud] {} MEDIA attachment(s) not delivered (media upload not ported)",
-                media_paths.len()
-            );
+        for path in &media_paths {
+            match whatsapp_upload_media(&client, cfg, path).await {
+                Ok(media_id) => {
+                    if let Err(e) =
+                        whatsapp_send_media(&client, cfg, &event.chat_id, &media_id, path).await
+                    {
+                        eprintln!("[whatsapp_cloud] media delivery failed: {e}");
+                    }
+                }
+                Err(e) => eprintln!("[whatsapp_cloud] media upload failed: {e}"),
+            }
         }
     }
     Ok(())
@@ -806,6 +1117,69 @@ mod tests {
         assert_eq!(events[0].chat_id, "5511999990000");
         assert_eq!(events[0].text, "olá");
         assert_eq!(events[0].message_id, "wamid.1");
+    }
+
+    #[test]
+    fn parse_full_captures_media_and_captions() {
+        let payload: Value = serde_json::from_str(
+            r#"{"entry":[{"changes":[{"value":{"messages":[
+                {"type":"text","from":"5511999990000","id":"wamid.t",
+                 "text":{"body":"hello"}},
+                {"type":"image","from":"5511999990000","id":"wamid.i",
+                 "image":{"id":"media-1","mime_type":"image/jpeg","caption":"look"}},
+                {"type":"document","from":"5511999990000","id":"wamid.d",
+                 "document":{"id":"media-2","mime_type":"application/pdf","filename":"r.pdf"}},
+                {"type":"audio","from":"5511999990000","id":"wamid.a",
+                 "audio":{"id":"media-3","mime_type":"audio/ogg"}},
+                {"type":"location","from":"5511999990000","id":"wamid.l",
+                 "location":{"latitude":1.0}}
+            ]}}]}]}
+        "#,
+        )
+        .unwrap();
+        let parsed = whatsapp_parse_messages_full(&payload);
+        // location is skipped; text + image + document + audio remain.
+        assert_eq!(parsed.len(), 4);
+        let (text_event, text_media) = &parsed[0];
+        assert_eq!(text_event.text, "hello");
+        assert!(text_media.is_empty());
+        let (image_event, image_media) = &parsed[1];
+        assert_eq!(image_event.text, "look");
+        assert_eq!(image_media.len(), 1);
+        assert_eq!(image_media[0].media_id, "media-1");
+        assert_eq!(image_media[0].kind, "image");
+        let (doc_event, doc_media) = &parsed[2];
+        assert_eq!(doc_event.text, "");
+        assert_eq!(doc_media[0].filename, "r.pdf");
+        assert_eq!(doc_media[0].mime, "application/pdf");
+        let (audio_event, audio_media) = &parsed[3];
+        assert_eq!(audio_event.text, "");
+        assert_eq!(audio_media[0].kind, "audio");
+        assert_eq!(audio_media[0].mime, "audio/ogg");
+    }
+
+    #[test]
+    fn media_caps_match_meta_limits() {
+        assert_eq!(whatsapp_media_cap("image"), 5 * 1024 * 1024);
+        assert_eq!(whatsapp_media_cap("video"), 16 * 1024 * 1024);
+        assert_eq!(whatsapp_media_cap("audio"), 16 * 1024 * 1024);
+        assert_eq!(whatsapp_media_cap("sticker"), 500 * 1024);
+        assert_eq!(whatsapp_media_cap("document"), 100 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_text_view_strips_media() {
+        let payload: Value = serde_json::from_str(
+            r#"{"entry":[{"changes":[{"value":{"messages":[
+                {"type":"image","from":"5511999990000","id":"wamid.i",
+                 "image":{"id":"media-1","mime_type":"image/jpeg"}}
+            ]}}]}]}
+        "#,
+        )
+        .unwrap();
+        let events = whatsapp_parse_messages(&payload);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].attachments.is_empty());
     }
 
     #[test]
