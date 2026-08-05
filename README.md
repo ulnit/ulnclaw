@@ -90,6 +90,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw logs               # tail/filter logs (-f, -n, --level, --since, --component)
 ./ulnclaw update --check   # check for updates (ulnclaw update applies: stash -> ff pull -> rebuild)
 ./ulnclaw config           # show/get/set/unset config (env-style keys go to .env)
+./ulnclaw secrets status   # external secret sources (secrets sync [--apply] fetches now)
 ./ulnclaw completion bash  # shell completions (bash/zsh/fish/elvish/powershell)
 ./ulnclaw dump             # copy-pasteable setup summary for support (--show-keys)
 ./ulnclaw version          # version + install info + update status
@@ -232,7 +233,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 660 tests
+cargo test                     # 675 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -324,6 +325,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw logs               # 查看/过滤日志（-f、-n、--level、--since、--component）
 ./ulnclaw update --check   # 检查更新（ulnclaw update 应用：stash -> ff 拉取 -> 重建）
 ./ulnclaw config           # 配置 show/get/set/unset（env 风格键写入 .env）
+./ulnclaw secrets status   # 外部秘密源（secrets sync [--apply] 立即拉取）
 ./ulnclaw completion bash  # shell 补全脚本（bash/zsh/fish/elvish/powershell）
 ./ulnclaw dump             # 可粘贴的装机摘要，用于求助排查（--show-keys）
 ./ulnclaw version          # 版本 + 安装信息 + 升级状态
@@ -385,7 +387,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 660 个测试
+cargo test                     # 675 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

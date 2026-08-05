@@ -133,6 +133,11 @@ enum Commands {
         #[command(subcommand)]
         action: SecurityAction,
     },
+    /// External secret sources: status / sync (hermes secrets)
+    Secrets {
+        #[command(subcommand)]
+        action: SecretsAction,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -647,6 +652,18 @@ enum SecurityAction {
 }
 
 #[derive(Subcommand)]
+enum SecretsAction {
+    /// Show configured sources, helper/bws availability, and token presence
+    Status,
+    /// Fetch secrets now and report what would change (dry-run by default)
+    Sync {
+        /// Actually export the winners into the process environment
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum CuratorAction {
     /// Skill usage summary (states, provenance, pins, unmanaged)
     Status,
@@ -822,6 +839,16 @@ async fn main() {
     init_logging(cli.verbose);
 
     let config = load_config(&cli);
+
+    // Apply external secret sources before anything runs (hermes env_loader
+    // behavior): fetch enabled sources, merge with process env ∪ .env, and
+    // export the winners. Single-threaded pre-dispatch, never fatal.
+    let secrets_report =
+        ulnclaw::secrets::apply_all(&config.secrets, &ulnclaw::config::ulnclaw_home());
+    for err in &secrets_report.errors {
+        eprintln!("[secrets] warning: {err}");
+    }
+
     let result = dispatch(cli, config).await;
     if let Err(e) = result {
         eprintln!("error: {}", e);
@@ -1039,6 +1066,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             }
             Ok(())
         }
+        Commands::Secrets { action } => secrets_cmd(&config, action),
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
@@ -2287,6 +2315,130 @@ fn print_diff_result(result: &serde_json::Value) {
             println!("{}", diff);
         }
     }
+}
+
+fn secrets_cmd(config: &UlncLawConfig, action: SecretsAction) -> Result<(), String> {
+    use ulnclaw::secrets as sec;
+    let home = ulnclaw::config::ulnclaw_home();
+    match action {
+        SecretsAction::Status => {
+            let cfg = &config.secrets;
+            let order = sec::ordered_sources(cfg);
+            if order.is_empty() {
+                println!("No secret sources enabled (all disabled or unknown).");
+            } else {
+                println!("Source order (first claim wins): {}", order.join(" -> "));
+            }
+            if cfg.command.enabled {
+                let cmd = if cfg.command.command.is_empty() {
+                    "(no command set)"
+                } else {
+                    &cfg.command.command
+                };
+                println!(
+                    "  command:   enabled  timeout={}s  {}",
+                    cfg.command.timeout_seconds, cmd
+                );
+            } else {
+                println!("  command:   disabled");
+            }
+            if cfg.bitwarden.enabled {
+                let bws = sec::find_bws(&home)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "bws NOT FOUND".to_string());
+                let token_present = std::env::var(&cfg.bitwarden.access_token_env).is_ok();
+                println!(
+                    "  bitwarden: enabled  bws={}  token({})={}  project={}  override_existing={}",
+                    bws,
+                    cfg.bitwarden.access_token_env,
+                    if token_present { "present" } else { "MISSING" },
+                    if cfg.bitwarden.project_id.is_empty() {
+                        "(unset)"
+                    } else {
+                        &cfg.bitwarden.project_id
+                    },
+                    cfg.bitwarden.override_existing
+                );
+            } else {
+                println!("  bitwarden: disabled");
+            }
+            if cfg.onepassword.enabled {
+                let op = sec::find_op(&cfg.onepassword.binary_path)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "op NOT FOUND".to_string());
+                let token_present =
+                    std::env::var(&cfg.onepassword.service_account_token_env).is_ok();
+                println!(
+                    "  onepassword: enabled  op={}  token({})={}  bindings={}  override_existing={}",
+                    op,
+                    cfg.onepassword.service_account_token_env,
+                    if token_present { "present" } else { "absent (interactive op auth may still work)" },
+                    cfg.onepassword.env.len(),
+                    cfg.onepassword.override_existing
+                );
+            } else {
+                println!("  onepassword: disabled");
+            }
+            if !cfg.preserve_existing.is_empty() {
+                println!("  preserve_existing: {}", cfg.preserve_existing.join(", "));
+            }
+        }
+        SecretsAction::Sync { apply } => {
+            let fetches = sec::fetch_all(&config.secrets, &home);
+            if fetches.is_empty() {
+                println!("No secret sources enabled — nothing to sync.");
+                return Ok(());
+            }
+            for (name, result) in &fetches {
+                if result.ok {
+                    println!("fetched {name}: {} secret(s)", result.secrets.len());
+                } else if let Some(err) = &result.error {
+                    println!("fetched {name}: FAILED — {err}");
+                }
+                for warn in &result.warnings {
+                    println!("  warning: {warn}");
+                }
+            }
+            // Base view: process env plus .env (same merge apply_all uses).
+            let mut env: std::collections::HashMap<String, String> =
+                std::env::vars().collect();
+            for (k, v) in ulnclaw::config::load_env_file(&home.join(".env")) {
+                env.entry(k).or_insert(v);
+            }
+            let report = sec::apply_to_env(&mut env, &config.secrets, &fetches);
+            for (var, source) in &report.applied {
+                if apply {
+                    // SAFETY: single-threaded CLI path; mirrors hermes
+                    // exporting winners at startup.
+                    unsafe { std::env::set_var(var, env.get(var).map(|s| s.as_str()).unwrap_or("")) };
+                    println!("exported {var} (from {source})");
+                } else {
+                    println!("would export {var} (from {source})");
+                }
+            }
+            for var in &report.skipped_existing {
+                println!("kept existing {var}");
+            }
+            for var in &report.skipped_protected {
+                println!("skipped protected {var}");
+            }
+            for conflict in &report.conflicts {
+                println!("conflict: {conflict}");
+            }
+            for err in &report.errors {
+                println!("error: {err}");
+            }
+            if apply {
+                println!(
+                    "Applied {} secret(s). Note: exports only affect this                      process; ulnclaw applies secrets automatically at startup.",
+                    report.applied.len()
+                );
+            } else if !report.applied.is_empty() {
+                println!("Dry run — re-run with --apply to export into this process.");
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(), String> {

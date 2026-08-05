@@ -695,6 +695,9 @@ pub struct UlncLawConfig {
     /// Video generation backend selection (hermes `video_gen:`).
     #[serde(default)]
     pub video_gen: VideoGenConfig,
+    /// External secret sources (hermes `secrets.*`).
+    #[serde(default)]
+    pub secrets: crate::secrets::SecretsConfig,
 }
 
 /// `[video_gen]` — video generation backend selection (hermes config.yaml
