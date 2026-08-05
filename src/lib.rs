@@ -115,6 +115,7 @@ pub mod tips;
 pub mod title_generator;
 pub mod tools;
 pub mod toolsets;
+pub mod update;
 pub mod video_gen;
 pub mod video_gen_backends;
 pub mod video_gen_xai;

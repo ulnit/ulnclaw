@@ -171,6 +171,18 @@ enum Commands {
         #[arg(long)]
         deep: bool,
     },
+    /// Update ulnclaw to the latest version (hermes update)
+    Update {
+        /// Check whether an update is available without installing anything
+        #[arg(long)]
+        check: bool,
+        /// Update against this branch instead of the current one
+        #[arg(long)]
+        branch: Option<String>,
+        /// Assume yes for interactive prompts (ulnclaw flow is non-interactive)
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// View and filter ulnclaw log files (hermes logs)
     Logs {
         /// Log to view: agent (default), errors, gateway, or 'list'
@@ -888,6 +900,22 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Status { all: _, deep } => {
             let opts = ulnclaw::status::StatusOptions { deep };
             print!("{}", ulnclaw::status::show_status(&config, &opts));
+            Ok(())
+        }
+        Commands::Update { check, branch, yes } => {
+            let opts = ulnclaw::update::UpdateOptions { check, branch, yes };
+            let root = ulnclaw::update::find_repo_root()
+                .ok_or("✗ Not a git repository — cannot check for updates.")?;
+            if check {
+                let (outcome, log_lines) = ulnclaw::update::check_update(&root, &opts)?;
+                for line in log_lines {
+                    println!("{line}");
+                }
+                print!("{}", ulnclaw::update::format_check_report(&outcome));
+            } else {
+                let report = ulnclaw::update::apply_update(&root, &opts)?;
+                print!("{}", ulnclaw::update::format_update_report(&report));
+            }
             Ok(())
         }
         Commands::Logs { log_name, lines, follow, level, session, since, component } => {
