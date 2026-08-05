@@ -3536,13 +3536,29 @@ async fn spawn_job_run(
     Some(run_id)
 }
 
+/// Provider factory used by the dispatcher's auto-decompose tick (the
+/// binary builds it from live config so `main.rs`' provider wiring is
+/// reused without a library dependency on the CLI).
+pub type DispatcherProviderFactory = std::sync::Arc<
+    dyn Fn() -> std::result::Result<std::sync::Arc<dyn crate::provider::Provider>, String>
+        + Send
+        + Sync,
+>;
+
 /// Start the embedded kanban dispatcher loop (hermes hosts the dispatcher
-/// in the gateway, ticking every 60 s by default): reclaim stale claims,
-/// promote parent-done todos, spawn detached workers for ready tasks.
+/// in the gateway, ticking every 60 s by default): auto-decompose fresh
+/// triage tasks, reclaim stale claims, promote parent-done todos, spawn
+/// detached workers for ready tasks.
+///
+/// The `[kanban] auto_decompose` toggle is re-read from config EVERY
+/// tick (hermes #49638): it is a safety switch — flipping it off must
+/// stop a runaway fan-out on the next tick, not on gateway restart. A
+/// config read failure fails safe (no auto-decompose that tick).
 pub fn spawn_kanban_dispatcher(
     interval_secs: u64,
     max_spawn: usize,
     use_worktrees: bool,
+    provider_factory: Option<DispatcherProviderFactory>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval =
@@ -3550,6 +3566,7 @@ pub fn spawn_kanban_dispatcher(
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
+            auto_decompose_tick(provider_factory.as_ref()).await;
             let _ = tokio::task::spawn_blocking(move || {
                 let Ok(store) = crate::kanban::KanbanStore::open_default() else {
                     return;
@@ -3576,6 +3593,71 @@ pub fn spawn_kanban_dispatcher(
             .await;
         }
     })
+}
+
+/// One auto-decompose pass (hermes `_auto_decompose_tick`): turn fresh
+/// triage tasks into ready workgraphs before the dispatcher fans out
+/// workers. Capped by `auto_decompose_per_tick` so a bulk load of triage
+/// tasks does not burst-spend the auxiliary LLM in one tick; the
+/// remainder defers to subsequent ticks.
+async fn auto_decompose_tick(provider_factory: Option<&DispatcherProviderFactory>) {
+    // Fail safe: a config read error disables auto-decompose for this
+    // tick rather than falling back to burst-prone defaults (hermes
+    // _resolve_auto_decompose_settings).
+    let Ok(config) = crate::config::UlncLawConfig::load(None) else {
+        return;
+    };
+    if !config.kanban.auto_decompose {
+        return;
+    }
+    let Some(factory) = provider_factory else {
+        return;
+    };
+    let provider = match factory() {
+        Ok(provider) => provider,
+        Err(e) => {
+            tracing::debug!("kanban auto-decompose: provider unavailable ({e})");
+            return;
+        }
+    };
+    let Ok(store) = crate::kanban::KanbanStore::open_default() else {
+        return;
+    };
+    let triage_ids = match crate::kanban_triage::list_triage_ids(&store) {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::debug!("kanban auto-decompose: list_triage_ids failed ({e})");
+            return;
+        }
+    };
+    let per_tick = config.kanban.auto_decompose_per_tick.max(1);
+    for task_id in triage_ids.into_iter().take(per_tick) {
+        let outcome = crate::kanban_triage::decompose_task(
+            &store,
+            &config,
+            provider.clone(),
+            &task_id,
+            Some("auto-decomposer"),
+        )
+        .await;
+        if outcome.ok {
+            match &outcome.child_ids {
+                Some(children) if outcome.fanout => {
+                    tracing::info!(
+                        "kanban auto-decompose: {task_id} → {} children",
+                        children.len()
+                    );
+                }
+                _ => {
+                    tracing::info!("kanban auto-decompose: {task_id} → single task (no fanout)");
+                }
+            }
+        } else {
+            // Common no-op reasons (no aux client configured) must not
+            // spam logs every tick (hermes logs them at debug).
+            tracing::debug!("kanban auto-decompose: {task_id} skipped: {}", outcome.reason);
+        }
+    }
 }
 
 /// Start the cron scheduler loop (hermes scheduler): every `poll_secs`

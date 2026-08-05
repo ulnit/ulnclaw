@@ -240,7 +240,13 @@
   run；重新认领时把残留活跃 run 恢复为 `reclaimed`）、
   `kanban runs [--json] [--state-type status|outcome --state-name V]`
   CLI（hermes 表格格式）与 `latest_run` / `latest_summary` 存储
-  辅助方法。
+  辅助方法；P133 接通网关调度器的 triage 自动分解路径（hermes
+  `_auto_decompose_tick`）：每个 tick 从配置实时重读
+  `[kanban] auto_decompose`（默认开）/ `auto_decompose_per_tick`
+  （默认 3），翻转开关在下一 tick 即停止失控扇出、无需重启网关
+  （hermes #49638 故障安全语义 —— 配置读取失败则本轮跳过），
+  随后在 dispatch 扇出之前经辅助 LLM 分解至多 N 个 triage 任务，
+  成功记 info、无操作跳过记 debug。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

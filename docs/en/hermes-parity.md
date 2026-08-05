@@ -259,7 +259,15 @@ performance and a single static binary.
   failures; re-claim recovers stale active runs as `reclaimed`), the
   `kanban runs [--json] [--state-type status|outcome --state-name V]`
   CLI with hermes' table format, and `latest_run` / `latest_summary`
-  store helpers.
+  store helpers; P133 wired the gateway dispatcher's auto-decompose
+  path (hermes `_auto_decompose_tick`): each tick re-reads
+  `[kanban] auto_decompose` (default on) /
+  `auto_decompose_per_tick` (default 3) live from config so flipping
+  the toggle stops a runaway fan-out on the next tick without a
+  gateway restart (hermes #49638 fail-safe semantics — config read
+  errors disable the pass), then decomposes up to N triage tasks via
+  the auxiliary LLM before the dispatch fan-out, logging successes at
+  info and no-op skips at debug.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

@@ -751,6 +751,14 @@ pub struct KanbanConfig {
     /// Promote parent-free decomposed children to ready automatically
     /// (hermes `kanban.auto_promote_children`, default on).
     pub auto_promote_children: bool,
+    /// Gateway dispatcher auto-decomposes triage-column tasks before
+    /// fanning out workers (hermes `kanban.auto_decompose`, default on).
+    /// Safety toggle: re-read every tick, so flipping it off stops a
+    /// runaway fan-out on the next tick without a gateway restart.
+    pub auto_decompose: bool,
+    /// Max triage tasks auto-decomposed per dispatcher tick (hermes
+    /// `kanban.auto_decompose_per_tick`, default 3).
+    pub auto_decompose_per_tick: usize,
 }
 
 impl Default for KanbanConfig {
@@ -763,6 +771,8 @@ impl Default for KanbanConfig {
             orchestrator_profile: None,
             default_assignee: None,
             auto_promote_children: true,
+            auto_decompose: true,
+            auto_decompose_per_tick: 3,
         }
     }
 }
@@ -1136,5 +1146,19 @@ mod tests {
         config.profiles.insert("work".into(), profile);
         let config = config.with_profile("work");
         assert_eq!(config.model.model, "test-model");
+    }
+
+    #[test]
+    fn kanban_auto_decompose_defaults_and_overrides() {
+        let cfg = crate::config::UlncLawConfig::default();
+        assert!(cfg.kanban.auto_decompose);
+        assert_eq!(cfg.kanban.auto_decompose_per_tick, 3);
+
+        let parsed: crate::config::UlncLawConfig = toml::from_str(
+            "[kanban]\nauto_decompose = false\nauto_decompose_per_tick = 1\n",
+        )
+        .unwrap();
+        assert!(!parsed.kanban.auto_decompose);
+        assert_eq!(parsed.kanban.auto_decompose_per_tick, 1);
     }
 }

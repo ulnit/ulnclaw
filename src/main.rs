@@ -1522,10 +1522,19 @@ async fn build_gateway_stack(
     // scheduler loop). 30s polling matches the job-timing granularity.
     ulnclaw::gateway::spawn_cron_scheduler(state.clone(), 30);
     if config.kanban.dispatch_in_gateway {
+        // Provider factory for the auto-decompose tick: builds from LIVE
+        // config each call so [auxiliary] / model edits take effect
+        // without a gateway restart (hermes #49638 semantics).
+        let provider_factory: ulnclaw::gateway::DispatcherProviderFactory =
+            std::sync::Arc::new(|| {
+                let live = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
+                build_provider(&live)
+            });
         ulnclaw::gateway::spawn_kanban_dispatcher(
             config.kanban.dispatch_interval_secs,
             config.kanban.max_spawn,
             config.kanban.worktrees,
+            Some(provider_factory),
         );
     }
     Ok(state)
