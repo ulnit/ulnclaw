@@ -492,6 +492,11 @@ impl Agent {
         let mut messages = Vec::new();
         let mut total_usage = Usage::default();
         let mut tool_calls_made = Vec::new();
+        // hermes `is_first_turn` — no carried-over conversation history.
+        let first_turn = conversation_history
+            .as_ref()
+            .map(|h| h.is_empty())
+            .unwrap_or(true);
 
         // System prompt (with memory injection)
         if let Some(prompt) = self.effective_system_prompt() {
@@ -561,6 +566,49 @@ impl Agent {
             }
         }
 
+        // Plugin hook: pre_llm_call — injected context rides the current
+        // turn's user message (hermes turn_context semantics: context is
+        // appended to the user message, never the system prompt).
+        if crate::plugins::has_hook("pre_llm_call") {
+            let history_compact: Vec<serde_json::Value> = messages
+                .iter()
+                .filter(|m| m.role != Role::System)
+                .map(|m| {
+                    let content = m.content.clone().unwrap_or_default();
+                    let truncated: String = content.chars().take(2000).collect();
+                    serde_json::json!({
+                        "role": m.role.to_string(),
+                        "content": truncated,
+                    })
+                })
+                .collect();
+            let payload = crate::plugins::hook_payload(
+                "pre_llm_call",
+                session_id.as_deref().unwrap_or(""),
+                &self.context.cwd(),
+                vec![
+                    ("user_message", serde_json::json!(user_message)),
+                    ("conversation_history", serde_json::Value::Array(history_compact)),
+                    ("is_first_turn", serde_json::json!(first_turn)),
+                    ("model", serde_json::json!(self.effective_model())),
+                    ("platform", serde_json::json!(self.config.source)),
+                ],
+                serde_json::json!({}),
+            );
+            let responses = crate::plugins::invoke_hook("pre_llm_call", payload).await;
+            let injections = crate::plugins::context_injections(&responses);
+            if !injections.is_empty() {
+                if let Some(last) = messages.last_mut() {
+                    if last.role == Role::User {
+                        let mut content = last.content.clone().unwrap_or_default();
+                        content.push_str("\n\n");
+                        content.push_str(&injections.join("\n\n"));
+                        last.content = Some(content);
+                    }
+                }
+            }
+        }
+
         let compressor = crate::context::ContextCompressor::new(self.config.context_budget_tokens)
             .with_timezone(self.context.config.timezone.clone());
 
@@ -605,7 +653,84 @@ impl Agent {
                 }
             }
 
-            let response = self.call_provider(&messages).await?;
+            // Plugin hooks around every provider request (hermes
+            // pre_api_request / post_api_request / api_request_error).
+            let api_started = std::time::Instant::now();
+            if crate::plugins::has_hook("pre_api_request") {
+                let request_char_count: usize = messages
+                    .iter()
+                    .map(|m| m.content.as_deref().map(str::len).unwrap_or(0))
+                    .sum();
+                let tool_count = self.tools.lock().await.definitions().len();
+                let payload = crate::plugins::hook_payload(
+                    "pre_api_request",
+                    session_id.as_deref().unwrap_or(""),
+                    &self.context.cwd(),
+                    vec![
+                        ("model", serde_json::json!(self.effective_model())),
+                        ("provider", serde_json::json!(self.provider.name())),
+                        ("api_call_count", serde_json::json!(iteration + 1)),
+                        ("message_count", serde_json::json!(messages.len())),
+                        ("tool_count", serde_json::json!(tool_count)),
+                        ("approx_input_tokens", serde_json::json!(request_char_count / 4)),
+                        ("request_char_count", serde_json::json!(request_char_count)),
+                        ("max_tokens", serde_json::json!(self.config.max_tokens)),
+                        ("platform", serde_json::json!(self.config.source)),
+                    ],
+                    serde_json::json!({}),
+                );
+                let _ = crate::plugins::invoke_hook("pre_api_request", payload).await;
+            }
+            let response = match self.call_provider(&messages).await {
+                Ok(response) => response,
+                Err(error) => {
+                    if crate::plugins::has_hook("api_request_error") {
+                        let payload = crate::plugins::hook_payload(
+                            "api_request_error",
+                            session_id.as_deref().unwrap_or(""),
+                            &self.context.cwd(),
+                            vec![
+                                ("model", serde_json::json!(self.effective_model())),
+                                ("provider", serde_json::json!(self.provider.name())),
+                                ("api_call_count", serde_json::json!(iteration + 1)),
+                                ("error", serde_json::json!(error.to_string())),
+                                ("api_duration", serde_json::json!(api_started.elapsed().as_secs_f64())),
+                                ("platform", serde_json::json!(self.config.source)),
+                            ],
+                            serde_json::json!({}),
+                        );
+                        let _ = crate::plugins::invoke_hook("api_request_error", payload).await;
+                    }
+                    return Err(error);
+                }
+            };
+            if crate::plugins::has_hook("post_api_request") {
+                let assistant_chars = response.content.as_deref().map(str::len).unwrap_or(0);
+                let usage = response.usage.clone().unwrap_or_default();
+                let payload = crate::plugins::hook_payload(
+                    "post_api_request",
+                    session_id.as_deref().unwrap_or(""),
+                    &self.context.cwd(),
+                    vec![
+                        ("model", serde_json::json!(self.effective_model())),
+                        ("provider", serde_json::json!(self.provider.name())),
+                        ("api_call_count", serde_json::json!(iteration + 1)),
+                        ("api_duration", serde_json::json!(api_started.elapsed().as_secs_f64())),
+                        ("finish_reason", serde_json::json!(response.finish_reason)),
+                        ("message_count", serde_json::json!(messages.len())),
+                        ("response_model", serde_json::json!(response.model)),
+                        ("usage", serde_json::json!({
+                            "input_tokens": usage.prompt_tokens,
+                            "output_tokens": usage.completion_tokens,
+                        })),
+                        ("assistant_content_chars", serde_json::json!(assistant_chars)),
+                        ("assistant_tool_call_count", serde_json::json!(response.tool_calls.len())),
+                        ("platform", serde_json::json!(self.config.source)),
+                    ],
+                    serde_json::json!({}),
+                );
+                let _ = crate::plugins::invoke_hook("post_api_request", payload).await;
+            }
 
             if let Some(ref usage) = response.usage {
                 total_usage.merge(usage);
@@ -702,6 +827,27 @@ impl Agent {
                 );
             }
 
+            // Plugin hook: post_llm_call — the turn produced a final
+            // response (hermes turn_finalizer fires it when final_response
+            // is non-empty and the turn was not interrupted).
+            if crate::plugins::has_hook("post_llm_call") {
+                let payload = crate::plugins::hook_payload(
+                    "post_llm_call",
+                    session_id.as_deref().unwrap_or(""),
+                    &self.context.cwd(),
+                    vec![
+                        ("user_message", serde_json::json!(user_message)),
+                        ("assistant_response", serde_json::json!(content)),
+                        ("model", serde_json::json!(self.effective_model())),
+                        ("platform", serde_json::json!(self.config.source)),
+                        ("completed", serde_json::json!(true)),
+                        ("iterations", serde_json::json!(iteration + 1)),
+                    ],
+                    serde_json::json!({}),
+                );
+                let _ = crate::plugins::invoke_hook("post_llm_call", payload).await;
+            }
+
             return Ok(RunResult {
                 content,
                 conversation: messages,
@@ -714,6 +860,24 @@ impl Agent {
 
         if let (Some(store), Some(sid)) = (self.store.as_ref(), session_id.as_ref()) {
             store.end_session(sid, "max_iterations").ok();
+        }
+
+        if crate::plugins::has_hook("post_llm_call") {
+            let payload = crate::plugins::hook_payload(
+                "post_llm_call",
+                session_id.as_deref().unwrap_or(""),
+                &self.context.cwd(),
+                vec![
+                    ("user_message", serde_json::json!(user_message)),
+                    ("assistant_response", serde_json::json!("Reached the iteration budget before finishing.")),
+                    ("model", serde_json::json!(self.effective_model())),
+                    ("platform", serde_json::json!(self.config.source)),
+                    ("completed", serde_json::json!(false)),
+                    ("iterations", serde_json::json!(self.config.max_iterations)),
+                ],
+                serde_json::json!({}),
+            );
+            let _ = crate::plugins::invoke_hook("post_llm_call", payload).await;
         }
 
         Ok(RunResult {
@@ -1403,6 +1567,89 @@ mod tests {
             calls: calls.clone(),
         });
         (provider, calls)
+    }
+
+    /// End-to-end hook firing: pre_api_request / post_api_request /
+    /// post_llm_call around a successful provider call, api_request_error
+    /// on failure. NOTE: this is the ONLY lib test that initializes the
+    /// plugin runtime (a process-wide OnceCell) — keep it that way.
+    #[tokio::test]
+    async fn agent_fires_api_and_turn_hooks() {
+        if cfg!(windows) {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ulnclaw-agent-hooks-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("hook.log");
+        // Append every payload the agent pipes in; each line is one JSON
+        // payload, so the event name is recoverable from hook_event_name.
+        let script = dir.join("hook.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ncat >> {}\necho\n", log.display()),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut config = crate::config::UlncLawConfig::default();
+        for event in [
+            "pre_api_request",
+            "post_api_request",
+            "api_request_error",
+            "post_llm_call",
+            "pre_llm_call",
+        ] {
+            config.hooks.events.insert(
+                event.to_string(),
+                vec![script.display().to_string()],
+            );
+        }
+        // Accept consent so build_runtime registers the callbacks.
+        config.hooks.auto_accept = true;
+        let _warnings = crate::plugins::init(&dir, &config).await;
+
+        // Successful turn: pre/post_api_request + pre/post_llm_call fire.
+        let (provider, calls) = counting(Some("hooked-reply"));
+        let mut agent_config = AgentConfig::default();
+        agent_config.persist = false;
+        let agent = Agent::new(provider, ToolRegistry::new()).with_config(agent_config);
+        let result = agent.run("hello hooks", None).await.expect("run succeeds");
+        assert_eq!(result.content, "hooked-reply");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Failed provider: api_request_error fires.
+        let (broken, _) = counting(None);
+        let mut agent_config = AgentConfig::default();
+        agent_config.persist = false;
+        let agent = Agent::new(broken, ToolRegistry::new()).with_config(agent_config);
+        assert!(agent.run("will fail", None).await.is_err());
+
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        for event in [
+            "pre_llm_call",
+            "pre_api_request",
+            "post_api_request",
+            "post_llm_call",
+            "api_request_error",
+        ] {
+            assert!(
+                logged.contains(&format!("\"hook_event_name\":\"{event}\"")),
+                "expected {event} in hook log, got: {logged}"
+            );
+        }
+        // pre_llm_call injection path: a context-returning hook appends to
+        // the user message. Verify via the payload shape only (the script
+        // above is a sink); context_injections aggregation is unit-tested
+        // in plugins.rs.
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

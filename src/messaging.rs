@@ -180,6 +180,50 @@ fn allowlisted(allowlist: &[String], id: &str) -> bool {
     allowlist.iter().any(|allowed| allowed == id)
 }
 
+/// `pre_gateway_dispatch` plugin hook (hermes fires it BEFORE auth so
+/// plugins can handle unauthorized senders without triggering pairing).
+/// Returns false when a hook consumed the event (`{"action": "skip"}`);
+/// a `{"action": "rewrite", "text": ...}` response replaces `event.text`.
+async fn pre_gateway_dispatch_gate(event: &mut MessageEvent) -> bool {
+    if !crate::plugins::has_hook("pre_gateway_dispatch") {
+        return true;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let payload = crate::plugins::hook_payload(
+        "pre_gateway_dispatch",
+        "",
+        &cwd,
+        vec![
+            ("platform", json!(event.platform)),
+            ("chat_id", json!(event.chat_id)),
+            ("sender_id", json!(event.sender_id)),
+            ("sender_name", json!(event.sender_name)),
+            ("text", json!(event.text)),
+            ("message_id", json!(event.message_id)),
+        ],
+        json!({}),
+    );
+    let responses = crate::plugins::invoke_hook("pre_gateway_dispatch", payload).await;
+    match crate::plugins::dispatch_decision(&responses) {
+        Some((action, detail)) if action == "skip" => {
+            eprintln!(
+                "[messaging] pre_gateway_dispatch skipped {} message from chat {}: {}",
+                event.platform,
+                event.chat_id,
+                detail.unwrap_or_default()
+            );
+            false
+        }
+        Some((action, text)) if action == "rewrite" => {
+            if let Some(text) = text {
+                event.text = text;
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
 /// Start every enabled platform; resolves when they have all stopped.
 pub async fn run_messaging(
     config: &crate::config::UlncLawConfig,
@@ -286,15 +330,8 @@ pub mod telegram {
                 if chat_id.is_empty() {
                     continue;
                 }
-                if !allowlisted(&cfg.allowed_chat_ids, &chat_id) {
-                    eprintln!(
-                        "[telegram] refusing message from chat {chat_id} — add it to \
-                         messaging.telegram.allowed_chat_ids"
-                    );
-                    continue;
-                }
                 let sender = message.get("from").cloned().unwrap_or(json!({}));
-                let event = MessageEvent {
+                let mut event = MessageEvent {
                     platform: "telegram".into(),
                     chat_id: chat_id.clone(),
                     sender_id: sender.get("id").map(|v| v.to_string()).unwrap_or_default(),
@@ -310,6 +347,17 @@ pub mod telegram {
                         .map(|v| v.to_string())
                         .unwrap_or_default(),
                 };
+                // Plugin gate before auth (hermes ordering).
+                if !pre_gateway_dispatch_gate(&mut event).await {
+                    continue;
+                }
+                if !allowlisted(&cfg.allowed_chat_ids, &chat_id) {
+                    eprintln!(
+                        "[telegram] refusing message from chat {chat_id} — add it to \
+                         messaging.telegram.allowed_chat_ids"
+                    );
+                    continue;
+                }
                 let dispatcher = dispatcher.clone();
                 let client = client.clone();
                 let token = token.clone();
@@ -471,15 +519,8 @@ pub mod discord {
         if channel_id.is_empty() {
             return;
         }
-        if !allowlisted(&cfg.allowed_channel_ids, &channel_id) {
-            eprintln!(
-                "[discord] refusing message from channel {channel_id} — add it to \
-                 messaging.discord.allowed_channel_ids"
-            );
-            return;
-        }
         let author = data.get("author").cloned().unwrap_or(json!({}));
-        let event = MessageEvent {
+        let mut event = MessageEvent {
             platform: "discord".into(),
             chat_id: channel_id.clone(),
             sender_id: author.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -492,6 +533,17 @@ pub mod discord {
             text: text.to_string(),
             message_id: data.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         };
+        // Plugin gate before auth (hermes ordering).
+        if !pre_gateway_dispatch_gate(&mut event).await {
+            return;
+        }
+        if !allowlisted(&cfg.allowed_channel_ids, &channel_id) {
+            eprintln!(
+                "[discord] refusing message from channel {channel_id} — add it to \
+                 messaging.discord.allowed_channel_ids"
+            );
+            return;
+        }
         let dispatcher = dispatcher.clone();
         let token = token.to_string();
         tokio::spawn(async move {
@@ -613,14 +665,7 @@ pub mod slack {
                 }
                 // Strip a leading <@BOTID> mention so the agent sees clean text.
                 let text = strip_mention(&text);
-                if !allowlisted(&cfg.allowed_channel_ids, &channel) {
-                    eprintln!(
-                        "[slack] refusing message from channel {channel} — add it to \
-                         messaging.slack.allowed_channel_ids"
-                    );
-                    continue;
-                }
-                let message_event = MessageEvent {
+                let mut message_event = MessageEvent {
                     platform: "slack".into(),
                     chat_id: channel.clone(),
                     sender_id: event.get("user").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -628,6 +673,17 @@ pub mod slack {
                     text,
                     message_id: event.get("ts").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 };
+                // Plugin gate before auth (hermes ordering).
+                if !pre_gateway_dispatch_gate(&mut message_event).await {
+                    continue;
+                }
+                if !allowlisted(&cfg.allowed_channel_ids, &channel) {
+                    eprintln!(
+                        "[slack] refusing message from channel {channel} — add it to \
+                         messaging.slack.allowed_channel_ids"
+                    );
+                    continue;
+                }
                 let dispatcher = dispatcher.clone();
                 let bot_token = bot_token.to_string();
                 tokio::spawn(async move {

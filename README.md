@@ -50,7 +50,7 @@ skill sync, and a Tauri desktop GUI (`desktop/`).
 - **📝 Working diff** — `ulnclaw diff [--staged|--all]` shows what changed in a git worktree (untracked files included), REPL `/gitdiff`
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`, `[auxiliary.title_generation]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
 - **📡 Messaging platforms** — Telegram/Discord/Slack adapters run inside `ulnclaw gateway` (`[messaging.*]`): allowlist-gated pairing (fail closed), one persistent session per chat, hermes-style reply chunking
-- **🔌 Plugins & hooks** — directory plugins (`~/.ulnclaw/plugins/<name>/plugin.toml`: hooks + subprocess tools) and `[hooks]` config shell hooks with hermes first-use consent (`plugins list/enable/disable/accept-hooks`); 23-event hermes hook catalog
+- **🔌 Plugins & hooks** — directory plugins (`~/.ulnclaw/plugins/<name>/plugin.toml`: hooks + subprocess tools) and `[hooks]` config shell hooks with hermes first-use consent (`plugins list/enable/disable/accept-hooks`, `hooks list/test/revoke/doctor`); the core fires all 13 hook events hermes emits at runtime (pre/post tool & LLM calls, API request lifecycle, session boundaries, gateway dispatch gating)
 - **🔑 Secrets vaults** — external secret sources applied at startup before providers read env (`secrets status/sync`): command helper, Bitwarden Secrets Manager (`bws`), 1Password (`op://` refs) with full hermes precedence semantics
 - **🖱️ Computer use** — `computer_use` tool via the cua-driver daemon (MCP over stdio, full hermes schema), approval-gated like hermes; `computer-use status/doctor/install`
 - **🔄 OAuth + skill sync** — `auth login` RFC 8628 device flow against any `[oauth]` provider; `sync status/pull/push/now` keeps skills in sync over HTTP(S) or a shared directory
@@ -100,6 +100,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw secrets status   # external secret sources (secrets sync [--apply] fetches now)
 ./ulnclaw computer-use status # background desktop control via cua-driver (doctor/install)
 ./ulnclaw plugins list      # plugins + shell hooks (enable/disable/accept-hooks)
+./ulnclaw hooks doctor      # probe every consented hook (list/test/revoke)
 ./ulnclaw auth login        # OAuth device-flow login (status/refresh/logout/open)
 ./ulnclaw sync status       # skill sync (pull/push/now/enable/disable/device)
 ./ulnclaw completion bash  # shell completions (bash/zsh/fish/elvish/powershell)
@@ -300,7 +301,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **📝 工作区 diff** —— `ulnclaw diff [--staged|--all]` 显示 git 工作区变更（含未跟踪文件），REPL `/gitdiff`
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`、`[auxiliary.title_generation]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
 - **📡 消息平台** —— Telegram/Discord/Slack 适配器运行于 `ulnclaw gateway` 内（`[messaging.*]`）：白名单配对（fail closed）、每聊天一条持久会话、hermes 风格回复分块
-- **🔌 插件与钩子** —— 目录插件（`~/.ulnclaw/plugins/<name>/plugin.toml`：hooks + 子进程工具）与 `[hooks]` 配置式 shell 钩子，复刻 hermes 首次使用同意机制（`plugins list/enable/disable/accept-hooks`）；hermes 23 事件钩子目录
+- **🔌 插件与钩子** —— 目录插件（`~/.ulnclaw/plugins/<name>/plugin.toml`：hooks + 子进程工具）与 `[hooks]` 配置式 shell 钩子，复刻 hermes 首次使用同意机制（`plugins list/enable/disable/accept-hooks`、`hooks list/test/revoke/doctor`）；核心触发 hermes 运行期实际发出的全部 13 个钩子事件（工具/LLM 前后、API 请求生命周期、会话边界、网关分发门控）
 - **🔑 Secrets 保险库** —— 外部秘密源在启动时、provider 读取 env 之前应用（`secrets status/sync`）：command 助手、Bitwarden Secrets Manager（`bws`）、1Password（`op://` 引用），完整复刻 hermes 优先级语义
 - **🖱️ Computer use** —— `computer_use` 工具经 cua-driver 守护进程（MCP over stdio，完整 hermes schema），与 hermes 相同的审批门控；`computer-use status/doctor/install`
 - **🔄 OAuth + 技能同步** —— `auth login` 对任意 `[oauth]` provider 执行 RFC 8628 设备流；`sync status/pull/push/now` 经 HTTP(S) 或共享目录同步技能
@@ -350,6 +351,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw secrets status   # 外部秘密源（secrets sync [--apply] 立即拉取）
 ./ulnclaw computer-use status # cua-driver 后台桌面控制（doctor/install）
 ./ulnclaw plugins list      # 插件与 shell 钩子（enable/disable/accept-hooks）
+./ulnclaw hooks doctor      # 逐个探测已同意的钩子（list/test/revoke）
 ./ulnclaw auth login        # OAuth 设备流登录（status/refresh/logout/open）
 ./ulnclaw sync status       # 技能同步（pull/push/now/enable/disable/device）
 ./ulnclaw completion bash  # shell 补全脚本（bash/zsh/fish/elvish/powershell）

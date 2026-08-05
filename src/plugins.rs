@@ -346,6 +346,12 @@ fn callbacks_for(event: &str) -> Vec<HookCallback> {
         .unwrap_or_default()
 }
 
+/// Whether any callback is registered for `event` (hermes `has_hook`) —
+/// callers skip building potentially expensive payloads when nothing fires.
+pub fn has_hook(event: &str) -> bool {
+    !callbacks_for(event).is_empty()
+}
+
 /// Run one hook script: JSON payload on stdin, JSON response on stdout.
 /// Never fatal — timeouts/parse errors yield no response (hermes policy).
 async fn run_hook_callback(callback: &HookCallback, payload: &Value) -> Option<Value> {
@@ -459,13 +465,43 @@ pub fn transform_text(responses: &[Value]) -> Option<String> {
     None
 }
 
-/// pre_llm_call aggregation: collect injected context strings (hermes).
+/// pre_llm_call aggregation: collect injected context strings (hermes —
+/// a response may be `{"context": "..."}` or a bare non-empty string).
 pub fn context_injections(responses: &[Value]) -> Vec<String> {
     responses
         .iter()
-        .filter_map(|r| r.get("context").and_then(|v| v.as_str()).map(String::from))
+        .filter_map(|r| match r {
+            Value::String(s) => Some(s.clone()),
+            Value::Object(_) => r
+                .get("context")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            _ => None,
+        })
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+/// pre_gateway_dispatch aggregation: first dict response carrying an
+/// `action` wins (hermes gateway/run.py). Returns the lowercased action
+/// plus its `text` (rewrite payload) or `reason` (skip explanation).
+pub fn dispatch_decision(responses: &[Value]) -> Option<(String, Option<String>)> {
+    for response in responses {
+        let Some(object) = response.as_object() else {
+            continue;
+        };
+        let Some(action) = object.get("action").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let text = object
+            .get("text")
+            .or_else(|| object.get("reason"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        return Some((action.to_lowercase(), text));
+    }
+    None
 }
 
 /// Register every plugin tool into the registry as
@@ -606,6 +642,124 @@ pub fn accept_all_hooks(home: &Path, config: &crate::config::UlncLawConfig) -> u
     added
 }
 
+/// Snapshot of the consent allowlist (`event\tcommand` entries) for the
+/// `hooks` CLI.
+pub fn allowlist_entries(home: &Path) -> Vec<String> {
+    load_allowlist(home)
+}
+
+/// Revoke consent for every entry whose command equals `command`
+/// (hermes `hooks revoke`). Returns the number of entries removed.
+pub fn revoke_allowlist(home: &Path, command: &str) -> usize {
+    let entries = load_allowlist(home);
+    let before = entries.len();
+    let kept: Vec<String> = entries
+        .into_iter()
+        .filter(|entry| entry.split('\t').nth(1) != Some(command))
+        .collect();
+    let removed = before - kept.len();
+    if removed > 0 {
+        save_allowlist(home, &kept);
+    }
+    removed
+}
+
+/// Default per-event test payloads (hermes `_DEFAULT_PAYLOADS`): what a
+/// script sees under `hooks test` / `hooks doctor` is shape-identical to
+/// runtime payloads.
+pub fn default_hook_payload(event: &str) -> Value {
+    let raw: &str = match event {
+        "pre_tool_call" => r#"{"tool_name":"terminal","args":{"command":"echo hello"},"session_id":"test-session","task_id":"test-task","tool_call_id":"test-call"}"#,
+        "post_tool_call" => r#"{"tool_name":"terminal","args":{"command":"echo hello"},"session_id":"test-session","task_id":"test-task","tool_call_id":"test-call","result":"{\"output\": \"hello\"}","duration_ms":42}"#,
+        "pre_llm_call" => r#"{"session_id":"test-session","user_message":"What is the weather?","conversation_history":[],"is_first_turn":true,"model":"gpt-4","platform":"cli"}"#,
+        "post_llm_call" => r#"{"session_id":"test-session","model":"gpt-4","platform":"cli"}"#,
+        "pre_verify" => r#"{"session_id":"test-session","platform":"cli","model":"gpt-4","coding":true,"attempt":0,"final_response":"All done — the change is applied.","changed_paths":["src/app.tsx"]}"#,
+        "on_session_start" => r#"{"session_id":"test-session"}"#,
+        "on_session_end" => r#"{"session_id":"test-session","task_id":"test-task","turn_id":"test-turn","completed":true,"failed":false,"interrupted":false,"turn_exit_reason":"text_response(stop)","model":"gpt-4","platform":"cli"}"#,
+        "on_session_finalize" => r#"{"session_id":"test-session"}"#,
+        "on_session_reset" => r#"{"session_id":"test-session"}"#,
+        "pre_api_request" => r#"{"session_id":"test-session","task_id":"test-task","platform":"cli","model":"claude-sonnet-4-6","provider":"anthropic","base_url":"https://api.anthropic.com","api_mode":"anthropic_messages","api_call_count":1,"message_count":4,"tool_count":12,"approx_input_tokens":2048,"request_char_count":8192,"max_tokens":4096}"#,
+        "post_api_request" => r#"{"session_id":"test-session","task_id":"test-task","platform":"cli","model":"claude-sonnet-4-6","provider":"anthropic","base_url":"https://api.anthropic.com","api_mode":"anthropic_messages","api_call_count":1,"api_duration":1.234,"finish_reason":"stop","message_count":4,"response_model":"claude-sonnet-4-6","usage":{"input_tokens":2048,"output_tokens":512},"assistant_content_chars":1200,"assistant_tool_call_count":0}"#,
+        "subagent_stop" => r#"{"parent_session_id":"parent-sess","child_role":null,"child_summary":"Synthetic summary for hooks test","child_status":"completed","tool_call_history":[{"tool_name":"write_file","tool_input":{"argument_keys":["content","path"],"targets":{"path":"/tmp/report.txt"}},"input_bytes":128,"output_bytes":32,"status":"ok"}],"duration_ms":1234}"#,
+        "pre_gateway_dispatch" => r#"{"platform":"telegram","chat_id":"12345","sender_id":"67890","sender_name":"test-user","text":"hello","message_id":"1"}"#,
+        _ => r#"{"extra":{}}"#,
+    };
+    serde_json::from_str(raw).unwrap_or_else(|_| json!({"extra": {}}))
+}
+
+/// One `hooks doctor` probe result: (event, command, outcome).
+pub struct HookProbe {
+    pub event: String,
+    pub command: String,
+    pub consented: bool,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// Run every configured hook with its default payload and report per-command
+/// outcomes (hermes `hooks doctor`). Non-consented hooks are reported but
+/// not executed.
+pub async fn doctor_hooks(home: &Path, config: &crate::config::UlncLawConfig) -> Vec<HookProbe> {
+    let allowlist = load_allowlist(home);
+    let mut probes = Vec::new();
+    let mut events: Vec<(&String, &Vec<String>)> = config.hooks.events.iter().collect();
+    events.sort_by(|a, b| a.0.cmp(b.0));
+    for (event, commands) in events {
+        if !VALID_HOOKS.contains(&event.as_str()) {
+            for command in commands {
+                probes.push(HookProbe {
+                    event: event.clone(),
+                    command: command.clone(),
+                    consented: false,
+                    ok: false,
+                    detail: "unknown hook event".into(),
+                });
+            }
+            continue;
+        }
+        let payload = default_hook_payload(event);
+        for command in commands {
+            let key = format!("{event}\t{command}");
+            let consented = allowlist.iter().any(|a| a == &key);
+            if !consented {
+                probes.push(HookProbe {
+                    event: event.clone(),
+                    command: command.clone(),
+                    consented: false,
+                    ok: false,
+                    detail: "not consented (plugins accept-hooks)".into(),
+                });
+                continue;
+            }
+            let callback = HookCallback {
+                event: event.clone(),
+                command: command.clone(),
+            };
+            let outcome = run_hook_callback(&callback, &payload).await;
+            probes.push(HookProbe {
+                event: event.clone(),
+                command: command.clone(),
+                consented: true,
+                ok: outcome.is_some(),
+                detail: match outcome {
+                    Some(value) => format!("responded: {}", truncate_for_display(&value.to_string(), 80)),
+                    None => "no valid JSON response (exit != 0, timeout, or unparseable stdout)".into(),
+                },
+            });
+        }
+    }
+    probes
+}
+
+fn truncate_for_display(text: &str, max: usize) -> String {
+    let flat: String = text.chars().filter(|c| *c != '\n').collect();
+    if flat.chars().count() <= max {
+        flat
+    } else {
+        flat.chars().take(max).collect::<String>() + "…"
+    }
+}
+
 /// Read the `plugins.disabled` list from config.toml (source of truth for
 /// enable/disable persistence).
 fn read_disabled_list(config_path: &Path) -> Vec<String> {
@@ -733,6 +887,101 @@ mod tests {
     fn context_injections_collected() {
         let responses = vec![json!({"context": "a"}), json!({}), json!({"context": "b"})];
         assert_eq!(context_injections(&responses), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn dispatch_decision_shapes() {
+        let responses = vec![json!("noise"), json!({}), json!({"action": "skip", "reason": "handled elsewhere"})];
+        let (action, detail) = dispatch_decision(&responses).unwrap();
+        assert_eq!(action, "skip");
+        assert_eq!(detail.as_deref(), Some("handled elsewhere"));
+
+        let responses = vec![json!({"action": "REWRITE", "text": "sanitized"})];
+        let (action, detail) = dispatch_decision(&responses).unwrap();
+        assert_eq!(action, "rewrite");
+        assert_eq!(detail.as_deref(), Some("sanitized"));
+
+        let responses = vec![json!({"action": "allow"})];
+        let (action, detail) = dispatch_decision(&responses).unwrap();
+        assert_eq!(action, "allow");
+        assert!(detail.is_none());
+
+        assert!(dispatch_decision(&[]).is_none());
+        assert!(dispatch_decision(&[json!("string"), json!(42)]).is_none());
+    }
+
+    #[test]
+    fn context_injections_accepts_bare_strings() {
+        let responses = vec![
+            json!({"context": "from-dict"}),
+            json!("  bare string  "),
+            json!(""),
+            json!(3),
+            json!({"context": ""}),
+        ];
+        assert_eq!(
+            context_injections(&responses),
+            vec!["from-dict".to_string(), "bare string".to_string()]
+        );
+    }
+
+    #[test]
+    fn default_hook_payload_covers_catalog() {
+        let payload = default_hook_payload("pre_tool_call");
+        assert_eq!(payload["tool_name"], json!("terminal"));
+        assert_eq!(payload["session_id"], json!("test-session"));
+        let payload = default_hook_payload("post_api_request");
+        assert_eq!(payload["usage"]["input_tokens"], json!(2048));
+        let payload = default_hook_payload("pre_gateway_dispatch");
+        assert_eq!(payload["platform"], json!("telegram"));
+        // Unknown events fall back to the generic envelope payload.
+        assert_eq!(default_hook_payload("not-a-hook"), json!({"extra": {}}));
+    }
+
+    #[test]
+    fn revoke_allowlist_removes_matching_entries() {
+        let dir = std::env::temp_dir().join(format!("ulnclaw-revoke-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        save_allowlist(
+            &dir,
+            &[
+                "pre_tool_call\t/tmp/a.sh".to_string(),
+                "post_llm_call\t/tmp/b.sh".to_string(),
+                "pre_tool_call\t/tmp/b.sh".to_string(),
+            ],
+        );
+        assert_eq!(revoke_allowlist(&dir, "/tmp/b.sh"), 2);
+        assert_eq!(allowlist_entries(&dir), vec!["pre_tool_call\t/tmp/a.sh".to_string()]);
+        assert_eq!(revoke_allowlist(&dir, "/tmp/missing.sh"), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn doctor_hooks_reports_consent_state() {
+        let dir = std::env::temp_dir().join(format!("ulnclaw-doctor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = crate::config::UlncLawConfig::default();
+        config.hooks.events.insert(
+            "on_session_start".to_string(),
+            vec!["/bin/echo ignored".to_string()],
+        );
+        config.hooks.events.insert(
+            "not_an_event".to_string(),
+            vec!["/bin/true".to_string()],
+        );
+        // Nothing consented: both probes report not-consented / unknown.
+        let probes = doctor_hooks(&dir, &config).await;
+        assert_eq!(probes.len(), 2);
+        assert!(probes.iter().all(|p| !p.ok));
+        assert!(probes.iter().any(|p| p.detail.contains("unknown hook event")));
+        assert!(probes.iter().any(|p| p.detail.contains("not consented")));
+        // Consent the echo hook: it runs and responds (echo emits JSON-ish
+        // text that fails to parse, so ok stays false but the probe ran).
+        save_allowlist(&dir, &["on_session_start\t/bin/echo ignored".to_string()]);
+        let probes = doctor_hooks(&dir, &config).await;
+        let echo_probe = probes.iter().find(|p| p.command == "/bin/echo ignored").unwrap();
+        assert!(echo_probe.consented);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -148,6 +148,11 @@ enum Commands {
         #[command(subcommand)]
         action: Option<PluginsAction>,
     },
+    /// Shell-hook inspection: list/test/revoke/doctor (hermes hooks)
+    Hooks {
+        #[command(subcommand)]
+        action: HooksAction,
+    },
     /// OAuth device-flow login: login/status/refresh/logout (hermes portal auth)
     Auth {
         #[command(subcommand)]
@@ -732,6 +737,23 @@ enum PluginsAction {
 }
 
 #[derive(Subcommand)]
+enum HooksAction {
+    /// List configured shell hooks and their consent state
+    List,
+    /// Fire one event with its default payload (or --payload-file) and print responses
+    Test {
+        event: String,
+        /// JSON file to feed as the payload instead of the built-in default
+        #[arg(long)]
+        payload_file: Option<std::path::PathBuf>,
+    },
+    /// Revoke consent for every hook entry whose command equals COMMAND
+    Revoke { command: String },
+    /// Run every consented hook with its default payload and report failures
+    Doctor,
+}
+
+#[derive(Subcommand)]
 enum ComputerUseAction {
     /// Print whether cua-driver is installed, its version, and the config
     Status,
@@ -1177,6 +1199,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Secrets { action } => secrets_cmd(&config, action),
         Commands::ComputerUse { action } => computer_use_cmd(&config, action).await,
         Commands::Plugins { action } => plugins_cmd(&config, action.unwrap_or(PluginsAction::List)).await,
+        Commands::Hooks { action } => hooks_cmd(&config, action).await,
         Commands::Auth { action } => auth_cmd(&config, action.unwrap_or(AuthAction::Status)).await,
         Commands::Sync { action } => sync_cmd(&config, action.unwrap_or(SyncAction::Status)).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
@@ -1947,6 +1970,15 @@ async fn chat_repl(
         serde_json::json!({"source": "cli", "mode": "repl"}),
     )
     .await;
+    // Plugin hook: on_session_finalize — the REPL session is done and its
+    // state can be archived/flushed (hermes session-boundary event).
+    ulnclaw::plugins::fire_session_event(
+        "on_session_finalize",
+        &session_key,
+        &repl_cwd,
+        serde_json::json!({"source": "cli", "mode": "repl"}),
+    )
+    .await;
     Ok(())
 }
 
@@ -1969,6 +2001,15 @@ async fn handle_slash(
         "/quit" | "/exit" | "/q" => return Ok(false),
         "/new" => {
             history.clear();
+            // Plugin hook: on_session_reset — the old conversation is being
+            // abandoned for a fresh one (hermes session-boundary event).
+            ulnclaw::plugins::fire_session_event(
+                "on_session_reset",
+                session_key,
+                &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                serde_json::json!({"source": "cli", "mode": "repl"}),
+            )
+            .await;
             // Fresh conversation = fresh session row (hermes /new); rotate
             // the live key and reset the per-session goal manager.
             *session_key = uuid::Uuid::new_v4().to_string();
@@ -2685,6 +2726,115 @@ async fn plugins_cmd(config: &UlncLawConfig, action: PluginsAction) -> Result<()
                 println!("No pending hooks to accept.");
             } else {
                 println!("✓ Accepted {added} hook command(s) into {}.", home.join("shell-hooks-allowlist.json").display());
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn hooks_cmd(config: &UlncLawConfig, action: HooksAction) -> Result<(), String> {
+    use ulnclaw::plugins;
+    let home = ulnclaw::config::ulnclaw_home();
+    // Populate the runtime so test/doctor see the same callbacks chat does.
+    let _ = plugins::init(&home, config).await;
+    match action {
+        HooksAction::List => {
+            let allowlist = plugins::allowlist_entries(&home);
+            if config.hooks.events.is_empty() {
+                println!("No shell hooks configured in [hooks].");
+            } else {
+                println!("Config shell hooks ([hooks]):");
+                let mut events: Vec<(&String, &Vec<String>)> = config.hooks.events.iter().collect();
+                events.sort_by(|a, b| a.0.cmp(b.0));
+                for (event, commands) in events {
+                    let known = ulnclaw::plugins::VALID_HOOKS.contains(&event.as_str());
+                    for command in commands {
+                        let key = format!("{event}\t{command}");
+                        let consented = allowlist.iter().any(|a| a == &key);
+                        let state = if !known {
+                            "unknown-event"
+                        } else if consented {
+                            "consented"
+                        } else {
+                            "pending"
+                        };
+                        println!("  [{state:>13}] {event}: {command}");
+                    }
+                }
+            }
+            let loaded = plugins::loaded_plugins();
+            let plugin_hooks: Vec<String> = loaded
+                .iter()
+                .filter(|p| !p.disabled)
+                .flat_map(|p| {
+                    p.manifest
+                        .hooks
+                        .iter()
+                        .map(move |h| format!("  [    consented] {}: {} (plugin {})", h, p.manifest.name, p.manifest.name))
+                })
+                .collect();
+            if !plugin_hooks.is_empty() {
+                println!("Plugin hooks (trusted by installation):");
+                for line in plugin_hooks {
+                    println!("{line}");
+                }
+            }
+            println!(
+                "\nConsent allowlist: {} ({} entries)",
+                home.join("shell-hooks-allowlist.json").display(),
+                allowlist.len()
+            );
+        }
+        HooksAction::Test { event, payload_file } => {
+            if !plugins::VALID_HOOKS.contains(&event.as_str()) {
+                return Err(format!(
+                    "unknown hook event {event:?} — expected one of the {} hermes hook names",
+                    plugins::VALID_HOOKS.len()
+                ));
+            }
+            let payload = match payload_file {
+                Some(path) => {
+                    let text = std::fs::read_to_string(&path)
+                        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+                    serde_json::from_str(&text)
+                        .map_err(|e| format!("payload file is not valid JSON: {e}"))?
+                }
+                None => plugins::default_hook_payload(&event),
+            };
+            println!("Firing {event:?} for registered callbacks…");
+            let responses = plugins::invoke_hook(&event, payload).await;
+            if responses.is_empty() {
+                println!("No responses (no consented hooks for this event, or none produced valid JSON).");
+            } else {
+                for (idx, response) in responses.iter().enumerate() {
+                    println!("response {}: {}", idx + 1, serde_json::to_string_pretty(response).unwrap_or_default());
+                }
+            }
+        }
+        HooksAction::Revoke { command } => {
+            let removed = plugins::revoke_allowlist(&home, &command);
+            if removed == 0 {
+                println!("No consent entries matched {command:?}.");
+            } else {
+                println!("✓ Revoked {removed} consent entr{} for {command:?}.", if removed == 1 { "y" } else { "ies" });
+            }
+        }
+        HooksAction::Doctor => {
+            let probes = plugins::doctor_hooks(&home, config).await;
+            if probes.is_empty() {
+                println!("No shell hooks configured in [hooks] — nothing to check.");
+                return Ok(());
+            }
+            let mut failed = 0usize;
+            for probe in &probes {
+                let mark = if probe.ok { "ok " } else { "ERR" };
+                println!("[{mark}] {}: {} — {}", probe.event, probe.command, probe.detail);
+                if !probe.ok {
+                    failed += 1;
+                }
+            }
+            if failed > 0 {
+                return Err(format!("{failed} hook(s) failed the doctor run"));
             }
         }
     }

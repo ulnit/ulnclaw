@@ -10,8 +10,6 @@
 
 use crate::error::{AgentError, Result};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
