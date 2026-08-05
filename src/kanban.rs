@@ -224,6 +224,12 @@ pub struct DispatchResult {
     pub auto_blocked: Vec<String>,
     /// Running tasks killed + requeued for exceeding max_runtime_seconds.
     pub reaped: Vec<String>,
+    /// Running tasks reclaimed for a stale/missing heartbeat (hermes
+    /// `detect_stale_running`).
+    pub stale: Vec<String>,
+    /// Running tasks whose worker pid died (hermes
+    /// `detect_crashed_workers`).
+    pub crashed: Vec<String>,
 }
 
 /// Worker brief for a dispatcher-spawned task (hermes spawns
@@ -3594,6 +3600,192 @@ impl KanbanStore {
         Ok(reaped)
     }
 
+    /// Crash-detection grace period (hermes
+    /// `DEFAULT_CRASH_GRACE_SECONDS` = 30, overridable via
+    /// `ULNCLAW_KANBAN_CRASH_GRACE_SECONDS`; 0 restores immediate
+    /// reclaim for tests). A freshly spawned worker must not be
+    /// reclaimed before its pid is visible on /proc.
+    fn crash_grace_seconds() -> i64 {
+        std::env::var("ULNCLAW_KANBAN_CRASH_GRACE_SECONDS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<i64>().ok())
+            .filter(|v| *v >= 0)
+            .unwrap_or(30)
+    }
+
+    /// Reclaim `running` tasks whose worker pid is no longer alive
+    /// (hermes `detect_crashed_workers`) — immediate liveness check
+    /// instead of waiting out the claim TTL. Emits a `crashed` event,
+    /// closes the active run with outcome `crashed`, and counts the
+    /// failure against the circuit breaker.
+    pub fn detect_crashed_workers(&self) -> Result<Vec<String>> {
+        let now = Self::now();
+        let grace = Self::crash_grace_seconds();
+        let rows: Vec<(String, i64, Option<i64>)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, worker_pid, started_at FROM tasks \
+                     WHERE status = 'running' AND worker_pid IS NOT NULL",
+                )
+                .map_err(db_error("crashed"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
+                })
+                .map_err(db_error("crashed"))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("crashed"))?
+        };
+        let mut crashed = Vec::new();
+        for (id, pid, started_at) in rows {
+            if let Some(started) = started_at {
+                if now - started < grace {
+                    continue;
+                }
+            }
+            if pid_alive(pid) {
+                continue;
+            }
+            let updated = self
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE tasks SET status = 'ready', claim_lock = NULL, \
+                     claim_expires = NULL, worker_pid = NULL \
+                     WHERE id = ?1 AND status = 'running' AND worker_pid = ?2",
+                    params![id, pid],
+                )
+                .map_err(db_error("crashed release"))?;
+            if updated != 1 {
+                continue;
+            }
+            let error = format!("pid {pid} not alive");
+            self.close_active_run(&id, "crashed", "crashed", None, Some(&error))?;
+            self.append_event(&id, "crashed", serde_json::json!({ "pid": pid }))?;
+            // Unified failure accounting — a crash consumes the retry
+            // budget and may trip the breaker (ready → blocked +
+            // gave_up).
+            self.record_task_failure(&id, &error, "crashed", 2)?;
+            crashed.push(id);
+        }
+        Ok(crashed)
+    }
+
+    /// Reclaim `running` tasks that show no progress: running longer
+    /// than `stale_timeout_seconds` AND no heartbeat within the last
+    /// hour (or never) — hermes `detect_stale_running`. The worker is
+    /// terminated (SIGTERM then SIGKILL); the run closes with outcome
+    /// `stale` and a `stale` event is emitted. Deliberately NOT counted
+    /// as a failure (hermes policy): long tasks without heartbeats are
+    /// not worker failures. `stale_timeout_seconds <= 0` disables the
+    /// check.
+    pub fn detect_stale_running(&self, stale_timeout_seconds: i64) -> Result<Vec<String>> {
+        if stale_timeout_seconds <= 0 {
+            return Ok(Vec::new());
+        }
+        let now = Self::now();
+        let rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT t.id, t.worker_pid, t.last_heartbeat_at, \
+                            COALESCE(r.started_at, t.started_at) \
+                       FROM tasks t \
+                       LEFT JOIN task_runs r ON r.id = t.current_run_id \
+                      WHERE t.status = 'running'",
+                )
+                .map_err(db_error("stale"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                })
+                .map_err(db_error("stale"))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("stale"))?
+        };
+        let mut reclaimed = Vec::new();
+        for (id, worker_pid, last_heartbeat_at, active_started_at) in rows {
+            let Some(started) = active_started_at else {
+                continue;
+            };
+            let elapsed = now - started;
+            if elapsed < stale_timeout_seconds {
+                continue;
+            }
+            let heartbeat_age = last_heartbeat_at.map(|hb| now - hb);
+            if let Some(age) = heartbeat_age {
+                if age < 3600 {
+                    continue; // recent heartbeat → still alive
+                }
+            }
+            if let Some(pid) = worker_pid {
+                if pid_alive(pid) {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                    for _ in 0..10 {
+                        if !pid_alive(pid) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                    if pid_alive(pid) {
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGKILL);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        if pid_alive(pid) {
+                            // Never release a claim while the worker is
+                            // still alive — retry next tick (hermes).
+                            continue;
+                        }
+                    }
+                }
+            }
+            let updated = self
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE tasks SET status = 'ready', claim_lock = NULL, \
+                     claim_expires = NULL, worker_pid = NULL, last_heartbeat_at = NULL \
+                     WHERE id = ?1 AND status = 'running'",
+                    params![id],
+                )
+                .map_err(db_error("stale release"))?;
+            if updated != 1 {
+                continue;
+            }
+            let error = match heartbeat_age {
+                Some(age) => format!("no heartbeat for {age}s after {elapsed}s running"),
+                None => format!("no heartbeat ever after {elapsed}s running"),
+            };
+            self.close_active_run(&id, "stale", "stale", None, Some(&error))?;
+            self.append_event(
+                &id,
+                "stale",
+                serde_json::json!({
+                    "elapsed_seconds": elapsed,
+                    "last_heartbeat_at": last_heartbeat_at,
+                    "heartbeat_age_seconds": heartbeat_age,
+                    "timeout_seconds": stale_timeout_seconds,
+                    "pid": worker_pid,
+                }),
+            )?;
+            reclaimed.push(id);
+        }
+        Ok(reclaimed)
+    }
+
     pub fn release_stale_claims(&self) -> Result<Vec<String>> {
         let now = Self::now();
         let stale: Vec<(String, Option<i64>)> = {
@@ -3786,6 +3978,7 @@ impl KanbanStore {
         max_spawn: Option<usize>,
         dry_run: bool,
         failure_limit: usize,
+        stale_timeout_seconds: i64,
     ) -> Result<DispatchResult>
     where
         F: FnMut(&Task) -> std::result::Result<Option<i64>, String>,
@@ -3793,6 +3986,8 @@ impl KanbanStore {
         let mut result = DispatchResult::default();
         result.reaped = self.reap_timed_out()?;
         result.reclaimed = self.release_stale_claims()?;
+        result.stale = self.detect_stale_running(stale_timeout_seconds)?;
+        result.crashed = self.detect_crashed_workers()?;
         result.promoted = self.recompute_ready()?;
 
         let running = self.list_tasks(None, Some("running"), None, 10_000)?;
@@ -4053,7 +4248,7 @@ mod tests {
         store.ready_task(&second.id).unwrap();
 
         let result = store
-            .dispatch_once(|_| Ok(Some(1234)), Some(1), false, 2)
+            .dispatch_once(|_| Ok(Some(1234)), Some(1), false, 2, 0)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, first.id);
@@ -4064,7 +4259,7 @@ mod tests {
 
         // Second tick with a higher cap picks up the remaining task.
         let result = store
-            .dispatch_once(|_| Ok(Some(5678)), Some(2), false, 2)
+            .dispatch_once(|_| Ok(Some(5678)), Some(2), false, 2, 0)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, second.id);
@@ -4076,7 +4271,7 @@ mod tests {
         let task = make_task(&store, "probe");
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(|_| panic!("dry run must not spawn"), None, true, 2)
+            .dispatch_once(|_| panic!("dry run must not spawn"), None, true, 2, 0)
             .unwrap();
         assert_eq!(result.would_spawn, vec![task.id.clone()]);
         assert!(result.spawned.is_empty());
@@ -4091,14 +4286,14 @@ mod tests {
 
         // First failure: recorded, still ready-ish for retry.
         let result = store
-            .dispatch_once(|_| Err("boom".into()), None, false, 2)
+            .dispatch_once(|_| Err("boom".into()), None, false, 2, 0)
             .unwrap();
         assert_eq!(result.spawn_failed, vec![task.id.clone()]);
         assert!(result.auto_blocked.is_empty());
 
         // Second consecutive failure trips the limit → blocked.
         let result = store
-            .dispatch_once(|_| Err("boom again".into()), None, false, 2)
+            .dispatch_once(|_| Err("boom again".into()), None, false, 2, 0)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         let blocked = store.get_task(&task.id).unwrap().unwrap();
@@ -5089,7 +5284,7 @@ mod tests {
 
         let tick = || {
             store
-                .dispatch_once(|_| Err("exec format error".to_string()), Some(4), false, 2)
+                .dispatch_once(|_| Err("exec format error".to_string()), Some(4), false, 2, 0)
                 .unwrap()
         };
 
@@ -5131,7 +5326,7 @@ mod tests {
             .unwrap();
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(|_| Err("boom".to_string()), Some(4), false, 2)
+            .dispatch_once(|_| Err("boom".to_string()), Some(4), false, 2, 0)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         assert!(result.spawn_failed.is_empty());
@@ -5153,7 +5348,7 @@ mod tests {
         let task = make_task(&store, "resilient");
         store.ready_task(&task.id).unwrap();
         store
-            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2)
+            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2, 0)
             .unwrap();
         assert_eq!(
             store.get_task(&task.id).unwrap().unwrap().consecutive_failures,
@@ -5171,10 +5366,10 @@ mod tests {
         let other = make_task(&store, "blocked cycle");
         store.ready_task(&other.id).unwrap();
         store
-            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2)
+            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2, 0)
             .unwrap();
         store
-            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2)
+            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2, 0)
             .unwrap();
         let t = store.get_task(&other.id).unwrap().unwrap();
         assert_eq!(t.status, "blocked");
@@ -5208,6 +5403,114 @@ mod tests {
             .find(|e| e.kind == "gave_up")
             .unwrap();
         assert_eq!(gave_up.payload["trigger_outcome"], "timed_out");
+    }
+
+    fn backdate_task(store: &KanbanStore, id: &str, started_at: i64, worker_pid: Option<i64>) {
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET started_at = ?2, worker_pid = ?3 WHERE id = ?1",
+            params![id, started_at, worker_pid],
+        )
+        .unwrap();
+        // Stale detection measures from the ACTIVE RUN's started_at
+        // (hermes semantics), so backdate that too.
+        conn.execute(
+            "UPDATE task_runs SET started_at = ?2
+              WHERE id = (SELECT current_run_id FROM tasks WHERE id = ?1)",
+            params![id, started_at],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn detect_crashed_workers_reclaims_dead_pid() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "crashy");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        // A pid that cannot exist + started well past the grace window.
+        backdate_task(&store, &task.id, KanbanStore::now() - 200, Some(2_147_483_647));
+
+        let crashed = store.detect_crashed_workers().unwrap();
+        assert_eq!(crashed, vec![task.id.clone()]);
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.status, "ready");
+        assert!(t.worker_pid.is_none());
+        assert_eq!(t.consecutive_failures, 1, "crash consumes the retry budget");
+        let run = store.latest_run(&task.id).unwrap().unwrap();
+        assert_eq!(run.outcome.as_deref(), Some("crashed"));
+        let kinds: Vec<String> = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert!(kinds.contains(&"crashed".to_string()));
+    }
+
+    #[test]
+    fn detect_crashed_workers_respects_grace_and_live_pids() {
+        let (_dir, store) = temp_store();
+        // Freshly claimed (started now → inside grace): untouched.
+        let fresh = make_task(&store, "fresh");
+        store.ready_task(&fresh.id).unwrap();
+        store.claim_task(&fresh.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        backdate_task(&store, &fresh.id, KanbanStore::now(), Some(2_147_483_647));
+        // Live pid (our own process): untouched regardless of age.
+        let live = make_task(&store, "live");
+        store.ready_task(&live.id).unwrap();
+        store.claim_task(&live.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        backdate_task(
+            &store,
+            &live.id,
+            KanbanStore::now() - 200,
+            Some(std::process::id() as i64),
+        );
+
+        assert!(store.detect_crashed_workers().unwrap().is_empty());
+        assert_eq!(store.get_task(&fresh.id).unwrap().unwrap().status, "running");
+        assert_eq!(store.get_task(&live.id).unwrap().unwrap().status, "running");
+    }
+
+    #[test]
+    fn detect_stale_running_reclaims_heartbeatless_worker() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "silent worker");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        backdate_task(&store, &task.id, KanbanStore::now() - 500, None);
+
+        // Disabled at 0; fresh thresholds skip it.
+        assert!(store.detect_stale_running(0).unwrap().is_empty());
+        assert!(store.detect_stale_running(10_000).unwrap().is_empty());
+
+        let reclaimed = store.detect_stale_running(100).unwrap();
+        assert_eq!(reclaimed, vec![task.id.clone()]);
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.status, "ready");
+        assert_eq!(t.consecutive_failures, 0, "stale is NOT a worker failure");
+        let run = store.latest_run(&task.id).unwrap().unwrap();
+        assert_eq!(run.outcome.as_deref(), Some("stale"));
+        let stale = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "stale")
+            .unwrap();
+        assert_eq!(stale.payload["timeout_seconds"], 100);
+    }
+
+    #[test]
+    fn detect_stale_running_skips_recent_heartbeat() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "chatty worker");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        store.heartbeat_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        backdate_task(&store, &task.id, KanbanStore::now() - 500, None);
+        // Heartbeat is fresh → not stale even past the run timeout.
+        assert!(store.detect_stale_running(100).unwrap().is_empty());
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "running");
     }
 
     #[test]

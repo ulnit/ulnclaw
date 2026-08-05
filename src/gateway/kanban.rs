@@ -428,6 +428,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
     let max_spawn = body.max_spawn.unwrap_or(config.kanban.max_spawn).max(1);
     let dry_run = body.dry_run.unwrap_or(false);
     let use_worktrees = config.kanban.worktrees;
+    let stale_timeout = config.kanban.stale_timeout_seconds;
     // Spawning child processes is blocking work — keep it off the axum task.
     let outcome = tokio::task::spawn_blocking(move || {
         store.dispatch_once(
@@ -435,6 +436,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
             Some(max_spawn),
             dry_run,
             2,
+            stale_timeout,
         )
     })
     .await;

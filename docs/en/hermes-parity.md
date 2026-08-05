@@ -303,7 +303,18 @@ performance and a single static binary.
   counter resets on completion and deliberate unblock (hermes
   fresh-start policy). CLI: `kanban create --max-retries N` (>= 1
   validated, matching hermes) and the gateway create API accepts the
-  same field.
+  same field; P137 added the dispatcher's worker-health detection
+  (hermes `detect_crashed_workers` + `detect_stale_running`): every
+  tick immediately reclaims running tasks whose worker pid died
+  (30 s launch-grace, `ULNCLAW_KANBAN_CRASH_GRACE_SECONDS` override;
+  `crashed` event, run closed with outcome `crashed`, failure counted
+  against the breaker) and running tasks past
+  `[kanban] stale_timeout_seconds` (hermes
+  `dispatch_stale_timeout_seconds`, default 14400, 0 disables,
+  re-read live in the gateway loop) whose heartbeat is missing or
+  older than an hour (worker SIGTERM→SIGKILL, `stale` event, run
+  outcome `stale`, deliberately NOT counted as a failure — hermes
+  policy); both surface in `DispatchResult.stale` / `.crashed`.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

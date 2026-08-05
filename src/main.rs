@@ -5155,12 +5155,16 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 std::process::id()
             );
             let home = ulnclaw::config::ulnclaw_home();
+            let stale_timeout = ulnclaw::config::UlncLawConfig::load(None)
+                .map(|c| c.kanban.stale_timeout_seconds)
+                .unwrap_or(14400);
             loop {
                 match store.dispatch_once(
                     |task| ulnclaw::kanban::dispatch_spawn(&home, true, task),
                     None,
                     false,
                     2,
+                    stale_timeout,
                 ) {
                     Ok(result)
                         if !result.spawned.is_empty() || !result.reclaimed.is_empty() =>
@@ -5347,6 +5351,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     Some(max_spawn.max(1)),
                     dry_run,
                     failure_limit.max(1),
+                    config.kanban.stale_timeout_seconds,
                 )
                 .map_err(|e| e.to_string())?;
             if json {

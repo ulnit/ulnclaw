@@ -759,6 +759,11 @@ pub struct KanbanConfig {
     /// Max triage tasks auto-decomposed per dispatcher tick (hermes
     /// `kanban.auto_decompose_per_tick`, default 3).
     pub auto_decompose_per_tick: usize,
+    /// Reclaim running tasks older than this many seconds when their
+    /// heartbeat went stale > 1 h (hermes
+    /// `kanban.dispatch_stale_timeout_seconds`, default 14400; 0
+    /// disables the check).
+    pub stale_timeout_seconds: i64,
 }
 
 impl Default for KanbanConfig {
@@ -773,6 +778,7 @@ impl Default for KanbanConfig {
             auto_promote_children: true,
             auto_decompose: true,
             auto_decompose_per_tick: 3,
+            stale_timeout_seconds: 14400,
         }
     }
 }

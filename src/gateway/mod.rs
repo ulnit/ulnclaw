@@ -3572,11 +3572,17 @@ pub fn spawn_kanban_dispatcher(
                     return;
                 };
                 let home = crate::config::ulnclaw_home();
+                // Live re-read so [kanban] stale_timeout_seconds edits
+                // take effect without a gateway restart.
+                let stale_timeout = crate::config::UlncLawConfig::load(None)
+                    .map(|c| c.kanban.stale_timeout_seconds)
+                    .unwrap_or(14400);
                 match store.dispatch_once(
                     |task| crate::kanban::dispatch_spawn(&home, use_worktrees, task),
                     Some(max_spawn.max(1)),
                     false,
                     2,
+                    stale_timeout,
                 ) {
                     Ok(result) if !result.spawned.is_empty() || !result.reclaimed.is_empty() => {
                         tracing::info!(

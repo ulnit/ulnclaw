@@ -274,7 +274,16 @@
   含 failures / effective_limit / limit_source / trigger_outcome），
   计数器在任务完成与主动 unblock 时清零（hermes 重新起步策略）。
   CLI：`kanban create --max-retries N`（校验 >= 1，与 hermes 一
-  致），网关创建 API 接受同一字段。
+  致），网关创建 API 接受同一字段；P137 补齐调度器的 worker 健康
+  检测（hermes `detect_crashed_workers` + `detect_stale_running`）：
+  每 tick 立即回收 worker pid 已死亡的 running 任务（30 秒启动
+  宽限期，`ULNCLAW_KANBAN_CRASH_GRACE_SECONDS` 可覆盖；发
+  `crashed` 事件、run 以 `crashed` 关闭、计入熔断预算），以及运行
+  超过 `[kanban] stale_timeout_seconds`（hermes
+  `dispatch_stale_timeout_seconds`，默认 14400，0 关闭，网关循环
+  实时重读）且心跳缺失或超过 1 小时的任务（worker 先 SIGTERM 后
+  SIGKILL，发 `stale` 事件、run 以 `stale` 关闭，按 hermes 策略
+  不计为失败）；两者分别进入 `DispatchResult.stale` / `.crashed`。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
