@@ -6148,6 +6148,8 @@ mod tests {
             workspace_path: None,
             branch_name: None,
             session_id: None,
+            block_kind: None,
+            block_recurrences: 0,
             id: "t_abc".into(),
             board: "default".into(),
             title: "Ship the widget".into(),

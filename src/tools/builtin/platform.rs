@@ -558,7 +558,8 @@ fn register_kanban(registry: &mut ToolRegistry) {
                 "properties": {
                     "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"},
                     "result": {"type": "string", "description": if done { "Summary of what was accomplished" } else { "Why the task is blocked (required)" }},
-                    "comment": {"type": "string", "description": "Optional extra comment"}
+                    "comment": {"type": "string", "description": "Optional extra comment"},
+                    "kind": {"type": "string", "enum": ["dependency", "needs_input", "capability", "transient"], "description": "Block only: typed reason. dependency waits in todo until parents finish; needs_input/capability wait on a human; transient may clear on its own"}
                 },
                 "required": []
             }))
@@ -579,7 +580,14 @@ fn register_kanban(registry: &mut ToolRegistry) {
                         store.complete_task(&id, result.filter(|s| !s.is_empty()))
                     } else {
                         match result.filter(|s| !s.is_empty()) {
-                            Some(reason) => store.block_task(&id, reason),
+                            Some(reason) => {
+                                let kind = args
+                                    .get("kind")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::trim)
+                                    .filter(|k| !k.is_empty());
+                                store.block_task_kind(&id, reason, kind)
+                            }
                             None => return Ok(kanban_error("kanban_block: 'result' (the blocking reason) is required")),
                         }
                     };

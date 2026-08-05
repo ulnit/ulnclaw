@@ -590,7 +590,14 @@ enum KanbanAction {
         result: Option<String>,
     },
     /// Block a task with a reason
-    Block { id: String, reason: Vec<String> },
+    Block {
+        id: String,
+        reason: Vec<String>,
+        /// Typed block: dependency | needs_input | capability |
+        /// transient (hermes block --kind)
+        #[arg(long)]
+        kind: Option<String>,
+    },
     /// Unblock a task (blocked → ready)
     Unblock { id: String },
     /// Archive a task
@@ -4619,11 +4626,11 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             .await;
             println!("{}", kanban_task_line(&task));
         }
-        KanbanAction::Block { id, reason } => {
+        KanbanAction::Block { id, reason, kind } => {
             let resolved = resolve(&id)?;
             let reason = reason.join(" ");
             let task = store
-                .block_task(&resolved, &reason)
+                .block_task_kind(&resolved, &reason, kind.as_deref())
                 .map_err(|e| e.to_string())?;
             ulnclaw::plugins::fire_session_event(
                 "kanban_task_blocked",

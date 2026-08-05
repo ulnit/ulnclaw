@@ -327,7 +327,18 @@
   `_self_post_chat_completion`：通配绑定走回环、配置了密钥则带
   bearer、单轮上限 600 秒、429/瞬时错误按 2/5/10 秒退避重试、
   其余 HTTP 错误快速失败）；唤醒在文本通知之后尽力异步执行，
-  不阻塞其他订阅。
+  不阻塞其他订阅；P142 移植类型化阻塞（hermes
+  `block_task(kind=…)`）：`kanban block --kind dependency` 把任务
+  停进 `todo`（`dependency_wait` 事件），由父任务门控 +
+  `recompute_ready` 在父任务完成后自动晋升 —— 无需人工与定时
+  解锁；`needs_input` / `capability` / `transient` / 未类型化进入
+  `blocked` 并持久化 `block_kind` 与 `block_recurrences`，解锁循环
+  熔断器在同一原因于解锁后再次阻塞达到
+  `BLOCK_RECURRENCE_LIMIT`（2）次时把任务改路由到 `triage`
+  （`block_loop_detected` 事件）—— 复发计数刻意跨越 unblock 保留、
+  仅在任务完成时清零；`unblock_task` 现在按未完成父任务重新门控
+  （父任务未了则 blocked → `todo`），与 hermes 的不变式修复一致；
+  agent `kanban_block` 工具与网关 block API 同步接受 kind。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

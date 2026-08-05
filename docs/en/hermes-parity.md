@@ -365,7 +365,20 @@ performance and a single static binary.
   key when configured, 600 s turn ceiling, 2/5/10 s backoff on 429 /
   transient errors, fail-fast on other HTTP errors); the wake runs
   best-effort and detached after the text ping so it cannot stall
-  other subscriptions.
+  other subscriptions; P142 ported typed block kinds (hermes
+  `block_task(kind=…)`): `kanban block --kind dependency` parks the
+  task in `todo` (`dependency_wait` event) where parent gating +
+  `recompute_ready` promote it automatically once the parents finish
+  — no human, no cron; `needs_input` / `capability` / `transient` /
+  untyped land in `blocked` with `block_kind` +
+  `block_recurrences` persisted, and the unblock-loop breaker routes
+  a task to `triage` (`block_loop_detected`) when the same cause
+  re-blocks `BLOCK_RECURRENCE_LIMIT` (2) times after unblocks —
+  recurrences survive unblock deliberately and reset only on
+  completion; `unblock_task` now re-gates on open parents
+  (blocked → `todo` while parents remain) matching hermes' invariant
+  fix; the agent `kanban_block` tool and the gateway block API accept
+  the kind.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

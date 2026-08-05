@@ -358,6 +358,10 @@ pub async fn complete_task(Path(id): Path<String>, Json(body): Json<CompleteBody
 #[derive(Deserialize)]
 pub struct BlockBody {
     pub reason: String,
+    /// Typed block kind (hermes block --kind): dependency |
+    /// needs_input | capability | transient.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// `POST /api/kanban/tasks/:id/block` — mark blocked (reason required).
@@ -373,7 +377,14 @@ pub async fn block_task(Path(id): Path<String>, Json(body): Json<BlockBody>) -> 
         Ok(id) => id,
         Err(e) => return e,
     };
-    match store.block_task(&id, body.reason.trim()) {
+    match store.block_task_kind(
+        &id,
+        body.reason.trim(),
+        body.kind
+            .as_deref()
+            .map(str::trim)
+            .filter(|kind| !kind.is_empty()),
+    ) {
         Ok(task) => Json(json!({"object": "ulnclaw.kanban.task", "task": task_json(&store, &task)})).into_response(),
         Err(e) => super::bad_request(&e.to_string(), None),
     }

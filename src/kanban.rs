@@ -24,6 +24,18 @@ pub const STATUSES: &[&str] = &[
 /// Valid task workspace kinds (hermes `VALID_WORKSPACE_KINDS`).
 pub const VALID_WORKSPACE_KINDS: &[&str] = &["scratch", "worktree", "dir"];
 
+/// Typed block reasons (hermes `VALID_BLOCK_KINDS`).
+pub const VALID_BLOCK_KINDS: &[&str] = &[
+    "dependency",
+    "needs_input",
+    "capability",
+    "transient",
+];
+
+/// Same-cause re-blocks after unblock route the task to triage once
+/// this many recurrences accumulate (hermes `BLOCK_RECURRENCE_LIMIT`).
+pub const BLOCK_RECURRENCE_LIMIT: i64 = 2;
+
 /// Terminal event kinds that wake the creator session (hermes
 /// `_WAKE_KINDS`). `archived` / `unblocked` are claimed by the
 /// notifier's terminal set but stay silent.
@@ -142,6 +154,12 @@ pub struct Task {
     /// gateway notifier wakes this session when the task reaches a
     /// wake-eligible terminal event.
     pub session_id: Option<String>,
+    /// Typed block reason (hermes `block_kind`, one of
+    /// [`VALID_BLOCK_KINDS`]) or None for legacy untyped blocks.
+    pub block_kind: Option<String>,
+    /// Unblock-loop counter: same-cause re-blocks after an unblock
+    /// (hermes `block_recurrences`); reset only on completion.
+    pub block_recurrences: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1661,7 +1679,9 @@ impl KanbanStore {
                 workspace_kind  TEXT NOT NULL DEFAULT 'scratch',
                 workspace_path  TEXT,
                 branch_name     TEXT,
-                session_id      TEXT
+                session_id      TEXT,
+                block_kind      TEXT,
+                block_recurrences INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_board_status ON tasks (board, status);
             CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks (session_id);
@@ -1813,6 +1833,18 @@ impl KanbanStore {
                 "CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id);",
             )
             .map_err(db_error("migrate session_id index"))?;
+        }
+        // Pre-P142 stores lack typed-block columns (hermes block_kind /
+        // block_recurrences).
+        if !columns.contains("block_kind") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN block_kind TEXT;")
+                .map_err(db_error("migrate block_kind"))?;
+        }
+        if !columns.contains("block_recurrences") {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN block_recurrences INTEGER NOT NULL DEFAULT 0;",
+            )
+            .map_err(db_error("migrate block_recurrences"))?;
         }
         let store = Self {
             conn: Mutex::new(conn),
@@ -2766,6 +2798,8 @@ impl KanbanStore {
             workspace_path: row.get("workspace_path")?,
             branch_name: row.get("branch_name")?,
             session_id: row.get("session_id")?,
+            block_kind: row.get("block_kind")?,
+            block_recurrences: row.get("block_recurrences")?,
         })
     }
 
@@ -2774,7 +2808,7 @@ impl KanbanStore {
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
         last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, \
-        session_id";
+        session_id, block_kind, block_recurrences";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -3037,7 +3071,8 @@ impl KanbanStore {
             "completed",
             serde_json::json!({ "result": result }),
             ", completed_at = ?3, result = ?4, claim_lock = NULL, claim_expires = NULL, \
-             consecutive_failures = 0, last_failure_error = NULL",
+             consecutive_failures = 0, last_failure_error = NULL, \
+             block_kind = NULL, block_recurrences = 0",
             vec![Box::new(now), Box::new(result.map(|r| r.to_string()))],
         )?;
         match self.close_active_run(id, "done", "completed", result, None)? {
@@ -3051,30 +3086,137 @@ impl KanbanStore {
         Ok(task)
     }
 
-    /// Block a task with a reason (hermes `block_task`).
+    /// Block a task with a reason (hermes `block_task`, untyped).
     pub fn block_task(&self, id: &str, reason: &str) -> Result<Task> {
-        let task = self.transition(
-            id,
-            &["todo", "ready", "running", "scheduled"],
-            "blocked",
-            "blocked",
-            serde_json::json!({ "reason": reason }),
-            ", claim_lock = NULL, claim_expires = NULL",
-            vec![],
-        )?;
+        self.block_task_kind(id, reason, None)
+    }
+
+    /// Block a task with a typed reason (hermes `block_task` with
+    /// `kind`). Routing by kind:
+    ///
+    /// - `dependency`: the task only waits on other tasks — it goes to
+    ///   `todo` (NOT `blocked`) so the parent-gating
+    ///   [`Self::recompute_ready`] promotes it automatically once the
+    ///   parents finish. No human, no cron, no retry storm.
+    /// - `needs_input` / `capability` / untyped: truly blocked — lands
+    ///   in `blocked` for a human. Each same-cause re-block after an
+    ///   unblock increments [`Task::block_recurrences`]; at
+    ///   [`BLOCK_RECURRENCE_LIMIT`] the task is routed to `triage`
+    ///   instead (`block_loop_detected` event), breaking unblock loops.
+    /// - `transient`: routed like a generic block but signals "may
+    ///   clear on its own"; still participates in the loop breaker.
+    pub fn block_task_kind(
+        &self,
+        id: &str,
+        reason: &str,
+        kind: Option<&str>,
+    ) -> Result<Task> {
+        if let Some(kind) = kind {
+            if !VALID_BLOCK_KINDS.contains(&kind) {
+                return Err(AgentError::session(format!(
+                    "kanban: block kind must be one of dependency, needs_input, \
+                     capability, transient (got '{kind}')"
+                )));
+            }
+        }
+        if kind == Some("dependency") {
+            let task = self.transition(
+                id,
+                &["todo", "ready", "running", "scheduled"],
+                "todo",
+                "dependency_wait",
+                serde_json::json!({ "reason": reason, "kind": kind }),
+                ", claim_lock = NULL, claim_expires = NULL, worker_pid = NULL, \
+                 block_kind = ?3",
+                vec![Box::new(kind.map(str::to_string))],
+            )?;
+            self.close_active_run(id, "blocked", "blocked", None, Some(reason))?;
+            return Ok(task);
+        }
+        // Truly-blocked kinds: unblock-loop accounting. block_task only
+        // fires after the task returned to the work pool, so a stored
+        // kind matching the incoming one means blocked → unblocked →
+        // re-blocked for the same cause. Untyped blocks compare equal
+        // to earlier untyped blocks.
+        let (prev_kind, prev_recurrences) = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT block_kind, block_recurrences FROM tasks WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(db_error("block"))?
+        };
+        let same_cause = prev_kind.as_deref() == kind;
+        let recurrences = if same_cause { prev_recurrences + 1 } else { 1 };
+        let task = if recurrences >= BLOCK_RECURRENCE_LIMIT {
+            self.transition(
+                id,
+                &["todo", "ready", "running", "scheduled"],
+                "triage",
+                "block_loop_detected",
+                serde_json::json!({
+                    "reason": reason,
+                    "kind": kind,
+                    "recurrences": recurrences,
+                    "limit": BLOCK_RECURRENCE_LIMIT,
+                }),
+                ", claim_lock = NULL, claim_expires = NULL, worker_pid = NULL, \
+                 block_kind = ?3, block_recurrences = ?4",
+                vec![
+                    Box::new(kind.map(str::to_string)),
+                    Box::new(recurrences),
+                ],
+            )?
+        } else {
+            self.transition(
+                id,
+                &["todo", "ready", "running", "scheduled"],
+                "blocked",
+                "blocked",
+                serde_json::json!({
+                    "reason": reason,
+                    "kind": kind,
+                    "recurrences": recurrences,
+                }),
+                ", claim_lock = NULL, claim_expires = NULL, block_kind = ?3, \
+                 block_recurrences = ?4",
+                vec![
+                    Box::new(kind.map(str::to_string)),
+                    Box::new(recurrences),
+                ],
+            )?
+        };
         self.close_active_run(id, "blocked", "blocked", None, Some(reason))?;
         Ok(task)
     }
 
-    /// blocked/scheduled → ready (hermes `unblock_task`). A deliberate
-    /// unblock is a fresh start for the dispatcher's retry budget.
+    /// blocked/scheduled → ready, or `todo` while parents remain open
+    /// (hermes `unblock_task`). A deliberate unblock is a fresh start
+    /// for the dispatcher's retry budget, but it deliberately does NOT
+    /// touch `block_kind` / `block_recurrences` — forgetting a
+    /// same-cause loop on unblock is exactly what lets cron-unblock ↔
+    /// worker-re-block spin forever (reset happens on completion).
     pub fn unblock_task(&self, id: &str) -> Result<Task> {
+        let undone_parents = self
+            .parents_of(id)?
+            .into_iter()
+            .filter_map(|parent_id| match self.get_task(&parent_id) {
+                Ok(Some(parent)) if parent.status != "done" => Some(parent_id),
+                _ => None,
+            })
+            .count();
+        let new_status = if undone_parents > 0 { "todo" } else { "ready" };
         let task = self.transition(
             id,
             &["blocked", "scheduled"],
-            "ready",
+            new_status,
             "unblocked",
-            serde_json::json!({}),
+            if new_status == "ready" {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({ "status": new_status })
+            },
             ", consecutive_failures = 0, last_failure_error = NULL",
             vec![],
         )?;
@@ -5339,7 +5481,9 @@ mod tests {
             workspace_kind: "scratch".into(),
             workspace_path: None,
             branch_name: None,
-            session_id: None,};
+            session_id: None,
+            block_kind: None,
+            block_recurrences: 0,};
         let prompt = worker_prompt(home, &task);
         assert!(prompt.contains("kanban worker for task t_1"));
         assert!(prompt.contains("DONE-SKILL"), "skill body must be inlined");
@@ -6773,5 +6917,136 @@ mod tests {
         assert_eq!(wake_status_text("gave_up"), "gave up (retries exhausted)");
         assert_eq!(wake_status_text("blocked"), "blocked; needs attention");
         assert_eq!(wake_status_text("whatever"), "status changed");
+    }
+
+    // ------------------------------------------------------------------
+    // P142 — typed block kinds + unblock-loop breaker
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn block_kind_dependency_waits_in_todo() {
+        let (_dir, store) = temp_store();
+        let parent = make_task(&store, "parent");
+        let child = make_task(&store, "child");
+        store.link_tasks(&parent.id, &child.id).unwrap();
+        store.ready_task(&child.id).unwrap();
+
+        let blocked = store
+            .block_task_kind(&child.id, "waiting on parent", Some("dependency"))
+            .unwrap();
+        assert_eq!(blocked.status, "todo");
+        assert_eq!(blocked.block_kind.as_deref(), Some("dependency"));
+        let event = store
+            .events(&child.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "dependency_wait")
+            .unwrap();
+        assert_eq!(event.payload["kind"], "dependency");
+
+        // Parent gating holds the child in todo until the parent
+        // finishes (the parent itself is parent-free and promotes).
+        let promoted = store.recompute_ready().unwrap();
+        assert_eq!(promoted, vec![parent.id.clone()]);
+        assert_eq!(store.get_task(&child.id).unwrap().unwrap().status, "todo");
+        store.complete_task(&parent.id, None).unwrap();
+        assert_eq!(store.recompute_ready().unwrap(), vec![child.id.clone()]);
+    }
+
+    #[test]
+    fn block_loop_routes_to_triage_at_limit() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "loopy");
+        store.ready_task(&task.id).unwrap();
+
+        // First needs_input block: recurrences = 1 → blocked.
+        let blocked = store
+            .block_task_kind(&task.id, "need creds", Some("needs_input"))
+            .unwrap();
+        assert_eq!(blocked.status, "blocked");
+        assert_eq!(blocked.block_recurrences, 1);
+
+        // Unblock deliberately keeps the recurrence counter (hermes).
+        store.unblock_task(&task.id).unwrap();
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.status, "ready");
+        assert_eq!(t.block_recurrences, 1);
+
+        // Same-cause re-block hits BLOCK_RECURRENCE_LIMIT → triage.
+        let looped = store
+            .block_task_kind(&task.id, "still need creds", Some("needs_input"))
+            .unwrap();
+        assert_eq!(looped.status, "triage");
+        assert_eq!(looped.block_recurrences, 2);
+        let event = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "block_loop_detected")
+            .unwrap();
+        assert_eq!(event.payload["recurrences"], 2);
+        assert_eq!(event.payload["limit"], 2);
+    }
+
+    #[test]
+    fn block_kind_switch_resets_recurrences_and_complete_clears() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "switchy");
+        store.ready_task(&task.id).unwrap();
+        store
+            .block_task_kind(&task.id, "need creds", Some("needs_input"))
+            .unwrap();
+        store.unblock_task(&task.id).unwrap();
+
+        // A DIFFERENT cause starts a fresh recurrence count → blocked.
+        let blocked = store
+            .block_task_kind(&task.id, "missing capability", Some("capability"))
+            .unwrap();
+        assert_eq!(blocked.status, "blocked");
+        assert_eq!(blocked.block_recurrences, 1);
+
+        // Completion clears the typed-block state.
+        store.unblock_task(&task.id).unwrap();
+        let done = store.complete_task(&task.id, Some("ok")).unwrap();
+        assert!(done.block_kind.is_none());
+        assert_eq!(done.block_recurrences, 0);
+    }
+
+    #[test]
+    fn block_kind_validation_and_untyped_back_compat() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "plain");
+        store.ready_task(&task.id).unwrap();
+        let err = store
+            .block_task_kind(&task.id, "x", Some("vibes"))
+            .unwrap_err();
+        assert!(err.to_string().contains("block kind must be one of"), "{err}");
+
+        // Untyped block behaves like before (kind NULL, recurrences 1).
+        let blocked = store.block_task(&task.id, "generic").unwrap();
+        assert_eq!(blocked.status, "blocked");
+        assert!(blocked.block_kind.is_none());
+        assert_eq!(blocked.block_recurrences, 1);
+    }
+
+    #[test]
+    fn unblock_regates_on_open_parents() {
+        let (_dir, store) = temp_store();
+        let parent = make_task(&store, "parent");
+        let child = make_task(&store, "child");
+        store.link_tasks(&parent.id, &child.id).unwrap();
+        store.ready_task(&child.id).unwrap();
+        store.block_task(&child.id, "hold").unwrap();
+
+        // Parent still open → unblock lands in todo, not ready.
+        let unblocked = store.unblock_task(&child.id).unwrap();
+        assert_eq!(unblocked.status, "todo");
+        let event = store
+            .events(&child.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "unblocked")
+            .unwrap();
+        assert_eq!(event.payload["status"], "todo");
     }
 }
