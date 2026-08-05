@@ -185,6 +185,23 @@ pub fn initialize_schema(conn: &Connection) -> Result<bool> {
         .map_err(|e| AgentError::session(format!("schema: {}", e)))?;
     // FTS5 probe — same pattern as hermes_state_schema's _fts5_available.
     let has_fts = conn.execute_batch(FTS_SQL).is_ok();
+    if has_fts {
+        // The external-content index can lag the canonical messages table
+        // (e.g. after `sessions repair` drops the FTS schema); rebuild it
+        // from the content table when the row counts disagree.
+        let fts_rows: Option<i64> = conn
+            .query_row("SELECT COUNT(*) FROM messages_fts", [], |r| r.get(0))
+            .ok();
+        let msg_rows: Option<i64> = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .ok();
+        if let (Some(fts), Some(msgs)) = (fts_rows, msg_rows) {
+            if fts != msgs {
+                conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')", [])
+                    .ok();
+            }
+        }
+    }
     let version: Option<i64> = conn
         .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| r.get(0))
         .optional()

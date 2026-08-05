@@ -6,6 +6,7 @@
 pub mod export;
 pub mod filters;
 pub mod recap;
+pub mod repair;
 pub mod recovery;
 pub mod sqlite;
 

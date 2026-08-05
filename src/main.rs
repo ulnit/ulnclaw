@@ -401,6 +401,16 @@ enum SessionAction {
     /// Reclaim disk space: merge FTS5 segments + VACUUM, no data change
     /// (hermes sessions optimize)
     Optimize,
+    /// Repair a malformed state.db schema so hidden sessions reappear
+    /// (hermes sessions repair)
+    Repair {
+        /// Only report whether the database opens cleanly; do not modify it
+        #[arg(long)]
+        check_only: bool,
+        /// Skip the timestamped backup copy (not recommended)
+        #[arg(long)]
+        no_backup: bool,
+    },
 }
 
 /// Shared time/filter flags for `sessions prune` / `sessions archive`
@@ -2174,6 +2184,60 @@ fn print_diff_result(result: &serde_json::Value) {
 
 async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    if let SessionAction::Repair { check_only, no_backup } = &action {
+        // Repair must run BEFORE opening the store: a malformed schema is
+        // exactly the case where open fails (hermes sessions repair).
+        let db_path = home.join("state.db");
+        if !db_path.exists() {
+            println!(
+                "No session database at {} (nothing to repair).",
+                db_path.display()
+            );
+            return Ok(());
+        }
+        match ulnclaw::session::repair::db_opens_cleanly(&db_path) {
+            None => println!("✓ {} opens cleanly — no repair needed.", db_path.display()),
+            Some(reason) => {
+                println!("✗ {} does not open cleanly: {}", db_path.display(), reason);
+                if *check_only {
+                    return Ok(());
+                }
+                println!("Repairing (a backup copy is made first)…");
+                let report =
+                    ulnclaw::session::repair::repair_state_db_schema(&db_path, !*no_backup);
+                if report.repaired {
+                    if let Some(backup) = &report.backup_path {
+                        println!("  backup: {}", backup.display());
+                    }
+                    println!(
+                        "  strategy: {}",
+                        report.strategy.as_deref().unwrap_or("unknown")
+                    );
+                    match SqliteSessionStore::open(&db_path) {
+                        Ok(store) => {
+                            let n = store.count_sessions().map_err(|e| e.to_string())?;
+                            println!("✓ Repaired — {} sessions recovered.", n);
+                        }
+                        Err(_) => println!("✓ Repaired."),
+                    }
+                } else {
+                    println!(
+                        "✗ Repair failed: {}",
+                        report.error.as_deref().unwrap_or("unknown error")
+                    );
+                    if let Some(backup) = &report.backup_path {
+                        println!("  A backup is preserved at: {}", backup.display());
+                    }
+                    println!("  Keep state.db and the backup; do not delete them.");
+                    println!();
+                    println!("  Next step — offline recovery (never modifies the source):");
+                    let source_hint = report.backup_path.as_ref().unwrap_or(&db_path);
+                    println!("    ulnclaw sessions recover {}", source_hint.display());
+                }
+            }
+        }
+        return Ok(());
+    }
     let store = SqliteSessionStore::open(home.join("state.db")).map_err(|e| e.to_string())?;
     match action {
         SessionAction::List { limit } => {
@@ -2387,6 +2451,11 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
                 "Database size: {:.1} MB -> {:.1} MB ({})",
                 before_mb, after_mb, delta
             );
+        }
+        SessionAction::Repair { .. } => {
+            // Handled before the store opens (a malformed schema is exactly
+            // the case where open fails).
+            unreachable!("sessions repair is dispatched before the store opens")
         }
     }
     Ok(())
