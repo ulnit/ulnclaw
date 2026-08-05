@@ -277,6 +277,15 @@ fn now_secs() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Truncate a string for UI payloads on a char boundary (tool-call cards).
+fn truncate_for_ui(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max_chars).collect();
+    format!("{cut}…")
+}
+
 /// State of one tracked async run (`/v1/runs`).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RunState {
@@ -568,6 +577,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/chat/stream", post(session_chat_stream))
         .route("/api/sessions/:id/model", post(lock_session_model))
         .route("/api/sessions/:id/recap", get(session_recap))
+        .route("/api/uploads", post(upload_media))
         .route("/api/jobs", get(list_jobs).post(create_job))
         .route(
             "/api/jobs/:id",
@@ -1931,9 +1941,35 @@ fn stream_agent_response(
                         .unwrap();
                     return Some((Ok(event), st));
                 }
-                Some(crate::agent::StreamEvent::ToolStarted { .. })
-                | Some(crate::agent::StreamEvent::ToolCompleted { .. }) => {
-                    // Chat-completions clients only get hermes.tool.progress.
+                Some(crate::agent::StreamEvent::ToolStarted {
+                    name,
+                    call_id,
+                    arguments,
+                }) => {
+                    // Tool-call cards for rich clients (hermes desktop
+                    // toolsets); plain chat-completions clients ignore
+                    // named events they don't know.
+                    let payload = json!({
+                        "name": name,
+                        "call_id": call_id,
+                        "arguments": truncate_for_ui(&arguments, 4000),
+                    });
+                    let event = Event::default()
+                        .event("hermes.tool.started")
+                        .json_data(payload)
+                        .unwrap();
+                    return Some((Ok(event), st));
+                }
+                Some(crate::agent::StreamEvent::ToolCompleted { call_id, result }) => {
+                    let payload = json!({
+                        "call_id": call_id,
+                        "result": truncate_for_ui(&result, 8000),
+                    });
+                    let event = Event::default()
+                        .event("hermes.tool.completed")
+                        .json_data(payload)
+                        .unwrap();
+                    return Some((Ok(event), st));
                 }
                 None => {
                     // Emitter dropped → the agent task finished. Await it and
@@ -2562,6 +2598,50 @@ async fn session_messages(
     match state.store.load_messages(&id) {
         Ok(messages) => Json(json!({"object": "list", "session_id": id, "data": messages})).into_response(),
         Err(e) => server_error(&e.to_string()),
+    }
+}
+
+/// `POST /api/uploads` — store a binary upload (desktop composer pastes
+/// clipboard images here) in the content-addressed media cache and hand
+/// back the path reference. The agent inspects it with
+/// vision_analyze/read_file — hermes' text-fallback media semantics for
+/// surfaces without native multimodal injection.
+async fn upload_media(
+    State(state): State<Arc<GatewayState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024; // hermes media cap
+    if body.is_empty() {
+        return bad_request("empty upload body", None);
+    }
+    if body.len() > MAX_UPLOAD_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({"error": {
+                "message": "upload exceeds the 25 MB media cap",
+                "type": "invalid_request_error"
+            }})),
+        )
+            .into_response();
+    }
+    let mime = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(';').next().unwrap_or("").trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let name_hint = params.get("name").cloned().unwrap_or_default();
+    let home = state.agent.context().home.clone();
+    match crate::media_cache::cache_media_bytes(&home, &body, &mime, &name_hint) {
+        Ok(path) => Json(json!({
+            "path": path.display().to_string(),
+            "mime": crate::media_cache::normalize_mime(&mime),
+            "bytes": body.len(),
+        }))
+        .into_response(),
+        Err(e) => server_error(&format!("upload cache failed: {e}")),
     }
 }
 
@@ -4209,6 +4289,40 @@ mod tests {
         assert!(text.contains("data: [DONE]"), "body: {}", text);
     }
 
+    #[tokio::test]
+    async fn test_upload_media_stores_in_cache() {
+        let state = streaming_state();
+        let home = state.agent.context().home.clone();
+        let app = router(state);
+        // Minimal PNG (signature + IHDR + tiny IDAT + IEND; trailing pad
+        // bytes are fine — the endpoint hashes, it does not decode).
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        let request = axum::http::Request::builder()
+            .uri("/api/uploads?name=paste.png")
+            .method("POST")
+            .header("content-type", "image/png")
+            .body(axum::body::Body::from(png.to_vec()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        let path = value["path"].as_str().expect("path returned");
+        assert!(path.starts_with(home.to_str().unwrap()), "path: {}", path);
+        assert!(std::path::Path::new(path).exists());
+        assert_eq!(value["mime"], "image/png");
+        assert_eq!(value["bytes"], png.len() as u64);
+    }
+
     struct FakeToolStreamProvider {
         calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
@@ -4324,6 +4438,59 @@ mod tests {
         assert_eq!(responses.len(), 1);
         let stored = responses.values().next().unwrap();
         assert_eq!(stored["status"], "completed");
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_stream_tool_cards_sse() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(
+                crate::tools::tool("echo")
+                    .description("echo tool")
+                    .handler(|_args, _ctx| async move { Ok(serde_json::json!({"echoed": true})) })
+                    .build()
+                    .expect("tool builds"),
+            );
+        let provider = Arc::new(FakeToolStreamProvider {
+            calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        });
+        let agent = Agent::new(provider, registry).with_store(store);
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "fake-tool-stream".into(),
+            "fake".into(),
+            None,
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+        let sid = state
+            .store
+            .create_session("tool-cards", Some("fake-tool-stream"), None)
+            .expect("session created");
+        let app = router(state);
+        let request = axum::http::Request::builder()
+            .uri(format!("/api/sessions/{}/chat/stream", sid))
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"message": "run echo"}"#))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body).to_string();
+        assert!(text.contains("event: hermes.tool.started"), "started: {}", text);
+        assert!(text.contains(r#""name":"echo""#), "name: {}", text);
+        assert!(text.contains(r#""call_id":"call_1""#), "call id: {}", text);
+        assert!(text.contains("event: hermes.tool.completed"), "completed: {}", text);
+        assert!(text.contains("echoed"), "result: {}", text);
+        assert!(text.contains("data: [DONE]"), "done: {}", text);
     }
 
     #[tokio::test]

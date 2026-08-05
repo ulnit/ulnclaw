@@ -3,7 +3,7 @@
 // everything else is plain HTTP (gateway.ts).
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
-import type { GatewaySettings, SessionRow, SkillRow } from "./gateway";
+import type { GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -37,6 +37,7 @@ const state = {
   busy: false,
   managedPid: null as number | null,
   skills: [] as SkillRow[],
+  pendingUploads: [] as { path: string; mime: string; bytes: number }[],
 };
 
 const el = {
@@ -50,6 +51,7 @@ const el = {
   send: document.getElementById("send") as HTMLButtonElement,
   toolProgress: document.getElementById("tool-progress")!,
   slashPop: document.getElementById("slash-pop")!,
+  attachChips: document.getElementById("attach-chips")!,
   settingsBtn: document.getElementById("settings-btn") as HTMLButtonElement,
   settings: document.getElementById("settings") as HTMLDialogElement,
   settingUrl: document.getElementById("setting-url") as HTMLInputElement,
@@ -171,7 +173,7 @@ async function refreshSessions(): Promise<void> {
 
 async function sendTurn(): Promise<void> {
   const text = el.input.value.trim();
-  if (!text || state.busy || !state.client) return;
+  if ((!text && state.pendingUploads.length === 0) || state.busy || !state.client) return;
   if (!state.current) {
     try {
       state.current = await state.client.createSession();
@@ -183,19 +185,31 @@ async function sendTurn(): Promise<void> {
       return;
     }
   }
+  // Attachments ride as hermes-style path references appended to the turn.
+  const message = (text + attachmentNote()).trim();
+  state.pendingUploads = [];
+  renderAttachChips();
   state.busy = true;
   el.send.disabled = true;
   el.input.value = "";
   hideSlashPop();
   el.toolProgress.hidden = true;
   el.toolProgress.textContent = "";
-  addMessage("user", text);
+  addMessage("user", message);
   const bubble = addMessage("assistant", "");
   bubble.classList.add("streaming");
+  // Expandable tool-call cards (hermes desktop toolsets), fed by the
+  // hermes.tool.started / hermes.tool.completed SSE events.
+  const cards = document.createElement("div");
+  cards.className = "tool-cards";
+  cards.hidden = true;
+  const row = bubble.parentElement!;
+  el.messages.insertBefore(cards, row);
+  const cardsByCallId = new Map<string, HTMLElement>();
   try {
     await state.client.chatStream(
       state.current.id,
-      text,
+      message,
       (chunk) => {
         bubble.textContent = (bubble.textContent || "") + chunk;
         el.messages.scrollTop = el.messages.scrollHeight;
@@ -203,6 +217,60 @@ async function sendTurn(): Promise<void> {
       (tool, status) => {
         el.toolProgress.textContent = `⚙ ${tool} — ${status}`;
         el.toolProgress.hidden = false;
+        const running = [...cardsByCallId.values()]
+          .reverse()
+          .find((card) => card.classList.contains("running"));
+        if (running) running.querySelector(".status")!.textContent = status;
+      },
+      (toolEvent) => {
+        cards.hidden = false;
+        if (toolEvent.kind === "started") {
+          const card = document.createElement("div");
+          card.className = "tool-card running";
+          const head = document.createElement("div");
+          head.className = "tool-card-head";
+          const caret = document.createElement("span");
+          caret.className = "caret";
+          caret.textContent = "▶";
+          const name = document.createElement("span");
+          name.className = "tname";
+          name.textContent = toolEvent.name || "tool";
+          const status = document.createElement("span");
+          status.className = "status";
+          status.textContent = "running…";
+          head.append(caret, name, status);
+          const body = document.createElement("div");
+          body.className = "tool-card-body";
+          if (toolEvent.arguments) {
+            const label = document.createElement("div");
+            label.className = "label";
+            label.textContent = "arguments";
+            const pre = document.createElement("pre");
+            pre.textContent = toolEvent.arguments;
+            body.append(label, pre);
+          }
+          card.append(head, body);
+          head.onclick = () => card.classList.toggle("open");
+          cards.appendChild(card);
+          cardsByCallId.set(toolEvent.callId, card);
+        } else {
+          const card = cardsByCallId.get(toolEvent.callId);
+          if (card) {
+            card.classList.remove("running");
+            card.classList.add("done");
+            card.querySelector(".status")!.textContent = "done";
+            if (toolEvent.result) {
+              const body = card.querySelector(".tool-card-body")!;
+              const label = document.createElement("div");
+              label.className = "label";
+              label.textContent = "result";
+              const pre = document.createElement("pre");
+              pre.textContent = toolEvent.result;
+              body.append(label, pre);
+            }
+          }
+        }
+        el.messages.scrollTop = el.messages.scrollHeight;
       },
     );
     bubble.classList.remove("streaming");
@@ -302,6 +370,65 @@ function completeSlash(name: string): void {
   el.input.focus();
 }
 
+// ---------------------------------------------------------------------------
+// Clipboard image paste → /api/uploads → path-reference attachments
+// (hermes text-fallback media semantics: the agent inspects the cached
+// file with vision_analyze/read_file).
+// ---------------------------------------------------------------------------
+
+function renderAttachChips(): void {
+  el.attachChips.innerHTML = "";
+  el.attachChips.hidden = state.pendingUploads.length === 0;
+  state.pendingUploads.forEach((upload, index) => {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = upload.path.split("/").pop() || upload.path;
+    name.title = upload.path;
+    const remove = document.createElement("button");
+    remove.textContent = "✕";
+    remove.title = "Remove attachment";
+    remove.onclick = () => {
+      state.pendingUploads.splice(index, 1);
+      renderAttachChips();
+    };
+    chip.append(name, remove);
+    el.attachChips.appendChild(chip);
+  });
+}
+
+async function handlePasteImages(event: ClipboardEvent): Promise<void> {
+  const items = event.clipboardData?.items;
+  if (!items || !state.client) return;
+  for (const item of Array.from(items)) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (!file || !file.type.startsWith("image/")) continue;
+    event.preventDefault();
+    try {
+      const upload = await state.client.uploadFile(file, `paste-${Date.now()}.png`);
+      state.pendingUploads.push(upload);
+      renderAttachChips();
+    } catch (error) {
+      addMessage("system", `Clipboard upload failed: ${error}`);
+    }
+  }
+}
+
+/// hermes attachment_note text-fallback format.
+function attachmentNote(): string {
+  if (state.pendingUploads.length === 0) return "";
+  const lines = ["", "", "[Attached media]"];
+  for (const upload of state.pendingUploads) {
+    lines.push(`- ${upload.path} (${upload.mime}, ${upload.bytes} bytes)`);
+  }
+  lines.push(
+    "Inspect images with vision_analyze, video with video_analyze, documents with read_file.",
+  );
+  return lines.join("\n");
+}
+
 async function start(): Promise<void> {
   state.bridge = await loadBridge();
   state.client = new GatewayClient(state.settings);
@@ -361,6 +488,7 @@ async function start(): Promise<void> {
     }
   });
   el.input.addEventListener("input", () => renderSlashPop());
+  el.input.addEventListener("paste", (event) => void handlePasteImages(event));
   el.settingsBtn.onclick = () => {
     el.settingUrl.value = state.settings.url;
     el.settingKey.value = state.settings.key;

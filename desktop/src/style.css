@@ -92,6 +92,37 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .slash-pop .slash-item.selected { background: var(--panel-2); outline: 1px solid var(--accent); }
 .slash-pop .slash-name { color: var(--accent); font-weight: 600; white-space: nowrap; }
 .slash-pop .slash-desc { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 18px 0; background: var(--panel); }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
+  background: var(--panel-2); border: 1px solid #2a3442; border-radius: 14px;
+  font-size: 12px; color: var(--dim); max-width: 320px;
+}
+.attach-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.attach-chip button { background: none; border: none; color: var(--dim); cursor: pointer; padding: 0 2px; font-size: 13px; }
+.attach-chip button:hover { color: var(--text); }
+
+.tool-cards { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.tool-card { border: 1px solid #2a3442; border-radius: 10px; background: var(--panel-2); overflow: hidden; }
+.tool-card-head {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer;
+  font-size: 12px; color: var(--dim); user-select: none;
+}
+.tool-card-head .caret { transition: transform .12s ease; display: inline-block; }
+.tool-card.open .caret { transform: rotate(90deg); }
+.tool-card-head .tname { color: var(--accent); font-weight: 600; }
+.tool-card-head .status { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.tool-card.done .status { color: var(--dim); }
+.tool-card.running .status { color: var(--accent); }
+.tool-card-body { display: none; padding: 8px 10px; border-top: 1px solid #1c2530; }
+.tool-card.open .tool-card-body { display: block; }
+.tool-card-body pre {
+  margin: 0 0 8px; font-size: 11px; color: var(--dim); white-space: pre-wrap;
+  word-break: break-word; max-height: 200px; overflow-y: auto;
+}
+.tool-card-body pre:last-child { margin-bottom: 0; }
+.tool-card-body .label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); margin-bottom: 3px; }
 .tool-progress {
   padding: 4px 18px; font-size: 12px; color: var(--dim);
   border-top: 1px solid #0b0f14; background: var(--panel);

@@ -34,6 +34,20 @@ export interface SkillRow {
   description: string;
 }
 
+export interface ToolCardEvent {
+  kind: "started" | "completed";
+  callId: string;
+  name?: string;
+  arguments?: string;
+  result?: string;
+}
+
+export interface UploadReply {
+  path: string;
+  mime: string;
+  bytes: number;
+}
+
 const SETTINGS_KEY = "ulnclaw.gateway";
 
 export function loadSettings(): GatewaySettings {
@@ -128,6 +142,7 @@ export class GatewayClient {
     message: string,
     onDelta: (chunk: string) => void,
     onToolProgress?: (tool: string, status: string) => void,
+    onToolCard?: (event: ToolCardEvent) => void,
   ): Promise<string> {
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/chat/stream`), {
       method: "POST",
@@ -165,6 +180,27 @@ export class GatewayClient {
           if (currentEvent === "hermes.tool.progress") {
             if (onToolProgress && typeof event?.tool === "string") {
               onToolProgress(event.tool, String(event?.status ?? ""));
+            }
+            continue;
+          }
+          if (currentEvent === "hermes.tool.started") {
+            if (onToolCard && typeof event?.call_id === "string") {
+              onToolCard({
+                kind: "started",
+                callId: event.call_id,
+                name: typeof event?.name === "string" ? event.name : undefined,
+                arguments: typeof event?.arguments === "string" ? event.arguments : undefined,
+              });
+            }
+            continue;
+          }
+          if (currentEvent === "hermes.tool.completed") {
+            if (onToolCard && typeof event?.call_id === "string") {
+              onToolCard({
+                kind: "completed",
+                callId: event.call_id,
+                result: typeof event?.result === "string" ? event.result : undefined,
+              });
             }
             continue;
           }
@@ -225,5 +261,17 @@ export class GatewayClient {
     } catch {
       return [];
     }
+  }
+
+  /** Upload a binary blob (clipboard image) into the media cache. */
+  async uploadFile(blob: Blob, name: string): Promise<UploadReply> {
+    const headers: Record<string, string> = { "Content-Type": blob.type || "application/octet-stream" };
+    if (this.settings.key) {
+      headers["Authorization"] = `Bearer ${this.settings.key}`;
+    }
+    const url = `${this.endpoint("/api/uploads")}?name=${encodeURIComponent(name)}`;
+    const response = await fetch(url, { method: "POST", headers, body: blob });
+    if (!response.ok) throw new Error(`upload: HTTP ${response.status}`);
+    return response.json();
   }
 }
