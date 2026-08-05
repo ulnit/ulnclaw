@@ -75,6 +75,7 @@
 pub mod active_sessions;
 pub mod agent;
 pub mod ansi;
+pub mod approvals_cmd;
 pub mod async_delegation;
 pub mod backup;
 pub mod banner;

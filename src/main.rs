@@ -158,6 +158,11 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Terminal approval mode: show, or persist manual|smart|off (hermes approvals)
+    Approvals {
+        /// Mode to persist: manual | smart | off (omit to show current)
+        mode: Option<String>,
+    },
     /// Diagnose configuration and dependencies (hermes doctor)
     Doctor {
         /// Attempt to fix issues automatically
@@ -960,6 +965,15 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 print!("{}", ulnclaw::insights::format_terminal(&report));
             }
             Ok(())
+        }
+        Commands::Approvals { mode } => {
+            let result = ulnclaw::approvals_cmd::run_approval_mode_command(mode.as_deref());
+            if result.ok {
+                println!("{}", result.message);
+                Ok(())
+            } else {
+                Err(result.message)
+            }
         }
         Commands::Doctor { fix, online, json } => {
             let opts = ulnclaw::doctor::DoctorOptions { fix, online, json };

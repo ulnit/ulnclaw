@@ -86,6 +86,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw dump             # copy-pasteable setup summary for support (--show-keys)
 ./ulnclaw version          # version + install info + update status
 ./ulnclaw memory           # persistent memory status; `memory reset [all|memory|user]`
+./ulnclaw approvals        # terminal approval mode; `approvals manual|smart|off` to set
 ./ulnclaw fallback         # fallback chain (add/remove/clear provider:model entries)
 ./ulnclaw backup           # zip backup of home (-q quick snapshot, backup list/restore/prune)
 ./ulnclaw import b.zip     # restore a backup zip (runtime-state files skipped, secrets 0600)
@@ -218,7 +219,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 598 tests
+cargo test                     # 603 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -307,6 +308,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw dump             # 可粘贴的装机摘要，用于求助排查（--show-keys）
 ./ulnclaw version          # 版本 + 安装信息 + 升级状态
 ./ulnclaw memory           # 持久记忆状态；`memory reset [all|memory|user]` 清除
+./ulnclaw approvals        # 终端审批模式；`approvals manual|smart|off` 设置
 ./ulnclaw fallback         # 回退链管理（add/remove/clear provider:model 条目）
 ./ulnclaw backup           # home 目录 zip 备份（-q 快速快照，backup list/restore/prune）
 ./ulnclaw import b.zip     # 恢复备份 zip（跳过运行时状态文件，机密文件 0600）
@@ -358,7 +360,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 598 个测试
+cargo test                     # 603 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

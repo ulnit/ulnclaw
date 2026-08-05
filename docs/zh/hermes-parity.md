@@ -65,6 +65,7 @@
 | Shell 补全（`hermes_cli/completion.py`） | ✅ 核心 | `ulnclaw completion <shell>` 基于 clap_complete：bash / zsh / fish（hermes 集合）另加 elvish / powershell；从实时 clap 命令树生成，自动跟随子命令变化（hermes 遍历 argparse 树同理）；SIGPIPE 恢复默认处理，管道接入 `head` 时静默退出 |
 | 环境转储与版本（`hermes_cli/dump.py`、`build_info.py`） | ✅ 核心 | `ulnclaw dump [--show-keys]`：纯文本、可直接粘贴的装机摘要——版本 + git SHA/提交日期、系统、profile、home、模型/provider、含 `TERMINAL_ENV` 覆盖提示的实际终端 backend、`api_keys:` set/not set/脱敏值并带"仅 shell 存在、`.env` 缺失"告警（托管后端只读 `.env` 不读登录 shell）、`features:` toolsets / MCP 服务器 / 记忆 provider / gateway 监听+鉴权 / cron 激活-总数 / 技能 / 检查点，以及非默认 `config_overrides:`；`ulnclaw version [--no-update-check]`：版本行 + 安装目录/方式 + 复用 `update --check` 机制的实时升级状态；无 git 安装回退读取内置 `.ulnclaw_build_sha` 标记（对标 hermes `.hermes_build_sha`） |
 | 记忆 CLI（`main.py cmd_memory`） | ✅ 核心 | `ulnclaw memory`：分库状态（`memory/MEMORY.md` 代理笔记与 `memory/USER.md` 用户画像的条目数 + 字节数，二者会注入每轮系统提示词）；`ulnclaw memory reset [all|memory|user] [--yes]`：hermes 风格清除清单（`◆ 文件 (说明) — N 字节`）、非 `--yes` 时交互式输入 `yes` 确认、逐文件 `✓ Deleted` 报告；REPL 内 `/memory` 查看当前内容 |
+| 审批模式 CLI（`hermes_cli/approval_mode.py`） | ✅ 核心 | `ulnclaw approvals [manual|smart|off]`：查看当前生效的终端审批模式，或经规范配置写入器持久化新模式（config.toml `approvals.mode`），写入后重新读回校验生效，并按 hermes 风格报告用法错误/受管配置失败；模式语义（`manual` 人工确认、`smart` 先问辅助守护 LLM、`off` 硬底线之外自动放行）与终端守卫一致 |
 
 ## 功能对标
 
