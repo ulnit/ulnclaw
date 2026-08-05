@@ -72,6 +72,7 @@
 //! }
 //! ```
 
+pub mod active_sessions;
 pub mod agent;
 pub mod ansi;
 pub mod async_delegation;

@@ -583,6 +583,10 @@ pub struct GatewayConfig {
     /// the prefix is accepted but ignored (single-profile behavior).
     #[serde(default)]
     pub multiplex_profiles: bool,
+    /// Cap on concurrently active chat sessions across all surfaces
+    /// (hermes `max_concurrent_sessions`; 0/unset disables the cap).
+    #[serde(default)]
+    pub max_concurrent_sessions: Option<u32>,
 }
 
 fn default_gateway_host() -> String {
@@ -600,6 +604,7 @@ impl Default for GatewayConfig {
             port: default_gateway_port(),
             key: None,
             multiplex_profiles: false,
+            max_concurrent_sessions: None,
         }
     }
 }

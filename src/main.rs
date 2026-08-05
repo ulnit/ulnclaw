@@ -1268,6 +1268,17 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
     // (hermes prefetch_update_check on the startup path).
     ulnclaw::banner::prefetch_update_check();
     let agent = make_agent(config, true, None).await?;
+    // Cross-process active-session cap (hermes active_sessions): the lease
+    // is released automatically when the REPL exits.
+    let (_session_lease, session_limit_error) =
+        ulnclaw::active_sessions::try_acquire_active_session(
+            &agent.context().session_id,
+            "cli",
+            config,
+        );
+    if let Some(message) = session_limit_error {
+        return Err(message);
+    }
     print_welcome_banner(config, &agent).await;
     // Random feature tip (hermes startup tip), tinted with the active
     // skin's banner_dim.

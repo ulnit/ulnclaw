@@ -213,7 +213,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 566 tests
+cargo test                     # 573 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -348,7 +348,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 566 个测试
+cargo test                     # 573 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

@@ -2106,6 +2106,7 @@ dependencies = [
  "dirs",
  "futures",
  "glob",
+ "libc",
  "percent-encoding",
  "regex",
  "reqwest",
