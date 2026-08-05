@@ -298,6 +298,18 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Remove ulnclaw: code, PATH entries, wrappers (hermes uninstall)
+    Uninstall {
+        /// Full uninstall — also wipe ~/.ulnclaw configs/sessions/logs
+        #[arg(long)]
+        full: bool,
+        /// Print the uninstall plan without changing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the interactive confirmation
+        #[arg(long)]
+        yes: bool,
+    },
     /// Manage the fallback provider chain (hermes fallback)
     Fallback {
         /// Subcommand: list (default) | add <provider:model> | remove <N|provider:model> | clear
@@ -1429,6 +1441,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             }
             Ok(())
         }
+        Commands::Uninstall { full, dry_run, yes } => uninstall_cmd(full, dry_run, yes),
         Commands::Fallback { args, yes } => {
             let home = ulnclaw::config::ulnclaw_home();
             print!("{}", ulnclaw::fallback::handle_fallback_command(&home, &args, yes)?);
@@ -1862,6 +1875,26 @@ async fn chat_repl(
         session_id = target;
     }
     let agent = make_agent(config, true, None, Some(session_id)).await?;
+    // Display-only tool-progress rendering wired through agent callbacks
+    // (hermes CLI tool-progress scrollback); /focus and /verbose compose
+    // on top of it (hermes focus_view + tool_progress_mode).
+    let display = Arc::new(std::sync::Mutex::new(ulnclaw::focus_view::DisplayState::default()));
+    {
+        let progress_display = display.clone();
+        let mut callbacks = ulnclaw::agent::AgentCallbacks::default();
+        callbacks.on_tool_start = Some(Box::new(move |name, _args| {
+            let show = {
+                let mut state = progress_display.lock().unwrap();
+                state.on_tool_call(name)
+            };
+            if show {
+                println!("\n⚙ {name}");
+            }
+        }));
+        agent.set_callbacks(callbacks).await;
+    }
+    // Session-scoped prompt stash (hermes Ctrl+S gesture → /stash).
+    let mut stash = ulnclaw::prompt_stash::PromptStash::new();
     // Cross-process active-session cap (hermes active_sessions): the lease
     // is released automatically when the REPL exits.
     let (_session_lease, session_limit_error) =
@@ -1923,7 +1956,12 @@ async fn chat_repl(
         let input = if let Some(next) = pending.take() {
             next
         } else {
-            print!("\n> ");
+            let stash_indicator = stash.indicator();
+            if stash_indicator.is_empty() {
+                print!("\n> ");
+            } else {
+                print!("\n{stash_indicator} > ");
+            }
             std::io::stdout().flush().map_err(|e| e.to_string())?;
             let mut line = String::new();
             stdin.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -1933,7 +1971,7 @@ async fn chat_repl(
             continue;
         }
         if input.starts_with('/') {
-            match handle_slash(&input, &agent, &mut history, &mut goal_manager, &mut pending, &mut session_key).await {
+            match handle_slash(&input, &agent, &mut history, &mut goal_manager, &mut pending, &mut session_key, &mut stash, &display).await {
                 Ok(true) => continue,
                 Ok(false) => break,
                 Err(e) => {
@@ -1952,6 +1990,15 @@ async fn chat_repl(
                 )
                 .await;
                 println!("\n{}", content);
+                // Focus view post-turn recovery line: how many tool lines
+                // were hidden and how to get them back (hermes format_hidden_line).
+                let hidden_line = {
+                    let mut state = display.lock().unwrap();
+                    ulnclaw::focus_view::format_hidden_line(state.take_hidden_count())
+                };
+                if let Some(hidden_line) = hidden_line {
+                    println!("{hidden_line}");
+                }
                 // Keep the conversation going (drop system prompt from history).
                 history = result
                     .conversation
@@ -2011,11 +2058,135 @@ async fn handle_slash(
     goals: &mut ulnclaw::goals::GoalManager,
     pending: &mut Option<String>,
     session_key: &mut String,
+    stash: &mut ulnclaw::prompt_stash::PromptStash,
+    display: &Arc<std::sync::Mutex<ulnclaw::focus_view::DisplayState>>,
 ) -> Result<bool, String> {
     let mut parts = input.splitn(2, ' ');
     let cmd = parts.next().unwrap_or("");
     let rest = parts.next().unwrap_or("").trim();
     match cmd {
+        "/focus" => {
+            let (enabled, configured) = {
+                let state = display.lock().unwrap();
+                (state.focus_enabled, state.configured_mode.clone())
+            };
+            match ulnclaw::focus_view::resolve_focus_arg(rest, enabled) {
+                ulnclaw::focus_view::FocusArg::Set(target) => {
+                    let message = {
+                        let mut state = display.lock().unwrap();
+                        state.focus_enabled = target;
+                        ulnclaw::focus_view::format_focus_toggle_message(
+                            target,
+                            Some(&state.configured_mode),
+                        )
+                    };
+                    println!("{message}");
+                }
+                ulnclaw::focus_view::FocusArg::Status => {
+                    println!("{}", ulnclaw::focus_view::format_focus_status(enabled, Some(&configured)));
+                }
+                ulnclaw::focus_view::FocusArg::Usage => {
+                    println!("{}", ulnclaw::focus_view::FOCUS_USAGE);
+                }
+            }
+        }
+        "/verbose" => {
+            let mut state = display.lock().unwrap();
+            if rest.is_empty() {
+                println!(
+                    "tool progress: {} (modes: off | new | all | verbose)",
+                    state.configured_mode
+                );
+            } else {
+                let wanted = rest.trim().to_ascii_lowercase();
+                if ulnclaw::focus_view::TOOL_PROGRESS_MODES.contains(&wanted.as_str()) {
+                    state.configured_mode = wanted.clone();
+                    println!("tool progress: {}", wanted.to_uppercase());
+                } else {
+                    println!("unknown mode '{rest}' — modes: off | new | all | verbose");
+                }
+            }
+        }
+        "/stash" => {
+            // hermes Ctrl+S gesture mapped onto the line REPL: content →
+            // park; empty + 1 item → pop; empty + 2+ → browse list.
+            let mut parts = rest.splitn(2, ' ');
+            let head = parts.next().unwrap_or("");
+            let tail = parts.next().unwrap_or("").trim();
+            match head {
+                "list" => {
+                    if stash.is_empty() {
+                        println!("nothing stashed.");
+                    } else {
+                        println!("stashed drafts (newest first):");
+                        for (idx, entry) in stash.items().iter().enumerate() {
+                            println!("  {}. {}", idx + 1, entry.preview);
+                        }
+                    }
+                }
+                "pop" => {
+                    let index: usize = tail.parse::<usize>().map(|n| n.saturating_sub(1)).unwrap_or(0);
+                    match stash.pop(index) {
+                        Some((text, _images)) => println!("restored draft:\n{text}"),
+                        None => println!("nothing to pop at that position."),
+                    }
+                }
+                "drop" => {
+                    let index: usize = tail.parse::<usize>().map(|n| n.saturating_sub(1)).unwrap_or(usize::MAX);
+                    if index == usize::MAX || index >= stash.len() {
+                        println!("usage: /stash drop <n> (1 = newest)");
+                    } else if stash.pop(index).is_some() {
+                        println!("dropped draft {} ({} remain).", index + 1, stash.len());
+                    }
+                }
+                "clear" => {
+                    stash.clear();
+                    println!("stash cleared.");
+                }
+                "" => match ulnclaw::prompt_stash::resolve_ctrl_s(stash, "", &[]) {
+                    (ulnclaw::prompt_stash::StashAction::Restored, Some((text, _images))) => {
+                        println!("restored draft:\n{text}");
+                    }
+                    (ulnclaw::prompt_stash::StashAction::OpenPanel, None) => {
+                        println!("stashed drafts (newest first):");
+                        for (idx, entry) in stash.items().iter().enumerate() {
+                            println!("  {}. {}", idx + 1, entry.preview);
+                        }
+                        println!("/stash pop <n> restores · /stash drop <n> deletes · /stash clear wipes");
+                    }
+                    _ => println!("nothing stashed."),
+                },
+                _ => {
+                    // Anything else is draft text to park (hermes gesture).
+                    if stash.stash(rest, &[]) {
+                        println!("stashed ({} parked). {}", stash.len(), stash.placeholder_hint());
+                    }
+                }
+            }
+        }
+        "/paste" => {
+            // hermes clipboard: save the clipboard image as PNG under the
+            // ulnclaw home and hand the agent a path reference.
+            if ulnclaw::clipboard::is_remote_shell_session() {
+                println!("note: SSH session detected — native clipboard tools write the REMOTE machine's clipboard; your terminal's OSC 52 paste reaches the local one.");
+            }
+            if !ulnclaw::clipboard::has_clipboard_image() {
+                println!("no image on the clipboard.");
+            } else {
+                let dir = ulnclaw::clipboard::clipboard_dir();
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let dest = dir.join(format!("clipboard-{ts}.png"));
+                if ulnclaw::clipboard::save_clipboard_image(&dest) {
+                    println!("saved clipboard image: {}", dest.display());
+                    println!("reference it in your next prompt (vision_analyze / read_file).");
+                } else {
+                    println!("clipboard image extraction failed (is wl-paste/xclip/pngpaste installed?)");
+                }
+            }
+        }
         "/quit" | "/exit" | "/q" => return Ok(false),
         "/new" => {
             history.clear();
@@ -2041,7 +2212,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -3052,6 +3223,78 @@ async fn computer_use_cmd(config: &UlncLawConfig, action: ComputerUseAction) -> 
             println!("install finished.");
         }
     }
+    Ok(())
+}
+
+fn uninstall_cmd(full: bool, dry_run: bool, yes: bool) -> Result<(), String> {
+    let plan = ulnclaw::uninstall::build_plan(full);
+    if dry_run {
+        ulnclaw::uninstall::print_dry_run(&plan);
+        return Ok(());
+    }
+    // Non-interactive fast path (hermes --yes): no prompts. Named-profile
+    // cleanup stays interactive-only in hermes; ulnclaw has no profiles
+    // service to worry about.
+    if yes {
+        ulnclaw::uninstall::perform_uninstall(&plan);
+        return Ok(());
+    }
+    println!();
+    println!("┌─────────────────────────────────────────────────────────┐");
+    println!("│              ⚕ ulnclaw Uninstaller                      │");
+    println!("└─────────────────────────────────────────────────────────┘");
+    println!();
+    println!("Current Installation:");
+    match &plan.project_root {
+        Some(root) => println!("  Code:    {}", root.display()),
+        None => println!("  Code:    (no checkout detected next to the binary)"),
+    }
+    println!("  Config:  {}", plan.home.join("config.toml").display());
+    println!("  Data:    {}", plan.home.display());
+    println!();
+    println!("Uninstall Options:");
+    println!();
+    println!("  1) Keep data - Remove code only, keep configs/sessions/logs");
+    println!("     (Recommended - you can reinstall later with your settings intact)");
+    println!();
+    println!("  2) Full uninstall - Remove everything including all data");
+    println!("     (Warning: This deletes all configs, sessions, and logs permanently)");
+    println!();
+    println!("  3) Cancel - Don't uninstall");
+    println!();
+    print!("Select option [1/2/3]: ");
+    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    let mut choice_line = String::new();
+    std::io::stdin().read_line(&mut choice_line).map_err(|e| e.to_string())?;
+    let choice = choice_line.trim().to_string();
+    if choice == "3" || matches!(choice.to_ascii_lowercase().as_str(), "" | "c" | "cancel" | "q" | "quit" | "n" | "no") {
+        println!();
+        println!("Uninstall cancelled.");
+        return Ok(());
+    }
+    if choice != "1" && choice != "2" {
+        return Err(format!("invalid choice '{choice}' (expected 1, 2 or 3)"));
+    }
+    let full_uninstall = choice == "2";
+    let plan = ulnclaw::uninstall::build_plan(full_uninstall);
+    println!();
+    if full_uninstall {
+        println!("⚠️  WARNING: This will permanently delete ALL ulnclaw data!");
+        println!("   Including: configs, API keys, sessions, scheduled jobs, logs");
+    } else {
+        println!("This will remove the ulnclaw code but keep your configuration and data.");
+    }
+    println!();
+    print!("Type 'yes' to confirm: ");
+    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    let mut confirm_line = String::new();
+    std::io::stdin().read_line(&mut confirm_line).map_err(|e| e.to_string())?;
+    if confirm_line.trim().to_ascii_lowercase() != "yes" {
+        println!();
+        println!("Uninstall cancelled.");
+        return Ok(());
+    }
+    ulnclaw::uninstall::perform_uninstall(&plan);
     Ok(())
 }
 

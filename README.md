@@ -67,7 +67,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 # One-shot run
 ./ulnclaw run "Summarize the README.md file"
 
-# Interactive chat (slash commands: /new /search /memory /skills /sessions /rollback /diff /recap /goal /subgoal ...)
+# Interactive chat (slash commands: /new /search /memory /skills /sessions /rollback /diff /recap /goal /subgoal /focus /verbose /stash /paste ...)
 ./ulnclaw chat
 ./ulnclaw chat --resume <session-id>   # resume a session by id or unique prefix (-r)
 ./ulnclaw chat --continue              # continue the most recent session (-c)
@@ -107,6 +107,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw completion bash  # shell completions (bash/zsh/fish/elvish/powershell)
 ./ulnclaw dump             # copy-pasteable setup summary for support (--show-keys)
 ./ulnclaw version          # version + install info + update status
+./ulnclaw uninstall        # remove code/PATH entries/wrappers (--full wipes data, --dry-run, --yes)
 ./ulnclaw memory           # persistent memory status; `memory reset [all|memory|user]`
 ./ulnclaw approvals        # terminal approval mode; `approvals manual|smart|off` to set
 ./ulnclaw prompt-size      # system prompt + tool-schema footprint (--json)
@@ -249,7 +250,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 749 tests
+cargo test                     # 775 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -319,7 +320,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 # 一次性运行
 ./ulnclaw run "总结一下 README.md"
 
-# 交互式聊天（斜杠命令：/new /search /memory /skills /sessions /rollback /diff /recap /goal /subgoal ……）
+# 交互式聊天（斜杠命令：/new /search /memory /skills /sessions /rollback /diff /recap /goal /subgoal /focus /verbose /stash /paste ……）
 ./ulnclaw chat
 ./ulnclaw chat --resume <session-id>   # 按 id 或唯一前缀恢复会话（-r）
 ./ulnclaw chat --continue              # 继续最近一次会话（-c）
@@ -359,6 +360,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw completion bash  # shell 补全脚本（bash/zsh/fish/elvish/powershell）
 ./ulnclaw dump             # 可粘贴的装机摘要，用于求助排查（--show-keys）
 ./ulnclaw version          # 版本 + 安装信息 + 升级状态
+./ulnclaw uninstall        # 移除代码/PATH 条目/包装脚本（--full 连数据清除、--dry-run、--yes）
 ./ulnclaw memory           # 持久记忆状态；`memory reset [all|memory|user]` 清除
 ./ulnclaw approvals        # 终端审批模式；`approvals manual|smart|off` 设置
 ./ulnclaw prompt-size      # 系统提示词 + 工具 schema 体积（--json）
@@ -420,7 +422,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 749 个测试
+cargo test                     # 775 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

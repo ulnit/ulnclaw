@@ -358,6 +358,12 @@ impl Agent {
         self
     }
 
+    /// Replace callbacks after construction (REPL display wiring keeps the
+    /// agent in an Arc; the callback set itself is behind a mutex).
+    pub async fn set_callbacks(&self, callbacks: AgentCallbacks) {
+        *self.callbacks.lock().await = callbacks;
+    }
+
     /// Set the shared tool context (session id, workdir, callbacks...).
     pub fn with_tool_context(mut self, context: ToolContext) -> Self {
         let mut context = context;
