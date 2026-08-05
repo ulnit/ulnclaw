@@ -38,6 +38,12 @@ pub struct MessagingConfig {
     /// `pair` behavior). Approved codes join the allowlist as a union.
     #[serde(default = "default_pairing")]
     pub pairing: bool,
+    /// WhatsApp Cloud webhook platform (mounted on the gateway router).
+    #[serde(default)]
+    pub whatsapp_cloud: crate::webhook_platforms::WhatsAppCloudConfig,
+    /// Microsoft Graph change-notification ingress (gateway router).
+    #[serde(default)]
+    pub msgraph: crate::webhook_platforms::MsGraphConfig,
 }
 
 fn default_pairing() -> bool {
@@ -376,6 +382,21 @@ pub fn extract_media_tags(text: &str) -> (String, Vec<std::path::PathBuf>) {
         prev_blank = blank;
     }
     (out.trim_end_matches('\n').to_string(), paths)
+}
+
+/// Pub wrapper for webhook platforms (whatsapp_cloud / msgraph).
+pub fn pairing_offer_public(
+    store: &crate::pairing::PairingStore,
+    platform: &str,
+    sender_id: &str,
+    sender_name: &str,
+) -> Option<String> {
+    pairing_offer(store, platform, sender_id, sender_name)
+}
+
+/// Pub wrapper for webhook platforms (whatsapp_cloud / msgraph).
+pub async fn pre_gateway_dispatch_gate_public(event: &mut MessageEvent) -> bool {
+    pre_gateway_dispatch_gate(event).await
 }
 
 /// `pre_gateway_dispatch` plugin hook (hermes fires it BEFORE auth so
@@ -1184,7 +1205,7 @@ pub mod slack {
 
 /// Split text into chunks no longer than `max` chars, preferring newline
 /// boundaries (hermes message splitting).
-fn chunk_text(text: &str, max: usize) -> Vec<String> {
+pub(crate) fn chunk_text(text: &str, max: usize) -> Vec<String> {
     if text.chars().count() <= max {
         return vec![text.to_string()];
     }

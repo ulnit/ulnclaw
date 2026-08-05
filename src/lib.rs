@@ -137,6 +137,7 @@ pub mod tools;
 pub mod toolsets;
 pub mod update;
 pub mod video_gen;
+pub mod webhook_platforms;
 pub mod video_gen_backends;
 pub mod video_gen_xai;
 pub mod url_safety;

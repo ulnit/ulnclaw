@@ -542,7 +542,7 @@ async fn usage(
 
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
         .route("/health/detailed", get(health_detailed))
         .route("/v1/health", get(health))
@@ -587,9 +587,122 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/runs/:id", get(get_run))
         .route("/v1/runs/:id/events", get(run_events))
         .route("/v1/runs/:id/approval", post(resolve_approval))
-        .route("/v1/runs/:id/stop", post(stop_run))
+        .route("/v1/runs/:id/stop", post(stop_run));
+    let router = attach_webhook_routes(router, &state);
+    router
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
+}
+
+/// Mount enabled webhook-platform ingress routes (hermes platform webhook
+/// servers run inside the gateway HTTP surface).
+fn attach_webhook_routes(
+    router: Router<Arc<GatewayState>>,
+    state: &Arc<GatewayState>,
+) -> Router<Arc<GatewayState>> {
+    let config = &state.agent.context().config;
+    let mut router = router;
+    if config.messaging.whatsapp_cloud.enabled {
+        router = router.route(
+            "/webhooks/whatsapp",
+            get(whatsapp_verify_route).post(whatsapp_webhook_route),
+        );
+        tracing::info!("gateway webhook route mounted: /webhooks/whatsapp");
+    }
+    if config.messaging.msgraph.enabled {
+        router = router.route(
+            "/webhooks/msgraph",
+            get(msgraph_webhook_route).post(msgraph_webhook_route),
+        );
+        tracing::info!("gateway webhook route mounted: /webhooks/msgraph");
+    }
+    router
+}
+
+async fn whatsapp_verify_route(
+    State(state): State<Arc<GatewayState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let cfg = &state.agent.context().config.messaging.whatsapp_cloud;
+    let query: Vec<(String, String)> = params.into_iter().collect();
+    match crate::webhook_platforms::whatsapp_verify(cfg, &query) {
+        Ok(challenge) => (StatusCode::OK, challenge).into_response(),
+        Err(_) => StatusCode::FORBIDDEN.into_response(),
+    }
+}
+
+async fn whatsapp_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let cfg = &config.messaging.whatsapp_cloud;
+    let signature = headers
+        .get("x-hub-signature-256")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let pairing = if config.messaging.pairing {
+        Some(crate::pairing::PairingStore::open(&crate::config::ulnclaw_home()))
+    } else {
+        None
+    };
+    match crate::webhook_platforms::whatsapp_handle_webhook(
+        cfg,
+        &dispatcher,
+        pairing.as_ref(),
+        &body,
+        &signature,
+    )
+    .await
+    {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => {
+            let message = e.to_string();
+            tracing::warn!("whatsapp webhook rejected: {message}");
+            if message.contains("X-Hub-Signature-256") {
+                // Invalid signature: refuse loudly so misconfigurations
+                // surface; Meta retries are harmless here.
+                StatusCode::FORBIDDEN.into_response()
+            } else {
+                // Parse/size issues: 200 stops Meta's retry storm (hermes
+                // logs and acks).
+                StatusCode::OK.into_response()
+            }
+        }
+    }
+}
+
+async fn msgraph_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let cfg = &config.messaging.msgraph;
+    let query: Vec<(String, String)> = params.into_iter().collect();
+    // Subscription validation: echo validationToken as text/plain.
+    if let Some(token) = crate::webhook_platforms::msgraph_validation_token(&query) {
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/plain")],
+            token,
+        )
+            .into_response();
+    }
+    if body.is_empty() {
+        return StatusCode::OK.into_response();
+    }
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    if let Err(e) =
+        crate::webhook_platforms::msgraph_handle_webhook(cfg, &dispatcher, &body, &query).await
+    {
+        tracing::warn!("msgraph webhook rejected: {e}");
+    }
+    // Graph requires 2xx to stop notification retries — always ack.
+    StatusCode::OK.into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -828,8 +941,14 @@ async fn auth_middleware(
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_string();
-    // Health probes are always open (hermes behavior).
-    if path == "/health" || path == "/health/detailed" || path == "/v1/health" {
+    // Health probes are always open (hermes behavior). Platform webhook
+    // ingress is likewise open — Meta/Graph authenticate via HMAC /
+    // clientState, not the gateway bearer key.
+    if path == "/health"
+        || path == "/health/detailed"
+        || path == "/v1/health"
+        || path.starts_with("/webhooks/")
+    {
         return next.run(request).await;
     }
     let Some(expected) = state.key.as_deref() else {

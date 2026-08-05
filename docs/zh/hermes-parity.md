@@ -181,8 +181,9 @@
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入与音频 STT
   管道未移植）；Slack 回复中的 `MEDIA:` 标签保留为字面文本（files.upload
-  流程未移植）；无语音消息与内联键盘；移植了 hermes 十个
-  平台适配器中的三个；配对与 hermes 相同按发送者 id 生效，但配置式白名单
+  流程未移植）；无语音消息与内联键盘；移植了 hermes 二十一个
+  平台适配器中的五个（WhatsApp Cloud + MS-Graph 接入经网关 webhook
+  路由）；配对与 hermes 相同按发送者 id 生效，但配置式白名单
   仍以聊天/频道 id 为粒度（认证门控 = 白名单 OR 已批准配对）。
 - OAuth/同步：流程与提供方无关（任意 RFC 8628 端点），不绑定 Nous 门户；
   同步只搬运技能包（无组织提案/审批工作流、无订阅门控）。
