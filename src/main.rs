@@ -95,6 +95,14 @@ enum Commands {
         #[command(subcommand)]
         action: Option<ModelsAction>,
     },
+    /// Persistent memory: status, or `reset` to erase (hermes memory)
+    Memory {
+        /// Omit for status; `reset [all|memory|user]` erases memory files
+        args: Vec<String>,
+        /// Skip the interactive confirmation (reset)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -902,6 +910,10 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             })
             .await
             .map_err(|e| e.to_string())?
+        }
+        Commands::Memory { args, yes } => {
+            let home = ulnclaw::config::ulnclaw_home();
+            ulnclaw::memory_cmd::handle_memory_command(&home, &args, yes)
         }
         Commands::Curator { action } => {
             curator_cmd(action.unwrap_or(CuratorAction::Status))

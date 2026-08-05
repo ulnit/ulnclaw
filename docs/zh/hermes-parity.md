@@ -64,6 +64,7 @@
 | 配置管理 CLI（`hermes_cli/config.py` config_command） | ✅ 核心 | `config_cmd.rs`：`show`（面板头 + 路径 + 全量配置，机密键经 `status::redact_key` 脱敏）、`get <key> [--json]`（config.toml 点路径；全大写键按 hermes `_is_env_config_key` 经进程环境变量 + `.env` 解析）、`set <key> <value> [--force]`（标量类型推断 bool/int/float/数组/表/字符串、嵌套表创建、未知段提示与 hermes 对齐；env 风格键写入 `.env`）、`unset <key>`（config.toml 或 `.env` 行移除）、`path` / `env-path`、`edit`（$EDITOR）；存储经 TOML 往返重写（TOML 取代 hermes YAML，注释丢失为已记录的取舍） |
 | Shell 补全（`hermes_cli/completion.py`） | ✅ 核心 | `ulnclaw completion <shell>` 基于 clap_complete：bash / zsh / fish（hermes 集合）另加 elvish / powershell；从实时 clap 命令树生成，自动跟随子命令变化（hermes 遍历 argparse 树同理）；SIGPIPE 恢复默认处理，管道接入 `head` 时静默退出 |
 | 环境转储与版本（`hermes_cli/dump.py`、`build_info.py`） | ✅ 核心 | `ulnclaw dump [--show-keys]`：纯文本、可直接粘贴的装机摘要——版本 + git SHA/提交日期、系统、profile、home、模型/provider、含 `TERMINAL_ENV` 覆盖提示的实际终端 backend、`api_keys:` set/not set/脱敏值并带"仅 shell 存在、`.env` 缺失"告警（托管后端只读 `.env` 不读登录 shell）、`features:` toolsets / MCP 服务器 / 记忆 provider / gateway 监听+鉴权 / cron 激活-总数 / 技能 / 检查点，以及非默认 `config_overrides:`；`ulnclaw version [--no-update-check]`：版本行 + 安装目录/方式 + 复用 `update --check` 机制的实时升级状态；无 git 安装回退读取内置 `.ulnclaw_build_sha` 标记（对标 hermes `.hermes_build_sha`） |
+| 记忆 CLI（`main.py cmd_memory`） | ✅ 核心 | `ulnclaw memory`：分库状态（`memory/MEMORY.md` 代理笔记与 `memory/USER.md` 用户画像的条目数 + 字节数，二者会注入每轮系统提示词）；`ulnclaw memory reset [all|memory|user] [--yes]`：hermes 风格清除清单（`◆ 文件 (说明) — N 字节`）、非 `--yes` 时交互式输入 `yes` 确认、逐文件 `✓ Deleted` 报告；REPL 内 `/memory` 查看当前内容 |
 
 ## 功能对标
 
