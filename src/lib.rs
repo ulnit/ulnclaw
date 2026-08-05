@@ -87,6 +87,7 @@ pub mod context;
 pub mod cron;
 pub mod desktop;
 pub mod doctor;
+pub mod dump;
 pub mod env_guard;
 pub mod env_probe;
 pub mod environments;

@@ -63,6 +63,31 @@ pub fn redact_key(key: &str) -> String {
     format!("{}…{}", head, tail)
 }
 
+/// Vendor API-key table shared by `status` and `dump` (label, env-var
+/// alternates; first non-empty wins). Hermes parity: `dump.py` api_keys.
+pub const KEY_TABLE: &[(&str, &[&str])] = &[
+    ("ULNCLAW_GATEWAY", &["ULNCLAW_GATEWAY_KEY", "ULNCLAW_API_KEY"]),
+    ("OpenRouter", &["OPENROUTER_API_KEY"]),
+    ("OpenAI", &["OPENAI_API_KEY"]),
+    ("Anthropic", &["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"]),
+    ("Google / Gemini", &["GOOGLE_API_KEY", "GEMINI_API_KEY"]),
+    ("DeepSeek", &["DEEPSEEK_API_KEY"]),
+    ("xAI / Grok", &["XAI_API_KEY"]),
+    ("Groq", &["GROQ_API_KEY"]),
+    ("Mistral", &["MISTRAL_API_KEY"]),
+    ("Together", &["TOGETHER_API_KEY"]),
+    ("Perplexity", &["PERPLEXITY_API_KEY"]),
+    ("Ollama Cloud", &["OLLAMA_CLOUD_API_KEY"]),
+    ("Tavily", &["TAVILY_API_KEY"]),
+    ("Firecrawl", &["FIRECRAWL_API_KEY"]),
+    ("Brave", &["BRAVE_API_KEY"]),
+    ("GitHub", &["GH_TOKEN", "GITHUB_TOKEN"]),
+    ("Notion", &["NOTION_TOKEN"]),
+    ("Home Assistant", &["HASS_TOKEN"]),
+    ("Discord", &["DISCORD_BOT_TOKEN"]),
+    ("Tenor", &["TENOR_API_KEY"]),
+];
+
 /// Status options (hermes `status --all --deep`; `--all` shares the same
 /// redaction posture, so ulnclaw folds it into the default rendering).
 #[derive(Debug, Clone, Default)]
@@ -148,28 +173,6 @@ pub fn show_status(config: &UlncLawConfig, opts: &StatusOptions) -> String {
             out.push_str(&format!("  {:<16}  ✓ model.api_key ({})\n", "config", redact_key(key)));
         }
     }
-    const KEY_TABLE: &[(&str, &[&str])] = &[
-        ("ULNCLAW_GATEWAY", &["ULNCLAW_GATEWAY_KEY", "ULNCLAW_API_KEY"]),
-        ("OpenRouter", &["OPENROUTER_API_KEY"]),
-        ("OpenAI", &["OPENAI_API_KEY"]),
-        ("Anthropic", &["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"]),
-        ("Google / Gemini", &["GOOGLE_API_KEY", "GEMINI_API_KEY"]),
-        ("DeepSeek", &["DEEPSEEK_API_KEY"]),
-        ("xAI / Grok", &["XAI_API_KEY"]),
-        ("Groq", &["GROQ_API_KEY"]),
-        ("Mistral", &["MISTRAL_API_KEY"]),
-        ("Together", &["TOGETHER_API_KEY"]),
-        ("Perplexity", &["PERPLEXITY_API_KEY"]),
-        ("Ollama Cloud", &["OLLAMA_CLOUD_API_KEY"]),
-        ("Tavily", &["TAVILY_API_KEY"]),
-        ("Firecrawl", &["FIRECRAWL_API_KEY"]),
-        ("Brave", &["BRAVE_API_KEY"]),
-        ("GitHub", &["GH_TOKEN", "GITHUB_TOKEN"]),
-        ("Notion", &["NOTION_TOKEN"]),
-        ("Home Assistant", &["HASS_TOKEN"]),
-        ("Discord", &["DISCORD_BOT_TOKEN"]),
-        ("Tenor", &["TENOR_API_KEY"]),
-    ];
     for (label, vars) in KEY_TABLE {
         let resolved = vars
             .iter()

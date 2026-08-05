@@ -176,6 +176,18 @@ enum Commands {
         /// Shell to generate completions for (bash, zsh, fish, elvish, powershell)
         shell: clap_complete::Shell,
     },
+    /// Dump a compact, copy-pasteable setup summary (hermes dump)
+    Dump {
+        /// Show redacted key values instead of set/not set
+        #[arg(long)]
+        show_keys: bool,
+    },
+    /// Show version, install info and update status (hermes version)
+    Version {
+        /// Skip the online update check
+        #[arg(long)]
+        no_update_check: bool,
+    },
     /// View and edit configuration (hermes config)
     Config {
         /// Subcommand: show (default) | get <key> | set <key> <value> | unset <key> | path | env-path | edit
@@ -955,6 +967,21 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Completion { shell } => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             clap_complete::generate(shell, &mut cmd, "ulnclaw", &mut std::io::stdout());
+            Ok(())
+        }
+        Commands::Dump { show_keys } => {
+            print!(
+                "{}",
+                ulnclaw::dump::build_dump(&config, cli.profile.as_deref(), show_keys)
+            );
+            Ok(())
+        }
+        Commands::Version { no_update_check } => {
+            let root = ulnclaw::update::find_repo_root();
+            print!(
+                "{}",
+                ulnclaw::dump::build_version_report(root.as_deref(), !no_update_check)
+            );
             Ok(())
         }
         Commands::Config { args, json, force } => {
