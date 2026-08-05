@@ -182,6 +182,14 @@ pub struct CreateTaskBody {
     /// (hermes max_retries; must be >= 1).
     #[serde(default)]
     pub max_retries: Option<i64>,
+    /// Workspace: `scratch` | `worktree` | `worktree:<path>` |
+    /// `dir:<path>` (hermes create --workspace).
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// Worktree branch name (hermes create --branch; requires a
+    /// worktree workspace).
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 /// `POST /api/kanban/tasks` — create a task on the current board.
@@ -198,6 +206,35 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
                 None,
             );
         }
+    }
+    // Workspace flags (hermes _cmd_create): parse + validate, then
+    // fall back to the [kanban] worktrees default when unset.
+    let (mut workspace_kind, workspace_path) = match body.workspace.as_deref() {
+        Some(raw) => match crate::kanban::parse_workspace_flag(raw) {
+            Ok(parsed) => parsed,
+            Err(e) => return super::bad_request(&e, None),
+        },
+        None => ("scratch".to_string(), None),
+    };
+    let branch_name = match body.branch.as_deref() {
+        Some(raw) => match crate::kanban::parse_branch_flag(raw) {
+            Ok(branch) => Some(branch),
+            Err(e) => return super::bad_request(&e, None),
+        },
+        None => None,
+    };
+    if branch_name.is_some() && workspace_kind != "worktree" {
+        return super::bad_request(
+            "--branch is only valid with --workspace worktree",
+            None,
+        );
+    }
+    if body.workspace.is_none()
+        && crate::config::UlncLawConfig::load(None)
+            .map(|c| c.kanban.worktrees)
+            .unwrap_or(false)
+    {
+        workspace_kind = "worktree".to_string();
     }
     let store = match store() {
         Ok(s) => s,
@@ -216,6 +253,9 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         idempotency_key: body.idempotency_key.filter(|k| !k.trim().is_empty()),
         triage: body.triage.unwrap_or(false),
         max_retries: body.max_retries,
+        workspace_kind: Some(workspace_kind),
+        workspace_path,
+        branch_name,
     }) {
         Ok(t) => t,
         Err(e) => return super::bad_request(&e.to_string(), None),
@@ -432,7 +472,9 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
     // Spawning child processes is blocking work — keep it off the axum task.
     let outcome = tokio::task::spawn_blocking(move || {
         store.dispatch_once(
-            |task| crate::kanban::dispatch_spawn(&home, use_worktrees, task),
+            &home,
+            use_worktrees,
+            |task, workspace| crate::kanban::dispatch_spawn(&home, task, workspace),
             Some(max_spawn),
             dry_run,
             2,

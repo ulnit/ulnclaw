@@ -314,7 +314,34 @@ performance and a single static binary.
   re-read live in the gateway loop) whose heartbeat is missing or
   older than an hour (worker SIGTERM→SIGKILL, `stale` event, run
   outcome `stale`, deliberately NOT counted as a failure — hermes
-  policy); both surface in `DispatchResult.stale` / `.crashed`.
+  policy); both surface in `DispatchResult.stale` / `.crashed`;
+  P138 hardened the embedded dispatcher (hermes gateway loop): an
+  exclusive `flock` singleton lock (`<home>/kanban/dispatcher.lock`)
+  guarantees exactly one dispatching gateway per machine — a second
+  gateway logs the contention and keeps serving HTTP without
+  dispatching — plus stuck-dispatcher telemetry (warn when the ready
+  queue stays non-empty for 6 consecutive ticks with zero spawns,
+  throttled to 300 s); P139 ported hermes' per-task workspaces:
+  tasks gain `workspace_kind` (`scratch` default / `worktree` /
+  `dir`), `workspace_path` and `branch_name` columns; `kanban create
+  --workspace scratch|worktree|worktree:<path>|dir:<path>` and
+  `--branch <name>` (worktree-only, hermes validation text) with the
+  gateway create API accepting the same fields; the dispatcher
+  resolves the workspace BEFORE spawn (hermes `resolve_workspace` /
+  `_resolve_worktree_workspace`): scratch dirs under
+  `<home>/kanban/workspaces/<id>`, `dir:` paths must be absolute
+  (confused-deputy guard, hermes threat model), worktrees anchor on
+  the board `default_workdir` (dispatcher-CWD fallback keeps the
+  pre-P139 behaviour; hermes raises instead) and materialize
+  `<repo>/.worktrees/<task-id>` on branch `wt/<task-id>` (or
+  `--branch`), reusing occupied sibling checkouts via a fresh tree;
+  the resolved path + branch are persisted on the task row so retries
+  reuse them, resolution errors count as `workspace:` spawn failures
+  against the circuit breaker, `kanban claim` resolves + prints the
+  workspace (hermes `_cmd_claim`), `[kanban] worktrees=true` keeps
+  its meaning for tasks created without `--workspace`, and decompose
+  children inherit the root's workspace kind/path (worktree children
+  always get their own tree, hermes sibling policy).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

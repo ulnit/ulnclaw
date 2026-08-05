@@ -538,6 +538,14 @@ enum KanbanAction {
         /// (hermes create --max-retries; 1 trips on the first failure)
         #[arg(long)]
         max_retries: Option<i64>,
+        /// Workspace: scratch | worktree | worktree:<path> | dir:<path>
+        /// (hermes create --workspace)
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Worktree branch name (requires --workspace worktree; hermes
+        /// create --branch)
+        #[arg(long)]
+        branch: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -4355,6 +4363,8 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             idempotency_key,
             triage,
             max_retries,
+            workspace,
+            branch,
             json,
         } => {
             let title = title.join(" ");
@@ -4367,6 +4377,30 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                         "kanban: --max-retries must be >= 1 (got {max_retries}); use 1 to trip on the first failure"
                     ));
                 }
+            }
+            let (mut workspace_kind, workspace_path) = match workspace.as_deref() {
+                Some(raw) => ulnclaw::kanban::parse_workspace_flag(raw)
+                    .map_err(|e| format!("kanban: {e}"))?,
+                None => ("scratch".to_string(), None),
+            };
+            let branch_name = match branch.as_deref() {
+                Some(raw) => Some(
+                    ulnclaw::kanban::parse_branch_flag(raw)
+                        .map_err(|e| format!("kanban: {e}"))?,
+                ),
+                None => None,
+            };
+            if branch_name.is_some() && workspace_kind != "worktree" {
+                return Err(
+                    "kanban: --branch is only valid with --workspace worktree".into(),
+                );
+            }
+            if workspace.is_none()
+                && ulnclaw::config::UlncLawConfig::load(None)
+                    .map(|c| c.kanban.worktrees)
+                    .unwrap_or(false)
+            {
+                workspace_kind = "worktree".to_string();
             }
             let task = store
                 .create_task(&NewTask {
@@ -4382,6 +4416,9 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     idempotency_key,
                     triage,
                     max_retries,
+                    workspace_kind: Some(workspace_kind),
+                    workspace_path,
+                    branch_name,
                 })
                 .map_err(|e| e.to_string())?;
             if json {
@@ -4509,6 +4546,21 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             let task = store
                 .claim_task(&resolved, &claimer, ttl.unwrap_or(DEFAULT_CLAIM_TTL_SECS))
                 .map_err(|e| e.to_string())?;
+            // Resolve the workspace on claim (hermes _cmd_claim) so the
+            // claimer sees where the work should happen.
+            {
+                let home = ulnclaw::config::ulnclaw_home();
+                match store.resolve_workspace(&home, &task) {
+                    Ok((workspace, branch)) => {
+                        let _ = store.set_workspace_path(&task.id, &workspace);
+                        if let Some(branch) = branch {
+                            let _ = store.set_branch_name(&task.id, &branch);
+                        }
+                        println!("Workspace: {}", workspace.display());
+                    }
+                    Err(e) => eprintln!("kanban: workspace: {e}"),
+                }
+            }
             ulnclaw::plugins::fire_session_event(
                 "kanban_task_claimed",
                 &task.id,
@@ -5160,7 +5212,11 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .unwrap_or(14400);
             loop {
                 match store.dispatch_once(
-                    |task| ulnclaw::kanban::dispatch_spawn(&home, true, task),
+                    &home,
+                    true,
+                    |task, workspace| {
+                        ulnclaw::kanban::dispatch_spawn(&home, task, workspace)
+                    },
                     None,
                     false,
                     2,
@@ -5347,7 +5403,11 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             let use_worktrees = config.kanban.worktrees;
             let result = store
                 .dispatch_once(
-                    |task| ulnclaw::kanban::dispatch_spawn(&home, use_worktrees, task),
+                    &home,
+                    use_worktrees,
+                    |task, workspace| {
+                        ulnclaw::kanban::dispatch_spawn(&home, task, workspace)
+                    },
                     Some(max_spawn.max(1)),
                     dry_run,
                     failure_limit.max(1),

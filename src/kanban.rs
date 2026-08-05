@@ -21,6 +21,9 @@ pub const STATUSES: &[&str] = &[
     "todo", "ready", "running", "scheduled", "blocked", "done", "archived",
 ];
 
+/// Valid task workspace kinds (hermes `VALID_WORKSPACE_KINDS`).
+pub const VALID_WORKSPACE_KINDS: &[&str] = &["scratch", "worktree", "dir"];
+
 /// Status glyphs (hermes `_STATUS_ICONS`).
 pub fn status_icon(status: &str) -> &'static str {
     match status {
@@ -80,6 +83,16 @@ pub struct Task {
     /// `max_retries`): block on the Nth failure; NULL = dispatcher
     /// default.
     pub max_retries: Option<i64>,
+    /// Workspace kind: `scratch` | `worktree` | `dir` (hermes
+    /// `workspace_kind`).
+    pub workspace_kind: String,
+    /// Requested or resolved workspace directory (hermes
+    /// `workspace_path`); the dispatcher persists the resolved path so
+    /// retries reuse the same directory.
+    pub workspace_path: Option<String>,
+    /// Worktree branch (hermes `branch_name`); defaults to `wt/<id>`
+    /// at dispatch time when empty.
+    pub branch_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,20 +320,15 @@ pub fn worker_prompt(home: &Path, task: &Task) -> String {
     prompt
 }
 
-/// Dispatch-time spawn: prepare an isolated worktree (when enabled and
-/// the cwd is a git repo), then spawn the detached worker in it.
+/// Dispatch-time spawn: run the detached worker in the workspace the
+/// dispatcher resolved for the task (hermes passes the resolved
+/// workspace to `_default_spawn`; `None` runs in place).
 pub fn dispatch_spawn(
     home: &Path,
-    use_worktrees: bool,
     task: &Task,
+    workspace: Option<&Path>,
 ) -> std::result::Result<Option<i64>, String> {
-    let workdir = if use_worktrees {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        prepare_worktree(&cwd, task)?
-    } else {
-        None
-    };
-    spawn_worker(home, task, workdir.as_deref())
+    spawn_worker(home, task, workspace)
 }
 
 /// Spawn a detached `ulnclaw run` worker for `task` (hermes
@@ -1251,6 +1259,121 @@ fn git_toplevel(dir: &Path) -> Option<std::path::PathBuf> {
     }
 }
 
+/// Parse `--workspace` into `(kind, path|None)` (hermes
+/// `_parse_workspace_flag`). Accepts `scratch`, `worktree`,
+/// `worktree:<path>`, `dir:<path>`.
+pub fn parse_workspace_flag(value: &str) -> std::result::Result<(String, Option<String>), String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Ok(("scratch".to_string(), None));
+    }
+    if v == "scratch" || v == "worktree" {
+        return Ok((v.to_string(), None));
+    }
+    for (prefix, kind) in [("dir:", "dir"), ("worktree:", "worktree")] {
+        if let Some(rest) = v.strip_prefix(prefix) {
+            let path = rest.trim();
+            if path.is_empty() {
+                return Err(format!(
+                    "--workspace {prefix} requires a path after the colon"
+                ));
+            }
+            return Ok((
+                kind.to_string(),
+                Some(expand_tilde(path).to_string_lossy().to_string()),
+            ));
+        }
+    }
+    Err(format!(
+        "unknown --workspace value {value:?}: use scratch, worktree, \
+         worktree:<path>, or dir:<path>"
+    ))
+}
+
+/// Validate `kanban create --branch` (hermes `_parse_branch_flag`).
+pub fn parse_branch_flag(value: &str) -> std::result::Result<String, String> {
+    let branch = value.trim();
+    if branch.is_empty() {
+        return Err("--branch requires a non-empty name".to_string());
+    }
+    if branch.starts_with('-') {
+        return Err("--branch must not start with '-'".to_string());
+    }
+    if branch.chars().any(char::is_whitespace) {
+        return Err("--branch must not contain whitespace".to_string());
+    }
+    Ok(branch.to_string())
+}
+
+/// Expand a leading `~/` against $HOME (hermes `os.path.expanduser`).
+fn expand_tilde(raw: &str) -> PathBuf {
+    if raw == "~" || raw.starts_with("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(&raw[2..]);
+        }
+    }
+    PathBuf::from(raw)
+}
+
+/// Root of per-task scratch workspaces (hermes `workspaces_root`):
+/// `<home>/kanban/workspaces/<task-id>`. Path-stable across retries so
+/// handoff between workers reuses the same directory.
+pub fn workspaces_root(home: &Path) -> PathBuf {
+    home.join("kanban").join("workspaces")
+}
+
+/// Current branch of the repo checked out at `dir` (hermes
+/// `_git_current_branch`).
+fn git_current_branch(dir: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() || name == "HEAD" {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// True when `dir` is a LINKED git worktree checkout (`.git` is a file
+/// pointing at the main repo, hermes `_is_linked_worktree_checkout`).
+fn is_linked_worktree_checkout(dir: &Path) -> bool {
+    dir.join(".git").is_file()
+}
+
+/// Create (or reuse) a linked worktree `target` in `repo` on `branch`
+/// (hermes `_ensure_git_worktree`). Falls back to attaching an
+/// existing branch when `-b` loses the race.
+fn ensure_git_worktree(repo: &Path, target: &Path, branch: &str) -> std::result::Result<(), String> {
+    if target.is_dir() {
+        return Ok(());
+    }
+    let status = std::process::Command::new("git")
+        .args(["worktree", "add", target.to_str().unwrap_or_default(), "-b", branch])
+        .current_dir(repo)
+        .status()
+        .map_err(|e| format!("git worktree add: {e}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    let status = std::process::Command::new("git")
+        .args(["worktree", "add", target.to_str().unwrap_or_default(), branch])
+        .current_dir(repo)
+        .status()
+        .map_err(|e| format!("git worktree add: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("git worktree add failed for {}", target.display()))
+    }
+}
+
 /// Prepare an isolated git worktree for `task` under
 /// `<repo>/.worktrees/<task-id>` on branch `kanban/<task-id>` (hermes
 /// worktree workspaces). Returns the worktree path, or `None` when the
@@ -1358,6 +1481,16 @@ pub struct NewTask {
     /// Circuit-breaker threshold: block on the Nth failed attempt
     /// (hermes `max_retries`; 1 trips on the first failure).
     pub max_retries: Option<i64>,
+    /// Workspace kind: `scratch` (default) | `worktree` | `dir`
+    /// (hermes `create --workspace`).
+    pub workspace_kind: Option<String>,
+    /// Workspace path for `worktree` / `dir` kinds (hermes
+    /// `worktree:<path>` / `dir:<path>`); must be absolute. When unset
+    /// for those kinds the board `default_workdir` fills it in.
+    pub workspace_path: Option<String>,
+    /// Worktree branch name (hermes `create --branch`; only valid
+    /// with the worktree kind).
+    pub branch_name: Option<String>,
 }
 
 pub struct KanbanStore {
@@ -1404,7 +1537,10 @@ impl KanbanStore {
                 result          TEXT,
                 claim_lock      TEXT,
                 claim_expires   INTEGER,
-                last_heartbeat_at INTEGER
+                last_heartbeat_at INTEGER,
+                workspace_kind  TEXT NOT NULL DEFAULT 'scratch',
+                workspace_path  TEXT,
+                branch_name     TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_board_status ON tasks (board, status);
             CREATE TABLE IF NOT EXISTS task_comments (
@@ -1529,6 +1665,22 @@ impl KanbanStore {
         if !columns.contains("max_retries") {
             conn.execute_batch("ALTER TABLE tasks ADD COLUMN max_retries INTEGER;")
                 .map_err(db_error("migrate max_retries"))?;
+        }
+        // Pre-P139 stores lack the workspace columns (hermes
+        // workspace_kind / workspace_path / branch_name).
+        if !columns.contains("workspace_kind") {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN workspace_kind TEXT NOT NULL DEFAULT 'scratch';",
+            )
+            .map_err(db_error("migrate workspace_kind"))?;
+        }
+        if !columns.contains("workspace_path") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN workspace_path TEXT;")
+                .map_err(db_error("migrate workspace_path"))?;
+        }
+        if !columns.contains("branch_name") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN branch_name TEXT;")
+                .map_err(db_error("migrate branch_name"))?;
         }
         let store = Self {
             conn: Mutex::new(conn),
@@ -1946,8 +2098,59 @@ impl KanbanStore {
                 }
             }
         }
+        // Workspace validation (hermes create_task).
+        let workspace_kind = task
+            .workspace_kind
+            .as_deref()
+            .map(str::trim)
+            .filter(|kind| !kind.is_empty())
+            .unwrap_or("scratch")
+            .to_string();
+        if !VALID_WORKSPACE_KINDS.contains(&workspace_kind.as_str()) {
+            return Err(AgentError::session(format!(
+                "kanban: workspace_kind must be one of scratch, worktree, dir \
+                 (got '{workspace_kind}')"
+            )));
+        }
+        let mut workspace_path = task
+            .workspace_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string);
+        let branch_name = task
+            .branch_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty())
+            .map(str::to_string);
+        if branch_name.is_some() && workspace_kind != "worktree" {
+            return Err(AgentError::session(
+                "kanban: branch_name is only valid for worktree workspaces",
+            ));
+        }
         let id = Self::new_task_id();
         let board = self.current_board()?;
+        // Resolve workspace_path from the board default_workdir when the
+        // caller named a dir/worktree workspace without a path (hermes
+        // create_task board-level fill-in).
+        if workspace_path.is_none() && matches!(workspace_kind.as_str(), "dir" | "worktree") {
+            let conn = self.conn.lock().unwrap();
+            let default_workdir: Option<String> = conn
+                .query_row(
+                    "SELECT default_workdir FROM boards WHERE slug = ?1",
+                    params![board],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
+            drop(conn);
+            workspace_path = default_workdir
+                .as_deref()
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(str::to_string);
+        }
         let now = Self::now();
         let initial_status = if task.triage { "triage" } else { "todo" };
         let skills_json = task
@@ -1959,8 +2162,9 @@ impl KanbanStore {
         conn.execute(
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
              created_by, created_at, tenant, model, skills, max_runtime_seconds, \
-             idempotency_key, max_retries) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             idempotency_key, max_retries, workspace_kind, workspace_path, branch_name) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+                     ?16, ?17, ?18)",
             params![
                 id,
                 board,
@@ -1977,6 +2181,9 @@ impl KanbanStore {
                 task.max_runtime_seconds,
                 idempotency_key,
                 task.max_retries,
+                workspace_kind,
+                workspace_path,
+                branch_name,
             ],
         )
         .map_err(db_error("create task"))?;
@@ -1984,6 +2191,223 @@ impl KanbanStore {
         self.append_event(&id, "created", serde_json::json!({ "board": board }))?;
         self.get_task(&id)?
             .ok_or_else(|| AgentError::session("kanban: task vanished after create"))
+    }
+
+    /// Persist the resolved workspace path so subsequent runs reuse the
+    /// same directory (hermes `set_workspace_path`).
+    pub fn set_workspace_path(&self, task_id: &str, path: &Path) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET workspace_path = ?1 WHERE id = ?2",
+            params![path.to_string_lossy().to_string(), task_id],
+        )
+        .map_err(db_error("set workspace_path"))?;
+        Ok(())
+    }
+
+    /// Persist the resolved worktree branch (hermes `set_branch_name`).
+    pub fn set_branch_name(&self, task_id: &str, branch: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET branch_name = ?1 WHERE id = ?2",
+            params![branch, task_id],
+        )
+        .map_err(db_error("set branch_name"))?;
+        Ok(())
+    }
+
+    /// Resolve (and create if needed) the workspace for `task` (hermes
+    /// `resolve_workspace`). Returns the workspace directory plus the
+    /// resolved branch name for worktree workspaces.
+    ///
+    /// - `scratch`: a fresh dir under `<home>/kanban/workspaces/<id>`.
+    ///   A legacy explicit `workspace_path` must be absolute.
+    /// - `dir`: the stored `workspace_path` (must be absolute —
+    ///   relative paths are rejected to prevent confused-deputy
+    ///   traversal against the dispatcher's CWD). Created if missing.
+    /// - `worktree`: a linked git worktree; see
+    ///   [`Self::resolve_worktree_workspace`].
+    pub fn resolve_workspace(
+        &self,
+        home: &Path,
+        task: &Task,
+    ) -> std::result::Result<(PathBuf, Option<String>), String> {
+        let kind = if task.workspace_kind.trim().is_empty() {
+            "scratch"
+        } else {
+            task.workspace_kind.as_str()
+        };
+        let explicit = task
+            .workspace_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty());
+        match kind {
+            "scratch" => {
+                let path = match explicit {
+                    Some(raw) => {
+                        let p = expand_tilde(raw);
+                        if !p.is_absolute() {
+                            return Err(format!(
+                                "task {} has non-absolute workspace_path {:?}; \
+                                 workspace paths must be absolute",
+                                task.id, raw
+                            ));
+                        }
+                        p
+                    }
+                    None => workspaces_root(home).join(&task.id),
+                };
+                std::fs::create_dir_all(&path)
+                    .map_err(|e| format!("create {}: {e}", path.display()))?;
+                Ok((path, None))
+            }
+            "dir" => {
+                let Some(raw) = explicit else {
+                    return Err(format!(
+                        "task {} has workspace_kind=dir but no workspace_path",
+                        task.id
+                    ));
+                };
+                let p = expand_tilde(raw);
+                if !p.is_absolute() {
+                    return Err(format!(
+                        "task {} has non-absolute workspace_path {:?}; use an \
+                         absolute path (relative paths are ambiguous against \
+                         the dispatcher's CWD)",
+                        task.id, raw
+                    ));
+                }
+                std::fs::create_dir_all(&p)
+                    .map_err(|e| format!("create {}: {e}", p.display()))?;
+                Ok((p, None))
+            }
+            "worktree" => self.resolve_worktree_workspace(task),
+            other => Err(format!("unknown workspace_kind: {other}")),
+        }
+    }
+
+    /// Resolve + materialize a linked git worktree for `task` (hermes
+    /// `_resolve_worktree_workspace`).
+    ///
+    /// Without `workspace_path` the anchor is the task board's
+    /// `default_workdir`; boards without one fall back to the
+    /// dispatcher's CWD (the pre-P139 ulnclaw behaviour) and a cwd
+    /// outside any git repo fails loudly instead of guessing.
+    ///
+    /// With `workspace_path`: a repo root anchors a fresh
+    /// `<repo>/.worktrees/<task-id>`; an existing linked checkout is
+    /// reused only when it is already on the task's branch (otherwise a
+    /// sibling task owns it and we materialize our own worktree under
+    /// the same repo); any other path inside a repo becomes the
+    /// worktree target itself. Empty `branch_name` defaults to
+    /// `wt/<task-id>`.
+    fn resolve_worktree_workspace(
+        &self,
+        task: &Task,
+    ) -> std::result::Result<(PathBuf, Option<String>), String> {
+        let branch_name = task
+            .branch_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("wt/{}", task.id));
+        let explicit = task
+            .workspace_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty());
+        let Some(raw) = explicit else {
+            let default_workdir: Option<String> = {
+                let conn = self.conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT default_workdir FROM boards WHERE slug = ?1",
+                    params![task.board],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten()
+            };
+            let anchor = match default_workdir
+                .as_deref()
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+            {
+                Some(raw) => {
+                    let p = expand_tilde(raw);
+                    if !p.is_absolute() {
+                        return Err(format!(
+                            "board {:?} default_workdir {:?} is not absolute; \
+                             use an absolute path to a git repo",
+                            task.board, raw
+                        ));
+                    }
+                    p
+                }
+                // Legacy fallback (pre-P139 behaviour): anchor on the
+                // dispatcher's CWD when the board has no workdir.
+                None => std::env::current_dir().map_err(|e| format!("current dir: {e}"))?,
+            };
+            let repo_root = git_toplevel(&anchor).ok_or_else(|| {
+                format!(
+                    "task {} has workspace_kind=worktree but no workspace_path, \
+                     and board {:?} has no usable default_workdir git repo. Set a \
+                     board default workdir (kanban boards set-workdir) or create \
+                     the task with --workspace worktree:<absolute-repo-path>",
+                    task.id, task.board
+                )
+            })?;
+            let target = repo_root.join(".worktrees").join(&task.id);
+            ensure_git_worktree(&repo_root, &target, &branch_name)?;
+            return Ok((target, Some(branch_name)));
+        };
+
+        let requested = expand_tilde(raw);
+        if !requested.is_absolute() {
+            return Err(format!(
+                "task {} has non-absolute worktree path {:?}; use an absolute path",
+                task.id, raw
+            ));
+        }
+        if requested.exists() && is_linked_worktree_checkout(&requested) {
+            let actual_branch = git_current_branch(&requested);
+            if actual_branch.as_deref() == Some(branch_name.as_str()) {
+                return Ok((requested, Some(branch_name)));
+            }
+            // The requested path is an existing checkout of a DIFFERENT
+            // task's branch (decompose children inherit the root's
+            // workspace_path verbatim). Reusing it would run this task
+            // on the other task's branch — materialize our own
+            // worktree under the same repo instead.
+            if let Some(fallback_root) = requested.parent().and_then(git_toplevel) {
+                let fallback = fallback_root.join(".worktrees").join(&task.id);
+                if fallback != requested {
+                    ensure_git_worktree(&fallback_root, &fallback, &branch_name)?;
+                    return Ok((fallback, Some(branch_name)));
+                }
+            }
+            return Ok((
+                requested,
+                Some(actual_branch.unwrap_or(branch_name)),
+            ));
+        }
+        if let Some(repo_root) = git_toplevel(&requested) {
+            if requested == repo_root {
+                let target = repo_root.join(".worktrees").join(&task.id);
+                ensure_git_worktree(&repo_root, &target, &branch_name)?;
+                return Ok((target, Some(branch_name)));
+            }
+        }
+        let repo_root = requested.parent().and_then(git_toplevel).ok_or_else(|| {
+            format!(
+                "task {} worktree path {:?} is not inside a git repo and does \
+                 not point at a git repo root",
+                task.id, raw
+            )
+        })?;
+        ensure_git_worktree(&repo_root, &requested, &branch_name)?;
+        Ok((requested, Some(branch_name)))
     }
 
     /// Flesh out a triage task and promote it to `todo` (hermes
@@ -2092,6 +2516,9 @@ impl KanbanStore {
             consecutive_failures: row.get("consecutive_failures")?,
             last_failure_error: row.get("last_failure_error")?,
             max_retries: row.get("max_retries")?,
+            workspace_kind: row.get("workspace_kind")?,
+            workspace_path: row.get("workspace_path")?,
+            branch_name: row.get("branch_name")?,
         })
     }
 
@@ -2099,7 +2526,7 @@ impl KanbanStore {
         created_by, created_at, started_at, completed_at, tenant, model, result, \
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
-        last_failure_error, max_retries";
+        last_failure_error, max_retries, workspace_kind, workspace_path, branch_name";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -3969,11 +4396,19 @@ impl KanbanStore {
     /// 1. reclaim stale claims, 2. promote parent-done todos, 3. spawn
     /// ready tasks (priority desc, oldest first) up to the live
     /// concurrency cap `max_spawn` (counting already-running tasks).
-    /// `spawn` returns the worker pid; failures are counted per task and
-    /// after `failure_limit` consecutive failures the task is auto-blocked
-    /// with the last error (hermes DEFAULT_FAILURE_LIMIT = 2).
+    /// Before each spawn the task workspace is resolved (hermes
+    /// `resolve_workspace`) and persisted; resolution errors are
+    /// counted as spawn failures prefixed `workspace:`. `spawn` gets
+    /// the resolved workspace and returns the worker pid; failures are
+    /// counted per task and after `failure_limit` consecutive failures
+    /// the task is auto-blocked with the last error (hermes
+    /// DEFAULT_FAILURE_LIMIT = 2). With `use_worktrees`, scratch tasks
+    /// created without an explicit `--workspace` keep the pre-P139
+    /// behaviour and run in a git worktree.
     pub fn dispatch_once<F>(
         &self,
+        home: &Path,
+        use_worktrees: bool,
         mut spawn: F,
         max_spawn: Option<usize>,
         dry_run: bool,
@@ -3981,7 +4416,7 @@ impl KanbanStore {
         stale_timeout_seconds: i64,
     ) -> Result<DispatchResult>
     where
-        F: FnMut(&Task) -> std::result::Result<Option<i64>, String>,
+        F: FnMut(&Task, Option<&Path>) -> std::result::Result<Option<i64>, String>,
     {
         let mut result = DispatchResult::default();
         result.reaped = self.reap_timed_out()?;
@@ -4022,7 +4457,41 @@ impl KanbanStore {
                 result.would_spawn.push(id);
                 continue;
             }
-            match spawn(&task) {
+            // [kanban] worktrees=true keeps its pre-P139 meaning for
+            // tasks created without an explicit --workspace: scratch
+            // upgrades to a worktree anchored at the board workdir (or
+            // the dispatcher CWD fallback).
+            let upgraded;
+            let effective: &Task = if use_worktrees
+                && task.workspace_kind == "scratch"
+                && task
+                    .workspace_path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .is_none()
+            {
+                upgraded = Task {
+                    workspace_kind: "worktree".to_string(),
+                    ..task.clone()
+                };
+                &upgraded
+            } else {
+                &task
+            };
+            // Resolve the workspace BEFORE spawn (hermes dispatch); the
+            // resolved path is persisted so retries reuse it.
+            let spawn_outcome = match self.resolve_workspace(home, effective) {
+                Ok((workspace, branch)) => {
+                    let _ = self.set_workspace_path(&id, &workspace);
+                    if let Some(branch) = &branch {
+                        let _ = self.set_branch_name(&id, branch);
+                    }
+                    spawn(effective, Some(workspace.as_path()))
+                }
+                Err(err) => Err(format!("workspace: {err}")),
+            };
+            match spawn_outcome {
                 Ok(pid) => {
                     let claimed = self.claim_task(
                         &id,
@@ -4241,14 +4710,14 @@ mod tests {
 
     #[test]
     fn dispatch_spawns_ready_tasks_respecting_cap() {
-        let (_dir, store) = temp_store();
+        let (dir, store) = temp_store();
         let first = make_task(&store, "first");
         let second = make_task(&store, "second");
         store.ready_task(&first.id).unwrap();
         store.ready_task(&second.id).unwrap();
 
         let result = store
-            .dispatch_once(|_| Ok(Some(1234)), Some(1), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1234)), Some(1), false, 2, 0)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, first.id);
@@ -4259,7 +4728,7 @@ mod tests {
 
         // Second tick with a higher cap picks up the remaining task.
         let result = store
-            .dispatch_once(|_| Ok(Some(5678)), Some(2), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5678)), Some(2), false, 2, 0)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, second.id);
@@ -4267,11 +4736,11 @@ mod tests {
 
     #[test]
     fn dispatch_dry_run_spawns_nothing() {
-        let (_dir, store) = temp_store();
+        let (dir, store) = temp_store();
         let task = make_task(&store, "probe");
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(|_| panic!("dry run must not spawn"), None, true, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| panic!("dry run must not spawn"), None, true, 2, 0)
             .unwrap();
         assert_eq!(result.would_spawn, vec![task.id.clone()]);
         assert!(result.spawned.is_empty());
@@ -4280,20 +4749,20 @@ mod tests {
 
     #[test]
     fn dispatch_auto_blocks_after_repeated_spawn_failures() {
-        let (_dir, store) = temp_store();
+        let (dir, store) = temp_store();
         let task = make_task(&store, "doomed");
         store.ready_task(&task.id).unwrap();
 
         // First failure: recorded, still ready-ish for retry.
         let result = store
-            .dispatch_once(|_| Err("boom".into()), None, false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom".into()), None, false, 2, 0)
             .unwrap();
         assert_eq!(result.spawn_failed, vec![task.id.clone()]);
         assert!(result.auto_blocked.is_empty());
 
         // Second consecutive failure trips the limit → blocked.
         let result = store
-            .dispatch_once(|_| Err("boom again".into()), None, false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom again".into()), None, false, 2, 0)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         let blocked = store.get_task(&task.id).unwrap().unwrap();
@@ -4605,7 +5074,10 @@ mod tests {
             consecutive_failures: 0,
             last_failure_error: None,
             max_retries: None,
-        };
+        
+            workspace_kind: "scratch".into(),
+            workspace_path: None,
+            branch_name: None,};
         let prompt = worker_prompt(home, &task);
         assert!(prompt.contains("kanban worker for task t_1"));
         assert!(prompt.contains("DONE-SKILL"), "skill body must be inlined");
@@ -5278,13 +5750,13 @@ mod tests {
 
     #[test]
     fn failure_breaker_trips_on_repeated_spawn_failures() {
-        let (_dir, store) = temp_store();
+        let (dir, store) = temp_store();
         let task = make_task(&store, "bad spawn");
         store.ready_task(&task.id).unwrap();
 
         let tick = || {
             store
-                .dispatch_once(|_| Err("exec format error".to_string()), Some(4), false, 2, 0)
+                .dispatch_once(dir.path(), false, |_, _| Err("exec format error".to_string()), Some(4), false, 2, 0)
                 .unwrap()
         };
 
@@ -5315,7 +5787,7 @@ mod tests {
 
     #[test]
     fn failure_breaker_honors_max_retries_override() {
-        let (_dir, store) = temp_store();
+        let (dir, store) = temp_store();
         let task = store
             .create_task(&NewTask {
                 title: "trip first".into(),
@@ -5326,7 +5798,7 @@ mod tests {
             .unwrap();
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(|_| Err("boom".to_string()), Some(4), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom".to_string()), Some(4), false, 2, 0)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         assert!(result.spawn_failed.is_empty());
@@ -5344,11 +5816,11 @@ mod tests {
 
     #[test]
     fn failure_counter_resets_on_complete_and_unblock() {
-        let (_dir, store) = temp_store();
+        let (dir, store) = temp_store();
         let task = make_task(&store, "resilient");
         store.ready_task(&task.id).unwrap();
         store
-            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0)
             .unwrap();
         assert_eq!(
             store.get_task(&task.id).unwrap().unwrap().consecutive_failures,
@@ -5366,10 +5838,10 @@ mod tests {
         let other = make_task(&store, "blocked cycle");
         store.ready_task(&other.id).unwrap();
         store
-            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0)
             .unwrap();
         store
-            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0)
             .unwrap();
         let t = store.get_task(&other.id).unwrap().unwrap();
         assert_eq!(t.status, "blocked");
@@ -5535,5 +6007,312 @@ mod tests {
         assert_eq!(report.status, "corrupt");
         assert!(report.backup_path.is_some());
         assert!(report.backup_path.unwrap().exists());
+    }
+
+    // ------------------------------------------------------------------
+    // P139 — task workspaces (--workspace / --branch, resolve_workspace)
+    // ------------------------------------------------------------------
+
+    fn init_git_repo(dir: &Path) {
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(dir.join("README.md"), "repo\n").unwrap();
+        run(&["add", "README.md"]);
+        run(&["commit", "-q", "-m", "init"]);
+    }
+
+    #[test]
+    fn parse_workspace_flag_variants() {
+        assert_eq!(parse_workspace_flag("").unwrap(), ("scratch".into(), None));
+        assert_eq!(
+            parse_workspace_flag("scratch").unwrap(),
+            ("scratch".into(), None)
+        );
+        assert_eq!(
+            parse_workspace_flag("worktree").unwrap(),
+            ("worktree".into(), None)
+        );
+        assert_eq!(
+            parse_workspace_flag("worktree:/repo/main").unwrap(),
+            ("worktree".into(), Some("/repo/main".to_string()))
+        );
+        assert_eq!(
+            parse_workspace_flag("dir:/tmp/ws").unwrap(),
+            ("dir".into(), Some("/tmp/ws".to_string()))
+        );
+        assert!(parse_workspace_flag("dir:").is_err());
+        assert!(parse_workspace_flag("worktree:   ").is_err());
+        let err = parse_workspace_flag("nope").unwrap_err();
+        assert!(err.contains("unknown --workspace value"), "{err}");
+    }
+
+    #[test]
+    fn parse_branch_flag_validation() {
+        assert_eq!(parse_branch_flag("feat/x").unwrap(), "feat/x");
+        assert_eq!(parse_branch_flag("  padded  ").unwrap(), "padded");
+        assert!(parse_branch_flag("   ").is_err());
+        assert!(parse_branch_flag("-leading").is_err());
+        assert!(parse_branch_flag("has space").is_err());
+    }
+
+    #[test]
+    fn create_task_stores_workspace_fields() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "wt".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("worktree".into()),
+                workspace_path: Some("/repo/main".into()),
+                branch_name: Some("feat/x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.workspace_kind, "worktree");
+        assert_eq!(task.workspace_path.as_deref(), Some("/repo/main"));
+        assert_eq!(task.branch_name.as_deref(), Some("feat/x"));
+    }
+
+    #[test]
+    fn create_task_rejects_bad_workspace() {
+        let (_dir, store) = temp_store();
+        let err = store
+            .create_task(&NewTask {
+                title: "bad".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("dir".into()),
+                workspace_path: Some("/tmp/x".into()),
+                branch_name: Some("feat/x".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("branch_name is only valid"),
+            "{err}"
+        );
+        let err = store
+            .create_task(&NewTask {
+                title: "bad".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("cloud".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("workspace_kind must be one of"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_scratch_and_dir() {
+        let (dir, store) = temp_store();
+        let scratch = make_task(&store, "scratchy");
+        let (path, branch) = store.resolve_workspace(dir.path(), &scratch).unwrap();
+        assert_eq!(path, workspaces_root(dir.path()).join(&scratch.id));
+        assert!(path.is_dir());
+        assert!(branch.is_none());
+
+        let dir_task = store
+            .create_task(&NewTask {
+                title: "explicit dir".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("dir".into()),
+                workspace_path: Some(dir.path().join("ws").to_string_lossy().to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+        let (path, _) = store.resolve_workspace(dir.path(), &dir_task).unwrap();
+        assert_eq!(path, dir.path().join("ws"));
+        assert!(path.is_dir());
+
+        // Relative dir paths are rejected (confused-deputy guard).
+        let rel = store
+            .create_task(&NewTask {
+                title: "relative".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("dir".into()),
+                workspace_path: Some("../escape".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let err = store.resolve_workspace(dir.path(), &rel).unwrap_err();
+        assert!(err.contains("non-absolute"), "{err}");
+    }
+
+    #[test]
+    fn resolve_workspace_worktree_via_board_workdir() {
+        let (dir, store) = temp_store();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_git_repo(&repo);
+        store
+            .set_board_workdir("default", Some(repo.to_str().unwrap()))
+            .unwrap();
+
+        let task = store
+            .create_task(&NewTask {
+                title: "wt via board".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("worktree".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        // create_task fills workspace_path from the board default_workdir.
+        assert_eq!(
+            task.workspace_path.as_deref(),
+            Some(repo.to_str().unwrap())
+        );
+        let (path, branch) = store.resolve_workspace(dir.path(), &task).unwrap();
+        assert_eq!(path, repo.join(".worktrees").join(&task.id));
+        assert!(path.is_dir());
+        assert!(is_linked_worktree_checkout(&path));
+        assert_eq!(branch.as_deref(), Some(format!("wt/{}", task.id).as_str()));
+
+        // Re-resolving without a stored path anchors on the board again
+        // and reuses the existing worktree.
+        let bare = Task {
+            workspace_path: None,
+            ..task.clone()
+        };
+        let (again, _) = store.resolve_workspace(dir.path(), &bare).unwrap();
+        assert_eq!(again, path);
+    }
+
+    #[test]
+    fn resolve_workspace_worktree_sibling_gets_own_tree() {
+        let (dir, store) = temp_store();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_git_repo(&repo);
+
+        let first = store
+            .create_task(&NewTask {
+                title: "first".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("worktree".into()),
+                workspace_path: Some(repo.to_str().unwrap().to_string()),
+                branch_name: Some("feat/shared".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let (first_path, first_branch) =
+            store.resolve_workspace(dir.path(), &first).unwrap();
+        assert_eq!(first_branch.as_deref(), Some("feat/shared"));
+        assert_eq!(git_current_branch(&first_path).as_deref(), Some("feat/shared"));
+
+        // A sibling inheriting the occupied checkout path must get its
+        // own worktree instead of the other task's branch.
+        let sibling = store
+            .create_task(&NewTask {
+                title: "sibling".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("worktree".into()),
+                workspace_path: Some(first_path.to_str().unwrap().to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+        let (sib_path, sib_branch) = store.resolve_workspace(dir.path(), &sibling).unwrap();
+        assert_eq!(sib_path, repo.join(".worktrees").join(&sibling.id));
+        assert_ne!(sib_path, first_path);
+        assert!(sib_branch.unwrap().starts_with("wt/"));
+    }
+
+    #[test]
+    fn dispatch_resolves_and_persists_workspace() {
+        let (dir, store) = temp_store();
+        let task = make_task(&store, "persist ws");
+        store.ready_task(&task.id).unwrap();
+        let mut seen: Option<PathBuf> = None;
+        let result = store
+            .dispatch_once(
+                dir.path(),
+                false,
+                |_task, ws| {
+                    seen = ws.map(|p| p.to_path_buf());
+                    Ok(Some(42))
+                },
+                Some(2),
+                false,
+                2,
+                0,
+            )
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        let expected = workspaces_root(dir.path()).join(&task.id);
+        assert_eq!(seen.as_ref(), Some(&expected));
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(
+            t.workspace_path.as_deref(),
+            Some(expected.to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn dispatch_workspace_error_counts_as_spawn_failure() {
+        let (dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "bad dir".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("dir".into()),
+                workspace_path: Some("relative/path".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        let result = store
+            .dispatch_once(
+                dir.path(),
+                false,
+                |_, _| Ok(Some(1)),
+                Some(2),
+                false,
+                2,
+                0,
+            )
+            .unwrap();
+        assert_eq!(result.spawn_failed, vec![task.id.clone()]);
+        assert!(result.spawned.is_empty());
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert!(t.last_failure_error.unwrap().starts_with("workspace:"));
+    }
+
+    #[test]
+    fn dispatch_worktrees_flag_upgrades_scratch_tasks() {
+        let (dir, store) = temp_store();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_git_repo(&repo);
+        store
+            .set_board_workdir("default", Some(repo.to_str().unwrap()))
+            .unwrap();
+
+        let task = make_task(&store, "legacy worktrees");
+        store.ready_task(&task.id).unwrap();
+        let result = store
+            .dispatch_once(dir.path(), true, |_, _| Ok(Some(7)), Some(2), false, 2, 0)
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        let expected = repo.join(".worktrees").join(&task.id);
+        assert_eq!(
+            t.workspace_path.as_deref(),
+            Some(expected.to_str().unwrap())
+        );
+        assert!(expected.is_dir());
+        assert_eq!(
+            t.branch_name.as_deref(),
+            Some(format!("wt/{}", task.id).as_str())
+        );
     }
 }

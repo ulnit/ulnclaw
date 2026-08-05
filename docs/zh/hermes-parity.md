@@ -289,7 +289,24 @@
   一个网关进程在调度 —— 第二个网关记录竞争日志、继续提供 HTTP
   但不调度（防配置漂移与重启竞争的兜底）—— 并新增调度器卡死
   健康遥测：ready 队列连续 6 拍非空却零 spawn 时告警（300 秒
-  节流）。
+  节流）；P139 移植 hermes 的按任务工作区：任务新增
+  `workspace_kind`（默认 `scratch` / `worktree` / `dir`）、
+  `workspace_path`、`branch_name` 三列；`kanban create --workspace
+  scratch|worktree|worktree:<path>|dir:<path>` 与 `--branch <名>`
+  （仅 worktree 可用，校验文案与 hermes 一致），网关创建 API 接受
+  相同字段；调度器在 spawn 之前解析工作区（hermes
+  `resolve_workspace` / `_resolve_worktree_workspace`）：scratch 目录
+  位于 `<home>/kanban/workspaces/<id>`，`dir:` 路径必须为绝对路径
+  （防混淆代理人穿越，沿用 hermes 威胁模型），worktree 以看板
+  `default_workdir` 为锚（未配置时回退调度器 CWD，保留 P139 之前的
+  行为；hermes 则直接报错），在 `<repo>/.worktrees/<task-id>` 物化
+  分支 `wt/<task-id>`（或 `--branch` 指定），被兄弟任务占用的检出
+  会自动改用同仓库下的新树；解析出的路径与分支持久化到任务行供
+  重试复用，解析失败按 `workspace:` 前缀计入 spawn 失败熔断，
+  `kanban claim` 认领时解析并打印工作区（hermes `_cmd_claim`），
+  `[kanban] worktrees=true` 对未显式指定 `--workspace` 的任务保持
+  原语义，decompose 子任务继承根任务的工作区类型/路径（worktree
+  子任务各自独占新树，hermes 兄弟任务策略）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

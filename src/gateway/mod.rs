@@ -3623,7 +3623,11 @@ pub fn spawn_kanban_dispatcher(
                     .map(|c| c.kanban.stale_timeout_seconds)
                     .unwrap_or(14400);
                 match store.dispatch_once(
-                    |task| crate::kanban::dispatch_spawn(&home, use_worktrees, task),
+                    &home,
+                    use_worktrees,
+                    |task, workspace| {
+                        crate::kanban::dispatch_spawn(&home, task, workspace)
+                    },
                     Some(max_spawn.max(1)),
                     false,
                     2,
@@ -5981,6 +5985,9 @@ mod tests {
 
     fn notifier_task(status: &str) -> crate::kanban::Task {
         crate::kanban::Task {
+            workspace_kind: "scratch".into(),
+            workspace_path: None,
+            branch_name: None,
             id: "t_abc".into(),
             board: "default".into(),
             title: "Ship the widget".into(),
