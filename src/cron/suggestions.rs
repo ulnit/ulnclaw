@@ -6,7 +6,7 @@
 //! dedup latching, MAX_PENDING cap), a curated starter catalog, and the
 //! shared `/suggestions` command dispatch used by REPL and CLI.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -487,6 +487,7 @@ pub fn handle_suggestions_command_with(store: &SuggestionStore, args: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn temp_store(dir: &Path) -> SuggestionStore {
         SuggestionStore::open(dir.join("suggestions.json"))

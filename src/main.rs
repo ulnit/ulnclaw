@@ -162,6 +162,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Show status of all components (hermes status)
+    Status {
+        /// Show all details (redacted for sharing; default rendering already redacts)
+        #[arg(long)]
+        all: bool,
+        /// Run deep checks (may take longer)
+        #[arg(long)]
+        deep: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -842,6 +851,11 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             } else {
                 print!("{}", report.render());
             }
+            Ok(())
+        }
+        Commands::Status { all: _, deep } => {
+            let opts = ulnclaw::status::StatusOptions { deep };
+            print!("{}", ulnclaw::status::show_status(&config, &opts));
             Ok(())
         }
     }

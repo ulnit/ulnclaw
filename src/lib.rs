@@ -108,6 +108,7 @@ pub mod session;
 pub mod skin;
 pub mod skill_usage;
 pub mod skills;
+pub mod status;
 pub mod think_scrubber;
 pub mod tips;
 pub mod title_generator;
