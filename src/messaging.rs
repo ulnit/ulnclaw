@@ -59,6 +59,9 @@ pub struct MessagingConfig {
     /// `platforms.weixin`).
     #[serde(default)]
     pub weixin: crate::weixin::WeixinConfig,
+    /// Official QQ Bot API v2 adapter (hermes `platforms.qq`).
+    #[serde(default)]
+    pub qq: crate::qqbot::QQBotConfig,
 }
 
 fn default_pairing() -> bool {
@@ -721,8 +724,16 @@ pub async fn run_messaging(
             crate::weixin::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.qq.enabled {
+        let cfg = msg.qq.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::qqbot::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin] enabled = true)");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq] enabled = true)");
         return;
     }
     for task in tasks {
