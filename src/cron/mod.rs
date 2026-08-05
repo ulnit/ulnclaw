@@ -6,6 +6,9 @@
 //!   - 5-field cron expressions: "0 9 * * *"
 //!   - ISO timestamps for one-shot runs: "2026-06-01T09:00:00"
 
+pub mod suggestions;
+
+
 use crate::error::{AgentError, Result};
 use chrono::{DateTime, Duration, Local, NaiveDateTime};
 use rusqlite::{params, Connection, OptionalExtension};

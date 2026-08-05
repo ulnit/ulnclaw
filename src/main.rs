@@ -132,6 +132,12 @@ enum Commands {
     Init,
     /// List available skins/themes (hermes skin engine)
     Skins,
+    /// Suggested automations — list/accept/dismiss pending cron proposals
+    /// (hermes /suggestions)
+    Suggestions {
+        /// Subcommand args (accept N | dismiss N | catalog | clear)
+        args: Vec<String>,
+    },
     /// Usage insights and analytics over session history (hermes insights)
     Insights {
         /// Number of days to analyze
@@ -812,6 +818,10 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             println!("Active skin: {} (set [display] skin in config.toml)", active);
             Ok(())
         }
+        Commands::Suggestions { args } => {
+            println!("{}", ulnclaw::cron::suggestions::handle_suggestions_command(&args.join(" ")));
+            Ok(())
+        }
         Commands::Insights { days, source, json } => {
             let engine = ulnclaw::insights::InsightsEngine::open_default().map_err(|e| e.to_string())?;
             let report = engine
@@ -1162,7 +1172,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -1494,6 +1504,9 @@ async fn handle_slash(
                     },
                 }
             }
+        }
+        "/suggestions" => {
+            println!("{}", ulnclaw::cron::suggestions::handle_suggestions_command(rest));
         }
         "/sessions" => {
             if let Some(store) = agent.tool_context().store.clone() {

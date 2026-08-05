@@ -71,6 +71,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw skills blueprints    # schedulable skills (skills schedule <name>)
 ./ulnclaw skills scan <name>   # security scan before trusting a skill (--json, --source, --force)
 ./ulnclaw cron list          # cron jobs (cron run <id> executes one immediately)
+./ulnclaw suggestions        # suggested automations (accept/dismiss/catalog/clear)
 ./ulnclaw moa list           # MoA presets (run: ./ulnclaw moa run "<prompt>")
 ./ulnclaw models providers   # models.dev catalog (list/info/refresh)
 ./ulnclaw checkpoints list   # filesystem snapshots ([checkpoints] enabled = true)
@@ -206,7 +207,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 528 tests
+cargo test                     # 534 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -280,6 +281,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw skills blueprints    # 可排程技能（skills schedule <name>）
 ./ulnclaw skills scan <name>   # 信任技能前的安全扫描（--json、--source、--force）
 ./ulnclaw cron list          # cron jobs (cron run <id> executes one immediately)
+./ulnclaw suggestions        # suggested automations (accept/dismiss/catalog/clear)
 ./ulnclaw moa list           # MoA 预设（运行：./ulnclaw moa run "<prompt>"）
 ./ulnclaw models providers   # models.dev 目录（list/info/refresh）
 ./ulnclaw checkpoints list   # 文件系统快照（[checkpoints] enabled = true）
@@ -334,7 +336,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 528 个测试
+cargo test                     # 534 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 
