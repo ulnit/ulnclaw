@@ -130,6 +130,8 @@ enum Commands {
     },
     /// Write a default config.toml
     Init,
+    /// List available skins/themes (hermes skin engine)
+    Skins,
 }
 
 #[derive(Subcommand)]
@@ -487,6 +489,8 @@ fn load_config(cli: &Cli) -> UlncLawConfig {
     if let Some(ref profile) = cli.profile {
         config = config.with_profile(profile);
     }
+    // Resolve the active theme once per process (hermes init_skin_from_config).
+    ulnclaw::skin::init_skin_from_config(&config);
     config
 }
 
@@ -772,6 +776,18 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             println!("config written to {}", path.display());
             Ok(())
         }
+        Commands::Skins => {
+            let active = ulnclaw::skin::get_active_skin_name();
+            for info in ulnclaw::skin::list_skins() {
+                let marker = if info.name == active { "*" } else { " " };
+                println!(
+                    "{} {:<16} {:<8} {}",
+                    marker, info.name, info.source, info.description
+                );
+            }
+            println!("Active skin: {} (set [display] skin in config.toml)", active);
+            Ok(())
+        }
     }
 }
 
@@ -906,6 +922,19 @@ async fn one_shot(config: &UlncLawConfig, prompt: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Print a random feature tip tinted with the active skin's banner_dim
+/// (hermes `✦ Tip:` line). Color only applies on a TTY without NO_COLOR.
+fn print_tip() {
+    let tip = ulnclaw::tips::format_tip(ulnclaw::tips::get_random_tip());
+    let skin = ulnclaw::skin::get_active_skin();
+    let color = skin.get_color("banner_dim", "#B8860B");
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        println!("{}", ulnclaw::skin::colorize(&color, &tip));
+    } else {
+        println!("{}", tip);
+    }
+}
+
 async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
     let agent = make_agent(config, true, None).await?;
     println!(
@@ -915,8 +944,9 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
         config.model.provider
     );
     println!("Type /help for commands, /quit to exit.");
-    // Random feature tip (hermes startup tip).
-    println!("{}", ulnclaw::tips::format_tip(ulnclaw::tips::get_random_tip()));
+    // Random feature tip (hermes startup tip), tinted with the active
+    // skin's banner_dim.
+    print_tip();
 
     let mut history: Vec<Message> = Vec::new();
     let stdin = std::io::stdin();
@@ -1023,7 +1053,7 @@ async fn handle_slash(
         "/new" => {
             history.clear();
             println!("New conversation started.");
-            println!("{}", ulnclaw::tips::format_tip(ulnclaw::tips::get_random_tip()));
+            print_tip();
         }
         "/help" => {
             println!(

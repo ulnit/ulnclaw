@@ -753,6 +753,11 @@ pub struct DisplayConfig {
     /// default, enabled from the desktop app's settings (hermes
     /// `display.message_reactions`).
     pub message_reactions: bool,
+    /// Active theme name — one of the built-in skins (default, ares, mono,
+    /// slate, daylight, warm-lightmode, poseidon, sisyphus, charizard);
+    /// blank/unset = `default` (hermes `display.skin`).
+    #[serde(default)]
+    pub skin: Option<String>,
 }
 
 /// `[security]` — URL safety toggles (port of hermes `security.*`).
