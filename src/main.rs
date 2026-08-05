@@ -1174,12 +1174,22 @@ async fn gateway_cmd(
     // Messaging platform gateways (hermes gateway/platforms): platforms
     // live in the gateway process alongside the HTTP API.
     let msg = &config.messaging;
-    if msg.telegram.enabled || msg.discord.enabled || msg.slack.enabled {
+    if msg.telegram.enabled
+        || msg.discord.enabled
+        || msg.slack.enabled
+        || msg.signal.enabled
+    {
         let messaging_config = config.clone();
         let agent = state.agent.clone();
         let store = state.store.clone();
         tokio::spawn(async move {
             ulnclaw::messaging::run_messaging(&messaging_config, agent, store).await;
+        });
+    }
+    if msg.bluebubbles.enabled {
+        let bluebubbles_config = msg.bluebubbles.clone();
+        tokio::spawn(async move {
+            ulnclaw::webhook_platforms::bluebubbles_startup(bluebubbles_config).await;
         });
     }
 

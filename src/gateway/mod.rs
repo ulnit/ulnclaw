@@ -630,6 +630,10 @@ fn attach_webhook_routes(
             names.join(", ")
         );
     }
+    if config.messaging.bluebubbles.enabled {
+        router = router.route("/webhooks/bluebubbles", post(bluebubbles_webhook_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/bluebubbles");
+    }
     router
 }
 
@@ -798,6 +802,63 @@ async fn whatsapp_webhook_route(
                 // Parse/size issues: 200 stops Meta's retry storm (hermes
                 // logs and acks).
                 StatusCode::OK.into_response()
+            }
+        }
+    }
+}
+
+async fn bluebubbles_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let cfg = &config.messaging.bluebubbles;
+    let password_param = params.get("password").cloned();
+    let password_header = ["x-password", "x-guid", "x-bluebubbles-guid"]
+        .iter()
+        .find_map(|name| headers.get(*name).and_then(|v| v.to_str().ok()))
+        .map(|s| s.to_string());
+    let body_text = String::from_utf8_lossy(&body).to_string();
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let pairing = if config.messaging.pairing {
+        Some(crate::pairing::PairingStore::open(&crate::config::ulnclaw_home()))
+    } else {
+        None
+    };
+    match crate::webhook_platforms::bluebubbles_handle_webhook(
+        cfg,
+        &dispatcher,
+        pairing.as_ref(),
+        &body_text,
+        password_param.as_deref(),
+        password_header.as_deref(),
+    )
+    .await
+    {
+        Ok(()) => (StatusCode::OK, "ok").into_response(),
+        Err(e) => {
+            let message = e.to_string();
+            if message.contains("unauthorized") {
+                tracing::warn!("bluebubbles webhook rejected: {message}");
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "unauthorized" })),
+                )
+                    .into_response()
+            } else if message.contains("parse") || message.contains("invalid") {
+                tracing::warn!("bluebubbles webhook bad payload: {message}");
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": message })),
+                )
+                    .into_response()
+            } else {
+                // Ack everything else so the BlueBubbles server does not
+                // retry-storm us (hermes logs and returns 200).
+                tracing::error!("bluebubbles webhook error: {message}");
+                (StatusCode::OK, "ok").into_response()
             }
         }
     }

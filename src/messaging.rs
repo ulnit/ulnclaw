@@ -51,6 +51,10 @@ pub struct MessagingConfig {
     /// services (hermes `platforms.webhook`).
     #[serde(default)]
     pub webhook: crate::webhook_platforms::WebhookConfig,
+    /// BlueBubbles iMessage bridge (hermes `platforms.bluebubbles`),
+    /// mounted on the gateway router.
+    #[serde(default)]
+    pub bluebubbles: crate::webhook_platforms::BlueBubblesConfig,
 }
 
 fn default_pairing() -> bool {

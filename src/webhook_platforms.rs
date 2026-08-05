@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::{AgentError, Result};
@@ -1572,6 +1573,185 @@ mod tests {
         };
         assert!(!whatsapp_dispatch_interactive_tap(&cfg, &appr).await);
     }
+
+    // ------------------------------------------------------------------
+    // BlueBubbles (hermes bluebubbles.py)
+    // ------------------------------------------------------------------
+
+    fn bb_cfg() -> BlueBubblesConfig {
+        BlueBubblesConfig {
+            enabled: true,
+            server_url: "http://127.0.0.1:1234".into(),
+            password: "p@ss word".into(),
+            allowed_chat_ids: vec![],
+            webhook_url: "http://127.0.0.1:8765/webhooks/bluebubbles".into(),
+        }
+    }
+
+    #[test]
+    fn bluebubbles_parse_json_dm() {
+        let body = r#"{
+            "type": "new-message",
+            "data": {
+                "guid": "msg-1",
+                "text": "hello there",
+                "chatGuid": "iMessage;-;+15551234567",
+                "chatIdentifier": "+15551234567",
+                "isGroup": false,
+                "isFromMe": false,
+                "handle": {"address": "+15551234567"}
+            }
+        }"#;
+        let event = bluebubbles_parse_webhook(body).unwrap().unwrap();
+        assert_eq!(event.chat_id, "iMessage;-;+15551234567");
+        assert_eq!(event.sender_id, "+15551234567");
+        assert_eq!(event.text, "hello there");
+        assert!(!event.is_group);
+        assert!(event.attachments.is_empty());
+    }
+
+    #[test]
+    fn bluebubbles_parse_group_via_guid_marker() {
+        let body = r#"{
+            "type": "new-message",
+            "data": {
+                "text": "hey team",
+                "chatGuid": "iMessage;+;chat123",
+                "chatIdentifier": "chat123",
+                "handle": {"address": "+15550001111"}
+            }
+        }"#;
+        let event = bluebubbles_parse_webhook(body).unwrap().unwrap();
+        assert!(event.is_group);
+    }
+
+    #[test]
+    fn bluebubbles_parse_form_fallback() {
+        let json_str = r#"{"type":"new-message","data":{"text":"form body","chatGuid":"iMessage;-;bob@example.com","chatIdentifier":"bob@example.com","handle":{"address":"bob@example.com"}}}"#;
+        let body = format!("payload={}", urlencode_component(json_str));
+        let event = bluebubbles_parse_webhook(&body).unwrap().unwrap();
+        assert_eq!(event.text, "form body");
+        assert_eq!(event.sender_id, "bob@example.com");
+    }
+
+    #[test]
+    fn bluebubbles_skips_from_me() {
+        let body = r#"{"type":"new-message","data":{"text":"my own message","chatGuid":"iMessage;-;x","handle":{"address":"x"},"isFromMe":true}}"#;
+        assert!(bluebubbles_parse_webhook(body).unwrap().is_none());
+    }
+
+    #[test]
+    fn bluebubbles_skips_tapbacks() {
+        for code in [2000, 2003, 3005] {
+            let body = format!(
+                r#"{{"type":"new-message","data":{{"text":"","chatGuid":"iMessage;-;x","handle":{{"address":"x"}},"associatedMessageType":{code}}}}}"#
+            );
+            assert!(bluebubbles_parse_webhook(&body).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn bluebubbles_skips_non_message_events() {
+        let body = r#"{"type":"typing-indicator","data":{"chatGuid":"iMessage;-;x"}}"#;
+        assert!(bluebubbles_parse_webhook(body).unwrap().is_none());
+    }
+
+    #[test]
+    fn bluebubbles_chats_array_v19_fallback() {
+        let body = r#"{
+            "type": "new-message",
+            "data": {
+                "text": "hi from v1.9",
+                "chats": [{"guid": "iMessage;-;alice@example.com", "chatIdentifier": "alice@example.com"}],
+                "handle": {"address": "alice@example.com"}
+            }
+        }"#;
+        let event = bluebubbles_parse_webhook(body).unwrap().unwrap();
+        assert_eq!(event.chat_id, "iMessage;-;alice@example.com");
+        assert_eq!(event.text, "hi from v1.9");
+    }
+
+    #[test]
+    fn bluebubbles_captures_attachments() {
+        let body = r#"{
+            "type": "new-message",
+            "data": {
+                "text": "",
+                "chatGuid": "iMessage;-;x",
+                "handle": {"address": "x"},
+                "attachments": [{"guid": "att-1", "mimeType": "image/jpeg"}, {"guid": ""}]
+            }
+        }"#;
+        let event = bluebubbles_parse_webhook(body).unwrap().unwrap();
+        assert_eq!(event.attachments, vec![("att-1".to_string(), "image/jpeg".to_string())]);
+    }
+
+    #[test]
+    fn bluebubbles_missing_fields_error() {
+        let body = r#"{"type":"new-message","data":{"text":""}}"#;
+        let err = bluebubbles_parse_webhook(body).unwrap_err();
+        assert!(err.to_string().contains("missing message fields"));
+        let empty_form = bluebubbles_parse_webhook("foo=bar").unwrap_err();
+        assert!(empty_form.to_string().contains("empty payload"));
+    }
+
+    #[test]
+    fn bluebubbles_url_decode_component() {
+        assert_eq!(url_decode_component("hello%20world"), "hello world");
+        assert_eq!(url_decode_component("a+b"), "a b");
+        assert_eq!(url_decode_component("p%40ss%20word"), "p@ss word");
+        assert_eq!(url_decode_component("bad%ZZ"), "bad%ZZ");
+        assert_eq!(url_decode_component("trailing%2"), "trailing%2");
+    }
+
+    #[test]
+    fn bluebubbles_api_url_carries_password() {
+        let cfg = bb_cfg();
+        let url = bluebubbles_api_url(&cfg, "/api/v1/ping").unwrap();
+        assert_eq!(
+            url,
+            "http://127.0.0.1:1234/api/v1/ping?password=p%40ss%20word"
+        );
+        let with_query = bluebubbles_api_url(&cfg, "/api/v1/message/text?guid=abc").unwrap();
+        assert!(with_query.contains("?guid=abc&password=p%40ss%20word"));
+        let mut no_password = cfg.clone();
+        no_password.password = String::new();
+        std::env::remove_var("BLUEBUBBLES_PASSWORD");
+        assert!(bluebubbles_api_url(&no_password, "/api/v1/ping").is_none());
+    }
+
+    #[test]
+    fn bluebubbles_guid_cache_lru() {
+        let cache = BlueBubblesGuidCache::default();
+        cache.put("first", "iMessage;-;first");
+        cache.put("second", "iMessage;-;second");
+        assert_eq!(cache.get("first").as_deref(), Some("iMessage;-;first"));
+        // Fill past the cap: 500 entries total, "second" is now oldest.
+        for i in 0..499 {
+            cache.put(&format!("k{i}"), &format!("guid-{i}"));
+        }
+        assert!(cache.get("second").is_none());
+        assert_eq!(cache.get("first").as_deref(), Some("iMessage;-;first"));
+        assert_eq!(cache.get("k498").as_deref(), Some("guid-498"));
+    }
+
+    #[tokio::test]
+    async fn bluebubbles_resolve_guid_passthrough_and_cache() {
+        let cfg = bb_cfg();
+        let client = reqwest::Client::new();
+        let cache = BlueBubblesGuidCache::default();
+        // Raw GUIDs (contain ';') pass through without network.
+        let guid =
+            bluebubbles_resolve_chat_guid(&client, &cfg, &cache, "iMessage;-;+15551234567")
+                .await;
+        assert_eq!(guid.as_deref(), Some("iMessage;-;+15551234567"));
+        // Pre-seeded cache entries resolve without network too.
+        cache.put("bob@example.com", "iMessage;-;bob@example.com");
+        let cached =
+            bluebubbles_resolve_chat_guid(&client, &cfg, &cache, "bob@example.com").await;
+        assert_eq!(cached.as_deref(), Some("iMessage;-;bob@example.com"));
+        assert!(bluebubbles_resolve_chat_guid(&client, &cfg, &cache, "   ").await.is_none());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1858,4 +2038,808 @@ pub async fn whatsapp_dispatch_interactive_tap(
     // flows that ulnclaw serves over HTTP; taps on them fall through to
     // text dispatch (hermes fallback semantics).
     false
+}
+
+// ---------------------------------------------------------------------------
+// BlueBubbles iMessage platform (hermes bluebubbles.py)
+// ---------------------------------------------------------------------------
+
+/// hermes MAX_TEXT_LENGTH — iMessage bubble chunk cap.
+pub const BLUEBUBBLES_MAX_TEXT_LENGTH: usize = 4000;
+const BLUEBUBBLES_GUID_CACHE_SIZE: usize = 500;
+
+/// `[messaging.bluebubbles]` — BlueBubbles macOS iMessage server (hermes
+/// `platforms.bluebubbles`). Inbound events arrive on the gateway's
+/// `/webhooks/bluebubbles` route; outbound rides the BlueBubbles REST API.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlueBubblesConfig {
+    pub enabled: bool,
+    /// BlueBubbles server base URL (fallback `BLUEBUBBLES_SERVER_URL`).
+    pub server_url: String,
+    /// Server password (fallback `BLUEBUBBLES_PASSWORD`); carried as a
+    /// query param because the BlueBubbles webhook API cannot send
+    /// custom headers (hermes note).
+    pub password: String,
+    /// Chat ids allowed to talk to the bot (chat GUIDs or identifiers);
+    /// empty refuses all (hermes pairing semantics shared gate).
+    pub allowed_chat_ids: Vec<String>,
+    /// Externally reachable URL of this gateway's
+    /// `/webhooks/bluebubbles` route — registered with the BlueBubbles
+    /// server at startup so it knows where to POST events.
+    pub webhook_url: String,
+}
+
+pub fn bluebubbles_server_url(cfg: &BlueBubblesConfig) -> Option<String> {
+    let trimmed = cfg.server_url.trim();
+    if !trimmed.is_empty() {
+        return Some(trimmed.trim_end_matches('/').to_string());
+    }
+    std::env::var("BLUEBUBBLES_SERVER_URL")
+        .ok()
+        .map(|v| v.trim().trim_end_matches('/').to_string())
+        .filter(|v| !v.is_empty())
+}
+
+pub fn bluebubbles_password(cfg: &BlueBubblesConfig) -> Option<String> {
+    let trimmed = cfg.password.trim();
+    if !trimmed.is_empty() {
+        return Some(trimmed.to_string());
+    }
+    std::env::var("BLUEBUBBLES_PASSWORD")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+}
+
+fn bluebubbles_api_url(cfg: &BlueBubblesConfig, path: &str) -> Option<String> {
+    let base = bluebubbles_server_url(cfg)?;
+    let password = bluebubbles_password(cfg)?;
+    let sep = if path.contains('?') { '&' } else { '?' };
+    Some(format!(
+        "{}{}{}password={}",
+        base,
+        path,
+        sep,
+        urlencode_component(&password)
+    ))
+}
+
+fn urlencode_component(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    out
+}
+
+/// hermes `_MESSAGE_EVENTS`.
+pub const BLUEBUBBLES_MESSAGE_EVENTS: &[&str] = &["new-message", "message", "updated-message"];
+/// hermes `_TAPBACK_ADDED` ∪ `_TAPBACK_REMOVED` associatedMessageType codes.
+pub const BLUEBUBBLES_TAPBACK_CODES: &[i64] =
+    &[2000, 2001, 2002, 2003, 2004, 2005, 3000, 3001, 3002, 3003, 3004, 3005];
+
+/// Parsed BlueBubbles webhook event ready for dispatch.
+#[derive(Debug, Clone)]
+pub struct BlueBubblesEvent {
+    pub chat_id: String,
+    pub chat_name: String,
+    pub sender_id: String,
+    pub text: String,
+    pub is_group: bool,
+    /// (guid, mimeType) attachment references to download.
+    pub attachments: Vec<(String, String)>,
+}
+
+/// hermes `_extract_payload_record`.
+fn bluebubbles_extract_record(payload: &Value) -> Value {
+    match payload.get("data") {
+        Some(Value::Object(_)) => payload["data"].clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .find(|item| item.is_object())
+            .cloned()
+            .unwrap_or_else(|| payload.clone()),
+        _ => {
+            if payload.get("message").map(|v| v.is_object()).unwrap_or(false) {
+                payload["message"].clone()
+            } else {
+                payload.clone()
+            }
+        }
+    }
+}
+
+fn first_str<'a>(candidates: impl IntoIterator<Item = Option<&'a Value>>) -> String {
+    for candidate in candidates {
+        if let Some(value) = candidate {
+            if let Some(s) = value.as_str() {
+                if !s.is_empty() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// Parse one BlueBubbles webhook body (JSON, or form-encoded with a
+/// `payload`/`data`/`message` field — hermes fallback). Returns
+/// `Ok(None)` for events to acknowledge silently (non-message events,
+/// from-me, tapbacks, incomplete records), `Err` for malformed bodies.
+pub fn bluebubbles_parse_webhook(body: &str) -> Result<Option<BlueBubblesEvent>> {
+    let payload: Value = if let Ok(value) = serde_json::from_str(body) {
+        value
+    } else {
+        // Form-encoded fallback (hermes parse_qs path).
+        let mut payload_str = String::new();
+        for pair in body.split('&') {
+            let Some((key, value)) = pair.split_once('=') else {
+                continue;
+            };
+            if matches!(key, "payload" | "data" | "message") {
+                payload_str = url_decode_component(value);
+                break;
+            }
+        }
+        if payload_str.is_empty() {
+            return Err(AgentError::config("bluebubbles webhook: empty payload"));
+        }
+        serde_json::from_str(&payload_str)
+            .map_err(|e| AgentError::config(format!("bluebubbles webhook parse: {e}")))?
+    };
+
+    let event_type = first_str([payload.get("type"), payload.get("event")]);
+    if !event_type.is_empty() && !BLUEBUBBLES_MESSAGE_EVENTS.contains(&event_type.as_str()) {
+        return Ok(None);
+    }
+
+    let record = bluebubbles_extract_record(&payload);
+    let is_from_me = ["isFromMe", "fromMe", "is_from_me"]
+        .iter()
+        .any(|key| record.get(*key).and_then(|v| v.as_bool()).unwrap_or(false));
+    if is_from_me {
+        return Ok(None);
+    }
+    // Tapback reactions delivered as messages.
+    if let Some(code) = record.get("associatedMessageType").and_then(|v| v.as_i64()) {
+        if BLUEBUBBLES_TAPBACK_CODES.contains(&code) {
+            return Ok(None);
+        }
+    }
+
+    let text = first_str([record.get("text"), record.get("message"), record.get("body")]);
+
+    let mut attachments = Vec::new();
+    if let Some(items) = record.get("attachments").and_then(|v| v.as_array()) {
+        for att in items {
+            let Some(guid) = att.get("guid").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if guid.is_empty() {
+                continue;
+            }
+            let mime = att
+                .get("mimeType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            attachments.push((guid.to_string(), mime));
+        }
+    }
+
+    if text.trim().is_empty() && !attachments.is_empty() {
+        // hermes: media-only inbound carries an "(attachment)" marker.
+    }
+
+    let mut chat_guid = first_str([
+        record.get("chatGuid"),
+        payload.get("chatGuid"),
+        record.get("chat_guid"),
+        payload.get("chat_guid"),
+        payload.get("guid"),
+    ]);
+    // BlueBubbles v1.9+ nests the chat GUID under chats[0].
+    if chat_guid.is_empty() {
+        if let Some(first) = record.get("chats").and_then(|v| v.as_array()).and_then(|a| a.first()) {
+            chat_guid = first_str([first.get("guid"), first.get("chatGuid")]);
+        }
+    }
+    let chat_identifier = first_str([
+        record.get("chatIdentifier"),
+        record.get("identifier"),
+        payload.get("chatIdentifier"),
+        payload.get("identifier"),
+    ]);
+    let mut sender = String::new();
+    if let Some(handle) = record.get("handle") {
+        if let Some(address) = handle.get("address").and_then(|v| v.as_str()) {
+            sender = address.to_string();
+        }
+    }
+    if sender.is_empty() {
+        sender = first_str([
+            record.get("sender"),
+            record.get("from"),
+            record.get("address"),
+        ]);
+    }
+    if sender.is_empty() {
+        sender = chat_identifier.clone();
+    }
+    if sender.is_empty() {
+        sender = chat_guid.clone();
+    }
+    let mut chat_identifier = chat_identifier;
+    if chat_guid.is_empty() && chat_identifier.is_empty() && !sender.is_empty() {
+        chat_identifier = sender.clone();
+    }
+    let chat_id = if !chat_guid.is_empty() {
+        chat_guid.clone()
+    } else {
+        chat_identifier.clone()
+    };
+    if sender.is_empty() || chat_id.is_empty() || (text.trim().is_empty() && attachments.is_empty()) {
+        return Err(AgentError::config("bluebubbles webhook: missing message fields"));
+    }
+    let is_group = record
+        .get("isGroup")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || chat_guid.contains(";+;");
+    Ok(Some(BlueBubblesEvent {
+        chat_id,
+        chat_name: if chat_identifier.is_empty() {
+            sender.clone()
+        } else {
+            chat_identifier
+        },
+        sender_id: sender,
+        text,
+        is_group,
+        attachments,
+    }))
+}
+
+fn url_decode_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() + 1 && i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    Err(_) => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+async fn bluebubbles_api_post(
+    client: &reqwest::Client,
+    cfg: &BlueBubblesConfig,
+    path: &str,
+    body: Value,
+) -> Result<Value> {
+    let url = bluebubbles_api_url(cfg, path)
+        .ok_or_else(|| AgentError::config("bluebubbles: server_url/password not configured"))?;
+    let response = client
+        .post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| AgentError::Tool(format!("bluebubbles {path}: {e}")))?;
+    let status = response.status();
+    let value: Value = response.json().await.unwrap_or_else(|_| json!({}));
+    if !status.is_success() {
+        let message = value
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(AgentError::Tool(format!(
+            "bluebubbles {path} ({status}): {message}"
+        )));
+    }
+    Ok(value)
+}
+
+async fn bluebubbles_api_get(
+    client: &reqwest::Client,
+    cfg: &BlueBubblesConfig,
+    path: &str,
+) -> Result<Value> {
+    let url = bluebubbles_api_url(cfg, path)
+        .ok_or_else(|| AgentError::config("bluebubbles: server_url/password not configured"))?;
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| AgentError::Tool(format!("bluebubbles {path}: {e}")))?;
+    let status = response.status();
+    let value: Value = response.json().await.unwrap_or_else(|_| json!({}));
+    if !status.is_success() {
+        return Err(AgentError::Tool(format!("bluebubbles {path}: HTTP {status}")));
+    }
+    Ok(value)
+}
+
+/// LRU chat-GUID cache (hermes `_guid_cache`, cap 500).
+pub struct BlueBubblesGuidCache {
+    entries: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    order: std::sync::Mutex<Vec<String>>,
+}
+
+impl Default for BlueBubblesGuidCache {
+    fn default() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(HashMap::new()),
+            order: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl BlueBubblesGuidCache {
+    fn get(&self, key: &str) -> Option<String> {
+        let value = self.entries.lock().unwrap().get(key).cloned()?;
+        let mut order = self.order.lock().unwrap();
+        order.retain(|k| k != key);
+        order.push(key.to_string());
+        Some(value)
+    }
+
+    fn put(&self, key: &str, value: &str) {
+        self.entries
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), value.to_string());
+        let mut order = self.order.lock().unwrap();
+        order.retain(|k| k != key);
+        order.push(key.to_string());
+        while order.len() > BLUEBUBBLES_GUID_CACHE_SIZE {
+            let oldest = order.remove(0);
+            self.entries.lock().unwrap().remove(&oldest);
+        }
+    }
+}
+
+/// Resolve an email/phone/chat-identifier to a BlueBubbles chat GUID
+/// (hermes `_resolve_chat_guid`): raw GUIDs (contain `;`) pass through;
+/// otherwise strict chatIdentifier match from `/api/v1/chat/query` —
+/// participant membership is deliberately NOT a fallback (hermes #24157).
+pub async fn bluebubbles_resolve_chat_guid(
+    client: &reqwest::Client,
+    cfg: &BlueBubblesConfig,
+    cache: &BlueBubblesGuidCache,
+    target: &str,
+) -> Option<String> {
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    if target.contains(';') {
+        return Some(target.to_string());
+    }
+    if let Some(guid) = cache.get(target) {
+        return Some(guid);
+    }
+    let payload = bluebubbles_api_post(client, cfg, "/api/v1/chat/query", json!({"limit": 100, "offset": 0}))
+        .await
+        .ok()?;
+    for chat in payload.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+        let guid = first_str([chat.get("guid"), chat.get("chatGuid")]);
+        let identifier = first_str([chat.get("chatIdentifier"), chat.get("identifier")]);
+        if identifier == target && !guid.is_empty() {
+            cache.put(target, &guid);
+            return Some(guid);
+        }
+    }
+    None
+}
+
+/// Download one attachment into the media cache (hermes
+/// `_download_attachment`).
+pub async fn bluebubbles_download_attachment(
+    client: &reqwest::Client,
+    cfg: &BlueBubblesConfig,
+    attachment_guid: &str,
+    declared_mime: &str,
+) -> Option<MediaAttachmentRef> {
+    let url = bluebubbles_api_url(
+        cfg,
+        &format!("/api/v1/attachment/{}/download", urlencode_component(attachment_guid)),
+    )?;
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let data = response.bytes().await.ok()?.to_vec();
+    let mime = if declared_mime.trim().is_empty() {
+        crate::signal::sniff_mime(&data).to_string()
+    } else {
+        declared_mime.to_string()
+    };
+    let path = crate::media_cache::cache_media_bytes(
+        &crate::config::ulnclaw_home(),
+        &data,
+        &mime,
+        "",
+    )
+    .ok()?;
+    Some(MediaAttachmentRef {
+        path,
+        mime,
+        bytes: data.len() as u64,
+    })
+}
+
+/// Cached attachment reference (converted to a messaging MediaAttachment
+/// at the dispatch boundary).
+#[derive(Debug, Clone)]
+pub struct MediaAttachmentRef {
+    pub path: std::path::PathBuf,
+    pub mime: String,
+    pub bytes: u64,
+}
+
+/// Send text (hermes `send`): paragraph-split bubbles, 4000-char cap,
+/// GUID resolution, chat creation for address-looking targets.
+pub async fn bluebubbles_send_text(
+    client: &reqwest::Client,
+    cfg: &BlueBubblesConfig,
+    cache: &BlueBubblesGuidCache,
+    chat_id: &str,
+    text: &str,
+) -> Result<()> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    let mut chunks: Vec<String> = Vec::new();
+    let paragraphs: Vec<&str> = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    for paragraph in if paragraphs.is_empty() { vec![text.trim()] } else { paragraphs } {
+        if paragraph.chars().count() <= BLUEBUBBLES_MAX_TEXT_LENGTH {
+            chunks.push(paragraph.to_string());
+        } else {
+            chunks.extend(crate::messaging::chunk_text(
+                paragraph,
+                BLUEBUBBLES_MAX_TEXT_LENGTH,
+            ));
+        }
+    }
+    for chunk in chunks {
+        let guid = match bluebubbles_resolve_chat_guid(client, cfg, cache, chat_id).await {
+            Some(guid) => guid,
+            None => {
+                // Address-looking target → create a fresh DM with the
+                // first chunk (hermes `_create_chat_for_handle`).
+                if chat_id.contains('@') || chat_id.starts_with('+') {
+                    let result = bluebubbles_api_post(
+                        client,
+                        cfg,
+                        "/api/v1/chat/new",
+                        json!({
+                            "addresses": [chat_id],
+                            "message": chunk,
+                            "tempGuid": format!("temp-{}", now_millis()),
+                        }),
+                    )
+                    .await?;
+                    if result.get("error").is_some() {
+                        return Err(AgentError::Tool(format!(
+                            "bluebubbles chat/new: {}",
+                            result["error"]
+                        )));
+                    }
+                    return Ok(());
+                }
+                return Err(AgentError::Tool(format!(
+                    "BlueBubbles chat not found for target: {chat_id}"
+                )));
+            }
+        };
+        bluebubbles_api_post(
+            client,
+            cfg,
+            "/api/v1/message/text",
+            json!({
+                "chatGuid": guid,
+                "tempGuid": format!("temp-{}", now_millis()),
+                "message": chunk,
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// Send a file attachment via multipart upload (hermes
+/// `_send_attachment`).
+pub async fn bluebubbles_send_attachment(
+    client: &reqwest::Client,
+    cfg: &BlueBubblesConfig,
+    cache: &BlueBubblesGuidCache,
+    chat_id: &str,
+    path: &std::path::Path,
+) -> Result<()> {
+    let Some(guid) = bluebubbles_resolve_chat_guid(client, cfg, cache, chat_id).await else {
+        return Err(AgentError::Tool(format!("Chat not found: {chat_id}")));
+    };
+    let file_name = path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "attachment.bin".into());
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| AgentError::Tool(format!("bluebubbles attachment read: {e}")))?;
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(file_name.clone())
+        .mime_str("application/octet-stream")
+        .map_err(|e| AgentError::Tool(format!("bluebubbles multipart: {e}")))?;
+    let form = reqwest::multipart::Form::new()
+        .part("attachment", part)
+        .text("chatGuid", guid)
+        .text("name", file_name)
+        .text("tempGuid", uuid::Uuid::new_v4().simple().to_string());
+    let url = bluebubbles_api_url(cfg, "/api/v1/message/attachment")
+        .ok_or_else(|| AgentError::config("bluebubbles: server_url/password not configured"))?;
+    let response = client
+        .post(&url)
+        .multipart(form)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| AgentError::Tool(format!("bluebubbles attachment upload: {e}")))?;
+    let status = response.status();
+    let value: Value = response.json().await.unwrap_or_else(|_| json!({}));
+    if status.is_success() && value.get("status").and_then(|v| v.as_i64()).unwrap_or(200) == 200 {
+        return Ok(());
+    }
+    Err(AgentError::Tool(format!(
+        "bluebubbles attachment upload ({}): {}",
+        status,
+        value
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Attachment upload failed")
+    )))
+}
+
+/// Register the webhook URL with the BlueBubbles server, deduplicating
+/// against existing registrations (hermes `_register_webhook` crash
+/// resilience).
+pub async fn bluebubbles_register_webhook(
+    client: &reqwest::Client,
+    cfg: &BlueBubblesConfig,
+) -> Result<()> {
+    if cfg.webhook_url.trim().is_empty() {
+        return Err(AgentError::config(
+            "bluebubbles: webhook_url not configured — the server needs the externally \
+             reachable URL of this gateway's /webhooks/bluebubbles route",
+        ));
+    }
+    if let Ok(existing) = bluebubbles_api_get(client, cfg, "/api/v1/webhook").await {
+        let urls: Vec<String> = existing
+            .get("data")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|item| item.get("url").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        if urls.iter().any(|u| u == cfg.webhook_url.trim()) {
+            return Ok(());
+        }
+    }
+    bluebubbles_api_post(
+        client,
+        cfg,
+        "/api/v1/webhook",
+        json!({
+            "url": cfg.webhook_url.trim(),
+            "events": ["new-message", "updated-message"],
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Startup handshake + webhook registration (hermes `connect`): ping,
+/// server info log, webhook registration, sender registration.
+pub async fn bluebubbles_startup(cfg: BlueBubblesConfig) {
+    let client = reqwest::Client::new();
+    match bluebubbles_api_get(&client, &cfg, "/api/v1/ping").await {
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("[bluebubbles] cannot reach server: {e}");
+            return;
+        }
+    }
+    if let Ok(info) = bluebubbles_api_get(&client, &cfg, "/api/v1/server/info").await {
+        let version = info
+            .pointer("/data/server_version")
+            .or_else(|| info.pointer("/data/version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        eprintln!("[bluebubbles] connected (server v{version})");
+    }
+    match bluebubbles_register_webhook(&client, &cfg).await {
+        Ok(()) => eprintln!("[bluebubbles] webhook registered: {}", cfg.webhook_url),
+        Err(e) => eprintln!("[bluebubbles] webhook registration failed: {e}"),
+    }
+    crate::messaging::register_platform_sender(
+        "bluebubbles",
+        Arc::new(BlueBubblesSender { cfg }),
+    );
+}
+
+/// PlatformSender for BlueBubbles (clarify prompts + echoes).
+pub struct BlueBubblesSender {
+    pub cfg: BlueBubblesConfig,
+}
+
+#[async_trait::async_trait]
+impl crate::messaging::PlatformSender for BlueBubblesSender {
+    async fn send_text(&self, chat_id: &str, text: &str) {
+        let client = reqwest::Client::new();
+        static CACHE: std::sync::OnceLock<BlueBubblesGuidCache> = std::sync::OnceLock::new();
+        let cache = CACHE.get_or_init(BlueBubblesGuidCache::default);
+        if let Err(e) = bluebubbles_send_text(&client, &self.cfg, cache, chat_id, text).await {
+            eprintln!("[bluebubbles] send failed: {e}");
+        }
+    }
+}
+
+/// Full inbound webhook handling: parse → authz union (allowlist OR
+/// pairing) → attachment downloads → dispatch → reply.
+pub async fn bluebubbles_handle_webhook(
+    cfg: &BlueBubblesConfig,
+    dispatcher: &Arc<crate::messaging::Dispatcher>,
+    pairing: Option<&crate::pairing::PairingStore>,
+    body: &str,
+    password_param: Option<&str>,
+    password_header: Option<&str>,
+) -> Result<()> {
+    let Some(password) = bluebubbles_password(cfg) else {
+        return Err(AgentError::config("bluebubbles: password not configured"));
+    };
+    let supplied = password_param.or(password_header).unwrap_or("");
+    if supplied != password {
+        return Err(AgentError::config("bluebubbles webhook: unauthorized"));
+    }
+    let event = match bluebubbles_parse_webhook(body)? {
+        Some(event) => event,
+        None => return Ok(()), // silent ack (from-me / tapback / non-message)
+    };
+    let authorized = cfg
+        .allowed_chat_ids
+        .iter()
+        .any(|allowed| {
+            *allowed == event.chat_id || *allowed == event.sender_id || *allowed == event.chat_name
+        })
+        || pairing
+            .map(|store| store.is_approved("bluebubbles", &event.sender_id))
+            .unwrap_or(false);
+    if !authorized {
+        eprintln!(
+            "[bluebubbles] refusing message from {} — add the chat GUID/identifier to \
+             messaging.bluebubbles.allowed_chat_ids or approve a pairing code",
+            event.sender_id
+        );
+        if let Some(store) = pairing {
+            if let Some(reply) = crate::messaging::pairing_offer_public(
+                store,
+                "bluebubbles",
+                &event.sender_id,
+                &event.sender_id,
+            ) {
+                let client = reqwest::Client::new();
+                static CACHE: std::sync::OnceLock<BlueBubblesGuidCache> =
+                    std::sync::OnceLock::new();
+                let cache = CACHE.get_or_init(BlueBubblesGuidCache::default);
+                if let Err(e) =
+                    bluebubbles_send_text(&client, cfg, cache, &event.chat_id, &reply).await
+                {
+                    eprintln!("[bluebubbles] pairing reply failed: {e}");
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let client = reqwest::Client::new();
+    let mut message_event = crate::messaging::MessageEvent {
+        platform: "bluebubbles".into(),
+        chat_id: event.chat_id.clone(),
+        sender_id: event.sender_id.clone(),
+        sender_name: event.chat_name.clone(),
+        text: if event.text.trim().is_empty() && !event.attachments.is_empty() {
+            "(attachment)".to_string()
+        } else {
+            event.text.clone()
+        },
+        message_id: String::new(),
+        attachments: Vec::new(),
+    };
+    for (guid, mime) in &event.attachments {
+        match bluebubbles_download_attachment(&client, cfg, guid, mime).await {
+            Some(att) => message_event.attachments.push(crate::messaging::MediaAttachment {
+                path: att.path,
+                mime: att.mime,
+                bytes: att.bytes,
+                original_name: String::new(),
+            }),
+            None => eprintln!("[bluebubbles] failed to download attachment {guid}"),
+        }
+    }
+    if !crate::messaging::pre_gateway_dispatch_gate_public(&mut message_event).await {
+        return Ok(());
+    }
+    let outcome = match dispatcher.handle_event(message_event).await {
+        Ok(outcome) => outcome,
+        Err(e) => crate::messaging::DispatchOutcome {
+            reply: format!("error: {e}"),
+            transcript_echoes: Vec::new(),
+        },
+    };
+    static CACHE: std::sync::OnceLock<BlueBubblesGuidCache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(BlueBubblesGuidCache::default);
+    for echo in &outcome.transcript_echoes {
+        if let Err(e) = bluebubbles_send_text(&client, cfg, cache, &event.chat_id, echo).await {
+            eprintln!("[bluebubbles] transcript echo failed: {e}");
+        }
+    }
+    let (reply_text, media_paths) = crate::messaging::extract_media_tags(&outcome.reply);
+    if !reply_text.trim().is_empty() {
+        if let Err(e) =
+            bluebubbles_send_text(&client, cfg, cache, &event.chat_id, &reply_text).await
+        {
+            eprintln!("[bluebubbles] reply failed: {e}");
+        }
+    }
+    for path in &media_paths {
+        if let Err(e) = bluebubbles_send_attachment(&client, cfg, cache, &event.chat_id, path).await
+        {
+            eprintln!("[bluebubbles] media delivery failed: {e}");
+        }
+    }
+    Ok(())
 }
