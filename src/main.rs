@@ -569,6 +569,8 @@ enum KanbanAction {
     Link { parent: String, child: String },
     /// Remove a parent→child dependency (hermes `kanban unlink`)
     Unlink { parent: String, child: String },
+    /// Remove git worktrees of done/archived tasks (hermes dispatcher gc)
+    Gc,
     /// One dispatcher pass: reclaim stale claims, promote parent-done
     /// todos, spawn workers for ready tasks (hermes `kanban dispatch`)
     Dispatch {
@@ -1329,6 +1331,7 @@ async fn build_gateway_stack(
         ulnclaw::gateway::spawn_kanban_dispatcher(
             config.kanban.dispatch_interval_secs,
             config.kanban.max_spawn,
+            config.kanban.worktrees,
         );
     }
     Ok(state)
@@ -4311,11 +4314,19 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!("unlinked {parent} → {child}");
         }
+        KanbanAction::Gc => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let (removed, skipped) = ulnclaw::kanban::gc_worktrees(&cwd, &store)
+                .map_err(|e| e.to_string())?;
+            println!("worktree gc: {removed} removed, {skipped} kept (active or not a worktree)");
+        }
         KanbanAction::Dispatch { max_spawn, dry_run, failure_limit } => {
             let home = ulnclaw::config::ulnclaw_home();
+            let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
+            let use_worktrees = config.kanban.worktrees;
             let result = store
                 .dispatch_once(
-                    |task| ulnclaw::kanban::default_spawn(&home, task),
+                    |task| ulnclaw::kanban::dispatch_spawn(&home, use_worktrees, task),
                     Some(max_spawn.max(1)),
                     dry_run,
                     failure_limit.max(1),

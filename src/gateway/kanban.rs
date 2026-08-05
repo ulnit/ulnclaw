@@ -390,12 +390,14 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
         Err(e) => return e,
     };
     let home = crate::config::ulnclaw_home();
-    let max_spawn = body.max_spawn.unwrap_or(2).max(1);
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let max_spawn = body.max_spawn.unwrap_or(config.kanban.max_spawn).max(1);
     let dry_run = body.dry_run.unwrap_or(false);
+    let use_worktrees = config.kanban.worktrees;
     // Spawning child processes is blocking work — keep it off the axum task.
     let outcome = tokio::task::spawn_blocking(move || {
         store.dispatch_once(
-            |task| crate::kanban::default_spawn(&home, task),
+            |task| crate::kanban::dispatch_spawn(&home, use_worktrees, task),
             Some(max_spawn),
             dry_run,
             2,

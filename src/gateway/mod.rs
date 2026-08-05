@@ -3527,7 +3527,11 @@ async fn spawn_job_run(
 /// Start the embedded kanban dispatcher loop (hermes hosts the dispatcher
 /// in the gateway, ticking every 60 s by default): reclaim stale claims,
 /// promote parent-done todos, spawn detached workers for ready tasks.
-pub fn spawn_kanban_dispatcher(interval_secs: u64, max_spawn: usize) -> tokio::task::JoinHandle<()> {
+pub fn spawn_kanban_dispatcher(
+    interval_secs: u64,
+    max_spawn: usize,
+    use_worktrees: bool,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval =
             tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(5)));
@@ -3540,7 +3544,7 @@ pub fn spawn_kanban_dispatcher(interval_secs: u64, max_spawn: usize) -> tokio::t
                 };
                 let home = crate::config::ulnclaw_home();
                 match store.dispatch_once(
-                    |task| crate::kanban::default_spawn(&home, task),
+                    |task| crate::kanban::dispatch_spawn(&home, use_worktrees, task),
                     Some(max_spawn.max(1)),
                     false,
                     2,

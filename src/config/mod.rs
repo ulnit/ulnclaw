@@ -739,6 +739,9 @@ pub struct KanbanConfig {
     pub dispatch_interval_secs: u64,
     /// Max concurrent kanban workers (live concurrency cap).
     pub max_spawn: usize,
+    /// Spawn each worker in its own git worktree when dispatching from a
+    /// repo (hermes worktree workspaces; falls back to in-place otherwise).
+    pub worktrees: bool,
 }
 
 impl Default for KanbanConfig {
@@ -747,6 +750,7 @@ impl Default for KanbanConfig {
             dispatch_in_gateway: true,
             dispatch_interval_secs: 60,
             max_spawn: 2,
+            worktrees: true,
         }
     }
 }

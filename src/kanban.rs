@@ -124,12 +124,38 @@ pub fn worker_prompt(task: &Task) -> String {
     )
 }
 
+/// Dispatch-time spawn: prepare an isolated worktree (when enabled and
+/// the cwd is a git repo), then spawn the detached worker in it.
+pub fn dispatch_spawn(
+    home: &Path,
+    use_worktrees: bool,
+    task: &Task,
+) -> std::result::Result<Option<i64>, String> {
+    let workdir = if use_worktrees {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        prepare_worktree(&cwd, task)?
+    } else {
+        None
+    };
+    spawn_worker(home, task, workdir.as_deref())
+}
+
 /// Spawn a detached `ulnclaw run` worker for `task` (hermes
 /// `_default_spawn`). The worker gets `ULNCLAW_KANBAN_TASK=<id>` (the
 /// worker-context env the kanban_* tools gate on), an optional
 /// `--profile <assignee>`, and its output goes to
 /// `<home>/kanban/worker-logs/<id>.log`. Returns the worker pid.
 pub fn default_spawn(home: &Path, task: &Task) -> std::result::Result<Option<i64>, String> {
+    spawn_worker(home, task, None)
+}
+
+/// Like [`default_spawn`] but the worker runs in `workdir` (an isolated
+/// worktree when the dispatcher prepared one).
+pub fn spawn_worker(
+    home: &Path,
+    task: &Task,
+    workdir: Option<&Path>,
+) -> std::result::Result<Option<i64>, String> {
     use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
     let log_dir = home.join("kanban").join("worker-logs");
@@ -147,6 +173,9 @@ pub fn default_spawn(home: &Path, task: &Task) -> std::result::Result<Option<i64
         cmd.arg("--profile").arg(assignee);
     }
     cmd.env("ULNCLAW_KANBAN_TASK", &task.id);
+    if let Some(workdir) = workdir {
+        cmd.current_dir(workdir);
+    }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log_file))
         .stderr(std::process::Stdio::from(err_file));
@@ -373,6 +402,106 @@ pub fn build_kanban_stop_nudge(task_id: &str, attempts: usize) -> Option<String>
          Never end a turn with only a promise of future action. Repeated protocol \
          violations will block this task and require manual intervention.]"
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Worker worktree isolation (hermes spawns each kanban worker in its own
+// git worktree under <repo>/.worktrees/t_<hex> so parallel workers never
+// share a dirty checkout)
+// ---------------------------------------------------------------------------
+
+/// The git repository enclosing `dir`, if any.
+fn git_toplevel(dir: &Path) -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(path))
+    }
+}
+
+/// Prepare an isolated git worktree for `task` under
+/// `<repo>/.worktrees/<task-id>` on branch `kanban/<task-id>` (hermes
+/// worktree workspaces). Returns the worktree path, or `None` when the
+/// dispatch cwd is not inside a git repo (the worker then runs in-place).
+/// Existing worktrees are reused.
+pub fn prepare_worktree(cwd: &Path, task: &Task) -> std::result::Result<Option<std::path::PathBuf>, String> {
+    let Some(repo) = git_toplevel(cwd) else {
+        return Ok(None);
+    };
+    let dir = repo.join(".worktrees").join(&task.id);
+    if dir.is_dir() {
+        return Ok(Some(dir));
+    }
+    let branch = format!("kanban/{}", task.id);
+    let status = std::process::Command::new("git")
+        .args(["worktree", "add", dir.to_str().unwrap_or_default(), "-b", &branch])
+        .current_dir(&repo)
+        .status()
+        .map_err(|e| format!("git worktree add: {e}"))?;
+    if !status.success() {
+        // Branch may already exist from a previous run — attach to it.
+        let status = std::process::Command::new("git")
+            .args(["worktree", "add", dir.to_str().unwrap_or_default(), &branch])
+            .current_dir(&repo)
+            .status()
+            .map_err(|e| format!("git worktree add: {e}"))?;
+        if !status.success() {
+            return Err(format!("git worktree add failed for {}", task.id));
+        }
+    }
+    Ok(Some(dir))
+}
+
+/// Remove worktrees of tasks that reached a terminal status (hermes
+/// dispatcher gc owns the `t_<hex>` trees). Branches are kept — that is
+/// where the finished work lives. Returns (removed, skipped) counts.
+pub fn gc_worktrees(cwd: &Path, store: &KanbanStore) -> std::result::Result<(usize, usize), String> {
+    let Some(repo) = git_toplevel(cwd) else {
+        return Ok((0, 0));
+    };
+    let root = repo.join(".worktrees");
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Ok((0, 0));
+    };
+    let mut removed = 0usize;
+    let mut skipped = 0usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("t_") {
+            continue;
+        }
+        let terminal = match store.get_task(&name) {
+            Ok(Some(task)) => matches!(task.status.as_str(), "done" | "archived"),
+            // Orphan tree (task row gone) — hermes gc reclaims these too.
+            Ok(None) => true,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
+        };
+        if !terminal {
+            skipped += 1;
+            continue;
+        }
+        let status = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force", entry.path().to_str().unwrap_or_default()])
+            .current_dir(&repo)
+            .status();
+        match status {
+            Ok(s) if s.success() => removed += 1,
+            _ => skipped += 1,
+        }
+    }
+    Ok((removed, skipped))
 }
 
 /// Best-effort liveness check for a local pid (hermes `_pid_alive`).
@@ -1711,6 +1840,45 @@ mod tests {
         assert_eq!(released.status, "ready");
         assert!(released.claim_lock.is_none());
         assert!(released.worker_pid.is_none());
+    }
+
+    #[test]
+    fn worktree_lifecycle_prepare_reuse_gc() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(repo.join("README.md"), "hi").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+
+        let store = KanbanStore::open(repo.join("kanban.db")).unwrap();
+        let task = make_task(&store, "worktree task");
+
+        // Prepare creates the worktree; a second call reuses it.
+        let wt = prepare_worktree(repo, &task).unwrap().expect("in a git repo");
+        assert!(wt.ends_with(format!(".worktrees/{}", task.id)));
+        assert!(wt.is_dir());
+        let wt2 = prepare_worktree(repo, &task).unwrap();
+        assert_eq!(Some(wt.clone()), wt2);
+
+        // Active task: gc keeps the tree.
+        let (removed, kept) = gc_worktrees(repo, &store).unwrap();
+        assert_eq!((removed, kept), (0, 1));
+
+        // Done task: gc removes the tree (branch stays).
+        store.complete_task(&task.id, Some("done")).unwrap();
+        let (removed, kept) = gc_worktrees(repo, &store).unwrap();
+        assert_eq!((removed, kept), (1, 0));
+        assert!(!wt.is_dir());
     }
 
     #[test]
