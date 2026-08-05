@@ -39,6 +39,7 @@ axum = "0.7"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tower = { version = "0.4", features = ["util"] }
 libc = "0.2"
+crossterm = "0.28"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 tempfile = "3"

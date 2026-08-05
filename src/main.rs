@@ -2509,7 +2509,23 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                 println!("No sessions found.");
                 return Ok(());
             }
-            run_session_browse(&rows)?;
+            // Raw-mode TUI on a real terminal (hermes curses picker),
+            // plain stdin loop otherwise (pipes, CI).
+            let selected = if std::io::IsTerminal::is_terminal(&std::io::stdout())
+                && std::io::IsTerminal::is_terminal(&std::io::stdin())
+            {
+                match run_session_browse_tui(&rows) {
+                    Ok(selected) => selected,
+                    Err(_) => run_session_browse_stdin(&rows)?, // raw mode unavailable
+                }
+            } else {
+                run_session_browse_stdin(&rows)?
+            };
+            if let Some(id) = selected {
+                println!("Resuming session: {}", id);
+                relaunch_resume(&id)?;
+            }
+            return Ok(());
         }
         SessionAction::RetitleSkills { limit, apply } => {
             let rows = store
@@ -2653,32 +2669,241 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
     Ok(())
 }
 
-/// Dependency-free interactive session picker (the hermes `sessions
-/// browse` curses TUI adapted to plain stdin): numbered list, live
-/// substring filter, resume by number via process relaunch.
-fn run_session_browse(rows: &[ulnclaw::session::sqlite::BrowseRow]) -> Result<(), String> {
-    use ulnclaw::session::sqlite::BrowseRow;
+/// Format one browse row: title (preview/id fallback) + relative time +
+/// source + truncated id, adaptive to the available width (hermes
+/// `_format_row`).
+fn format_browse_row(row: &ulnclaw::session::sqlite::BrowseRow, name_width: usize) -> String {
+    let title = row
+        .title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .or_else(|| row.preview.clone())
+        .unwrap_or_else(|| row.id.clone());
+    let name: String = title.chars().take(name_width).collect();
+    format!(
+        "{:<width$}  {:<10}  {:<6}  {}",
+        name,
+        relative_time(row.last_active),
+        row.source,
+        &row.id[..row.id.len().min(18)],
+        width = name_width
+    )
+}
+
+/// Case-insensitive browse filter over title/preview/id/source (shared by
+/// the TUI and the stdin picker).
+fn browse_row_matches(row: &ulnclaw::session::sqlite::BrowseRow, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    let q = filter.to_lowercase();
+    row.title
+        .as_deref()
+        .map(|t| t.to_lowercase().contains(&q))
+        .unwrap_or(false)
+        || row.preview
+            .as_deref()
+            .map(|p| p.to_lowercase().contains(&q))
+            .unwrap_or(false)
+        || row.id.to_lowercase().contains(&q)
+        || row.source.to_lowercase().contains(&q)
+}
+
+/// Raw-mode terminal session browser (the hermes curses
+/// `_session_browse_picker` port): arrow-key navigation with scrolling,
+/// live type-to-filter, Enter selects, Esc quits. Returns the selected
+/// session id, or `None` when cancelled.
+fn run_session_browse_tui(
+    rows: &[ulnclaw::session::sqlite::BrowseRow],
+) -> Result<Option<String>, String> {
+    use crossterm::{
+        cursor,
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+        execute, queue,
+        style::{Color, Print, ResetColor, SetForegroundColor},
+        terminal::{self, Clear, ClearType},
+    };
+
+    /// Restore the terminal on every exit path.
+    struct TuiGuard;
+    impl Drop for TuiGuard {
+        fn drop(&mut self) {
+            terminal::disable_raw_mode().ok();
+            let mut out = std::io::stdout();
+            execute!(
+                out,
+                cursor::Show,
+                terminal::LeaveAlternateScreen
+            )
+            .ok();
+        }
+    }
+
+    let mut out = std::io::stdout();
+    execute!(out, terminal::EnterAlternateScreen, cursor::Hide)
+        .map_err(|e| e.to_string())?;
+    terminal::enable_raw_mode().map_err(|e| e.to_string())?;
+    let _guard = TuiGuard;
+
+    let mut cursor_idx: usize = 0;
+    let mut scroll_offset: usize = 0;
+    let mut filter = String::new();
+
+    loop {
+        let filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> =
+            rows.iter().filter(|r| browse_row_matches(r, &filter)).collect();
+        if cursor_idx >= filtered.len() {
+            cursor_idx = filtered.len().saturating_sub(1);
+        }
+
+        let (cols, rows_h) = terminal::size().map_err(|e| e.to_string())?;
+        let (cols, rows_h) = (cols as usize, rows_h as usize);
+        queue!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))
+            .map_err(|e| e.to_string())?;
+
+        if rows_h < 5 || cols < 40 {
+            queue!(out, Print("Terminal too small")).map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
+            // Wait for any key before bailing out.
+            let _ = event::read();
+            return Ok(None);
+        }
+
+        // Header (hermes: filter line with block cursor, else key hints).
+        if filter.is_empty() {
+            queue!(
+                out,
+                SetForegroundColor(Color::Yellow),
+                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Esc quit"),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+        } else {
+            queue!(
+                out,
+                SetForegroundColor(Color::Cyan),
+                Print(format!("  Browse sessions — filter: {filter}\u{2588}")),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        queue!(out, Print("\r\n")).map_err(|e| e.to_string())?;
+
+        // Viewport: header + one footer hint line.
+        let page_height = rows_h.saturating_sub(2).max(1);
+        if cursor_idx < scroll_offset {
+            scroll_offset = cursor_idx;
+        }
+        if cursor_idx >= scroll_offset + page_height {
+            scroll_offset = cursor_idx - page_height + 1;
+        }
+        if scroll_offset >= filtered.len() {
+            scroll_offset = filtered.len().saturating_sub(1);
+        }
+        // Layout: arrow 3 + active 10 + source 6 + id 18 + padding 6.
+        let name_width = cols.saturating_sub(3 + 10 + 6 + 18 + 6).max(20);
+        let end = (scroll_offset + page_height).min(filtered.len());
+        for (i, row) in filtered[scroll_offset..end].iter().enumerate() {
+            let selected = scroll_offset + i == cursor_idx;
+            if selected {
+                queue!(out, SetForegroundColor(Color::Green)).map_err(|e| e.to_string())?;
+            }
+            let arrow = if selected { " \u{25B6} " } else { "   " };
+            queue!(out, Print(arrow), Print(format_browse_row(row, name_width)))
+                .map_err(|e| e.to_string())?;
+            if selected {
+                queue!(out, ResetColor).map_err(|e| e.to_string())?;
+            }
+            queue!(out, Print("\r\n")).map_err(|e| e.to_string())?;
+        }
+        if filtered.is_empty() {
+            queue!(out, Print("  (no sessions match — backspace to clear the filter)"))
+                .map_err(|e| e.to_string())?;
+        } else if filtered.len() > page_height {
+            queue!(
+                out,
+                Print(format!(
+                    "  {}–{} of {} (type to narrow)",
+                    scroll_offset + 1,
+                    end,
+                    filtered.len()
+                ))
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        out.flush().map_err(|e| e.to_string())?;
+
+        match event::read().map_err(|e| e.to_string())? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
+                {
+                    return Ok(None);
+                }
+                match key.code {
+                    KeyCode::Esc => return Ok(None),
+                    // Ctrl+J (LF) / Ctrl+M (CR) are the classic Enter
+                    // equivalents — some terminal paths deliver LF.
+                    KeyCode::Enter
+                    | (KeyCode::Char('j') | KeyCode::Char('m'))
+                        if matches!(key.code, KeyCode::Enter)
+                            || key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        if let Some(row) = filtered.get(cursor_idx) {
+                            return Ok(Some(row.id.clone()));
+                        }
+                    }
+                    KeyCode::Up => {
+                        cursor_idx = cursor_idx.saturating_sub(1);
+                    }
+                    KeyCode::Down => {
+                        if filtered.is_empty() {
+                            cursor_idx = 0;
+                        } else {
+                            cursor_idx = (cursor_idx + 1).min(filtered.len() - 1);
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        cursor_idx = cursor_idx.saturating_sub(page_height);
+                    }
+                    KeyCode::PageDown => {
+                        if !filtered.is_empty() {
+                            cursor_idx = (cursor_idx + page_height).min(filtered.len() - 1);
+                        }
+                    }
+                    KeyCode::Home => cursor_idx = 0,
+                    KeyCode::End => {
+                        cursor_idx = filtered.len().saturating_sub(1);
+                    }
+                    KeyCode::Backspace => {
+                        if filter.pop().is_some() {
+                            cursor_idx = 0;
+                            scroll_offset = 0;
+                        }
+                    }
+                    KeyCode::Char(ch) => {
+                        filter.push(ch);
+                        cursor_idx = 0;
+                        scroll_offset = 0;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Plain-stdin session picker fallback for non-TTY contexts (pipes, CI):
+/// numbered list, live substring filter, resume by number. Returns the
+/// selected session id, or `None` when cancelled.
+fn run_session_browse_stdin(
+    rows: &[ulnclaw::session::sqlite::BrowseRow],
+) -> Result<Option<String>, String> {
     let mut filter = String::new();
     loop {
-        let filtered: Vec<&BrowseRow> = rows
-            .iter()
-            .filter(|r| {
-                if filter.is_empty() {
-                    return true;
-                }
-                let q = filter.to_lowercase();
-                r.title
-                    .as_deref()
-                    .map(|t| t.to_lowercase().contains(&q))
-                    .unwrap_or(false)
-                    || r.preview
-                        .as_deref()
-                        .map(|p| p.to_lowercase().contains(&q))
-                        .unwrap_or(false)
-                    || r.id.to_lowercase().contains(&q)
-                    || r.source.to_lowercase().contains(&q)
-            })
-            .collect();
+        let filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> =
+            rows.iter().filter(|r| browse_row_matches(r, &filter)).collect();
         println!();
         if filter.is_empty() {
             println!(
@@ -2693,34 +2918,21 @@ fn run_session_browse(rows: &[ulnclaw::session::sqlite::BrowseRow]) -> Result<()
         }
         let page = &filtered[..filtered.len().min(20)];
         for (idx, row) in page.iter().enumerate() {
-            let title = row
-                .title
-                .clone()
-                .filter(|t| !t.trim().is_empty())
-                .or_else(|| row.preview.clone())
-                .unwrap_or_else(|| row.id.clone());
-            println!(
-                "  {:>2}. {:<50.50}  {:<10}  {:<6}  {}",
-                idx + 1,
-                title,
-                relative_time(row.last_active),
-                row.source,
-                &row.id[..row.id.len().min(18)]
-            );
+            println!("  {:>2}. {}", idx + 1, format_browse_row(row, 50));
         }
         if filtered.len() > page.len() {
-            println!("      … {} more — type text to narrow", filtered.len() - page.len());
+            println!("      \u{2026} {} more — type text to narrow", filtered.len() - page.len());
         }
         print!("\n> ");
         std::io::Write::flush(&mut std::io::stdout()).ok();
         let mut line = String::new();
         if std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())? == 0 {
-            return Ok(()); // EOF
+            return Ok(None); // EOF
         }
         let input = line.trim().to_string();
         if input == "q" || input == "quit" {
             println!("Cancelled.");
-            return Ok(());
+            return Ok(None);
         }
         if input.is_empty() {
             filter.clear();
@@ -2728,9 +2940,7 @@ fn run_session_browse(rows: &[ulnclaw::session::sqlite::BrowseRow]) -> Result<()
         }
         if let Ok(n) = input.parse::<usize>() {
             if n >= 1 && n <= page.len() {
-                let selected = page[n - 1];
-                println!("Resuming session: {}", selected.id);
-                return relaunch_resume(&selected.id);
+                return Ok(Some(page[n - 1].id.clone()));
             }
             println!("No such entry — pick 1-{} or type text to filter.", page.len());
             continue;
