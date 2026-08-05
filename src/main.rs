@@ -524,9 +524,10 @@ enum KanbanAction {
         /// Skill force-loaded into the dispatcher worker (repeatable)
         #[arg(long = "skill")]
         skills: Vec<String>,
-        /// Per-attempt worker runtime cap in seconds
+        /// Per-attempt worker runtime cap: seconds (300) or duration
+        /// (90s, 30m, 2h, 1d) — hermes create --max-runtime
         #[arg(long)]
-        max_runtime: Option<i64>,
+        max_runtime: Option<String>,
         /// Dedup key (hermes idempotency_key)
         #[arg(long)]
         idempotency_key: Option<String>,
@@ -4371,6 +4372,13 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             if title.trim().is_empty() {
                 return Err("usage: ulnclaw kanban create <title>".into());
             }
+            let max_runtime_seconds = match max_runtime.as_deref() {
+                Some(raw) => match ulnclaw::kanban::parse_duration(raw) {
+                    Ok(secs) => secs,
+                    Err(e) => return Err(format!("kanban: --max-runtime: {e}")),
+                },
+                None => None,
+            };
             if let Some(max_retries) = max_retries {
                 if max_retries < 1 {
                     return Err(format!(
@@ -4412,7 +4420,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     model,
                     created_by: KanbanStore::claimer_id(),
                     skills: if skills.is_empty() { None } else { Some(skills) },
-                    max_runtime_seconds: max_runtime,
+                    max_runtime_seconds,
                     idempotency_key,
                     triage,
                     max_retries,

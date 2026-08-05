@@ -243,6 +243,9 @@ pub struct DispatchResult {
     /// Running tasks whose worker pid died (hermes
     /// `detect_crashed_workers`).
     pub crashed: Vec<String>,
+    /// Ready tasks whose respawn was deferred this tick, with the guard
+    /// reason (hermes `DispatchResult.respawn_guarded`).
+    pub respawn_guarded: Vec<(String, String)>,
 }
 
 /// Worker brief for a dispatcher-spawned task (hermes spawns
@@ -1305,6 +1308,35 @@ pub fn parse_branch_flag(value: &str) -> std::result::Result<String, String> {
     Ok(branch.to_string())
 }
 
+/// Parse `30s` / `5m` / `2h` / `1d` or a bare integer into seconds
+/// (hermes `_parse_duration`). Empty input is `Ok(None)`; malformed
+/// input is an error the CLI surfaces as a usage message.
+pub fn parse_duration(value: &str) -> std::result::Result<Option<i64>, String> {
+    let s = value.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(secs) = s.parse::<i64>() {
+        return Ok(Some(secs));
+    }
+    let (num, unit) = s.split_at(s.len() - 1);
+    let factor = match unit {
+        "s" => 1i64,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86400,
+        _ => {
+            return Err(format!(
+                "malformed duration {value:?} (expected 30s, 5m, 2h, 1d, or a number)"
+            ))
+        }
+    };
+    match num.parse::<f64>() {
+        Ok(n) => Ok(Some((n * factor as f64) as i64)),
+        Err(_) => Err(format!("malformed duration {value:?}")),
+    }
+}
+
 /// Expand a leading `~/` against $HOME (hermes `os.path.expanduser`).
 fn expand_tilde(raw: &str) -> PathBuf {
     if raw == "~" || raw.starts_with("~/") {
@@ -1320,6 +1352,42 @@ fn expand_tilde(raw: &str) -> PathBuf {
 /// handoff between workers reuses the same directory.
 pub fn workspaces_root(home: &Path) -> PathBuf {
     home.join("kanban").join("workspaces")
+}
+
+/// Errors that will not resolve by retrying immediately — defer the
+/// respawn instead of burning worker slots (hermes
+/// `_RESPAWN_BLOCKER_RE`).
+const RESPAWN_BLOCKER_RE: &str = concat!(
+    r"\b(quota|rate[\s_\-]?limit|429|403|auth\w*|",
+    r"unauthorized|forbidden|billing|subscription|",
+    r"access[\s_]denied|permission[\s_]denied|",
+    r"invalid[\s_]api[\s_]key)\b"
+);
+
+/// A completed run within this window counts as recent proof — do not
+/// re-spawn (hermes `_RESPAWN_GUARD_SUCCESS_WINDOW`).
+const RESPAWN_GUARD_SUCCESS_WINDOW: i64 = 3600;
+
+/// A GitHub PR URL in a comment within this window blocks re-spawn
+/// (hermes `_RESPAWN_GUARD_PR_WINDOW`).
+const RESPAWN_GUARD_PR_WINDOW: i64 = 86400;
+
+/// GitHub PR URL pattern in task comments (hermes
+/// `_RESPAWN_GUARD_PR_URL_RE`).
+const RESPAWN_GUARD_PR_URL_RE: &str =
+    r"https?://github\.com/[^/\s]+/[^/\s]+/pull/\d+";
+
+/// Default cooldown after a rate-limited requeue before the dispatcher
+/// re-probes (hermes `DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS`); override
+/// with `ULNCLAW_KANBAN_RATE_LIMIT_COOLDOWN_SECONDS` (0 disables).
+const DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS: i64 = 300;
+
+fn rate_limit_cooldown_seconds() -> i64 {
+    std::env::var("ULNCLAW_KANBAN_RATE_LIMIT_COOLDOWN_SECONDS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|secs| *secs >= 0)
+        .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS)
 }
 
 /// Current branch of the repo checked out at `dir` (hermes
@@ -2214,6 +2282,118 @@ impl KanbanStore {
         )
         .map_err(db_error("set branch_name"))?;
         Ok(())
+    }
+
+    /// Return a guard reason if `task_id` should NOT be re-spawned this
+    /// tick, else `None` (hermes `check_respawn_guard`). Priority:
+    /// `rate_limit_cooldown` (latest run ended on a quota wall inside
+    /// the cooldown) > `blocker_auth` (last failure matches a
+    /// quota/auth pattern) > `recent_success` (a completed run within
+    /// the window, unless deliberately re-queued afterwards) >
+    /// `active_pr` (a GitHub PR URL in a recent comment). The task
+    /// stays `ready` and gets another chance next tick.
+    pub fn check_respawn_guard(&self, task_id: &str) -> Option<String> {
+        use std::sync::OnceLock;
+        static BLOCKER: OnceLock<regex::Regex> = OnceLock::new();
+        static PR_URL: OnceLock<regex::Regex> = OnceLock::new();
+        let conn = self.conn.lock().unwrap();
+        let last_failure_error: Option<String> = conn
+            .query_row(
+                "SELECT last_failure_error FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        // 1. Rate-limit cooldown: checked BEFORE the blocker regex
+        //    because the rate-limit requeue stamps quota-flavored text
+        //    that the regex would otherwise match forever (the
+        //    rate-limit path never increments consecutive_failures, so
+        //    the breaker cannot free it). Latest run only: a newer
+        //    crash/completion supersedes the quota wall.
+        let latest_run: Option<(String, Option<i64>)> = conn
+            .query_row(
+                "SELECT outcome, ended_at FROM task_runs                  WHERE task_id = ?1 AND ended_at IS NOT NULL                  ORDER BY ended_at DESC LIMIT 1",
+                params![task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        if let Some((outcome, ended_at)) = latest_run {
+            if outcome == "rate_limited" {
+                let cooldown = rate_limit_cooldown_seconds();
+                if cooldown <= 0 {
+                    return None;
+                }
+                if let Some(ended) = ended_at {
+                    if Self::now() - ended < cooldown {
+                        return Some("rate_limit_cooldown".to_string());
+                    }
+                }
+                // Cooldown elapsed — allow the cheap probe and skip the
+                // blocker regex (hermes policy).
+                return None;
+            }
+        }
+        // 2. Quota / auth blocker: retrying immediately will not help.
+        if let Some(err) = &last_failure_error {
+            let blocker = BLOCKER.get_or_init(|| {
+                regex::RegexBuilder::new(RESPAWN_BLOCKER_RE)
+                    .case_insensitive(true)
+                    .build()
+                    .expect("respawn blocker regex compiles")
+            });
+            if blocker.is_match(err) {
+                return Some("blocker_auth".to_string());
+            }
+        }
+        // 3. Completed run within the success window — proof of recent
+        //    success. An explicit re-queue AFTER that completion
+        //    (ready/promoted/unblocked/released event) is a deliberate
+        //    re-run request and bypasses the guard.
+        let now = Self::now();
+        let recent_completed: Option<i64> = conn
+            .query_row(
+                "SELECT ended_at FROM task_runs                  WHERE task_id = ?1 AND outcome = 'completed' AND ended_at >= ?2                  ORDER BY ended_at DESC LIMIT 1",
+                params![task_id, now - RESPAWN_GUARD_SUCCESS_WINDOW],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        if let Some(completed_at) = recent_completed {
+            let requeued: Option<i64> = conn
+                .query_row(
+                    "SELECT 1 FROM task_events                      WHERE task_id = ?1 AND created_at >= ?2                      AND kind IN ('ready', 'promoted', 'unblocked', 'released')                      LIMIT 1",
+                    params![task_id, completed_at],
+                    |row| row.get(0),
+                )
+                .ok();
+            if requeued.is_none() {
+                return Some("recent_success".to_string());
+            }
+        }
+        // 4. A prior worker already opened a PR.
+        let pr_url = PR_URL.get_or_init(|| {
+            regex::RegexBuilder::new(RESPAWN_GUARD_PR_URL_RE)
+                .case_insensitive(true)
+                .build()
+                .expect("pr url regex compiles")
+        });
+        let mut stmt = conn
+            .prepare(
+                "SELECT body FROM task_comments WHERE task_id = ?1 AND created_at >= ?2",
+            )
+            .ok()?;
+        let bodies = stmt
+            .query_map(params![task_id, now - RESPAWN_GUARD_PR_WINDOW], |row| {
+                row.get::<_, String>(0)
+            })
+            .ok()?;
+        for body in bodies.flatten() {
+            if pr_url.is_match(&body) {
+                return Some("active_pr".to_string());
+            }
+        }
+        None
     }
 
     /// Resolve (and create if needed) the workspace for `task` (hermes
@@ -4450,6 +4630,19 @@ impl KanbanStore {
                     continue;
                 }
             }
+            // Respawn guard (hermes): defer tasks whose immediate
+            // retry cannot help; they stay ready for a later tick.
+            if let Some(reason) = self.check_respawn_guard(&id) {
+                result.respawn_guarded.push((id.clone(), reason.clone()));
+                if !dry_run {
+                    self.append_event(
+                        &id,
+                        "respawn_guarded",
+                        serde_json::json!({ "reason": reason }),
+                    )?;
+                }
+                continue;
+            }
             let Some(task) = self.get_task(&id)? else {
                 continue;
             };
@@ -6314,5 +6507,158 @@ mod tests {
             t.branch_name.as_deref(),
             Some(format!("wt/{}", task.id).as_str())
         );
+    }
+
+    // ------------------------------------------------------------------
+    // P140 — duration parsing + respawn guard
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn parse_duration_variants() {
+        assert_eq!(parse_duration("").unwrap(), None);
+        assert_eq!(parse_duration("300").unwrap(), Some(300));
+        assert_eq!(parse_duration("90s").unwrap(), Some(90));
+        assert_eq!(parse_duration("30m").unwrap(), Some(1800));
+        assert_eq!(parse_duration("2h").unwrap(), Some(7200));
+        assert_eq!(parse_duration("1d").unwrap(), Some(86400));
+        assert_eq!(parse_duration("1.5m").unwrap(), Some(90));
+        assert_eq!(parse_duration(" 2H ").unwrap(), Some(7200));
+        assert!(parse_duration("abc").is_err());
+        assert!(parse_duration("10x").is_err());
+    }
+
+    fn insert_closed_run(store: &KanbanStore, task_id: &str, outcome: &str, ended_at: i64) {
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO task_runs (task_id, status, started_at, ended_at, outcome) \
+                 VALUES (?1, 'done', ?2, ?2, ?3)",
+                params![task_id, ended_at, outcome],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn respawn_guard_blocker_auth() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "guarded");
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET last_failure_error = ?2 WHERE id = ?1",
+                params![task.id, "provider returned 429 rate limit"],
+            )
+            .unwrap();
+        assert_eq!(
+            store.check_respawn_guard(&task.id).as_deref(),
+            Some("blocker_auth")
+        );
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET last_failure_error = ?2 WHERE id = ?1",
+                params![task.id, "worker segfaulted"],
+            )
+            .unwrap();
+        assert_eq!(store.check_respawn_guard(&task.id), None);
+    }
+
+    #[test]
+    fn respawn_guard_recent_success_and_requeue_bypass() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "succeeded");
+        insert_closed_run(&store, &task.id, "completed", KanbanStore::now());
+        assert_eq!(
+            store.check_respawn_guard(&task.id).as_deref(),
+            Some("recent_success")
+        );
+        // A deliberate re-queue after the success bypasses the guard.
+        store
+            .append_event(&task.id, "ready", serde_json::json!({}))
+            .unwrap();
+        assert_eq!(store.check_respawn_guard(&task.id), None);
+    }
+
+    #[test]
+    fn respawn_guard_active_pr() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "pr opened");
+        store
+            .add_comment(
+                &task.id,
+                "worker",
+                "opened https://github.com/acme/widget/pull/42 for review",
+            )
+            .unwrap();
+        assert_eq!(
+            store.check_respawn_guard(&task.id).as_deref(),
+            Some("active_pr")
+        );
+    }
+
+    #[test]
+    fn respawn_guard_rate_limit_cooldown_and_expiry() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "quota wall");
+        insert_closed_run(&store, &task.id, "rate_limited", KanbanStore::now());
+        assert_eq!(
+            store.check_respawn_guard(&task.id).as_deref(),
+            Some("rate_limit_cooldown")
+        );
+        // Past the default 300 s cooldown the probe is allowed again.
+        let later = make_task(&store, "quota wall aged");
+        insert_closed_run(
+            &store,
+            &later.id,
+            "rate_limited",
+            KanbanStore::now() - 301,
+        );
+        assert_eq!(store.check_respawn_guard(&later.id), None);
+    }
+
+    #[test]
+    fn dispatch_respawn_guard_defers_and_events() {
+        let (dir, store) = temp_store();
+        let task = make_task(&store, "deferred");
+        store.ready_task(&task.id).unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET last_failure_error = ?2 WHERE id = ?1",
+                params![task.id, "403 forbidden"],
+            )
+            .unwrap();
+        let result = store
+            .dispatch_once(
+                dir.path(),
+                false,
+                |_, _| Ok(Some(9)),
+                Some(2),
+                false,
+                2,
+                0,
+            )
+            .unwrap();
+        assert!(result.spawned.is_empty());
+        assert_eq!(
+            result.respawn_guarded,
+            vec![(task.id.clone(), "blocker_auth".to_string())]
+        );
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "ready");
+        let event = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "respawn_guarded")
+            .unwrap();
+        assert_eq!(event.payload["reason"], "blocker_auth");
     }
 }

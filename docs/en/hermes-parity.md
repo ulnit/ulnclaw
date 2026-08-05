@@ -341,7 +341,19 @@ performance and a single static binary.
   workspace (hermes `_cmd_claim`), `[kanban] worktrees=true` keeps
   its meaning for tasks created without `--workspace`, and decompose
   children inherit the root's workspace kind/path (worktree children
-  always get their own tree, hermes sibling policy).
+  always get their own tree, hermes sibling policy); P140 added the
+  respawn guard + duration syntax: `kanban create --max-runtime`
+  accepts `30s`/`5m`/`2h`/`1d` as well as bare seconds (hermes
+  `_parse_duration`), and the dispatcher defers ready tasks that
+  cannot benefit from an immediate retry (hermes
+  `check_respawn_guard`) — `rate_limit_cooldown` (latest run ended
+  `rate_limited` inside `ULNCLAW_KANBAN_RATE_LIMIT_COOLDOWN_SECONDS`,
+  default 300, 0 disables), `blocker_auth` (last failure matches the
+  quota/auth pattern), `recent_success` (completed run within 1 h
+  without a deliberate re-queue) and `active_pr` (GitHub PR URL in a
+  24 h comment window); guarded tasks stay ready, each deferral emits
+  a `respawn_guarded` event, and the gateway dispatch API reports
+  them.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

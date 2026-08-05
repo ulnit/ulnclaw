@@ -306,7 +306,18 @@
   `kanban claim` 认领时解析并打印工作区（hermes `_cmd_claim`），
   `[kanban] worktrees=true` 对未显式指定 `--workspace` 的任务保持
   原语义，decompose 子任务继承根任务的工作区类型/路径（worktree
-  子任务各自独占新树，hermes 兄弟任务策略）。
+  子任务各自独占新树，hermes 兄弟任务策略）；P140 补齐重生守卫
+  与时长语法：`kanban create --max-runtime` 接受
+  `30s`/`5m`/`2h`/`1d` 与纯秒数（hermes `_parse_duration`）；
+  调度器对立即重试无益的就绪任务延后重生（hermes
+  `check_respawn_guard`）—— `rate_limit_cooldown`（最近一次 run 以
+  `rate_limited` 结束且仍在冷却期内，
+  `ULNCLAW_KANBAN_RATE_LIMIT_COOLDOWN_SECONDS` 默认 300，0 关闭）、
+  `blocker_auth`（最近失败命中配额/鉴权模式）、`recent_success`
+  （1 小时内有已完成 run 且其后无主动重新入队）、`active_pr`
+  （24 小时内评论中出现 GitHub PR 链接）；被守卫的任务保持
+  ready，每次延后都会记录 `respawn_guarded` 事件，网关 dispatch
+  API 一并返回。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
