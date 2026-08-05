@@ -722,6 +722,16 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
     let stdin = std::io::stdin();
     let session_key = agent.context().session_id.clone();
     let store = agent.context().store.clone();
+    // Standing-goal (Ralph loop) manager for this session — state persists
+    // in state.db keyed by session id (hermes GoalManager per live session).
+    let mut goal_manager = ulnclaw::goals::GoalManager::new(
+        session_key.clone(),
+        store.clone(),
+        ulnclaw::goals::DEFAULT_MAX_TURNS,
+    );
+    // Input queued by slash commands (e.g. /goal kicks the loop with the
+    // goal text; the judge feeds continuation prompts through here too).
+    let mut pending: Option<String> = None;
     loop {
         // Drain finished background delegations into the conversation
         // (hermes CLI completion drain, positive-ownership by session key).
@@ -740,16 +750,20 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
                 name: None,
             });
         }
-        print!("\n> ");
-        std::io::stdout().flush().map_err(|e| e.to_string())?;
-        let mut line = String::new();
-        stdin.read_line(&mut line).map_err(|e| e.to_string())?;
-        let input = line.trim().to_string();
+        let input = if let Some(next) = pending.take() {
+            next
+        } else {
+            print!("\n> ");
+            std::io::stdout().flush().map_err(|e| e.to_string())?;
+            let mut line = String::new();
+            stdin.read_line(&mut line).map_err(|e| e.to_string())?;
+            line.trim().to_string()
+        };
         if input.is_empty() {
             continue;
         }
         if input.starts_with('/') {
-            match handle_slash(&input, &agent, &mut history).await {
+            match handle_slash(&input, &agent, &mut history, &mut goal_manager, &mut pending).await {
                 Ok(true) => continue,
                 Ok(false) => break,
                 Err(e) => {
@@ -768,6 +782,25 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
                     .into_iter()
                     .filter(|m| m.role != Role::System)
                     .collect();
+                // The Ralph loop: when a standing goal is active, judge the
+                // turn and feed the continuation prompt back as the next
+                // user message until the goal is done/paused/cleared.
+                if goal_manager.is_active() {
+                    if let Some(provider) = agent.tool_context().provider.clone() {
+                        let background = ulnclaw::goals::gather_background_processes();
+                        let decision = goal_manager
+                            .evaluate_after_turn(config, provider, &result.content, &background)
+                            .await;
+                        if !decision.message.is_empty() {
+                            println!("\n{}", decision.message);
+                        }
+                        if decision.should_continue {
+                            if let Some(prompt) = decision.continuation_prompt {
+                                pending = Some(prompt);
+                            }
+                        }
+                    }
+                }
             }
             Err(e) => println!("error: {}", e),
         }
@@ -775,7 +808,13 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
     Ok(())
 }
 
-async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message>) -> Result<bool, String> {
+async fn handle_slash(
+    input: &str,
+    agent: &Arc<Agent>,
+    history: &mut Vec<Message>,
+    goals: &mut ulnclaw::goals::GoalManager,
+    pending: &mut Option<String>,
+) -> Result<bool, String> {
     let mut parts = input.splitn(2, ' ');
     let cmd = parts.next().unwrap_or("");
     let rest = parts.next().unwrap_or("").trim();
@@ -787,7 +826,7 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect <url>|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect <url>|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -910,6 +949,154 @@ async fn handle_slash(input: &str, agent: &Arc<Agent>, history: &mut Vec<Message
             match ulnclaw::tools::builtin::memory::load_memory_for_prompt(&agent.tool_context().home) {
                 Some(memory) => println!("{}", memory),
                 None => println!("(memory is empty)"),
+            }
+        }
+        "/goal" => {
+            // Standing goal — the Ralph loop (hermes /goal). Subcommands:
+            // status/show/draft/pause/resume/clear/wait/unwait; anything
+            // else is treated as the goal text (inline `field: value` lines
+            // become a completion contract).
+            let lower = rest.to_ascii_lowercase();
+            if rest.is_empty() || lower == "status" {
+                println!("  {}", goals.status_line());
+            } else if lower == "show" {
+                println!("  {}", goals.status_line());
+                println!("  {}", goals.render_contract());
+            } else if lower.starts_with("draft") {
+                let objective = rest["draft".len()..].trim();
+                if objective.is_empty() {
+                    println!("  Usage: /goal draft <objective in plain language>");
+                } else {
+                    println!("  Drafting completion contract…");
+                    let contract = match agent.tool_context().provider.clone() {
+                        Some(provider) => {
+                            let config = agent.tool_context().config.clone();
+                            ulnclaw::goals::draft_contract(&config, provider, objective).await
+                        }
+                        None => None,
+                    };
+                    match goals.set(objective, None, contract) {
+                        Ok(state) => {
+                            println!("  ⊙ Goal set ({}-turn budget): {}", state.max_turns, state.goal);
+                            if state.has_contract() {
+                                println!("  Drafted completion contract:");
+                                for line in state.contract.render_block().lines() {
+                                    println!("    {}", line);
+                                }
+                                println!(
+                                    "  Tighten any field by re-setting the goal with inline lines (e.g. verify: <command>). Use /goal show to review."
+                                );
+                            } else {
+                                println!(
+                                    "  Couldn't draft a contract (aux model unavailable) — running as a free-form goal. The per-turn judge still applies."
+                                );
+                            }
+                            pending.replace(state.goal.clone());
+                        }
+                        Err(e) => println!("  Invalid goal: {}", e),
+                    }
+                }
+            } else if lower == "pause" {
+                match goals.pause("user-paused") {
+                    Some(state) => println!("  ⏸ Goal paused: {}", state.goal),
+                    None => println!("  No goal set."),
+                }
+            } else if lower == "resume" {
+                match goals.resume(true) {
+                    Some(state) => {
+                        println!("  ▶ Goal resumed: {}", state.goal);
+                        println!("  Send any message (or type 'continue') to kick it off.");
+                    }
+                    None => println!("  No goal to resume."),
+                }
+            } else if matches!(lower.as_str(), "clear" | "stop" | "done") {
+                let had = goals.has_goal();
+                goals.clear();
+                if had {
+                    println!("  ✓ Goal cleared.");
+                } else {
+                    println!("  No active goal.");
+                }
+            } else if lower == "wait" || lower.starts_with("wait ") {
+                let wait_arg = rest["wait".len()..].trim();
+                if wait_arg.is_empty() {
+                    println!("  Usage: /goal wait <pid> [reason]");
+                } else {
+                    let mut wtokens = wait_arg.splitn(2, char::is_whitespace);
+                    let pid_str = wtokens.next().unwrap_or("");
+                    match pid_str.parse::<u32>() {
+                        Ok(pid) => {
+                            let reason = wtokens.next().unwrap_or("").trim();
+                            match goals.wait_on(pid, reason) {
+                                Ok(_) => {
+                                    let suffix = if reason.is_empty() { String::new() } else { format!(" ({})", reason) };
+                                    println!("  ⏳ Goal parked on pid {}{}. Loop pauses until it exits.", pid, suffix);
+                                }
+                                Err(e) => println!("  /goal wait: {}", e),
+                            }
+                        }
+                        Err(_) => println!("  /goal wait: <pid> must be an integer process id."),
+                    }
+                }
+            } else if lower == "unwait" {
+                if goals.stop_waiting() {
+                    println!("  ▶ Wait barrier cleared — goal loop resumes.");
+                } else {
+                    println!("  No wait barrier set.");
+                }
+            } else {
+                let (headline, contract) = ulnclaw::goals::parse_contract(rest);
+                let goal_text = if headline.is_empty() { rest.to_string() } else { headline };
+                let contract = if contract.is_empty() { None } else { Some(contract) };
+                match goals.set(&goal_text, None, contract) {
+                    Ok(state) => {
+                        println!("  ⊙ Goal set ({}-turn budget): {}", state.max_turns, state.goal);
+                        if state.has_contract() {
+                            println!("  Completion contract:");
+                            for line in state.contract.render_block().lines() {
+                                println!("    {}", line);
+                            }
+                        }
+                        println!(
+                            "  After each turn, a judge model checks if the goal is done{}. The agent keeps working until it is, you pause/clear it, or the budget is exhausted. Use /goal status, /goal show, /goal pause, /goal resume, /goal clear.",
+                            if state.has_contract() { " against the contract above" } else { "" }
+                        );
+                        pending.replace(state.goal.clone());
+                    }
+                    Err(e) => println!("  Invalid goal: {}", e),
+                }
+            }
+        }
+        "/subgoal" => {
+            // Extra criteria on the active goal (hermes /subgoal).
+            if rest.is_empty() {
+                println!("  {}", goals.render_subgoals());
+            } else {
+                let mut sub_parts = rest.splitn(2, ' ');
+                match sub_parts.next().unwrap_or("") {
+                    "remove" => {
+                        let idx_str = sub_parts.next().unwrap_or("").trim();
+                        if idx_str.is_empty() {
+                            println!("  Usage: /subgoal remove <n>");
+                        } else {
+                            match idx_str.parse::<usize>() {
+                                Ok(n) => match goals.remove_subgoal(n) {
+                                    Ok(removed) => println!("  ✓ Removed subgoal {}: {}", n, removed),
+                                    Err(e) => println!("  /subgoal remove: {}", e),
+                                },
+                                Err(_) => println!("  /subgoal remove: <n> must be an integer (1-based index)."),
+                            }
+                        }
+                    }
+                    "clear" => match goals.clear_subgoals() {
+                        Ok(count) => println!("  ✓ Cleared {} subgoal(s).", count),
+                        Err(e) => println!("  /subgoal clear: {}", e),
+                    },
+                    _ => match goals.add_subgoal(rest) {
+                        Ok(text) => println!("  ✓ Added subgoal: {}", text),
+                        Err(e) => println!("  /subgoal: {}", e),
+                    },
+                }
             }
         }
         "/sessions" => {

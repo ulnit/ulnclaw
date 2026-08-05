@@ -58,7 +58,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 # One-shot run
 ./ulnclaw run "Summarize the README.md file"
 
-# Interactive chat (slash commands: /new /search /memory /skills /sessions /rollback /diff /recap ...)
+# Interactive chat (slash commands: /new /search /memory /skills /sessions /rollback /diff /recap /goal /subgoal ...)
 ./ulnclaw chat
 
 # Management subcommands
@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 432 tests
+cargo test                     # 465 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -263,7 +263,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 # 一次性运行
 ./ulnclaw run "总结一下 README.md"
 
-# 交互式聊天（斜杠命令：/new /search /memory /skills /sessions /rollback /diff /recap ……）
+# 交互式聊天（斜杠命令：/new /search /memory /skills /sessions /rollback /diff /recap /goal /subgoal ……）
 ./ulnclaw chat
 
 # 管理子命令
@@ -328,7 +328,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 432 个测试
+cargo test                     # 465 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

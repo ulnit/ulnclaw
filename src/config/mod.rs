@@ -387,6 +387,10 @@ pub struct AuxiliaryTaskConfig {
     /// language.
     #[serde(default)]
     pub language: Option<String>,
+    /// Task output budget override (hermes `auxiliary.goal_judge.max_tokens`);
+    /// unset or non-positive falls back to the task's default.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
 }
 
 impl AuxiliaryTaskConfig {
@@ -432,6 +436,12 @@ impl AuxiliaryTaskConfig {
     /// `auxiliary.title_generation.language`); blank = match the user.
     pub fn language(&self) -> Option<String> {
         Self::nonblank(self.language.as_ref())
+    }
+
+    /// Task output budget override (hermes `_goal_judge_max_tokens`);
+    /// non-positive values fall back to the task default.
+    pub fn max_tokens(&self) -> Option<u32> {
+        self.max_tokens.filter(|v| *v > 0)
     }
 
     /// True when the entry carries no usable override at all.

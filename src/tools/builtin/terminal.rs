@@ -39,6 +39,8 @@ pub fn check_terminal_requirements() -> ToolAvailability {
 
 struct BackgroundProcess {
     command: String,
+    /// OS process id captured at spawn (used by goal wait barriers).
+    pid: Option<u32>,
     started_at: f64,
     output: Arc<Mutex<String>>,
     exit_code: Arc<Mutex<Option<i32>>>,
@@ -48,6 +50,58 @@ struct BackgroundProcess {
 fn process_registry() -> &'static Mutex<HashMap<String, Arc<BackgroundProcess>>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, Arc<BackgroundProcess>>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// True when a background process registered under `process_id` exists and
+/// is still running (no exit code recorded yet). Backs the goal loop's
+/// session wait barrier (hermes `process_registry.is_session_waiting`;
+/// ulnclaw has no watch patterns, so "still running" is the trigger).
+/// Fail-safe: registry lock poisoning resolves to false so a stale barrier
+/// can never wedge the loop.
+pub fn background_process_running(process_id: &str) -> bool {
+    process_registry()
+        .lock()
+        .ok()
+        .and_then(|reg| reg.get(process_id).cloned())
+        .map(|proc| proc.exit_code.lock().map(|g| g.is_none()).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// True when a background process is registered under `process_id`
+/// (running or already exited).
+pub fn background_process_exists(process_id: &str) -> bool {
+    process_registry()
+        .lock()
+        .ok()
+        .map(|reg| reg.contains_key(process_id))
+        .unwrap_or(false)
+}
+
+/// Snapshot of every registered background process for the goal judge
+/// prompt (hermes `process_registry.list_sessions`). Includes exited
+/// entries; the caller filters them out.
+pub fn list_background_processes() -> Vec<crate::goals::BackgroundProcessInfo> {
+    let now = now_secs();
+    let Ok(reg) = process_registry().lock() else {
+        return Vec::new();
+    };
+    reg.iter()
+        .map(|(id, proc)| {
+            let exited = proc.exit_code.lock().ok().and_then(|g| *g).is_some();
+            let output = proc.output.lock().map(|g| g.clone()).unwrap_or_default();
+            // Tail of the output as a one-line preview.
+            let tail: String = output.chars().rev().take(200).collect::<String>().chars().rev().collect();
+            let preview = tail.replace('\n', " ");
+            crate::goals::BackgroundProcessInfo {
+                pid: proc.pid,
+                session_id: Some(id.clone()),
+                command: proc.command.clone(),
+                status: if exited { "exited".to_string() } else { "running".to_string() },
+                uptime_seconds: Some((now - proc.started_at).max(0.0) as u64),
+                output_preview: if preview.trim().is_empty() { None } else { Some(preview) },
+            }
+        })
+        .collect()
 }
 
 /// Close-view sink set by a driver (desktop bridge): called with
@@ -365,6 +419,7 @@ async fn spawn_background(
         Ok(child) => child,
         Err(e) => return Ok(json!({"success": false, "error": format!("spawn failed: {}", e)})),
     };
+    let child_pid = child.id();
 
     let output_buffer = Arc::new(Mutex::new(String::new()));
     let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
@@ -437,6 +492,7 @@ async fn spawn_background(
 
     let record = Arc::new(BackgroundProcess {
         command: command.clone(),
+        pid: child_pid,
         started_at: now_secs(),
         output: output_buffer,
         exit_code,
