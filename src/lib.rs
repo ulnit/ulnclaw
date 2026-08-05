@@ -93,6 +93,7 @@ pub mod mcp;
 pub mod managed_gateway;
 pub mod moa;
 pub mod learning_graph;
+pub mod learning_graph_render;
 pub mod learning_mutations;
 pub mod models_dev;
 pub mod projects_db;

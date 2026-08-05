@@ -2,7 +2,7 @@
 //! session/skill/cron/tool management).
 
 use clap::{Parser, Subcommand};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use ulnclaw::agent::{Agent, AgentConfig};
@@ -94,6 +94,33 @@ enum Commands {
     Models {
         #[command(subcommand)]
         action: Option<ModelsAction>,
+    },
+    /// What Hermes has learned, on a timeline — learned skills & memories
+    /// (hermes `hermes journey`)
+    Journey {
+        #[command(subcommand)]
+        action: Option<JourneyAction>,
+        /// Render the timeline built up to this point (0=oldest, 1=now)
+        #[arg(long, default_value = "1.0")]
+        reveal: f64,
+        /// Animate the build-up over time (Ctrl-C to stop)
+        #[arg(long)]
+        play: bool,
+        /// Animation frames per second for --play (default 12)
+        #[arg(long, default_value = "12")]
+        fps: u32,
+        /// Override render width in columns
+        #[arg(long)]
+        width: Option<usize>,
+        /// Override render height in rows
+        #[arg(long)]
+        height: Option<usize>,
+        /// Disable color output
+        #[arg(long)]
+        no_color: bool,
+        /// Print the raw graph payload as JSON and exit
+        #[arg(long)]
+        json: bool,
     },
     /// Write a default config.toml
     Init,
@@ -195,6 +222,25 @@ enum SkillAction {
         /// Evaluate the install policy with force override
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum JourneyAction {
+    /// List node ids (for delete/edit)
+    List { #[arg(long)] no_color: bool },
+    /// Delete a learned skill (archived) or memory by node id
+    Delete {
+        /// Node id (skill name or memory:<source>:<index>; see `journey list`)
+        node: String,
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Edit a learned skill or memory by node id in $EDITOR
+    Edit {
+        /// Node id (skill name or memory:<source>:<index>; see `journey list`)
+        node: String,
     },
 }
 
@@ -464,6 +510,16 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             .await
             .map_err(|e| e.to_string())?
         }
+        Commands::Journey {
+            action,
+            reveal,
+            play,
+            fps,
+            width,
+            height,
+            no_color,
+            json,
+        } => journey_cmd(action, reveal, play, fps, width, height, no_color, json),
         Commands::Init => {
             let path = UlncLawConfig::write_default_if_missing().map_err(|e| e.to_string())?;
             println!("config written to {}", path.display());
@@ -1124,6 +1180,437 @@ fn tools_cmd(config: &UlncLawConfig) -> Result<(), String> {
     for def in registry.definitions() {
         println!("  {}", def.name);
     }
+    Ok(())
+}
+
+// ── journey: the learning timeline (hermes hermes_cli/journey.py) ─────────
+
+fn journey_cmd(
+    action: Option<JourneyAction>,
+    reveal: f64,
+    play: bool,
+    fps: u32,
+    width: Option<usize>,
+    height: Option<usize>,
+    no_color: bool,
+    json_flag: bool,
+) -> Result<(), String> {
+    use ulnclaw::learning_graph_render as render;
+
+    let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+
+    match action {
+        Some(JourneyAction::List { no_color }) => {
+            let payload = ulnclaw::learning_graph::build_learning_graph(&home);
+            let mut nodes: Vec<serde_json::Value> = payload
+                .get("nodes")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if nodes.is_empty() {
+                println!("No learning yet.");
+                return Ok(());
+            }
+            nodes.sort_by_key(|n| {
+                n.get("timestamp")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0)
+            });
+            let color = !no_color && std::io::stdout().is_terminal();
+            for node in &nodes {
+                let glyph = if node.get("kind").and_then(|v| v.as_str()) == Some("memory") {
+                    render::MEMORY_GLYPH
+                } else {
+                    render::SKILL_GLYPH
+                };
+                let id = node.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let label = node.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                let date = render::format_date(node.get("timestamp").and_then(|v| v.as_f64()));
+                if color {
+                    println!(
+                        "\u{1b}[38;2;138;138;138m{}\u{1b}[0m  {} {}  \u{1b}[38;2;138;138;138m{}\u{1b}[0m",
+                        id, glyph, label, date
+                    );
+                } else {
+                    println!("{}  {} {}  {}", id, glyph, label, date);
+                }
+            }
+            Ok(())
+        }
+        Some(JourneyAction::Delete { node, yes }) => {
+            let detail = ulnclaw::learning_mutations::node_detail(&home, &node);
+            if detail.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                println!(
+                    "  {}",
+                    detail
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("not found")
+                );
+                return Err("node not found".into());
+            }
+            if !yes {
+                let label = detail.get("label").and_then(|v| v.as_str()).unwrap_or(&node);
+                print!("  Delete '{}'? [y/N] ", label);
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+                if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                    println!("  aborted");
+                    return Err("aborted".into());
+                }
+            }
+            let result = ulnclaw::learning_mutations::delete_node(&home, &node);
+            println!(
+                "  {}",
+                result.get("message").and_then(|v| v.as_str()).unwrap_or("")
+            );
+            if result.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                Ok(())
+            } else {
+                Err("delete failed".into())
+            }
+        }
+        Some(JourneyAction::Edit { node }) => {
+            let detail = ulnclaw::learning_mutations::node_detail(&home, &node);
+            if detail.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                println!(
+                    "  {}",
+                    detail
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("not found")
+                );
+                return Err("node not found".into());
+            }
+            let kind = detail.get("kind").and_then(|v| v.as_str()).unwrap_or("skill");
+            let content = detail
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let suffix = if kind == "skill" { ".md" } else { ".txt" };
+            let Some(edited) = open_in_editor(&content, suffix)? else {
+                println!("  no changes");
+                return Ok(());
+            };
+            if edited.trim() == content.trim() {
+                println!("  no changes");
+                return Ok(());
+            }
+            let result = ulnclaw::learning_mutations::edit_node(&home, &node, &edited);
+            println!(
+                "  {}",
+                result.get("message").and_then(|v| v.as_str()).unwrap_or("")
+            );
+            if result.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                Ok(())
+            } else {
+                Err("edit failed".into())
+            }
+        }
+        None => {
+            let payload = ulnclaw::learning_graph::build_learning_graph(&home);
+            if json_flag {
+                println!("{}", serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?);
+                return Ok(());
+            }
+            let color = !no_color && std::io::stdout().is_terminal();
+            let (cols, rows) = term_size(width, height);
+            let nodes = payload.get("nodes").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            if nodes == 0 {
+                println!(
+                    "No learning yet — use ulnclaw a while and your learned skills and memories will start mapping out here."
+                );
+                return Ok(());
+            }
+            if play {
+                journey_play(&payload, cols, rows, color, fps)
+            } else {
+                let reveal = reveal.clamp(0.0, 1.0);
+                print!("{}", journey_frame_text(&payload, cols, rows, reveal, color));
+                Ok(())
+            }
+        }
+    }
+}
+
+fn term_size(width: Option<usize>, height: Option<usize>) -> (usize, usize) {
+    let env_cols = std::env::var("COLUMNS").ok().and_then(|v| v.parse().ok());
+    let env_lines = std::env::var("LINES").ok().and_then(|v| v.parse().ok());
+    let cols = width.or(env_cols).unwrap_or(90).max(40);
+    let rows = height.or(env_lines).unwrap_or(30).max(10);
+    (cols, rows)
+}
+
+fn open_in_editor(initial: &str, suffix: &str) -> Result<Option<String>, String> {
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let mut parts = editor.split_whitespace();
+    let Some(bin) = parts.next() else {
+        return Err("no editor configured".into());
+    };
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "ulnclaw-journey-{}-{}{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+        suffix
+    ));
+    std::fs::write(&path, initial).map_err(|e| e.to_string())?;
+    let status = std::process::Command::new(bin)
+        .args(parts)
+        .arg(&path)
+        .status();
+    let result = match status {
+        Ok(status) if status.success() => {
+            std::fs::read_to_string(&path).map(Some).map_err(|e| e.to_string())
+        }
+        Ok(_) => Err("editor exited non-zero".to_string()),
+        Err(e) => Err(format!("editor failed: {}", e)),
+    };
+    std::fs::remove_file(&path).ok();
+    result
+}
+
+/// Resolve a style run to a concrete 24-bit foreground color.
+fn run_color(
+    run: &ulnclaw::learning_graph_render::Run,
+    palette: &std::collections::HashMap<String, String>,
+) -> Option<(u8, u8, u8)> {
+    use ulnclaw::learning_graph_render as render;
+    let base = run.hex.clone().or_else(|| palette.get(&run.style).cloned())?;
+    let faded = render::fade(palette, Some(&base), run.alpha)?;
+    Some(render::hex_to_rgb(&faded))
+}
+
+fn row_to_text(
+    row: &[ulnclaw::learning_graph_render::Run],
+    palette: &std::collections::HashMap<String, String>,
+    color: bool,
+) -> String {
+    let mut out = String::new();
+    for run in row {
+        if !color {
+            out.push_str(&run.text);
+            continue;
+        }
+        match run_color(run, palette) {
+            Some((r, g, b)) => {
+                out.push_str(&format!("\u{1b}[38;2;{};{};{}m{}\u{1b}[0m", r, g, b, run.text));
+            }
+            None => out.push_str(&run.text),
+        }
+    }
+    out
+}
+
+fn journey_frame_text(
+    payload: &serde_json::Value,
+    cols: usize,
+    rows: usize,
+    reveal: f64,
+    color: bool,
+) -> String {
+    use ulnclaw::learning_graph_render as render;
+
+    let palette = render::derive_palette("#FFD700", true);
+    let legend = render::build_legend(payload);
+    let categories = render::category_legend(payload, 4);
+    let summary = render::build_summary(payload);
+    let axis = render::axis_labels(payload);
+    // Lines are pad-left(2), so content must fit in cols-2.
+    let inner = cols.saturating_sub(2).max(24);
+    // Reserve rows for title/legend/blank/axis/footer/labels + summary.
+    let field_rows = rows.saturating_sub(10 + summary.len()).max(6);
+    let frame = render::render_graph(payload, inner, field_rows, reveal);
+    let count = payload
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+
+    let mut parts: Vec<String> = Vec::new();
+
+    if color {
+        parts.push(format!(
+            "\u{1b}[1;38;2;232;196;99m✦ Journey \u{1b}[0m\u{1b}[38;2;158;158;158m· learned skills & memories over time\u{1b}[0m"
+        ));
+    } else {
+        parts.push("✦ Journey · learned skills & memories over time".to_string());
+    }
+
+    let mut legend_line = String::from("  ");
+    for (i, item) in legend.iter().enumerate() {
+        if i > 0 {
+            legend_line.push_str("   ");
+        }
+        let glyph = item.get("glyph").and_then(|v| v.as_str()).unwrap_or("");
+        let label = item.get("label").and_then(|v| v.as_str()).unwrap_or("");
+        let style = item.get("style").and_then(|v| v.as_str()).unwrap_or(render::STYLE_DIM);
+        if color {
+            let fake = render::Run {
+                text: format!("{} ", glyph),
+                style: style.to_string(),
+                alpha: 1.0,
+                hex: None,
+            };
+            legend_line.push_str(&row_to_text(&[fake], &palette, true));
+            legend_line.push_str(&format!("\u{1b}[38;2;158;158;158m{}\u{1b}[0m", label));
+        } else {
+            legend_line.push_str(&format!("{} {}", glyph, label));
+        }
+    }
+    parts.push(legend_line);
+
+    if !categories.is_empty() {
+        let mut cat_line = String::from("  ");
+        for (i, item) in categories.iter().enumerate() {
+            if i > 0 {
+                cat_line.push_str("  ");
+            }
+            let glyph = item.get("glyph").and_then(|v| v.as_str()).unwrap_or("");
+            let label = item.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let hex = item.get("color").and_then(|v| v.as_str()).unwrap_or("");
+            if color && !hex.is_empty() {
+                let (r, g, b) = render::hex_to_rgb(hex);
+                cat_line.push_str(&format!("\u{1b}[38;2;{};{};{}m{} \u{1b}[0m", r, g, b, glyph));
+                cat_line.push_str(&format!("\u{1b}[38;2;138;138;138m{}\u{1b}[0m", label));
+            } else {
+                cat_line.push_str(&format!("{} {}", glyph, label));
+            }
+        }
+        parts.push(cat_line);
+    }
+
+    parts.push(String::new());
+
+    for row in &frame.grid {
+        if row.is_empty() {
+            parts.push(String::new());
+        } else {
+            parts.push(format!("  {}", row_to_text(row, &palette, color)));
+        }
+    }
+
+    // Date axis under the field (oldest → now).
+    let (start, end) = axis;
+    let gap = inner.saturating_sub(start.chars().count()).saturating_sub(end.chars().count()).max(1);
+    if color {
+        parts.push(format!(
+            "  \u{1b}[38;2;138;138;138m{}\u{1b}[0m{}\u{1b}[38;2;138;138;138m{}\u{1b}[0m",
+            start,
+            " ".repeat(gap),
+            end
+        ));
+    } else {
+        parts.push(format!("  {}{}{}", start, " ".repeat(gap), end));
+    }
+
+    let pct = (reveal * 100.0).round() as i64;
+    if color {
+        parts.push(format!(
+            "  \u{1b}[38;2;138;138;138m◷ \u{1b}[0m\u{1b}[38;2;232;196;99m{}\u{1b}[0m   \u{1b}[38;2;138;138;138m{}/{} revealed · {}%\u{1b}[0m",
+            if frame.date.is_empty() { "—" } else { &frame.date },
+            frame.visible,
+            count,
+            pct
+        ));
+    } else {
+        parts.push(format!(
+            "  ◷ {}   {}/{} revealed · {}%",
+            if frame.date.is_empty() { "—" } else { &frame.date },
+            frame.visible,
+            count,
+            pct
+        ));
+    }
+
+    if !frame.labels.is_empty() {
+        parts.push(String::new());
+        if color {
+            parts.push("  \u{1b}[38;2;158;158;158mcharted signals\u{1b}[0m".to_string());
+        } else {
+            parts.push("  charted signals".to_string());
+        }
+        for item in frame.labels.iter().take(6) {
+            let key = item.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            let glyph = item.get("glyph").and_then(|v| v.as_str()).unwrap_or("");
+            let label = item.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let meta = item.get("meta").and_then(|v| v.as_str()).unwrap_or("");
+            let style = item.get("style").and_then(|v| v.as_str()).unwrap_or(render::STYLE_DIM);
+            let alpha = item.get("alpha").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            let meta: String = if meta.chars().count() <= 32 {
+                meta.to_string()
+            } else {
+                meta.chars().take(29).collect::<String>() + "…"
+            };
+            if color {
+                let fake = render::Run {
+                    text: format!("{} {}", glyph, label),
+                    style: style.to_string(),
+                    alpha,
+                    hex: None,
+                };
+                parts.push(format!(
+                    "  \u{1b}[38;2;178;178;178m{} \u{1b}[0m{}  \u{1b}[38;2;138;138;138m{}\u{1b}[0m",
+                    key,
+                    row_to_text(&[fake], &palette, true),
+                    meta
+                ));
+            } else {
+                parts.push(format!("  {} {} {}  {}", key, glyph, label, meta));
+            }
+        }
+    }
+
+    for line in &summary {
+        if color {
+            parts.push(format!("  \u{1b}[38;2;158;158;158m{}\u{1b}[0m", line));
+        } else {
+            parts.push(format!("  {}", line));
+        }
+    }
+
+    parts.join("\n") + "\n"
+}
+
+fn journey_play(
+    payload: &serde_json::Value,
+    cols: usize,
+    rows: usize,
+    color: bool,
+    fps: u32,
+) -> Result<(), String> {
+    let frames = 42usize;
+    let delay = std::time::Duration::from_secs_f64(1.0 / fps.clamp(1, 60) as f64);
+    let mut out = std::io::stdout();
+    if color {
+        // Clear the screen once, then home the cursor per frame.
+        write!(out, "\u{1b}[2J").ok();
+    }
+    for i in 0..frames {
+        let reveal = i as f64 / (frames - 1) as f64;
+        let text = journey_frame_text(payload, cols, rows, reveal, color);
+        if color {
+            write!(out, "\u{1b}[H{}", text).ok();
+        } else {
+            write!(out, "{}", text).ok();
+        }
+        out.flush().ok();
+        std::thread::sleep(delay);
+    }
+    let text = journey_frame_text(payload, cols, rows, 1.0, color);
+    if color {
+        write!(out, "\u{1b}[H{}", text).ok();
+    } else {
+        write!(out, "{}", text).ok();
+    }
+    out.flush().ok();
     Ok(())
 }
 
