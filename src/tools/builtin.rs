@@ -10,6 +10,7 @@ pub mod files;
 pub mod media;
 pub mod memory;
 pub mod platform;
+pub mod project;
 pub mod session_search;
 pub mod skills;
 pub mod terminal;
@@ -39,6 +40,7 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     platform::register(registry);
     tool_search::register(registry);
     desktop::register(registry);
+    project::register(registry);
     x_search::register(registry);
     video::register(registry);
 }
@@ -67,6 +69,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "x_search",
         "video_generate",
         "xai_video_edit", "xai_video_extend",
+        "project_list", "project_create", "project_switch",
         "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
         "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",
         "bfl_flux3_get_result", "bfl_flux3_prompting_guide",

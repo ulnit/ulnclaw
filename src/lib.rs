@@ -93,6 +93,7 @@ pub mod mcp;
 pub mod managed_gateway;
 pub mod moa;
 pub mod models_dev;
+pub mod projects_db;
 pub mod provider;
 pub mod redact;
 pub mod session;

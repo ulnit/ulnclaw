@@ -155,6 +155,11 @@ pub fn toolsets() -> &'static std::collections::HashMap<&'static str, ToolsetDef
             ],
             includes: &[],
         });
+        map.insert("project", ToolsetDef {
+            description: "Desktop Projects — create/switch named workspaces (GUI sessions only)",
+            tools: &["project_list", "project_create", "project_switch"],
+            includes: &[],
+        });
         map.insert("discord", ToolsetDef {
             description: "Discord messaging",
             tools: &["discord"],
