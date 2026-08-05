@@ -153,6 +153,11 @@ enum Commands {
         #[command(subcommand)]
         action: HooksAction,
     },
+    /// DM pairing codes: list/approve/revoke/clear-pending (hermes pairing)
+    Pairing {
+        #[command(subcommand)]
+        action: PairingAction,
+    },
     /// OAuth device-flow login: login/status/refresh/logout (hermes portal auth)
     Auth {
         #[command(subcommand)]
@@ -737,6 +742,18 @@ enum PluginsAction {
 }
 
 #[derive(Subcommand)]
+enum PairingAction {
+    /// Show pending pairing requests and approved users
+    List,
+    /// Approve a pairing request by the code the bot DM'd or its request id
+    Approve { platform: String, code: String },
+    /// Revoke a paired user's access
+    Revoke { platform: String, user_id: String },
+    /// Clear pending pairing codes (all platforms unless one is given)
+    ClearPending { platform: Option<String> },
+}
+
+#[derive(Subcommand)]
 enum HooksAction {
     /// List configured shell hooks and their consent state
     List,
@@ -1200,6 +1217,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::ComputerUse { action } => computer_use_cmd(&config, action).await,
         Commands::Plugins { action } => plugins_cmd(&config, action.unwrap_or(PluginsAction::List)).await,
         Commands::Hooks { action } => hooks_cmd(&config, action).await,
+        Commands::Pairing { action } => pairing_cmd(action).await,
         Commands::Auth { action } => auth_cmd(&config, action.unwrap_or(AuthAction::Status)).await,
         Commands::Sync { action } => sync_cmd(&config, action.unwrap_or(SyncAction::Status)).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
@@ -2727,6 +2745,101 @@ async fn plugins_cmd(config: &UlncLawConfig, action: PluginsAction) -> Result<()
             } else {
                 println!("✓ Accepted {added} hook command(s) into {}.", home.join("shell-hooks-allowlist.json").display());
             }
+        }
+    }
+    Ok(())
+}
+
+async fn pairing_cmd(action: PairingAction) -> Result<(), String> {
+    use ulnclaw::pairing::PairingStore;
+    let home = ulnclaw::config::ulnclaw_home();
+    let store = PairingStore::open(&home);
+    match action {
+        PairingAction::List => {
+            let platforms = store.known_platforms();
+            if platforms.is_empty() {
+                println!("No pairing activity yet.");
+                println!("Unknown senders who DM an enabled bot receive a pairing code;");
+                println!("approve it with: ulnclaw pairing approve <platform> <code>");
+                return Ok(());
+            }
+            for platform in &platforms {
+                let pending = store.list_pending(platform);
+                if !pending.is_empty() {
+                    println!("Pending ({platform}):");
+                    for request in &pending {
+                        let name = if request.user_name.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", request.user_name)
+                        };
+                        println!(
+                            "  {}  user {}{}  ({}m old)  approve: ulnclaw pairing approve {platform} {}",
+                            request.request_id, request.user_id, name, request.age_minutes, request.request_id
+                        );
+                    }
+                }
+                let approved = store.list_approved(platform);
+                if !approved.is_empty() {
+                    println!("Approved ({platform}):");
+                    for grant in &approved {
+                        let name = if grant.user_name.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", grant.user_name)
+                        };
+                        println!("  {}{}", grant.user_id, name);
+                    }
+                }
+            }
+        }
+        PairingAction::Approve { platform, code } => {
+            match store.approve_code(&platform, &code) {
+                Some(grant) => {
+                    let name = if grant.user_name.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", grant.user_name)
+                    };
+                    println!("✓ Approved {}{} on {platform}.", grant.user_id, name);
+                    println!("  The pairing store joins the allowlist — the gateway authorizes them on the next message.");
+                }
+                None => {
+                    if store.is_locked_out(&platform) {
+                        return Err(format!(
+                            "{platform} is locked out after {} failed approvals — try again in an hour",
+                            ulnclaw::pairing::MAX_FAILED_ATTEMPTS
+                        ));
+                    }
+                    return Err(format!(
+                        "no pending pairing request matched {code:?} on {platform} (codes expire after 1 hour)"
+                    ));
+                }
+            }
+        }
+        PairingAction::Revoke { platform, user_id } => {
+            if store.revoke(&platform, &user_id) {
+                println!("✓ Revoked {user_id} on {platform}.");
+            } else {
+                return Err(format!("{user_id} is not paired on {platform}"));
+            }
+        }
+        PairingAction::ClearPending { platform } => {
+            let targets: Vec<String> = match platform {
+                Some(platform) => vec![platform],
+                None => {
+                    let mut all = store.known_platforms();
+                    if all.is_empty() {
+                        all = vec!["telegram".into(), "discord".into(), "slack".into()];
+                    }
+                    all
+                }
+            };
+            let mut total = 0usize;
+            for platform in &targets {
+                total += store.clear_pending(platform);
+            }
+            println!("✓ Cleared {total} pending pairing code(s).");
         }
     }
     Ok(())

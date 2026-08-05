@@ -34,6 +34,14 @@ pub struct MessagingConfig {
     pub discord: DiscordConfig,
     #[serde(default)]
     pub slack: SlackConfig,
+    /// Offer pairing codes to unknown senders (hermes unauthorized-DM
+    /// `pair` behavior). Approved codes join the allowlist as a union.
+    #[serde(default = "default_pairing")]
+    pub pairing: bool,
+}
+
+fn default_pairing() -> bool {
+    true
 }
 
 /// `[messaging.telegram]`.
@@ -180,6 +188,34 @@ fn allowlisted(allowlist: &[String], id: &str) -> bool {
     allowlist.iter().any(|allowed| allowed == id)
 }
 
+/// Offer a pairing code to an unauthorized sender (hermes pairing flow).
+/// Returns the reply text, or None to stay silent (rate-limited repeat).
+fn pairing_offer(
+    store: &crate::pairing::PairingStore,
+    platform: &str,
+    sender_id: &str,
+    sender_name: &str,
+) -> Option<String> {
+    // Repeat requests within the rate window are silently ignored (hermes).
+    if store.is_rate_limited(platform, sender_id) {
+        return None;
+    }
+    match store.generate_code(platform, sender_id, sender_name) {
+        Some(code) => Some(format!(
+            "Hi~ I don't recognize you yet!\n\n\
+             Here's your pairing code: `{code}`\n\n\
+             Ask the bot owner to run:\n\
+             `ulnclaw pairing approve {platform} {code}`"
+        )),
+        None => {
+            // Queue full or locked out: send the throttle notice once, then
+            // silence follow-ups via the rate limit (hermes behavior).
+            store.record_rate_limit(platform, sender_id);
+            Some("Too many pairing requests right now~ Please try again later!".to_string())
+        }
+    }
+}
+
 /// `pre_gateway_dispatch` plugin hook (hermes fires it BEFORE auth so
 /// plugins can handle unauthorized senders without triggering pairing).
 /// Returns false when a hook consumed the event (`{"action": "skip"}`);
@@ -233,25 +269,35 @@ pub async fn run_messaging(
     let dispatcher = Dispatcher::new(agent, store);
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let msg = &config.messaging;
+    let pairing: Option<Arc<crate::pairing::PairingStore>> = if msg.pairing {
+        Some(Arc::new(crate::pairing::PairingStore::open(
+            &crate::config::ulnclaw_home(),
+        )))
+    } else {
+        None
+    };
     if msg.telegram.enabled {
         let cfg = msg.telegram.clone();
         let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
         tasks.push(tokio::spawn(async move {
-            telegram::run(cfg, dispatcher).await;
+            telegram::run(cfg, dispatcher, pairing).await;
         }));
     }
     if msg.discord.enabled {
         let cfg = msg.discord.clone();
         let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
         tasks.push(tokio::spawn(async move {
-            discord::run(cfg, dispatcher).await;
+            discord::run(cfg, dispatcher, pairing).await;
         }));
     }
     if msg.slack.enabled {
         let cfg = msg.slack.clone();
         let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
         tasks.push(tokio::spawn(async move {
-            slack::run(cfg, dispatcher).await;
+            slack::run(cfg, dispatcher, pairing).await;
         }));
     }
     if tasks.is_empty() {
@@ -280,7 +326,7 @@ pub mod telegram {
 
     const API: &str = "https://api.telegram.org";
 
-    pub async fn run(cfg: TelegramConfig, dispatcher: Arc<Dispatcher>) {
+    pub async fn run(cfg: TelegramConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
         let Some(token) = resolve_token(&cfg.bot_token, "TELEGRAM_BOT_TOKEN") else {
             eprintln!("[telegram] disabled: no bot_token configured (set messaging.telegram.bot_token or TELEGRAM_BOT_TOKEN)");
             return;
@@ -351,11 +397,23 @@ pub mod telegram {
                 if !pre_gateway_dispatch_gate(&mut event).await {
                     continue;
                 }
-                if !allowlisted(&cfg.allowed_chat_ids, &chat_id) {
+                // Auth union: configured allowlist OR an approved pairing
+                // code (hermes authz union).
+                let authorized = allowlisted(&cfg.allowed_chat_ids, &chat_id)
+                    || pairing
+                        .as_ref()
+                        .map(|store| store.is_approved("telegram", &event.sender_id))
+                        .unwrap_or(false);
+                if !authorized {
                     eprintln!(
                         "[telegram] refusing message from chat {chat_id} — add it to \
-                         messaging.telegram.allowed_chat_ids"
+                         messaging.telegram.allowed_chat_ids or approve a pairing code"
                     );
+                    if let Some(store) = pairing.as_ref() {
+                        if let Some(reply) = pairing_offer(store, "telegram", &event.sender_id, &event.sender_name) {
+                            send_message(&client, &token, &chat_id, &reply).await;
+                        }
+                    }
                     continue;
                 }
                 let dispatcher = dispatcher.clone();
@@ -421,20 +479,20 @@ pub mod discord {
     const INTENT_DIRECT_MESSAGES: u64 = 1 << 12;
     const INTENT_MESSAGE_CONTENT: u64 = 1 << 15;
 
-    pub async fn run(cfg: DiscordConfig, dispatcher: Arc<Dispatcher>) {
+    pub async fn run(cfg: DiscordConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
         let Some(token) = resolve_token(&cfg.bot_token, "DISCORD_BOT_TOKEN") else {
             eprintln!("[discord] disabled: no bot_token configured (set messaging.discord.bot_token or DISCORD_BOT_TOKEN)");
             return;
         };
         loop {
-            if let Err(e) = run_session(&cfg, &token, dispatcher.clone()).await {
+            if let Err(e) = run_session(&cfg, &token, dispatcher.clone(), pairing.clone()).await {
                 eprintln!("[discord] gateway session ended: {e} — reconnecting in 5s");
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     }
 
-    async fn run_session(cfg: &DiscordConfig, token: &str, dispatcher: Arc<Dispatcher>) -> Result<()> {
+    async fn run_session(cfg: &DiscordConfig, token: &str, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) -> Result<()> {
         use futures::{SinkExt, StreamExt};
         let (ws, _) = tokio_tungstenite::connect_async(GATEWAY)
             .await
@@ -494,7 +552,7 @@ pub mod discord {
                                 eprintln!("[discord] logged in as {username}");
                             }
                             if event_name == "MESSAGE_CREATE" {
-                                handle_message_create(cfg, token, &dispatcher, payload.get("d").cloned().unwrap_or(json!({}))).await;
+                                handle_message_create(cfg, token, &dispatcher, payload.get("d").cloned().unwrap_or(json!({})), pairing.as_deref()).await;
                             }
                         }
                         7 | 9 => {
@@ -507,7 +565,7 @@ pub mod discord {
         }
     }
 
-    async fn handle_message_create(cfg: &DiscordConfig, token: &str, dispatcher: &Arc<Dispatcher>, data: Value) {
+    async fn handle_message_create(cfg: &DiscordConfig, token: &str, dispatcher: &Arc<Dispatcher>, data: Value, pairing: Option<&crate::pairing::PairingStore>) {
         // Ignore bot/webhook messages (never talk to ourselves).
         if data.get("author").and_then(|a| a.get("bot")).and_then(|v| v.as_bool()).unwrap_or(false) {
             return;
@@ -537,11 +595,21 @@ pub mod discord {
         if !pre_gateway_dispatch_gate(&mut event).await {
             return;
         }
-        if !allowlisted(&cfg.allowed_channel_ids, &channel_id) {
+        // Auth union: configured allowlist OR an approved pairing code.
+        let authorized = allowlisted(&cfg.allowed_channel_ids, &channel_id)
+            || pairing
+                .map(|store| store.is_approved("discord", &event.sender_id))
+                .unwrap_or(false);
+        if !authorized {
             eprintln!(
                 "[discord] refusing message from channel {channel_id} — add it to \
-                 messaging.discord.allowed_channel_ids"
+                 messaging.discord.allowed_channel_ids or approve a pairing code"
             );
+            if let Some(store) = pairing {
+                if let Some(reply) = pairing_offer(store, "discord", &event.sender_id, &event.sender_name) {
+                    send_channel_message(token, &channel_id, &reply).await;
+                }
+            }
             return;
         }
         let dispatcher = dispatcher.clone();
@@ -581,7 +649,7 @@ pub mod slack {
     use futures::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as WsMessage;
 
-    pub async fn run(cfg: SlackConfig, dispatcher: Arc<Dispatcher>) {
+    pub async fn run(cfg: SlackConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
         let Some(bot_token) = resolve_token(&cfg.bot_token, "SLACK_BOT_TOKEN") else {
             eprintln!("[slack] disabled: no bot_token configured (set messaging.slack.bot_token or SLACK_BOT_TOKEN)");
             return;
@@ -591,7 +659,7 @@ pub mod slack {
             return;
         };
         loop {
-            match run_socket_session(&cfg, &bot_token, &app_token, dispatcher.clone()).await {
+            match run_socket_session(&cfg, &bot_token, &app_token, dispatcher.clone(), pairing.clone()).await {
                 Ok(()) => {}
                 Err(e) => eprintln!("[slack] socket session ended: {e} — reconnecting in 5s"),
             }
@@ -625,6 +693,7 @@ pub mod slack {
         bot_token: &str,
         app_token: &str,
         dispatcher: Arc<Dispatcher>,
+        pairing: Option<Arc<crate::pairing::PairingStore>>,
     ) -> Result<()> {
         let client = reqwest::Client::new();
         let url = open_socket_url(&client, app_token).await?;
@@ -677,11 +746,22 @@ pub mod slack {
                 if !pre_gateway_dispatch_gate(&mut message_event).await {
                     continue;
                 }
-                if !allowlisted(&cfg.allowed_channel_ids, &channel) {
+                // Auth union: configured allowlist OR an approved pairing code.
+                let authorized = allowlisted(&cfg.allowed_channel_ids, &channel)
+                    || pairing
+                        .as_ref()
+                        .map(|store| store.is_approved("slack", &message_event.sender_id))
+                        .unwrap_or(false);
+                if !authorized {
                     eprintln!(
                         "[slack] refusing message from channel {channel} — add it to \
-                         messaging.slack.allowed_channel_ids"
+                         messaging.slack.allowed_channel_ids or approve a pairing code"
                     );
+                    if let Some(store) = pairing.as_ref() {
+                        if let Some(reply) = pairing_offer(store, "slack", &message_event.sender_id, &message_event.sender_name) {
+                            post_message(bot_token, &channel, &reply).await;
+                        }
+                    }
                     continue;
                 }
                 let dispatcher = dispatcher.clone();

@@ -108,6 +108,7 @@ pub mod mcp;
 pub mod managed_gateway;
 pub mod messaging;
 pub mod oauth;
+pub mod pairing;
 pub mod skills_sync;
 pub mod memory_cmd;
 pub mod moa;
