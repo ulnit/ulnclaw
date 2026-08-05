@@ -133,6 +133,14 @@ pub struct Dispatcher {
     histories: Arc<Mutex<HashMap<String, Vec<crate::provider::Message>>>>,
 }
 
+/// Result of one dispatched platform message (hermes run-turn output):
+/// the agent reply plus any 🎙️ transcript echoes to deliver first.
+#[derive(Debug, Clone, Default)]
+pub struct DispatchOutcome {
+    pub reply: String,
+    pub transcript_echoes: Vec<String>,
+}
+
 impl Dispatcher {
     pub fn new(agent: Arc<Agent>, store: Arc<SqliteSessionStore>) -> Arc<Self> {
         Arc::new(Self {
@@ -147,13 +155,17 @@ impl Dispatcher {
         format!("platform-{}-{}", event.platform, event.chat_id)
     }
 
-    /// Run one agent turn for the event's chat; returns the reply text.
-    pub async fn handle_event(self: &Arc<Self>, event: MessageEvent) -> Result<String> {
+    /// Run one agent turn for the event's chat; returns the reply text
+    /// plus transcript echoes (hermes `_echo_pending_stt_transcripts_once`).
+    pub async fn handle_event(self: &Arc<Self>, event: MessageEvent) -> Result<DispatchOutcome> {
         let key = Self::session_key(&event);
         {
             let mut busy = self.busy.lock().await;
             if *busy.get(&key).unwrap_or(&false) {
-                return Ok("(the previous message is still being processed — please wait)".into());
+                return Ok(DispatchOutcome {
+                    reply: "(the previous message is still being processed — please wait)".into(),
+                    transcript_echoes: Vec::new(),
+                });
             }
             busy.insert(key.clone(), true);
         }
@@ -162,7 +174,7 @@ impl Dispatcher {
         result
     }
 
-    async fn run_turn(&self, key: &str, event: &MessageEvent) -> Result<String> {
+    async fn run_turn(&self, key: &str, event: &MessageEvent) -> Result<DispatchOutcome> {
         use crate::provider::Role;
         // Ensure the session row exists under a deterministic id.
         if self.store.resolve_session_id(key).ok().flatten().is_none() {
@@ -185,15 +197,51 @@ impl Dispatcher {
                     .collect();
             }
         }
+        // Voice-note STT enrichment (hermes
+        // `_transcribe_pending_audio_event_once`): audio attachments are
+        // transcribed ahead of the turn; transcripts are echoed back to
+        // the chat and the enriched text replaces the raw caption.
+        let config = &self.agent.context().config;
+        let audio_paths: Vec<std::path::PathBuf> = event
+            .attachments
+            .iter()
+            .filter(|a| crate::stt::attachment_is_stt_input(&a.mime))
+            .map(|a| a.path.clone())
+            .collect();
+        let mut user_text = event.text.clone();
+        let mut transcript_echoes: Vec<String> = Vec::new();
+        let mut transcribed: Vec<std::path::PathBuf> = Vec::new();
+        if !audio_paths.is_empty() {
+            let (enriched, transcripts, done) = crate::stt::enrich_message_with_transcription(
+                &config.stt,
+                &user_text,
+                &audio_paths,
+            )
+            .await;
+            user_text = enriched;
+            transcribed = done;
+            if config.stt.echo_transcripts {
+                transcript_echoes = transcripts
+                    .iter()
+                    .map(|t| crate::stt::echo_line(t))
+                    .collect();
+            }
+        }
         let mut prompt = if event.sender_name.is_empty() {
-            event.text.clone()
+            user_text
         } else {
-            format!("{}: {}", event.sender_name, event.text)
+            format!("{}: {}", event.sender_name, user_text)
         };
         // Cached attachments are referenced by path so the agent can apply
         // vision_analyze / video_analyze / read_file (hermes text-fallback
-        // semantics for media).
-        prompt.push_str(&attachment_note(&event.attachments));
+        // semantics for media). Transcribed voice notes already appear in
+        // the enriched text — skip them to avoid duplicate path noise.
+        let remaining: Vec<&MediaAttachment> = event
+            .attachments
+            .iter()
+            .filter(|a| !transcribed.contains(&a.path))
+            .collect();
+        prompt.push_str(&attachment_note_refs(&remaining));
         let result = self
             .agent
             .run_with_session(&prompt, Some(history.clone()), Some(key))
@@ -205,7 +253,10 @@ impl Dispatcher {
             .collect();
         // Fire the gateway pre-dispatch observers' counterpart: the
         // session hooks already cover lifecycle; keep this minimal.
-        Ok(result.content)
+        Ok(DispatchOutcome {
+            reply: result.content,
+            transcript_echoes,
+        })
     }
 }
 
@@ -316,7 +367,13 @@ async fn download_to_cache(
 /// the agent can inspect images via `vision_analyze`, video via
 /// `video_analyze`, and documents via `read_file` (hermes falls back to
 /// exactly this text reference when native multimodal injection fails).
+#[cfg(test)]
 fn attachment_note(attachments: &[MediaAttachment]) -> String {
+    let refs: Vec<&MediaAttachment> = attachments.iter().collect();
+    attachment_note_refs(&refs)
+}
+
+fn attachment_note_refs(attachments: &[&MediaAttachment]) -> String {
     if attachments.is_empty() {
         return String::new();
     }
@@ -646,10 +703,17 @@ pub mod telegram {
                 let client = client.clone();
                 let token = token.clone();
                 tokio::spawn(async move {
-                    let reply = match dispatcher.handle_event(event.clone()).await {
-                        Ok(text) => text,
-                        Err(e) => format!("error: {e}"),
+                    let outcome = match dispatcher.handle_event(event.clone()).await {
+                        Ok(outcome) => outcome,
+                        Err(e) => crate::messaging::DispatchOutcome {
+                            reply: format!("error: {e}"),
+                            transcript_echoes: Vec::new(),
+                        },
                     };
+                    for echo in &outcome.transcript_echoes {
+                        send_message(&client, &token, &event.chat_id, echo).await;
+                    }
+                    let reply = outcome.reply;
                     // MEDIA:<path> tags become native attachments (hermes
                     // extract_media); the rest is sent as text.
                     let (reply_text, media_paths) = extract_media_tags(&reply);
@@ -980,10 +1044,17 @@ pub mod discord {
         let dispatcher = dispatcher.clone();
         let token = token.to_string();
         tokio::spawn(async move {
-            let reply = match dispatcher.handle_event(event.clone()).await {
-                Ok(text) => text,
-                Err(e) => format!("error: {e}"),
+            let outcome = match dispatcher.handle_event(event.clone()).await {
+                Ok(outcome) => outcome,
+                Err(e) => crate::messaging::DispatchOutcome {
+                    reply: format!("error: {e}"),
+                    transcript_echoes: Vec::new(),
+                },
             };
+            for echo in &outcome.transcript_echoes {
+                send_channel_message(&token, &event.chat_id, echo).await;
+            }
+            let reply = outcome.reply;
             let (reply_text, media_paths) = extract_media_tags(&reply);
             if !reply_text.trim().is_empty() {
                 send_channel_message(&token, &event.chat_id, &reply_text).await;
@@ -1191,10 +1262,17 @@ pub mod slack {
                 let dispatcher = dispatcher.clone();
                 let bot_token = bot_token.to_string();
                 tokio::spawn(async move {
-                    let reply = match dispatcher.handle_event(message_event.clone()).await {
-                        Ok(text) => text,
-                        Err(e) => format!("error: {e}"),
+                    let outcome = match dispatcher.handle_event(message_event.clone()).await {
+                        Ok(outcome) => outcome,
+                        Err(e) => crate::messaging::DispatchOutcome {
+                            reply: format!("error: {e}"),
+                            transcript_echoes: Vec::new(),
+                        },
                     };
+                    for echo in &outcome.transcript_echoes {
+                        post_message(&bot_token, &message_event.chat_id, echo).await;
+                    }
+                    let reply = outcome.reply;
                     // MEDIA:<path> tags become native Slack file uploads
                     // (hermes files.upload flow); the rest posts as text.
                     let (reply_text, media_paths) = extract_media_tags(&reply);

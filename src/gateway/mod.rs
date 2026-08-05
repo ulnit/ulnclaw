@@ -733,7 +733,7 @@ async fn generic_webhook_route(
         attachments: Vec::new(),
     };
     let reply = match dispatcher.handle_event(event_msg).await {
-        Ok(reply) => reply,
+        Ok(outcome) => outcome.reply,
         Err(e) => {
             tracing::error!("[webhook] route '{}' agent turn failed: {e}", route.name);
             return (

@@ -584,12 +584,21 @@ pub async fn whatsapp_handle_webhook(
         if !crate::messaging::pre_gateway_dispatch_gate_public(&mut event).await {
             continue;
         }
-        let reply = match dispatcher.handle_event(event.clone()).await {
-            Ok(text) => text,
-            Err(e) => format!("error: {e}"),
+        let outcome = match dispatcher.handle_event(event.clone()).await {
+            Ok(outcome) => outcome,
+            Err(e) => crate::messaging::DispatchOutcome {
+                reply: format!("error: {e}"),
+                transcript_echoes: Vec::new(),
+            },
         };
-        let (reply_text, media_paths) = crate::messaging::extract_media_tags(&reply);
         let client = reqwest::Client::new();
+        for echo in &outcome.transcript_echoes {
+            if let Err(e) = whatsapp_send(&client, cfg, &event.chat_id, echo).await {
+                eprintln!("[whatsapp_cloud] transcript echo failed: {e}");
+            }
+        }
+        let reply = outcome.reply;
+        let (reply_text, media_paths) = crate::messaging::extract_media_tags(&reply);
         if let Err(e) = whatsapp_send(&client, cfg, &event.chat_id, &reply_text).await {
             eprintln!("[whatsapp_cloud] reply failed: {e}");
         }
@@ -703,7 +712,7 @@ pub async fn msgraph_handle_webhook(
             attachments: Vec::new(),
         };
         match dispatcher.handle_event(event).await {
-            Ok(_) => {}
+            Ok(_) => {} // Notifications have no chat to echo transcripts into.
             Err(e) => eprintln!("[msgraph] dispatch failed: {e}"),
         }
     }

@@ -14,6 +14,7 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register(video_analyze_tool());
     registry.register(image_generate_tool());
     registry.register(text_to_speech_tool());
+    registry.register(transcribe_audio_tool());
 }
 
 fn openai_key() -> Option<String> {
@@ -506,6 +507,69 @@ fn save_audio(
         "path": path.display().to_string(),
         "bytes": bytes.len(),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// transcribe_audio (hermes tools/transcription_tools.transcribe_audio)
+// ---------------------------------------------------------------------------
+
+fn check_stt() -> ToolAvailability {
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    match crate::stt::provider_readiness(&config.stt) {
+        Ok(()) => ToolAvailability::available(),
+        Err(reason) => ToolAvailability::unavailable(&format!(
+            "stt provider '{}' not ready: {}",
+            config.stt.provider, reason
+        )),
+    }
+}
+
+fn transcribe_audio_tool() -> crate::tools::Tool {
+    tool("transcribe_audio")
+        .description(
+            "Transcribe an audio file (voice note, recording) to text using the configured \
+             STT provider ([stt] config: local_command/groq/openai/mistral/xai/elevenlabs/\
+             deepinfra or a [stt.providers.<name>] command).",
+        )
+        .parameters(json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the audio file"},
+                "model": {"type": "string", "description": "Optional model override for the active provider"},
+                "language": {"type": "string", "description": "Optional language hint override (e.g. en, es, zh)"}
+            },
+            "required": ["path"]
+        }))
+        .handler(|args, ctx| async move {
+            let Some(path_arg) = args.get("path").and_then(|v| v.as_str()) else {
+                return Ok(json!({"success": false, "error": "transcribe_audio: 'path' is required"}));
+            };
+            let path = ctx.resolve_path(path_arg);
+            if !path.exists() {
+                return Ok(json!({"success": false, "error": format!("audio file not found: {}", path.display())}));
+            }
+            let mut stt = ctx.config.stt.clone();
+            crate::stt::apply_overrides(
+                &mut stt,
+                args.get("model").and_then(|v| v.as_str()),
+                args.get("language").and_then(|v| v.as_str()),
+            );
+            let outcome = crate::stt::transcribe_audio(&stt, &path).await;
+            let mut value = json!({
+                "success": outcome.success,
+                "transcript": outcome.transcript,
+                "provider": outcome.provider,
+            });
+            if let Some(error) = outcome.error {
+                value["error"] = json!(error);
+            }
+            Ok(value)
+        })
+        .toolset("stt")
+        .emoji("🎙️")
+        .check_fn(check_stt)
+        .build()
+        .expect("transcribe_audio builds")
 }
 
 /// base64 engine alias (uses reqwest's re-exported base64 when available;

@@ -111,6 +111,14 @@ pub fn toolsets() -> &'static std::collections::HashMap<&'static str, ToolsetDef
             tools: &["text_to_speech"],
             includes: &[],
         });
+        map.insert("stt", ToolsetDef {
+            description:
+                "Speech-to-text transcription (voice notes, recordings). Opt-in: add stt \
+                 to enabled_toolsets; gateway voice messages are transcribed via [stt] \
+                 config regardless of toolsets (hermes parity)",
+            tools: &["transcribe_audio"],
+            includes: &[],
+        });
         map.insert("todo", ToolsetDef {
             description: "Session task list",
             tools: &["todo"],

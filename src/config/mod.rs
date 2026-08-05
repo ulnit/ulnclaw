@@ -710,6 +710,9 @@ pub struct UlncLawConfig {
     /// Messaging platform gateways (hermes gateway/platforms).
     #[serde(default)]
     pub messaging: crate::messaging::MessagingConfig,
+    /// Speech-to-text pipeline for voice messages (hermes `stt:`).
+    #[serde(default)]
+    pub stt: crate::stt::SttConfig,
     /// OAuth device-flow login (hermes portal auth, service-agnostic).
     #[serde(default)]
     pub oauth: crate::oauth::OAuthConfig,
