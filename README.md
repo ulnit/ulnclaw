@@ -55,7 +55,7 @@ skill sync, and a Tauri desktop GUI (`desktop/`).
 - **🔑 Secrets vaults** — external secret sources applied at startup before providers read env (`secrets status/sync`): command helper, Bitwarden Secrets Manager (`bws` — pinned auto-install, AES-GCM-encrypted TTL cache, `secrets bitwarden setup` wizard), 1Password (`op://` refs, `secrets onepassword setup/set`) with full hermes precedence semantics
 - **🖱️ Computer use** — `computer_use` tool via the cua-driver daemon (MCP over stdio, full hermes schema), approval-gated like hermes; `computer-use status/doctor/install`
 - **🔄 OAuth + skill sync** — `auth login` RFC 8628 device flow against any `[oauth]` provider; `sync status/pull/push/now` keeps skills in sync over HTTP(S) or a shared directory
-- **🖥️ Desktop GUI** — `desktop/`: a Tauri 2 shell (replacing hermes' Electron app) that hosts the chat UI (session rename/delete hover actions, live tool-progress strip from `hermes.tool.progress` SSE events) and manages the gateway child process; the gateway's local-app CORS also serves any browser dashboard
+- **🖥️ Desktop GUI** — `desktop/`: a Tauri 2 shell (replacing hermes' Electron app) that hosts the chat UI (session rename/delete hover actions, live tool-progress strip from `hermes.tool.progress` SSE events, `/`-slash completion popup over gateway commands + installed skills) and manages the gateway child process; the gateway's local-app CORS also serves any browser dashboard
 
 ### CLI Quick Start
 
@@ -252,7 +252,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 841 tests
+cargo test                     # 845 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -310,7 +310,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🔑 Secrets 保险库** —— 外部秘密源在启动时、provider 读取 env 之前应用（`secrets status/sync`）：command 助手、Bitwarden Secrets Manager（`bws` —— 固定版本自动安装、AES-GCM 加密 TTL 缓存、`secrets bitwarden setup` 向导）、1Password（`op://` 引用、`secrets onepassword setup/set`），完整复刻 hermes 优先级语义
 - **🖱️ Computer use** —— `computer_use` 工具经 cua-driver 守护进程（MCP over stdio，完整 hermes schema），与 hermes 相同的审批门控；`computer-use status/doctor/install`
 - **🔄 OAuth + 技能同步** —— `auth login` 对任意 `[oauth]` provider 执行 RFC 8628 设备流；`sync status/pull/push/now` 经 HTTP(S) 或共享目录同步技能
-- **🖥️ 桌面 GUI** —— `desktop/`：Tauri 2 外壳（取代 hermes 的 Electron 应用），承载聊天界面（会话重命名/删除悬停操作、`hermes.tool.progress` SSE 事件驱动的实时工具进度条）并管理 gateway 子进程；网关内置的本地应用 CORS 同样服务任意浏览器仪表盘
+- **🖥️ 桌面 GUI** —— `desktop/`：Tauri 2 外壳（取代 hermes 的 Electron 应用），承载聊天界面（会话重命名/删除悬停操作、`hermes.tool.progress` SSE 事件驱动的实时工具进度条、网关命令 + 已装技能的 `/` 斜杠补全弹层）并管理 gateway 子进程；网关内置的本地应用 CORS 同样服务任意浏览器仪表盘
 
 ### CLI 快速开始
 
@@ -426,7 +426,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 841 个测试
+cargo test                     # 845 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

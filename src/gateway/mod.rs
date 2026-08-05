@@ -2570,6 +2570,167 @@ struct SessionChatRequest {
     message: String,
 }
 
+/// Slash handling for the session chat endpoints (hermes desktop slash
+/// passthrough): `/skill-name` + `/<bundle>` invocations expand into
+/// scaffolded agent turns (hermes gateway/run.py shares skill_commands
+/// with the CLI for exactly this), while a small session-scoped command
+/// set runs without an LLM turn.
+enum GatewaySlash {
+    /// Expanded text to run through the agent as the user turn.
+    AgentTurn(String),
+    /// Reply directly — no LLM turn.
+    Direct(String),
+}
+
+const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
+  /help            this list
+  /skills          list skills (invoke one: /<skill-name> [instruction])
+  /tools           list enabled tools
+  /recap           recap this session
+  /title [text]    show or set the session title
+  /usage           this session's token usage
+  /<bundle>        invoke a skill bundle (ulnclaw bundles)";
+
+async fn resolve_gateway_slash(
+    state: &Arc<GatewayState>,
+    session_id: &str,
+    message: &str,
+) -> Option<GatewaySlash> {
+    let trimmed = message.trim();
+    let stripped = trimmed.strip_prefix('/')?;
+    if stripped.is_empty() {
+        return None;
+    }
+    let mut parts = trimmed.splitn(2, ' ');
+    let cmd = parts.next().unwrap_or("");
+    let rest = parts.next().unwrap_or("").trim();
+    let skills_dir = state.agent.context().home.join("skills");
+    match cmd {
+        "/help" => Some(GatewaySlash::Direct(GATEWAY_SLASH_HELP.to_string())),
+        "/skills" => {
+            let skills = crate::skills::list_skills(&skills_dir);
+            if skills.is_empty() {
+                Some(GatewaySlash::Direct(
+                    "no skills installed (<home>/skills).".to_string(),
+                ))
+            } else {
+                let mut text = String::new();
+                for skill in &skills {
+                    text.push_str(&format!("  {} — {}\n", skill.name, skill.description));
+                }
+                Some(GatewaySlash::Direct(text.trim_end().to_string()))
+            }
+        }
+        "/tools" => Some(GatewaySlash::Direct(state.agent.tool_names().join(", "))),
+        "/recap" => {
+            let row = state.store.get_session_row(session_id).ok().flatten();
+            let messages = state.store.load_messages(session_id).unwrap_or_default();
+            let recap = crate::session::recap::build_recap(
+                &messages,
+                row.as_ref().and_then(|r| r.title.as_deref()),
+                Some(session_id),
+            );
+            Some(GatewaySlash::Direct(recap))
+        }
+        "/title" => {
+            if rest.is_empty() {
+                let title = state
+                    .store
+                    .get_session_row(session_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|row| row.title.clone())
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| "(untitled)".to_string());
+                Some(GatewaySlash::Direct(format!("title: {title}")))
+            } else {
+                match state.store.set_session_title(session_id, rest) {
+                    Ok(()) => Some(GatewaySlash::Direct(format!("title set: {rest}"))),
+                    Err(e) => Some(GatewaySlash::Direct(format!("title set failed: {e}"))),
+                }
+            }
+        }
+        "/usage" => {
+            let Some(row) = state.store.get_session_row(session_id).ok().flatten() else {
+                return Some(GatewaySlash::Direct("session not found.".to_string()));
+            };
+            Some(GatewaySlash::Direct(format!(
+                "messages: {}  tokens: {} in / {} out",
+                row.message_count, row.input_tokens, row.output_tokens
+            )))
+        }
+        _ => {
+            let cmd_name = cmd.trim_start_matches('/');
+            // Bundles win over single skills (hermes bundle-over-skill
+            // slash precedence).
+            if let Some(key) = crate::bundles::resolve_bundle_command_key(cmd_name) {
+                if let Some((message, _loaded, _missing)) =
+                    crate::bundles::build_bundle_invocation_message(&key, rest, &skills_dir)
+                {
+                    return Some(GatewaySlash::AgentTurn(message));
+                }
+            }
+            if let Some(message) =
+                crate::skills::build_skill_invocation_message(&skills_dir, cmd_name, rest)
+            {
+                return Some(GatewaySlash::AgentTurn(message));
+            }
+            Some(GatewaySlash::Direct(format!(
+                "unknown command: {cmd} — /help lists gateway slash commands"
+            )))
+        }
+    }
+}
+
+/// Persist a direct slash exchange so the transcript stays whole, and
+/// answer with a single-chunk SSE stream (chat-completions shape).
+fn direct_sse_response(state: &Arc<GatewayState>, session_id: &str, request: &str, text: String) -> Response {
+    let user_msg = Message {
+        role: Role::User,
+        content: Some(request.to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    };
+    let assistant_msg = Message {
+        role: Role::Assistant,
+        content: Some(text.clone()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    };
+    let _ = state.store.append_message(session_id, &user_msg);
+    let _ = state.store.append_message(session_id, &assistant_msg);
+    use axum::response::sse::{Event, Sse};
+    let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+    let created = now_secs() as u64;
+    let model = state.model_name.clone();
+    let chunk = |delta: Value, finish: Value| -> Value {
+        json!({
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        })
+    };
+    let mut final_chunk = chunk(json!({}), json!("stop"));
+    final_chunk["usage"] =
+        json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0});
+    let events: Vec<Event> = vec![
+        Event::default().json_data(chunk(json!({"role": "assistant"}), Value::Null)).unwrap(),
+        Event::default().json_data(chunk(json!({"content": text}), Value::Null)).unwrap(),
+        Event::default().json_data(final_chunk).unwrap(),
+        Event::default().data("[DONE]"),
+    ];
+    let stream = futures::stream::iter(
+        events
+            .into_iter()
+            .map(Ok::<Event, std::convert::Infallible>),
+    );
+    Sse::new(stream).into_response()
+}
+
 /// Drain finished background delegations into a session before its turn —
 /// hermes' async-delegation wake delivery (positive-ownership by the
 /// process session key; ulnclaw runs one profile per gateway process).
@@ -2602,6 +2763,36 @@ async fn session_chat(
             .into_response();
     }
     drain_delegations_into_session(&state, &id);
+    let mut message = request.message.clone();
+    if let Some(slash) = resolve_gateway_slash(&state, &id, &message).await {
+        match slash {
+            GatewaySlash::Direct(text) => {
+                let user_msg = Message {
+                    role: Role::User,
+                    content: Some(message.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                };
+                let assistant_msg = Message {
+                    role: Role::Assistant,
+                    content: Some(text.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                };
+                let _ = state.store.append_message(&id, &user_msg);
+                let _ = state.store.append_message(&id, &assistant_msg);
+                return Json(json!({
+                    "session_id": id,
+                    "response": text,
+                    "iterations": 0,
+                }))
+                .into_response();
+            }
+            GatewaySlash::AgentTurn(expanded) => message = expanded,
+        }
+    }
     let history = state
         .store
         .load_messages(&id)
@@ -2617,7 +2808,7 @@ async fn session_chat(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let outcome = await_with_model_override(
         override_model,
-        state.agent.run_with_session(&request.message, history_arg, Some(&id)),
+        state.agent.run_with_session(&message, history_arg, Some(&id)),
     )
     .await;
     match outcome {
@@ -2649,6 +2840,15 @@ async fn session_chat_stream(
             .into_response();
     }
     drain_delegations_into_session(&state, &id);
+    let mut message = request.message.clone();
+    if let Some(slash) = resolve_gateway_slash(&state, &id, &message).await {
+        match slash {
+            GatewaySlash::Direct(text) => {
+                return direct_sse_response(&state, &id, &message, text);
+            }
+            GatewaySlash::AgentTurn(expanded) => message = expanded,
+        }
+    }
     let history = state
         .store
         .load_messages(&id)
@@ -2657,7 +2857,7 @@ async fn session_chat_stream(
         .filter(|m| m.role != Role::System)
         .collect::<Vec<_>>();
     let history_arg = if history.is_empty() { None } else { Some(history) };
-    stream_agent_response(state, request.message, history_arg, Some(id))
+    stream_agent_response(state, message, history_arg, Some(id))
 }
 
 /// `PATCH /api/sessions/:id` — update client-safe session metadata
@@ -3867,6 +4067,146 @@ mod tests {
         let text = String::from_utf8_lossy(&body).to_string();
         assert!(text.contains(r#""content":"Hel""#), "delta: {}", text);
         assert!(text.contains("data: [DONE]"), "done: {}", text);
+    }
+
+    async fn post_chat(app: Router, sid: &str, message: &str) -> Value {
+        let request = axum::http::Request::builder()
+            .uri(format!("/api/sessions/{}/chat", sid))
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({ "message": message }).to_string(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).expect("json reply")
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_direct_commands() {
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-test", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/help").await;
+        assert!(
+            reply["response"]
+                .as_str()
+                .unwrap()
+                .starts_with("Gateway slash commands:"),
+            "help: {}",
+            reply
+        );
+        assert_eq!(reply["iterations"], 0);
+
+        let reply = post_chat(app.clone(), &sid, "/title Slash Session").await;
+        assert_eq!(reply["response"], "title set: Slash Session");
+        let reply = post_chat(app.clone(), &sid, "/title").await;
+        assert_eq!(reply["response"], "title: Slash Session");
+
+        let reply = post_chat(app.clone(), &sid, "/no-such-command").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .starts_with("unknown command: /no-such-command"));
+
+        // Direct exchanges are persisted to the transcript.
+        let messages = state.store.load_messages(&sid).expect("messages load");
+        assert!(messages
+            .iter()
+            .any(|m| m.content.as_deref() == Some("/help")));
+        assert!(messages
+            .iter()
+            .any(|m| m.content.as_deref() == Some("title set: Slash Session")));
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_skill_expansion() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().to_path_buf();
+        let skill_dir = home.join("skills").join("work");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: work\ndescription: Do the work\n---\n\nDo the thing.\n",
+        )
+        .unwrap();
+        let store = Arc::new(
+            SqliteSessionStore::open(home.join("state.db")).expect("store opens"),
+        );
+        let provider = Arc::new(FakeStreamProvider);
+        let agent = Agent::new(provider.clone(), ToolRegistry::new())
+            .with_store(store)
+            .with_context(
+                crate::tools::context::ToolContext::new()
+                    .with_home(&home)
+                    .with_provider(provider),
+            );
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "fake-stream".into(),
+            "fake".into(),
+            None,
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+        let sid = state
+            .store
+            .create_session("skill-slash", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app, &sid, "/work fix the title leak").await;
+        assert_eq!(reply["response"], "Hello"); // the fake agent answered
+
+        // The user turn was stored as the hermes skill scaffold, so
+        // retitle-skills recognizes it.
+        let messages = state.store.load_messages(&sid).expect("messages load");
+        let scaffold = messages
+            .iter()
+            .find(|m| {
+                m.content
+                    .as_deref()
+                    .map(|c| c.starts_with("[IMPORTANT: The user has invoked the \"work\" skill"))
+                    .unwrap_or(false)
+            })
+            .expect("scaffolded user turn stored");
+        assert_eq!(
+            crate::session::retitle::describe_skill_invocation(scaffold.content.as_ref().unwrap())
+                .as_deref(),
+            Some("/work — fix the title leak")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_stream_slash_direct() {
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-stream", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state);
+        let request = axum::http::Request::builder()
+            .uri(format!("/api/sessions/{}/chat/stream", sid))
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"message": "/help"}"#))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body).to_string();
+        assert!(text.contains("Gateway slash commands:"), "body: {}", text);
+        assert!(text.contains("data: [DONE]"), "body: {}", text);
     }
 
     struct FakeToolStreamProvider {

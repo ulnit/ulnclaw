@@ -380,6 +380,16 @@ impl Agent {
         self
     }
 
+    /// Replace the tool context wholesale (custom home/provider wiring);
+    /// the attached session store, if any, carries over.
+    pub fn with_context(mut self, mut context: ToolContext) -> Self {
+        if let Some(store) = self.store.clone() {
+            context.store = Some(store);
+        }
+        self.context = Arc::new(context);
+        self
+    }
+
     pub fn tool_context(&self) -> Arc<ToolContext> {
         self.context.clone()
     }

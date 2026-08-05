@@ -139,6 +139,74 @@ pub fn linked_files(skill_path: &Path) -> Vec<String> {
     files
 }
 
+/// Build the scaffolded user message for a `/skill-name` slash invocation
+/// (hermes `build_skill_invocation_message` + `_build_skill_message`).
+/// Embeds the whole skill body behind the canonical activation note so the
+/// agent follows the skill, injects the skill directory + supporting-file
+/// hints, and appends the user's instruction marker. Returns `None` when
+/// the skill does not exist.
+pub fn build_skill_invocation_message(
+    skills_dir: &Path,
+    name: &str,
+    user_instruction: &str,
+) -> Option<String> {
+    let skill = find_skill(skills_dir, name)?;
+    let content = std::fs::read_to_string(skill.path.join("SKILL.md")).unwrap_or_default();
+    // Track active usage for curator lifecycle (hermes bump_use #17782).
+    if let Some(home) = skills_dir.parent() {
+        crate::skill_usage::bump_use(home, &skill.name);
+    }
+    let activation_note = format!(
+        "[IMPORTANT: The user has invoked the \"{}\" skill, indicating they want \
+         you to follow its instructions. The full skill content is loaded below.]",
+        skill.name
+    );
+    let mut parts: Vec<String> = vec![activation_note, String::new(), content.trim().to_string()];
+    parts.push(String::new());
+    parts.push(format!("[Skill directory: {}]", skill.path.display()));
+    parts.push(
+        "Resolve any relative paths in this skill (e.g. `scripts/foo.js`, \
+         `templates/config.yaml`) against that directory, then run them \
+         with the terminal tool using the absolute path."
+            .to_string(),
+    );
+    let missing_env: Vec<String> = required_env_vars(&content)
+        .into_iter()
+        .filter(|var| std::env::var(var).map(|v| v.is_empty()).unwrap_or(true))
+        .collect();
+    if !missing_env.is_empty() {
+        parts.push(String::new());
+        parts.push(format!(
+            "[Skill setup note: required environment variables are not set: {}. \
+             Continue and note any reduced functionality.]",
+            missing_env.join(", ")
+        ));
+    }
+    let supporting = linked_files(&skill.path);
+    if !supporting.is_empty() {
+        parts.push(String::new());
+        parts.push("[This skill has supporting files:]".to_string());
+        for rel in &supporting {
+            parts.push(format!("- {}  ->  {}", rel, skill.path.join(rel).display()));
+        }
+        parts.push(format!(
+            "\nLoad any of these with skill_view(name=\"{}\", file_path=\"<path>\"), \
+             or run scripts directly by absolute path (e.g. `node {}/scripts/foo.js`).",
+            skill.name,
+            skill.path.display()
+        ));
+    }
+    let instruction = user_instruction.trim();
+    if !instruction.is_empty() {
+        parts.push(String::new());
+        parts.push(format!(
+            "The user has provided the following instruction alongside the skill invocation: {}",
+            instruction
+        ));
+    }
+    Some(parts.join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +253,41 @@ mod tests {
         assert_eq!(required_env_vars("---\nname: x\n---\n"), Vec::<String>::new());
         // No frontmatter.
         assert_eq!(required_env_vars("plain body"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn skill_invocation_message_scaffolds_hermes_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill_dir = dir.path().join("work");
+        std::fs::create_dir_all(skill_dir.join("scripts")).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: work\ndescription: Do the work\n---\n\nDo the thing.\n",
+        )
+        .unwrap();
+        std::fs::write(skill_dir.join("scripts/run.sh"), "#!/bin/sh\necho ok").unwrap();
+
+        let message =
+            build_skill_invocation_message(dir.path(), "work", "fix the title leak").unwrap();
+        assert!(message.starts_with(
+            "[IMPORTANT: The user has invoked the \"work\" skill, indicating they want"
+        ));
+        assert!(message.contains("The full skill content is loaded below.]"));
+        assert!(message.contains("Do the thing."));
+        assert!(message.contains(&format!("[Skill directory: {}]", skill_dir.display())));
+        assert!(message.contains("scripts/run.sh"));
+        assert!(message.ends_with(
+            "The user has provided the following instruction alongside the skill invocation: fix the title leak"
+        ));
+        // Round-trips through the retitle describe surface.
+        assert_eq!(
+            crate::session::retitle::describe_skill_invocation(&message).as_deref(),
+            Some("/work — fix the title leak")
+        );
+
+        // Bare invocation: no instruction marker; case-insensitive lookup.
+        let bare = build_skill_invocation_message(dir.path(), "WORK", "  ").unwrap();
+        assert!(!bare.contains("alongside the skill invocation"));
+        assert!(build_skill_invocation_message(dir.path(), "nope", "").is_none());
     }
 }

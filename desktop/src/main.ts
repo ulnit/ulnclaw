@@ -3,7 +3,7 @@
 // everything else is plain HTTP (gateway.ts).
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
-import type { GatewaySettings, SessionRow } from "./gateway";
+import type { GatewaySettings, SessionRow, SkillRow } from "./gateway";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -36,6 +36,7 @@ const state = {
   current: null as SessionRow | null,
   busy: false,
   managedPid: null as number | null,
+  skills: [] as SkillRow[],
 };
 
 const el = {
@@ -48,6 +49,7 @@ const el = {
   input: document.getElementById("input") as HTMLTextAreaElement,
   send: document.getElementById("send") as HTMLButtonElement,
   toolProgress: document.getElementById("tool-progress")!,
+  slashPop: document.getElementById("slash-pop")!,
   settingsBtn: document.getElementById("settings-btn") as HTMLButtonElement,
   settings: document.getElementById("settings") as HTMLDialogElement,
   settingUrl: document.getElementById("setting-url") as HTMLInputElement,
@@ -184,6 +186,7 @@ async function sendTurn(): Promise<void> {
   state.busy = true;
   el.send.disabled = true;
   el.input.value = "";
+  hideSlashPop();
   el.toolProgress.hidden = true;
   el.toolProgress.textContent = "";
   addMessage("user", text);
@@ -227,6 +230,78 @@ async function pollHealth(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Slash-command completion (hermes desktop-slash-commands passthrough):
+// the gateway chat endpoints execute /skill + /<bundle> invocations and a
+// small session command set; the popup surfaces both while typing.
+// ---------------------------------------------------------------------------
+
+const GATEWAY_SLASH_COMMANDS: [string, string][] = [
+  ["/help", "gateway slash commands"],
+  ["/skills", "list skills"],
+  ["/tools", "list enabled tools"],
+  ["/recap", "recap this session"],
+  ["/title", "show or set the session title"],
+  ["/usage", "this session's token usage"],
+];
+
+let slashIndex = 0;
+
+function slashCandidates(prefix: string): { name: string; desc: string }[] {
+  const builtins = GATEWAY_SLASH_COMMANDS.map(([name, desc]) => ({ name, desc }));
+  const skills = state.skills.map((skill) => ({
+    name: `/${skill.name}`,
+    desc: skill.description || "skill",
+  }));
+  const lowered = prefix.toLowerCase();
+  return [...builtins, ...skills].filter((item) => item.name.toLowerCase().startsWith(lowered));
+}
+
+function hideSlashPop(): void {
+  el.slashPop.hidden = true;
+  el.slashPop.innerHTML = "";
+  slashIndex = 0;
+}
+
+function renderSlashPop(): void {
+  const value = el.input.value;
+  // Only while typing the leading command token (no space/newline yet).
+  if (!value.startsWith("/") || /[\s]/.test(value)) {
+    hideSlashPop();
+    return;
+  }
+  const items = slashCandidates(value);
+  if (items.length === 0) {
+    hideSlashPop();
+    return;
+  }
+  slashIndex = Math.min(slashIndex, items.length - 1);
+  el.slashPop.innerHTML = "";
+  items.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "slash-item" + (index === slashIndex ? " selected" : "");
+    const name = document.createElement("span");
+    name.className = "slash-name";
+    name.textContent = item.name;
+    const desc = document.createElement("span");
+    desc.className = "slash-desc";
+    desc.textContent = item.desc;
+    row.append(name, desc);
+    row.onmousedown = (event) => {
+      event.preventDefault(); // keep composer focus
+      completeSlash(item.name);
+    };
+    el.slashPop.appendChild(row);
+  });
+  el.slashPop.hidden = false;
+}
+
+function completeSlash(name: string): void {
+  el.input.value = `${name} `;
+  hideSlashPop();
+  el.input.focus();
+}
+
 async function start(): Promise<void> {
   state.bridge = await loadBridge();
   state.client = new GatewayClient(state.settings);
@@ -255,11 +330,37 @@ async function start(): Promise<void> {
   };
   el.send.onclick = () => void sendTurn();
   el.input.addEventListener("keydown", (event) => {
+    if (!el.slashPop.hidden) {
+      const items = slashCandidates(el.input.value);
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        slashIndex = (slashIndex + 1) % Math.max(items.length, 1);
+        renderSlashPop();
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        slashIndex = (slashIndex - 1 + items.length) % Math.max(items.length, 1);
+        renderSlashPop();
+        return;
+      }
+      if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+        event.preventDefault();
+        if (items[slashIndex]) completeSlash(items[slashIndex].name);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        hideSlashPop();
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void sendTurn();
     }
   });
+  el.input.addEventListener("input", () => renderSlashPop());
   el.settingsBtn.onclick = () => {
     el.settingUrl.value = state.settings.url;
     el.settingKey.value = state.settings.key;
@@ -282,6 +383,7 @@ async function start(): Promise<void> {
 
   await pollHealth();
   await refreshSessions();
+  state.skills = (await state.client.listSkills()) || [];
   setInterval(() => void pollHealth(), 10000);
   setInterval(() => void refreshSessions(), 30000);
 }

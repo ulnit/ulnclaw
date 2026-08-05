@@ -29,6 +29,11 @@ export interface ChatReply {
   session_id: string;
 }
 
+export interface SkillRow {
+  name: string;
+  description: string;
+}
+
 const SETTINGS_KEY = "ulnclaw.gateway";
 
 export function loadSettings(): GatewaySettings {
@@ -208,5 +213,17 @@ export class GatewayClient {
       headers: this.headers(),
     });
     if (!response.ok) throw new Error(`delete session: HTTP ${response.status}`);
+  }
+
+  /** Installed skills (drives the composer's /slash completion). */
+  async listSkills(): Promise<SkillRow[]> {
+    try {
+      const response = await fetch(this.endpoint("/v1/skills"), { headers: this.headers() });
+      if (!response.ok) return [];
+      const value = await response.json();
+      return (value.data || []) as SkillRow[];
+    } catch {
+      return [];
+    }
   }
 }
