@@ -60,6 +60,8 @@ pub struct Task {
     pub claim_lock: Option<String>,
     pub claim_expires: Option<i64>,
     pub last_heartbeat_at: Option<i64>,
+    /// Pid of the dispatcher-spawned worker (hermes `worker_pid`).
+    pub worker_pid: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +88,85 @@ pub struct TaskEvent {
     pub kind: String,
     pub payload: Value,
     pub created_at: i64,
+}
+
+/// Outcome of one [`KanbanStore::dispatch_once`] tick (hermes
+/// `DispatchResult`, scoped).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DispatchResult {
+    /// Running tasks whose claim expired and were reset to ready.
+    pub reclaimed: Vec<String>,
+    /// Todo tasks promoted to ready (all parents done).
+    pub promoted: Vec<String>,
+    /// Tasks a worker was spawned for, with the worker pid when known.
+    pub spawned: Vec<(String, Option<i64>)>,
+    /// Tasks that would have spawned (dry-run ticks).
+    pub would_spawn: Vec<String>,
+    /// Ready tasks skipped because the concurrency cap was reached.
+    pub skipped_capped: Vec<String>,
+    /// Tasks whose spawn failed (still under the failure limit).
+    pub spawn_failed: Vec<String>,
+    /// Tasks auto-blocked after `failure_limit` consecutive spawn failures.
+    pub auto_blocked: Vec<String>,
+}
+
+/// Worker brief for a dispatcher-spawned task (hermes spawns
+/// `hermes chat -q "work kanban task <id>"`; the ulnclaw one-shot is
+/// `ulnclaw run`).
+pub fn worker_prompt(task: &Task) -> String {
+    format!(
+        "You are a kanban worker for task {} ({}). Start by calling kanban_show \
+         (task_id defaults to your own task) to read the full brief, then do the \
+         work. When finished you MUST call kanban_complete with a result summary; \
+         if you cannot proceed, call kanban_block with the reason. Use \
+         kanban_heartbeat to report progress on long steps.",
+        task.id, task.title
+    )
+}
+
+/// Spawn a detached `ulnclaw run` worker for `task` (hermes
+/// `_default_spawn`). The worker gets `ULNCLAW_KANBAN_TASK=<id>` (the
+/// worker-context env the kanban_* tools gate on), an optional
+/// `--profile <assignee>`, and its output goes to
+/// `<home>/kanban/worker-logs/<id>.log`. Returns the worker pid.
+pub fn default_spawn(home: &Path, task: &Task) -> std::result::Result<Option<i64>, String> {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
+    let log_dir = home.join("kanban").join("worker-logs");
+    std::fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("create {}: {e}", log_dir.display()))?;
+    let log_path = log_dir.join(format!("{}.log", task.id));
+    let log_file = std::fs::File::create(&log_path)
+        .map_err(|e| format!("create {}: {e}", log_path.display()))?;
+    let err_file = log_file
+        .try_clone()
+        .map_err(|e| format!("clone log handle: {e}"))?;
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("run").arg(worker_prompt(task));
+    if let Some(assignee) = task.assignee.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+        cmd.arg("--profile").arg(assignee);
+    }
+    cmd.env("ULNCLAW_KANBAN_TASK", &task.id);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log_file))
+        .stderr(std::process::Stdio::from(err_file));
+    // New session: the worker survives the dispatcher's process group.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let child = cmd.spawn().map_err(|e| format!("spawn worker: {e}"))?;
+    Ok(Some(i64::from(child.id())))
+}
+
+/// Best-effort liveness check for a local pid (hermes `_pid_alive`).
+fn pid_alive(pid: i64) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// Arguments for [`KanbanStore::create_task`].
@@ -182,6 +263,21 @@ impl KanbanStore {
             );",
         )
         .map_err(db_error("schema"))?;
+        // Additive migration: pre-P122 stores lack the worker_pid column.
+        let has_worker_pid: bool = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(tasks)")
+                .map_err(db_error("migrate"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(db_error("migrate"))?;
+            let found = rows.flatten().any(|name| name == "worker_pid");
+            found
+        };
+        if !has_worker_pid {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN worker_pid INTEGER;")
+                .map_err(db_error("migrate worker_pid"))?;
+        }
         let store = Self {
             conn: Mutex::new(conn),
             path,
@@ -439,12 +535,13 @@ impl KanbanStore {
             claim_lock: row.get("claim_lock")?,
             claim_expires: row.get("claim_expires")?,
             last_heartbeat_at: row.get("last_heartbeat_at")?,
+            worker_pid: row.get("worker_pid")?,
         })
     }
 
     const TASK_COLUMNS: &'static str = "id, board, title, body, assignee, status, priority, \
         created_by, created_at, started_at, completed_at, tenant, model, result, \
-        claim_lock, claim_expires, last_heartbeat_at";
+        claim_lock, claim_expires, last_heartbeat_at, worker_pid";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -834,6 +931,27 @@ impl KanbanStore {
         Ok(())
     }
 
+    /// Remove a parent → child link (hermes `unlink_tasks`). Idempotent.
+    pub fn unlink_tasks(&self, parent_id: &str, child_id: &str) -> Result<()> {
+        let removed = self
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM task_links WHERE parent_id = ?1 AND child_id = ?2",
+                params![parent_id, child_id],
+            )
+            .map_err(db_error("unlink"))?;
+        if removed > 0 {
+            self.append_event(
+                child_id,
+                "unlinked",
+                serde_json::json!({ "parent_id": parent_id }),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Parent task ids of `task_id`, oldest link first.
     pub fn parents_of(&self, task_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
@@ -893,6 +1011,228 @@ impl KanbanStore {
             .query_map(params![task_id], |row| row.get::<_, String>(0))
             .map_err(db_error("children"))?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("children"))
+    }
+
+    // ------------------------------------------------------------------
+    // Dispatcher tick (hermes kanban_db.dispatch_once semantics, scoped:
+    // reclaim stale claims, promote parent-done todos, spawn ready tasks)
+    // ------------------------------------------------------------------
+
+    /// Reset `running` tasks whose claim TTL expired back to `ready`
+    /// (hermes `release_stale_claims`). A stale claim whose worker pid is
+    /// still alive gets extended instead of reclaimed, so a slow-but-healthy
+    /// worker is not yanked mid-flight. Returns reclaimed task ids.
+    pub fn release_stale_claims(&self) -> Result<Vec<String>> {
+        let now = Self::now();
+        let stale: Vec<(String, Option<i64>)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, worker_pid FROM tasks WHERE status = 'running' \
+                     AND claim_expires IS NOT NULL AND claim_expires < ?1",
+                )
+                .map_err(db_error("stale"))?;
+            let rows = stmt
+                .query_map(params![now], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+                })
+                .map_err(db_error("stale"))?;
+            let found = rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error("stale"))?;
+            found
+        };
+        let mut reclaimed = Vec::new();
+        for (id, worker_pid) in stale {
+            if let Some(pid) = worker_pid {
+                if pid_alive(pid) {
+                    // Healthy slow worker: extend the claim another TTL.
+                    let new_expires = now + DEFAULT_CLAIM_TTL_SECS;
+                    self.conn
+                        .lock()
+                        .unwrap()
+                        .execute(
+                            "UPDATE tasks SET claim_expires = ?2 WHERE id = ?1 \
+                             AND status = 'running'",
+                            params![id, new_expires],
+                        )
+                        .map_err(db_error("extend claim"))?;
+                    self.append_event(
+                        &id,
+                        "claim_extended",
+                        serde_json::json!({ "expires": new_expires }),
+                    )?;
+                    continue;
+                }
+            }
+            self.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE tasks SET status = 'ready', claim_lock = NULL, \
+                     claim_expires = NULL, worker_pid = NULL \
+                     WHERE id = ?1 AND status = 'running'",
+                    params![id],
+                )
+                .map_err(db_error("release claim"))?;
+            self.append_event(&id, "released", serde_json::json!({ "reason": "stale_claim" }))?;
+            reclaimed.push(id);
+        }
+        Ok(reclaimed)
+    }
+
+    /// Promote `todo` tasks whose parents are all `done` to `ready`
+    /// (hermes `recompute_ready`). Returns promoted task ids.
+    pub fn recompute_ready(&self) -> Result<Vec<String>> {
+        let todos: Vec<String> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare("SELECT id FROM tasks WHERE status = 'todo'")
+                .map_err(db_error("recompute"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(db_error("recompute"))?;
+            let found = rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error("recompute"))?;
+            found
+        };
+        let mut promoted = Vec::new();
+        for id in todos {
+            let parents = self.parents_of(&id)?;
+            let mut all_done = true;
+            for parent in parents {
+                match self.get_task(&parent)? {
+                    Some(task) if task.status == "done" => {}
+                    _ => {
+                        all_done = false;
+                        break;
+                    }
+                }
+            }
+            if all_done {
+                self.ready_task(&id)?;
+                promoted.push(id);
+            }
+        }
+        Ok(promoted)
+    }
+
+    /// Consecutive spawn failures recorded for `task_id` (hermes counts
+    /// them to auto-block unfixable tasks).
+    fn spawn_failure_streak(&self, task_id: &str) -> Result<usize> {
+        let events = self.events(task_id)?;
+        let mut streak = 0usize;
+        for event in events.iter().rev() {
+            match event.kind.as_str() {
+                "spawn_failed" => streak += 1,
+                "spawned" | "released" | "ready" | "created" => break,
+                _ => {}
+            }
+        }
+        Ok(streak)
+    }
+
+    /// Record the pid of a dispatcher-spawned worker.
+    pub fn set_worker_pid(&self, id: &str, pid: Option<i64>) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET worker_pid = ?2 WHERE id = ?1",
+                params![id, pid],
+            )
+            .map_err(db_error("worker_pid"))?;
+        Ok(())
+    }
+
+    /// Run one dispatcher tick (hermes `dispatch_once`, scoped port):
+    /// 1. reclaim stale claims, 2. promote parent-done todos, 3. spawn
+    /// ready tasks (priority desc, oldest first) up to the live
+    /// concurrency cap `max_spawn` (counting already-running tasks).
+    /// `spawn` returns the worker pid; failures are counted per task and
+    /// after `failure_limit` consecutive failures the task is auto-blocked
+    /// with the last error (hermes DEFAULT_FAILURE_LIMIT = 2).
+    pub fn dispatch_once<F>(
+        &self,
+        mut spawn: F,
+        max_spawn: Option<usize>,
+        dry_run: bool,
+        failure_limit: usize,
+    ) -> Result<DispatchResult>
+    where
+        F: FnMut(&Task) -> std::result::Result<Option<i64>, String>,
+    {
+        let mut result = DispatchResult::default();
+        result.reclaimed = self.release_stale_claims()?;
+        result.promoted = self.recompute_ready()?;
+
+        let running = self.list_tasks(None, Some("running"), None, 10_000)?;
+        let mut running_count = running.len();
+        let ready: Vec<String> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM tasks WHERE status = 'ready' AND claim_lock IS NULL \
+                     ORDER BY priority DESC, created_at ASC",
+                )
+                .map_err(db_error("dispatch"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(db_error("dispatch"))?;
+            let found = rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error("dispatch"))?;
+            found
+        };
+
+        for id in ready {
+            if let Some(cap) = max_spawn {
+                if running_count >= cap {
+                    result.skipped_capped.push(id);
+                    continue;
+                }
+            }
+            let Some(task) = self.get_task(&id)? else {
+                continue;
+            };
+            if dry_run {
+                result.would_spawn.push(id);
+                continue;
+            }
+            match spawn(&task) {
+                Ok(pid) => {
+                    let claimed = self.claim_task(
+                        &id,
+                        &KanbanStore::claimer_id(),
+                        DEFAULT_CLAIM_TTL_SECS,
+                    )?;
+                    self.set_worker_pid(&id, pid)?;
+                    self.append_event(
+                        &id,
+                        "spawned",
+                        serde_json::json!({ "pid": pid, "assignee": claimed.assignee }),
+                    )?;
+                    running_count += 1;
+                    result.spawned.push((id, pid));
+                }
+                Err(err) => {
+                    self.append_event(
+                        &id,
+                        "spawn_failed",
+                        serde_json::json!({ "error": err }),
+                    )?;
+                    let streak = self.spawn_failure_streak(&id)?;
+                    if streak >= failure_limit {
+                        self.block_task(
+                            &id,
+                            &format!("dispatcher: spawn failed {streak}x — {err}"),
+                        )?;
+                        result.auto_blocked.push(id);
+                    } else {
+                        result.spawn_failed.push(id);
+                    }
+                }
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -1053,5 +1393,132 @@ mod tests {
             assert_ne!(status_icon(status), "?");
         }
         assert_eq!(status_icon("weird"), "?");
+    }
+
+    #[test]
+    fn dispatch_promotes_todos_with_done_parents() {
+        let (_dir, store) = temp_store();
+        let parent = make_task(&store, "parent");
+        let child = make_task(&store, "child");
+        store.link_tasks(&parent.id, &child.id).unwrap();
+        // Parentless todos promote (vacuous all-parents-done); the child
+        // stays todo while its parent is unfinished.
+        let promoted = store.recompute_ready().unwrap();
+        assert_eq!(promoted, vec![parent.id.clone()]);
+        assert_eq!(store.get_task(&child.id).unwrap().unwrap().status, "todo");
+        store.complete_task(&parent.id, Some("done")).unwrap();
+        let promoted = store.recompute_ready().unwrap();
+        assert_eq!(promoted, vec![child.id.clone()]);
+        assert_eq!(store.get_task(&child.id).unwrap().unwrap().status, "ready");
+    }
+
+    #[test]
+    fn dispatch_spawns_ready_tasks_respecting_cap() {
+        let (_dir, store) = temp_store();
+        let first = make_task(&store, "first");
+        let second = make_task(&store, "second");
+        store.ready_task(&first.id).unwrap();
+        store.ready_task(&second.id).unwrap();
+
+        let result = store
+            .dispatch_once(|_| Ok(Some(1234)), Some(1), false, 2)
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        assert_eq!(result.spawned[0].0, first.id);
+        assert_eq!(result.skipped_capped, vec![second.id.clone()]);
+        let spawned_task = store.get_task(&first.id).unwrap().unwrap();
+        assert_eq!(spawned_task.status, "running");
+        assert_eq!(spawned_task.worker_pid, Some(1234));
+
+        // Second tick with a higher cap picks up the remaining task.
+        let result = store
+            .dispatch_once(|_| Ok(Some(5678)), Some(2), false, 2)
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        assert_eq!(result.spawned[0].0, second.id);
+    }
+
+    #[test]
+    fn dispatch_dry_run_spawns_nothing() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "probe");
+        store.ready_task(&task.id).unwrap();
+        let result = store
+            .dispatch_once(|_| panic!("dry run must not spawn"), None, true, 2)
+            .unwrap();
+        assert_eq!(result.would_spawn, vec![task.id.clone()]);
+        assert!(result.spawned.is_empty());
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "ready");
+    }
+
+    #[test]
+    fn dispatch_auto_blocks_after_repeated_spawn_failures() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "doomed");
+        store.ready_task(&task.id).unwrap();
+
+        // First failure: recorded, still ready-ish for retry.
+        let result = store
+            .dispatch_once(|_| Err("boom".into()), None, false, 2)
+            .unwrap();
+        assert_eq!(result.spawn_failed, vec![task.id.clone()]);
+        assert!(result.auto_blocked.is_empty());
+
+        // Second consecutive failure trips the limit → blocked.
+        let result = store
+            .dispatch_once(|_| Err("boom again".into()), None, false, 2)
+            .unwrap();
+        assert_eq!(result.auto_blocked, vec![task.id.clone()]);
+        let blocked = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(blocked.status, "blocked");
+        assert!(blocked.result.is_none());
+    }
+
+    #[test]
+    fn release_stale_claims_reclaims_dead_workers() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "stale");
+        store.ready_task(&task.id).unwrap();
+        let claimed = store
+            .claim_task(&task.id, &KanbanStore::claimer_id(), DEFAULT_CLAIM_TTL_SECS)
+            .unwrap();
+        assert_eq!(claimed.status, "running");
+
+        // Force-expire the claim and pin a dead worker pid.
+        store.conn.lock().unwrap()
+            .execute(
+                "UPDATE tasks SET claim_expires = ?2, worker_pid = ?3 WHERE id = ?1",
+                params![task.id, 1i64, 999_999_999i64],
+            )
+            .unwrap();
+        let reclaimed = store.release_stale_claims().unwrap();
+        assert_eq!(reclaimed, vec![task.id.clone()]);
+        let released = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(released.status, "ready");
+        assert!(released.claim_lock.is_none());
+        assert!(released.worker_pid.is_none());
+    }
+
+    #[test]
+    fn release_stale_claims_extends_live_workers() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "slow-but-alive");
+        store.ready_task(&task.id).unwrap();
+        store
+            .claim_task(&task.id, &KanbanStore::claimer_id(), DEFAULT_CLAIM_TTL_SECS)
+            .unwrap();
+        // Expired claim but our own (very much alive) pid.
+        let live_pid = std::process::id() as i64;
+        store.conn.lock().unwrap()
+            .execute(
+                "UPDATE tasks SET claim_expires = ?2, worker_pid = ?3 WHERE id = ?1",
+                params![task.id, 1i64, live_pid],
+            )
+            .unwrap();
+        let reclaimed = store.release_stale_claims().unwrap();
+        assert!(reclaimed.is_empty());
+        let extended = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(extended.status, "running");
+        assert!(extended.claim_expires.unwrap() > 1);
     }
 }

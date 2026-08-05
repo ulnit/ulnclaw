@@ -598,6 +598,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/boards", get(kanban::list_boards).post(kanban::create_board))
         .route("/api/kanban/boards/:slug/switch", post(kanban::switch_board))
         .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))
+        .route("/api/kanban/dispatch", post(kanban::dispatch))
         .route("/api/kanban/tasks/:id", get(kanban::get_task))
         .route("/api/kanban/tasks/:id/complete", post(kanban::complete_task))
         .route("/api/kanban/tasks/:id/block", post(kanban::block_task))

@@ -373,6 +373,53 @@ pub async fn link_task(Path(id): Path<String>, Json(body): Json<LinkBody>) -> Re
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct DispatchBody {
+    #[serde(default)]
+    pub max_spawn: Option<usize>,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+}
+
+/// `POST /api/kanban/dispatch` — one dispatcher tick (hermes
+/// `kanban dispatch`): reclaim stale claims, promote parent-done todos,
+/// spawn detached `ulnclaw run` workers for ready tasks.
+pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let home = crate::config::ulnclaw_home();
+    let max_spawn = body.max_spawn.unwrap_or(2).max(1);
+    let dry_run = body.dry_run.unwrap_or(false);
+    // Spawning child processes is blocking work — keep it off the axum task.
+    let outcome = tokio::task::spawn_blocking(move || {
+        store.dispatch_once(
+            |task| crate::kanban::default_spawn(&home, task),
+            Some(max_spawn),
+            dry_run,
+            2,
+        )
+    })
+    .await;
+    match outcome {
+        Ok(Ok(result)) => Json(json!({
+            "object": "ulnclaw.kanban.dispatch",
+            "dry_run": dry_run,
+            "reclaimed": result.reclaimed,
+            "promoted": result.promoted,
+            "spawned": result.spawned,
+            "would_spawn": result.would_spawn,
+            "skipped_capped": result.skipped_capped,
+            "spawn_failed": result.spawn_failed,
+            "auto_blocked": result.auto_blocked,
+        }))
+        .into_response(),
+        Ok(Err(e)) => super::server_error(&e.to_string()),
+        Err(e) => super::server_error(&e.to_string()),
+    }
+}
+
 /// `POST /api/kanban/tasks/:id/claim` — claim a task for work (desktop
 /// "start" button); uses the same TTL semantics as the CLI workers.
 pub async fn claim_task(Path(id): Path<String>) -> Response {

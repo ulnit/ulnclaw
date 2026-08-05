@@ -565,6 +565,23 @@ enum KanbanAction {
     Archive { id: String },
     /// Comment on a task
     Comment { id: String, text: Vec<String> },
+    /// Add a parent→child dependency (hermes `kanban link <parent> <child>`)
+    Link { parent: String, child: String },
+    /// Remove a parent→child dependency (hermes `kanban unlink`)
+    Unlink { parent: String, child: String },
+    /// One dispatcher pass: reclaim stale claims, promote parent-done
+    /// todos, spawn workers for ready tasks (hermes `kanban dispatch`)
+    Dispatch {
+        /// Max concurrent workers (counts already-running tasks)
+        #[arg(long, default_value = "2")]
+        max_spawn: usize,
+        /// Show what would spawn without spawning
+        #[arg(long)]
+        dry_run: bool,
+        /// Consecutive spawn failures before a task is auto-blocked
+        #[arg(long, default_value = "2")]
+        failure_limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -4221,6 +4238,56 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .add_comment(&resolved, &KanbanStore::claimer_id(), &text)
                 .map_err(|e| e.to_string())?;
             println!("comment added to {resolved}");
+        }
+        KanbanAction::Link { parent, child } => {
+            let parent = resolve(&parent)?;
+            let child = resolve(&child)?;
+            store
+                .link_tasks(&parent, &child)
+                .map_err(|e| e.to_string())?;
+            println!("linked {parent} → {child} (child waits for parent)");
+        }
+        KanbanAction::Unlink { parent, child } => {
+            let parent = resolve(&parent)?;
+            let child = resolve(&child)?;
+            store
+                .unlink_tasks(&parent, &child)
+                .map_err(|e| e.to_string())?;
+            println!("unlinked {parent} → {child}");
+        }
+        KanbanAction::Dispatch { max_spawn, dry_run, failure_limit } => {
+            let home = ulnclaw::config::ulnclaw_home();
+            let result = store
+                .dispatch_once(
+                    |task| ulnclaw::kanban::default_spawn(&home, task),
+                    Some(max_spawn.max(1)),
+                    dry_run,
+                    failure_limit.max(1),
+                )
+                .map_err(|e| e.to_string())?;
+            if dry_run {
+                println!("dry run — would spawn {} task(s)", result.would_spawn.len());
+                for id in &result.would_spawn {
+                    println!("  ▶ {id}");
+                }
+            } else {
+                println!(
+                    "dispatch: {} reclaimed, {} promoted, {} spawned",
+                    result.reclaimed.len(),
+                    result.promoted.len(),
+                    result.spawned.len()
+                );
+                for (id, pid) in &result.spawned {
+                    let pid = pid.map(|p| p.to_string()).unwrap_or_else(|| "?".into());
+                    println!("  ● {id} → worker pid {pid}");
+                }
+            }
+            for id in &result.skipped_capped {
+                println!("  ⏭ {id} skipped (concurrency cap)");
+            }
+            for id in &result.auto_blocked {
+                println!("  ⊘ {id} auto-blocked (spawn failures)");
+            }
         }
     }
     Ok(())

@@ -113,7 +113,7 @@
 | 记忆系统 | ✅ | MEMORY.md/USER.md，注入提示词 |
 | Cron 调度器 | ✅ | 任务存储 + 计划解析 + 轮询循环（`cron::run_scheduler`） |
 | MCP 客户端（`mcp_tool.py`） | ✅ 核心 | stdio JSON-RPC：initialize/tools/list/tools/call；`[[mcp.servers]]` 配置；工具注册为 `mcp__<server>__<tool>`；npx/uvx/pipx 启动前的 OSV 恶意软件检查（`osv_check.py` 移植：MAL-* 通告阻止启动、fail-open、1 小时结论缓存、`OSV_ENDPOINT`/`OSV_CHECK_CACHE_TTL` 覆盖） |
-| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`、`kanban init`/`boards list|create|rm|switch|show`/`create`/`list`/`show`/`ready`/`assign`/`claim`/`heartbeat`/`done`/`block`/`unblock`/`archive`/`comment`（kanban 任务引擎：boards、带 TTL 的认领锁 + 过期接管、带图标的 hermes 状态生命周期、评论与事件轨迹、`kanban_task_*` 插件钩子）、`secrets status/sync/bitwarden setup|install|status|disable/onepassword setup|status|set|remove|disable`、`computer-use status/doctor/install`、`plugins list/enable/disable/accept-hooks`、`hooks list/test/revoke/doctor`、`pairing list/approve/revoke/clear-pending`、`weixin login`（微信 iLink 扫码登录）、`auth login/status/refresh/logout`、`sync status/pull/push/now/enable/disable/device`、`uninstall --full/--dry-run/--yes`（代码检出 + shell PATH 条目 + 包装符号链接 + 可选清除主目录；hermes `uninstall.py` 移植 —— Windows 注册表/环境变量步骤未移植））、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
+| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`、`kanban init`/`boards list|create|rm|switch|show`/`create`/`list`/`show`/`ready`/`assign`/`claim`/`heartbeat`/`done`/`block`/`unblock`/`archive`/`comment`/`link`/`unlink`/`dispatch [--max-spawn N] [--dry-run]`（kanban 任务引擎：boards、带 TTL 的认领锁 + 过期接管、带图标的 hermes 状态生命周期、评论与事件轨迹、`kanban_task_*` 插件钩子）、`secrets status/sync/bitwarden setup|install|status|disable/onepassword setup|status|set|remove|disable`、`computer-use status/doctor/install`、`plugins list/enable/disable/accept-hooks`、`hooks list/test/revoke/doctor`、`pairing list/approve/revoke/clear-pending`、`weixin login`（微信 iLink 扫码登录）、`auth login/status/refresh/logout`、`sync status/pull/push/now/enable/disable/device`、`uninstall --full/--dry-run/--yes`（代码检出 + shell PATH 条目 + 包装符号链接 + 可选清除主目录；hermes `uninstall.py` 移植 —— Windows 注册表/环境变量步骤未移植））、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
 | Git 工作区 diff（`working_diff.py`） | ✅ | `ulnclaw diff [--staged|--all] [--dir PATH] [paths...]` + REPL `/gitdiff [staged|all]`：working/staged/all 三模式，未跟踪文件经 `git diff --no-index` 折入（上限 50 个），带超时；基于检查点的 REPL `/diff` 保持独立 |
 | 委派（delegation） | ✅ | SubAgentRunner trait、深度限制、子会话 |
 | 混合智能体 MoA（`moa_loop.py`、`moa_config.py`） | ✅ 核心 | `[moa.presets.<name>]` 参考模型并行扇出 + 聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa <prompt>`）；loud/silent 降级策略、全部失败提前返回、聚合失败回退拼接结果；持久 `provider: moa` 门面、trace 与隐私过滤未移植 |
@@ -183,7 +183,11 @@
   目录）；pre_verify 无 ulnclaw verify 循环可挂载；`ulnclaw kanban` 引擎
   现已在 claim/done/block 时触发 kanban_task_claimed/completed/blocked
   钩子，agent 侧 kanban_* 工具现已改用同一 KanbanStore 引擎
-  （P119 统一了此前独立的表），hermes 的 swarm/worktree-dispatcher 层未移植。
+  （P119 统一了此前独立的表）；P122 移植了调度器 tick（`kanban dispatch` CLI +
+  `POST /api/kanban/dispatch`：过期认领回收（存活 pid 自动续期）、父任务完成的
+  todo→ready 晋升、就绪任务经分离的 `ulnclaw run` 生成 worker（ULNCLAW_KANBAN_TASK
+  环境）、实时并发上限、连续 2 次 spawn 失败自动阻塞）；hermes 的 worktree 隔离
+  与网关内嵌定时调度未移植。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
