@@ -163,6 +163,12 @@ enum Commands {
         /// Mode to persist: manual | smart | off (omit to show current)
         mode: Option<String>,
     },
+    /// Measure the system prompt + tool-schema payload (hermes prompt-size)
+    PromptSize {
+        /// Emit the breakdown as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Diagnose configuration and dependencies (hermes doctor)
     Doctor {
         /// Attempt to fix issues automatically
@@ -974,6 +980,25 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             } else {
                 Err(result.message)
             }
+        }
+        Commands::PromptSize { json } => {
+            let home = ulnclaw::config::ulnclaw_home();
+            let mut registry = ulnclaw::tools::ToolRegistry::new();
+            ulnclaw::tools::builtin::register_builtin_tools(&mut registry);
+            ulnclaw::toolsets::apply_toolset_policy(
+                &mut registry,
+                &config.enabled_toolsets,
+                &config.disabled_toolsets,
+            );
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            let data =
+                ulnclaw::prompt_size::compute_prompt_breakdown(&config, &home, &cwd, &registry);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?);
+            } else {
+                print!("{}", ulnclaw::prompt_size::render_breakdown(&data));
+            }
+            Ok(())
         }
         Commands::Doctor { fix, online, json } => {
             let opts = ulnclaw::doctor::DoctorOptions { fix, online, json };

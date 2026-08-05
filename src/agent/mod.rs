@@ -17,6 +17,13 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
+/// Default identity prompt when no custom system prompt is configured.
+/// Shared with the `prompt-size` diagnostic so the numbers it reports match
+/// what `Agent::effective_system_prompt` actually injects.
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are ulnclaw, a capable AI assistant with tools for \
+                                         shell, files, web, memory, skills, and scheduling. Be \
+                                         concise and precise.";
+
 /// Events surfaced to streaming consumers (gateway SSE).
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
@@ -425,11 +432,11 @@ impl Agent {
     /// Build the effective system prompt: configured prompt + memory
     /// injection (hermes injects MEMORY.md/USER.md into every turn).
     fn effective_system_prompt(&self) -> Option<String> {
-        let base = self.config.system_prompt.clone().unwrap_or_else(|| {
-            "You are ulnclaw, a capable AI assistant with tools for shell, files, web, \
-             memory, skills, and scheduling. Be concise and precise."
-                .to_string()
-        });
+        let base = self
+            .config
+            .system_prompt
+            .clone()
+            .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string());
         let mut parts = vec![base];
         if let Some(memory) = crate::tools::builtin::memory::load_memory_for_prompt(&self.context.home) {
             parts.push(format!("## Persistent memory\n{}", memory));
