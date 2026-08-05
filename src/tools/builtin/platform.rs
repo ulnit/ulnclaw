@@ -429,11 +429,13 @@ fn register_kanban(registry: &mut ToolRegistry) {
                     .iter()
                     .map(|(kind, value)| json!({"kind": kind, "value": value}))
                     .collect();
+                let worker_context = store.build_worker_context(&id).unwrap_or_default();
                 Ok(json!({
                     "success": true,
                     "task": kanban_task_json(&store, &task),
                     "comments": comments,
                     "attachments": attachments,
+                    "worker_context": worker_context,
                 }))
             })
             .toolset("kanban")

@@ -220,6 +220,53 @@ pub struct DispatchResult {
 /// Worker brief for a dispatcher-spawned task (hermes spawns
 /// `hermes chat -q "work kanban task <id>"`; the ulnclaw one-shot is
 /// `ulnclaw run`).
+/// Worker-context caps (hermes `_CTX_MAX_*`).
+const CTX_MAX_PRIOR_ATTEMPTS: usize = 10;
+const CTX_MAX_COMMENTS: usize = 30;
+const CTX_MAX_FIELD_BYTES: usize = 4 * 1024;
+const CTX_MAX_BODY_BYTES: usize = 8 * 1024;
+const CTX_MAX_COMMENT_BYTES: usize = 2 * 1024;
+
+/// Truncate to `limit` chars with a visible ellipsis (hermes `_cap`).
+fn cap_field(s: &str, limit: usize) -> String {
+    let s = s.trim();
+    let count = s.chars().count();
+    if count <= limit {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(limit).collect();
+    format!("{truncated}… [truncated, {} chars omitted]", count - limit)
+}
+
+/// Coarse human age — "just now" / "18h ago" / "3d ago" (hermes
+/// `_relative_age`). Relative ages make an LLM re-verify stale handoffs
+/// instead of reading them as current fact.
+fn relative_age(ts: i64, now: i64) -> String {
+    let delta = now - ts;
+    if delta < 60 {
+        return "just now".into();
+    }
+    if delta < 3600 {
+        return format!("{}m ago", delta / 60);
+    }
+    if delta < 86400 {
+        return format!("{}h ago", delta / 3600);
+    }
+    format!("{}d ago", delta / 86400)
+}
+
+fn ctx_timestamp(ts: i64, now: i64) -> String {
+    let base = chrono::DateTime::from_timestamp(ts, 0)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| ts.to_string());
+    let age = relative_age(ts, now);
+    if age.is_empty() {
+        base
+    } else {
+        format!("{base}, {age}")
+    }
+}
+
 pub fn worker_prompt(home: &Path, task: &Task) -> String {
     let mut prompt = format!(
         "You are a kanban worker for task {} ({}). Start by calling kanban_show \
@@ -360,6 +407,201 @@ pub fn read_worker_log(home: &Path, task_id: &str, tail_bytes: Option<u64>) -> O
         }
     }
     Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Result of [`repair_db`] (hermes `RepairResult`).
+#[derive(Debug, Clone, Serialize)]
+pub struct RepairReport {
+    /// ok | repaired | missing | corrupt
+    pub status: String,
+    pub db_path: PathBuf,
+    pub messages: Vec<String>,
+    pub post_repair_messages: Vec<String>,
+    pub backup_path: Option<PathBuf>,
+    pub reindexed: Vec<String>,
+}
+
+fn integrity_check(conn: &Connection) -> Vec<String> {
+    let mut stmt = match conn.prepare("PRAGMA integrity_check") {
+        Ok(stmt) => stmt,
+        Err(_) => return vec!["integrity_check failed to prepare".into()],
+    };
+    stmt.query_map([], |row| row.get::<_, String>(0))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_else(|_| vec!["integrity_check query failed".into()])
+}
+
+fn integrity_ok(messages: &[String]) -> bool {
+    messages.len() == 1 && messages[0].trim().eq_ignore_ascii_case("ok")
+}
+
+/// Index names iff EVERY integrity message is an index-class error
+/// (hermes `_repairable_index_names`); `None` fails closed.
+fn repairable_index_names(messages: &[String]) -> Option<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
+    let mut saw_any = false;
+    for raw in messages {
+        let message = raw.trim();
+        if message.is_empty() {
+            continue;
+        }
+        let index = message
+            .strip_prefix("wrong # of entries in index ")
+            .or_else(|| {
+                // "row <N> missing from index <name>"
+                let rest = message.strip_prefix("row ")?;
+                let rest = rest.split_once(" missing from index ")?.1;
+                Some(rest)
+            })
+            .or_else(|| {
+                message
+                    .strip_prefix("row ")
+                    .and_then(|r| r.split_once(" missing from index "))
+                    .map(|(_, idx)| idx)
+            });
+        let Some(index) = index.map(str::trim).filter(|n| !n.is_empty()) else {
+            return None;
+        };
+        saw_any = true;
+        if !names.contains(&index.to_string()) {
+            names.push(index.to_string());
+        }
+    }
+    if !saw_any || names.is_empty() {
+        return None;
+    }
+    Some(names)
+}
+
+/// Content-addressed quarantine of a corrupt DB + WAL/SHM sidecars
+/// (hermes `_backup_corrupt_db`).
+fn backup_corrupt_db(path: &Path) -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let fingerprint: String = hasher
+        .finalize()
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let parent = path.parent()?;
+    let backup = parent.join(format!("{}.corrupt-{fingerprint}", path.file_name()?.to_str()?));
+    if !backup.exists() {
+        std::fs::write(&backup, &bytes).ok()?;
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = path.with_file_name(format!("{}{suffix}", path.file_name()?.to_str()?));
+            if sidecar.exists() {
+                let dest = parent.join(format!(
+                    "{}.corrupt-{fingerprint}{suffix}",
+                    path.file_name()?.to_str()?
+                ));
+                std::fs::copy(&sidecar, &dest).ok();
+            }
+        }
+    }
+    Some(backup)
+}
+
+/// Integrity-check a kanban DB and apply the narrow index-REINDEX
+/// auto-repair when the damage is entirely index-scoped (hermes
+/// `repair_db`). Anything else stays corrupt (fail-closed). Never
+/// runs schema init, so it is reachable on exactly the boards that
+/// need it.
+pub fn repair_db(path: &Path) -> RepairReport {
+    let db_path = path.to_path_buf();
+    let missing = match std::fs::metadata(&db_path) {
+        Ok(meta) => meta.len() == 0,
+        Err(_) => true,
+    };
+    if missing {
+        return RepairReport {
+            status: "missing".into(),
+            db_path,
+            messages: Vec::new(),
+            post_repair_messages: Vec::new(),
+            backup_path: None,
+            reindexed: Vec::new(),
+        };
+    }
+    let conn = match Connection::open(&db_path) {
+        Ok(conn) => conn,
+        Err(e) => {
+            let backup_path = backup_corrupt_db(&db_path);
+            return RepairReport {
+                status: "corrupt".into(),
+                db_path,
+                messages: vec![format!("sqlite refused to open file: {e}")],
+                post_repair_messages: Vec::new(),
+                backup_path,
+                reindexed: Vec::new(),
+            };
+        }
+    };
+    let messages = integrity_check(&conn);
+    if integrity_ok(&messages) {
+        return RepairReport {
+            status: "ok".into(),
+            db_path,
+            messages,
+            post_repair_messages: Vec::new(),
+            backup_path: None,
+            reindexed: Vec::new(),
+        };
+    }
+    // Quarantine FIRST — identical policy to the connect-time guard.
+    let backup_path = backup_corrupt_db(&db_path);
+    let Some(index_names) = repairable_index_names(&messages) else {
+        return RepairReport {
+            status: "corrupt".into(),
+            db_path,
+            messages,
+            post_repair_messages: Vec::new(),
+            backup_path,
+            reindexed: Vec::new(),
+        };
+    };
+    let mut reindexed = Vec::new();
+    for name in &index_names {
+        let targeted = conn.execute_batch(&format!("REINDEX \"{name}\";"));
+        if targeted.is_err() {
+            // Parsed name did not resolve — fall back to a full REINDEX.
+            if conn.execute_batch("REINDEX;").is_err() {
+                return RepairReport {
+                    status: "corrupt".into(),
+                    db_path,
+                    messages,
+                    post_repair_messages: vec!["REINDEX failed".into()],
+                    backup_path,
+                    reindexed,
+                };
+            }
+            reindexed = index_names.clone();
+            break;
+        }
+        reindexed.push(name.clone());
+    }
+    let post = integrity_check(&conn);
+    if integrity_ok(&post) {
+        RepairReport {
+            status: "repaired".into(),
+            db_path,
+            messages,
+            post_repair_messages: post,
+            backup_path,
+            reindexed,
+        }
+    } else {
+        RepairReport {
+            status: "corrupt".into(),
+            db_path,
+            messages,
+            post_repair_messages: post,
+            backup_path,
+            reindexed,
+        }
+    }
 }
 
 /// In-process slash surface for the REPL `/kanban` command (hermes
@@ -2979,6 +3221,233 @@ impl KanbanStore {
         Ok(summary)
     }
 
+    /// Full text a worker reads to understand its task (hermes
+    /// `build_worker_context`): header, capped body, attachments, prior
+    /// attempts (run summaries/errors/metadata, capped), done-parent
+    /// handoffs, assignee's recent completed runs elsewhere, comment
+    /// thread. Caps keep prompts bounded on pathological boards.
+    pub fn build_worker_context(&self, task_id: &str) -> Result<String> {
+        let task = self
+            .get_task(task_id)?
+            .ok_or_else(|| AgentError::session(format!("kanban: unknown task {task_id}")))?;
+        let now = Self::now();
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(format!("# Kanban task {}: {}", task.id, task.title));
+        lines.push(String::new());
+        lines.push(format!(
+            "Assignee: {}",
+            task.assignee.as_deref().unwrap_or("(unassigned)")
+        ));
+        lines.push(format!("Status:   {}", task.status));
+        if let Some(max_runtime) = task.max_runtime_seconds {
+            lines.push(format!("Max runtime: {max_runtime}s"));
+        }
+        lines.push(String::new());
+
+        if !task.body.trim().is_empty() {
+            lines.push("## Body".into());
+            lines.push(cap_field(&task.body, CTX_MAX_BODY_BYTES));
+            lines.push(String::new());
+        }
+
+        let attachments = self.attachments(task_id).unwrap_or_default();
+        if !attachments.is_empty() {
+            lines.push("## Attachments".into());
+            lines.push(
+                "Files/links attached to this task. Read them with the file/terminal                  tools:"
+                    .into(),
+            );
+            for (kind, value) in &attachments {
+                lines.push(format!("- `{kind}` → `{value}`"));
+            }
+            lines.push(String::new());
+        }
+
+        // Prior attempts: closed runs only (the active run is this worker).
+        let all_prior: Vec<Run> = self
+            .list_runs(task_id, false, None, None)?
+            .into_iter()
+            .filter(|r| r.ended_at.is_some())
+            .collect();
+        let (omitted, shown, first_idx) = if all_prior.len() > CTX_MAX_PRIOR_ATTEMPTS {
+            let omitted = all_prior.len() - CTX_MAX_PRIOR_ATTEMPTS;
+            (omitted, all_prior[omitted..].to_vec(), omitted + 1)
+        } else {
+            (0, all_prior.clone(), 1)
+        };
+        if !shown.is_empty() {
+            lines.push("## Prior attempts on this task".into());
+            if omitted > 0 {
+                lines.push(format!(
+                    "_({} earlier attempt{} omitted; showing most recent {})_",
+                    omitted,
+                    if omitted != 1 { "s" } else { "" },
+                    shown.len()
+                ));
+            }
+            for (offset, run) in shown.iter().enumerate() {
+                let idx = first_idx + offset;
+                let profile = run.profile.as_deref().unwrap_or("(unknown)");
+                let outcome = run.outcome.as_deref().unwrap_or(&run.status);
+                lines.push(format!(
+                    "### Attempt {idx} — {outcome} ({profile}, {})",
+                    ctx_timestamp(run.started_at, now)
+                ));
+                if let Some(summary) = run.summary.as_deref().filter(|s| !s.trim().is_empty()) {
+                    lines.push(cap_field(summary, CTX_MAX_FIELD_BYTES));
+                }
+                if let Some(err) = run.error.as_deref().filter(|s| !s.trim().is_empty()) {
+                    lines.push(format!("_error_: {}", cap_field(err, CTX_MAX_FIELD_BYTES)));
+                }
+                if let Some(meta) = &run.metadata {
+                    lines.push(format!("_metadata_: `{}`", cap_field(&meta.to_string(), CTX_MAX_FIELD_BYTES)));
+                }
+                lines.push(String::new());
+            }
+        }
+
+        // Done-parent handoffs: prefer the latest completed run's
+        // summary, fall back to task.result for legacy rows.
+        let parent_ids = self.parents_of(task_id)?;
+        if !parent_ids.is_empty() {
+            let mut wrote_header = false;
+            for parent_id in parent_ids {
+                let Some(parent) = self.get_task(&parent_id)? else {
+                    continue;
+                };
+                if parent.status != "done" {
+                    continue;
+                }
+                let completed_run = self
+                    .list_runs(&parent_id, true, Some("outcome"), Some("completed"))?
+                    .into_iter()
+                    .max_by_key(|r| r.started_at);
+                if !wrote_header {
+                    lines.push("## Parent task results".into());
+                    lines.push(
+                        "_Handoffs from upstream tasks, captured when each parent completed                          (see age below). These are point-in-time snapshots, not live state —                          if a result drives your current work and it's not recent, re-verify                          against the source before acting on it as current._"
+                            .into(),
+                    );
+                    wrote_header = true;
+                }
+                let done_ts = completed_run
+                    .as_ref()
+                    .and_then(|r| r.ended_at)
+                    .or(parent.completed_at);
+                let age_suffix = done_ts
+                    .map(|ts| format!(" (completed {})", relative_age(ts, now)))
+                    .unwrap_or_default();
+                lines.push(format!("### {parent_id}{age_suffix}"));
+                let body = completed_run
+                    .as_ref()
+                    .and_then(|r| r.summary.as_deref())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| cap_field(s, CTX_MAX_FIELD_BYTES))
+                    .or_else(|| {
+                        parent
+                            .result
+                            .as_deref()
+                            .filter(|s| !s.trim().is_empty())
+                            .map(|s| cap_field(s, CTX_MAX_FIELD_BYTES))
+                    })
+                    .unwrap_or_else(|| "(no result recorded)".into());
+                lines.push(body);
+                if let Some(run) = completed_run.as_ref().filter(|r| r.metadata.is_some()) {
+                    let meta = run.metadata.as_ref().unwrap();
+                    lines.push(format!(
+                        "_metadata_: `{}`",
+                        cap_field(&meta.to_string(), CTX_MAX_FIELD_BYTES)
+                    ));
+                }
+                lines.push(String::new());
+            }
+        }
+
+        // Cross-task role history: the assignee's 5 most recent completed
+        // runs elsewhere (implicit continuity, hermes role history).
+        if let Some(assignee) = task.assignee.as_deref().filter(|a| !a.is_empty()) {
+            let role_rows: Vec<(String, String, Option<String>, i64)> = {
+                let conn = self.conn.lock().unwrap();
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT t.id, t.title, r.summary, r.ended_at
+                           FROM task_runs r JOIN tasks t ON r.task_id = t.id
+                          WHERE r.profile = ?1 AND r.task_id != ?2
+                            AND r.outcome = 'completed'
+                          ORDER BY r.ended_at DESC LIMIT 5",
+                    )
+                    .map_err(db_error("context roles"))?;
+                let rows = stmt
+                    .query_map(params![assignee, task_id], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    })
+                    .map_err(db_error("context roles"))?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(db_error("context roles"))?
+            };
+            if !role_rows.is_empty() {
+                lines.push(format!("## Recent work by @{assignee}"));
+                for (id, title, summary, ended_at) in role_rows {
+                    let first = summary
+                        .as_deref()
+                        .map(|s| s.trim().lines().next().unwrap_or(""))
+                        .unwrap_or("");
+                    let first: String = first.chars().take(200).collect();
+                    let first = if first.is_empty() { "(no summary)".into() } else { first };
+                    lines.push(format!(
+                        "- {id} — {title} ({}): {first}",
+                        ctx_timestamp(ended_at, now)
+                    ));
+                }
+                lines.push(String::new());
+            }
+        }
+
+        // Comment thread, capped (comment-storm protection).
+        let all_comments = self.comments(task_id)?;
+        let (omitted_c, shown_c) = if all_comments.len() > CTX_MAX_COMMENTS {
+            let omitted = all_comments.len() - CTX_MAX_COMMENTS;
+            (omitted, all_comments[omitted..].to_vec())
+        } else {
+            (0, all_comments.clone())
+        };
+        if !shown_c.is_empty() {
+            lines.push("## Comment thread".into());
+            if omitted_c > 0 {
+                lines.push(format!(
+                    "_({} earlier comment{} omitted; showing most recent {})_",
+                    omitted_c,
+                    if omitted_c != 1 { "s" } else { "" },
+                    shown_c.len()
+                ));
+            }
+            for comment in &shown_c {
+                // Explicit "comment from worker" framing: operator/system
+                // author names must not read as system directives (hermes
+                // #22452 defense-in-depth).
+                let safe_author = comment.author.replace('`', "");
+                lines.push(format!(
+                    "comment from worker `{safe_author}` at {}:",
+                    ctx_timestamp(comment.created_at, now)
+                ));
+                lines.push(cap_field(&comment.body, CTX_MAX_COMMENT_BYTES));
+                lines.push(String::new());
+            }
+        }
+
+        let mut out = lines.join("\n");
+        while out.ends_with("\n\n") {
+            out.pop();
+        }
+        out.push('\n');
+        Ok(out)
+    }
+
     /// Child task ids of `task_id`, oldest link first.
     pub fn children_of(&self, task_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
@@ -4464,5 +4933,78 @@ mod tests {
         // hermes semantics: the run profile is the task's assignee at
         // claim time (set by the first claim), not the new lock holder.
         assert_eq!(runs[1].profile.as_deref(), Some("host:1"));
+    }
+
+    #[test]
+    fn worker_context_includes_history_and_handoffs() {
+        let (_dir, store) = temp_store();
+        // Parent completes with a result the child should inherit.
+        let parent = make_task(&store, "Design schema");
+        store.ready_task(&parent.id).unwrap();
+        store.claim_task(&parent.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        store.complete_task(&parent.id, Some("schema v2 shipped")).unwrap();
+
+        let child = make_task(&store, "Implement schema");
+        store.link_tasks(&parent.id, &child.id).unwrap();
+        store.assign_task(&child.id, "host:1").unwrap();
+        store.add_comment(&child.id, "host:1", "starting now").unwrap();
+
+        // Two attempts: first reclaimed, second running.
+        store.ready_task(&child.id).unwrap();
+        store.claim_task(&child.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        store.reclaim_task(&child.id, "took too long").unwrap();
+        store.claim_task(&child.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+
+        let ctx = store.build_worker_context(&child.id).unwrap();
+        assert!(ctx.contains(&format!("# Kanban task {}: Implement schema", child.id)));
+        assert!(ctx.contains("## Prior attempts on this task"));
+        assert!(ctx.contains("Attempt 1 — reclaimed"));
+        assert!(ctx.contains("took too long"));
+        assert!(ctx.contains("## Parent task results"));
+        assert!(ctx.contains(&parent.id));
+        assert!(ctx.contains("schema v2 shipped"));
+        assert!(ctx.contains("## Comment thread"));
+        assert!(ctx.contains("starting now"));
+        // The active run (attempt 2) must not appear as prior work.
+        assert!(!ctx.contains("Attempt 2"));
+    }
+
+    #[test]
+    fn worker_context_caps_runaway_fields() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "big");
+        let big_body = "x".repeat(CTX_MAX_BODY_BYTES + 100);
+        store.edit_task(&task.id, None, Some(&big_body)).unwrap();
+        let big_comment = "y".repeat(CTX_MAX_COMMENT_BYTES + 50);
+        store.add_comment(&task.id, "worker", &big_comment).unwrap();
+
+        let ctx = store.build_worker_context(&task.id).unwrap();
+        assert!(ctx.contains("… [truncated,"));
+        // No full 8 KB body survived the cap.
+        assert!(!ctx.contains(&"x".repeat(CTX_MAX_BODY_BYTES + 1)));
+    }
+
+    #[test]
+    fn repair_db_missing_ok_and_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        // Missing file.
+        let report = repair_db(&dir.path().join("kanban.db"));
+        assert_eq!(report.status, "missing");
+
+        // Healthy store.
+        let store = KanbanStore::open(dir.path().join("kanban.db")).unwrap();
+        make_task(&store, "healthy");
+        drop(store);
+        let report = repair_db(&dir.path().join("kanban.db"));
+        assert_eq!(report.status, "ok");
+        assert!(report.backup_path.is_none());
+
+        // Garbage bytes: sqlite refuses to open → corrupt + quarantined.
+        let bad = dir.path().join("bad.db");
+        std::fs::write(&bad, b"this is not a sqlite database at all....").unwrap();
+        let report = repair_db(&bad);
+        assert_eq!(report.status, "corrupt");
+        assert!(report.backup_path.is_some());
+        assert!(report.backup_path.unwrap().exists());
     }
 }

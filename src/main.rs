@@ -507,6 +507,7 @@ enum KanbanAction {
         action: KanbanBoardsAction,
     },
     /// Create a task on the current board
+    #[command(visible_alias = "new")]
     Create {
         title: Vec<String>,
         /// Task body / description
@@ -537,6 +538,7 @@ enum KanbanAction {
         json: bool,
     },
     /// List tasks
+    #[command(visible_alias = "ls")]
     List {
         #[arg(long)]
         status: Option<String>,
@@ -706,6 +708,28 @@ enum KanbanAction {
         /// With --state-type: keep runs whose column equals this value
         #[arg(long)]
         state_name: Option<String>,
+    },
+    /// Print the full worker context for a task — brief, prior
+    /// attempts, parent handoffs, comments (hermes `kanban context`)
+    Context { id: String },
+    /// Integrity-check kanban.db and auto-repair index-scoped damage
+    /// (hermes `kanban repair`)
+    Repair { #[arg(long)] json: bool },
+    /// Known assignees (config roster) with per-status task counts
+    /// (hermes `kanban assignees`)
+    Assignees { #[arg(long)] json: bool },
+    /// DEPRECATED — the dispatcher runs inside the gateway. `--force`
+    /// keeps the old standalone loop alive (hermes `kanban daemon`)
+    Daemon {
+        /// Tick interval in seconds
+        #[arg(long, default_value = "60")]
+        interval: u64,
+        /// Write the dispatcher pid here
+        #[arg(long)]
+        pidfile: Option<PathBuf>,
+        /// Run the standalone loop anyway (hidden escape hatch)
+        #[arg(long, hide = true)]
+        force: bool,
     },
     /// Subscribe a gateway chat to a task's terminal events (hermes
     /// `kanban notify-subscribe`)
@@ -4954,6 +4978,187 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                         println!("     ✖ {first}");
                     }
                 }
+            }
+        }
+        KanbanAction::Context { id } => {
+            let resolved = resolve(&id)?;
+            let text = store
+                .build_worker_context(&resolved)
+                .map_err(|e| e.to_string())?;
+            print!("{text}");
+        }
+        KanbanAction::Repair { json } => {
+            let db_path = ulnclaw::config::ulnclaw_home().join("kanban.db");
+            let report = ulnclaw::kanban::repair_db(&db_path);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+                );
+            } else {
+                match report.status.as_str() {
+                    "missing" => {
+                        println!("No kanban DB at {} — nothing to repair.", report.db_path.display());
+                    }
+                    "ok" => {
+                        println!("{}: integrity_check ok — no repair needed.", report.db_path.display());
+                    }
+                    "repaired" => {
+                        println!("{}: repaired.", report.db_path.display());
+                        println!("  reindexed: {}", report.reindexed.join(", "));
+                        if let Some(backup) = &report.backup_path {
+                            println!("  pre-repair backup: {}", backup.display());
+                        }
+                        println!("  integrity_check now ok.");
+                    }
+                    _ => {
+                        eprintln!("{}: CORRUPT.", report.db_path.display());
+                        for line in report.messages.iter().take(10) {
+                            eprintln!("  {line}");
+                        }
+                        if report.reindexed.is_empty() {
+                            eprintln!(
+                                "  Not an index-only failure — automatic REINDEX repair does not apply (fail-closed)."
+                            );
+                        } else {
+                            eprintln!(
+                                "  REINDEX ({}) attempted but integrity_check is still failing:",
+                                report.reindexed.join(", ")
+                            );
+                            for line in report.post_repair_messages.iter().take(10) {
+                                eprintln!("    {line}");
+                            }
+                        }
+                        return Err("kanban repair: database still corrupt".into());
+                    }
+                }
+            }
+        }
+        KanbanAction::Assignees { json } => {
+            let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
+            let stats = store.board_stats().map_err(|e| e.to_string())?;
+            // Roster: configured profiles (+ implicit default) merged with
+            // assignees actually seen on the board.
+            let mut names: Vec<String> = vec!["default".into()];
+            for name in config.profiles.keys() {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+            for (assignee, _) in &stats.by_assignee {
+                if !names.contains(assignee) {
+                    names.push(assignee.clone());
+                }
+            }
+            names.sort();
+            let on_disk = |name: &str| -> bool {
+                name == "default" || config.profiles.contains_key(name)
+            };
+            if json {
+                let rows: Vec<serde_json::Value> = names
+                    .iter()
+                    .map(|name| {
+                        let counts = stats
+                            .by_assignee
+                            .iter()
+                            .find(|(a, _)| a == name)
+                            .map(|(_, counts)| counts.clone())
+                            .unwrap_or_default();
+                        serde_json::json!({
+                            "name": name,
+                            "on_disk": on_disk(name),
+                            "counts": counts,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?
+                );
+            } else if names.is_empty() {
+                println!("(no assignees)");
+            } else {
+                println!("{:20}  {:8}  COUNTS", "NAME", "ON DISK");
+                for name in &names {
+                    let counts = stats
+                        .by_assignee
+                        .iter()
+                        .find(|(a, _)| a == name)
+                        .map(|(_, counts)| {
+                            let mut parts: Vec<String> = counts
+                                .iter()
+                                .map(|(status, n)| format!("{status}={n}"))
+                                .collect();
+                            parts.sort();
+                            parts.join(", ")
+                        })
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "(idle)".into());
+                    println!(
+                        "{:20}  {:8}  {counts}",
+                        name,
+                        if on_disk(name) { "yes" } else { "no" }
+                    );
+                }
+            }
+        }
+        KanbanAction::Daemon { interval, pidfile, force } => {
+            if !force {
+                let guidance = [
+                    "ulnclaw kanban daemon: DEPRECATED — the dispatcher now runs",
+                    "inside the gateway. To use kanban:",
+                    "",
+                    "    ulnclaw gateway            # starts the gateway + embedded dispatcher",
+                    "",
+                    "Ready tasks are picked up on the next dispatcher tick",
+                    "(default: every 60 seconds). Configure via config.toml:",
+                    "",
+                    "    [kanban]",
+                    "    dispatch_in_gateway = true     # default",
+                    "    dispatch_interval_secs = 60",
+                    "",
+                    "Running both the gateway AND this standalone daemon will",
+                    "race for claims. If you truly need the old standalone",
+                    "daemon (no gateway available), rerun with --force.",
+                ]
+                .join("\n");
+                return Err(guidance);
+            }
+            if let Some(pidfile) = pidfile {
+                if let Some(parent) = pidfile.parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                if std::fs::write(&pidfile, std::process::id().to_string()).is_err() {
+                    eprintln!("warning: could not write pidfile {}", pidfile.display());
+                }
+            }
+            eprintln!(
+                "Kanban dispatcher running STANDALONE via --force (interval={}s, pid={}).                  Ctrl-C to stop. NOTE: if a gateway is also running with                  dispatch_in_gateway=true (default), you have two dispatchers racing for claims.",
+                interval,
+                std::process::id()
+            );
+            let home = ulnclaw::config::ulnclaw_home();
+            loop {
+                match store.dispatch_once(
+                    |task| ulnclaw::kanban::dispatch_spawn(&home, true, task),
+                    None,
+                    false,
+                    2,
+                ) {
+                    Ok(result)
+                        if !result.spawned.is_empty() || !result.reclaimed.is_empty() =>
+                    {
+                        println!(
+                            "kanban daemon: {} reclaimed, {} promoted, {} spawned",
+                            result.reclaimed.len(),
+                            result.promoted.len(),
+                            result.spawned.len()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("kanban daemon tick failed: {e}"),
+                }
+                std::thread::sleep(std::time::Duration::from_secs(interval.max(5)));
             }
         }
         KanbanAction::NotifySubscribe {

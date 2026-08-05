@@ -246,7 +246,16 @@
   （默认 3），翻转开关在下一 tick 即停止失控扇出、无需重启网关
   （hermes #49638 故障安全语义 —— 配置读取失败则本轮跳过），
   随后在 dispatch 扇出之前经辅助 LLM 分解至多 N 个 triage 任务，
-  成功记 info、无操作跳过记 debug。
+  成功记 info、无操作跳过记 debug；P134 补齐 hermes kanban CLI 的
+  最后几块：`kanban context`（完整移植 `build_worker_context` ——
+  带上限的正文/附件、历史尝试的 run 摘要与 metadata、已完成父任务
+  的交接结果与相对时间陈旧度提示、assignee 跨任务角色历史、带上限
+  的评论区；`kanban_show` 工具同步返回 `worker_context`，spawn 出的
+  worker 无需额外往返即可读取）、`kanban repair`（integrity_check +
+  内容寻址隔离备份 + 仅索引损坏的 REINDEX 自动修复，其余情况保守
+  失败）、`kanban assignees`（配置名册与看板 assignee 合并、按状态
+  计数）、`kanban daemon`（hermes 已弃用的存根，指向网关；`--force`
+  保留独立循环）以及 `ls`/`new` 可见别名。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

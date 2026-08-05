@@ -267,7 +267,19 @@ performance and a single static binary.
   gateway restart (hermes #49638 fail-safe semantics — config read
   errors disable the pass), then decomposes up to N triage tasks via
   the auxiliary LLM before the dispatch fan-out, logging successes at
-  info and no-op skips at debug.
+  info and no-op skips at debug; P134 completed the remaining hermes
+  kanban CLI surface: `kanban context` (full `build_worker_context`
+  port — capped body/attachments, prior-attempt run summaries with
+  metadata, done-parent handoffs with relative-age staleness hints,
+  assignee cross-task role history, capped comment thread; the
+  `kanban_show` tool now returns the same `worker_context` so spawned
+  workers read it without extra round-trips), `kanban repair`
+  (integrity_check + content-addressed quarantine + index-scoped
+  REINDEX auto-repair, fail-closed otherwise), `kanban assignees`
+  (config roster merged with board assignees, per-status counts),
+  `kanban daemon` (hermes-deprecated stub pointing at the gateway,
+  `--force` keeps the standalone loop), and `ls`/`new` visible
+  aliases.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the
