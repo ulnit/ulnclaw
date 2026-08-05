@@ -409,6 +409,10 @@ enum KanbanBoardsAction {
     Switch { slug: String },
     /// Show the current board
     Show,
+    /// Rename a board's display name
+    Rename { slug: String, name: Vec<String> },
+    /// Set (or clear with --workdir "") a board's default working directory
+    SetWorkdir { slug: String, #[arg(long)] workdir: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -633,6 +637,59 @@ enum KanbanAction {
         #[arg(long)]
         json: bool,
     },
+    /// Park a task in Scheduled — waiting on time, not human input
+    /// (hermes `kanban schedule`)
+    Schedule { id: String, reason: Vec<String> },
+    /// Manually promote a todo/blocked task to ready (hermes `kanban promote`)
+    Promote {
+        id: String,
+        reason: Vec<String>,
+        /// Promote even if parent dependencies are not done yet
+        #[arg(long)]
+        force: bool,
+    },
+    /// Release an active worker claim on a running task (hermes `kanban reclaim`)
+    Reclaim { id: String, #[arg(long)] reason: Option<String> },
+    /// Reassign a task to another profile ('none' clears), optionally
+    /// reclaiming first (hermes `kanban reassign`)
+    Reassign {
+        id: String,
+        profile: String,
+        /// Release any active claim before reassigning
+        #[arg(long)]
+        reclaim: bool,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Edit a task's title/body (hermes `kanban edit`)
+    Edit {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Set a per-task model override; omit the model to clear it
+    /// (hermes `kanban set-model`)
+    SetModel { id: String, model: Option<String> },
+    /// Attach a local file to a task (hermes `kanban attach`)
+    Attach { id: String, path: PathBuf },
+    /// List a task's attachments (hermes `kanban attachments`)
+    Attachments { id: String },
+    /// Delete an attachment by id (hermes `kanban attach-rm`)
+    AttachRm { attachment_id: i64 },
+    /// Show a task's event trail; --follow keeps watching (hermes `kanban tail`)
+    Tail {
+        id: String,
+        /// Keep watching for new events
+        #[arg(long)]
+        follow: bool,
+        /// How many trailing events to show first
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Per-status task counts of the current board (hermes `kanban stats`)
+    Stats,
     /// Remove git worktrees of done/archived tasks (hermes dispatcher gc)
     Gc,
     /// One dispatcher pass: reclaim stale claims, promote parent-done
@@ -4148,6 +4205,20 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 store.switch_board(&slug).map_err(|e| e.to_string())?;
                 println!("switched to board '{slug}'");
             }
+            KanbanBoardsAction::Rename { slug, name } => {
+                let name = name.join(" ");
+                store.rename_board(&slug, &name).map_err(|e| e.to_string())?;
+                println!("board '{slug}' renamed to '{name}'");
+            }
+            KanbanBoardsAction::SetWorkdir { slug, workdir } => {
+                store
+                    .set_board_workdir(&slug, workdir.as_deref())
+                    .map_err(|e| e.to_string())?;
+                match workdir.as_deref().filter(|w| !w.trim().is_empty()) {
+                    Some(dir) => println!("board '{slug}' workdir: {dir}"),
+                    None => println!("board '{slug}' workdir cleared"),
+                }
+            }
             KanbanBoardsAction::Show => {
                 let current = store.current_board().map_err(|e| e.to_string())?;
                 println!("current board: {current}");
@@ -4580,6 +4651,151 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             if total == 0 {
                 println!("no diagnostics — the board looks healthy");
             }
+        }
+        KanbanAction::Schedule { id, reason } => {
+            let resolved = resolve(&id)?;
+            let reason = reason.join(" ");
+            let task = store
+                .schedule_task(&resolved, &reason)
+                .map_err(|e| e.to_string())?;
+            println!("\u{23F1} {} scheduled", task.id);
+        }
+        KanbanAction::Promote { id, reason, force } => {
+            let resolved = resolve(&id)?;
+            let reason = reason.join(" ");
+            let task = store
+                .promote_task(&resolved, &reason, force)
+                .map_err(|e| e.to_string())?;
+            println!("\u{25B6} {} promoted to ready", task.id);
+        }
+        KanbanAction::Reclaim { id, reason } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .reclaim_task(&resolved, reason.as_deref().unwrap_or("manual reclaim"))
+                .map_err(|e| e.to_string())?;
+            println!("\u{25FB} {} reclaimed to ready", task.id);
+        }
+        KanbanAction::Reassign { id, profile, reclaim, reason } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .reassign_task(
+                    &resolved,
+                    &profile,
+                    reclaim,
+                    reason.as_deref().unwrap_or(""),
+                )
+                .map_err(|e| e.to_string())?;
+            match &task.assignee {
+                Some(assignee) => println!("{} reassigned to {assignee}", task.id),
+                None => println!("{} unassigned", task.id),
+            }
+        }
+        KanbanAction::Edit { id, title, body } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .edit_task(&resolved, title.as_deref(), body.as_deref())
+                .map_err(|e| e.to_string())?;
+            println!("{} edited — {}", task.id, task.title);
+        }
+        KanbanAction::SetModel { id, model } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .set_model(&resolved, model.as_deref())
+                .map_err(|e| e.to_string())?;
+            match &task.model {
+                Some(model) => println!("{} model pinned to {model}", task.id),
+                None => println!("{} model override cleared", task.id),
+            }
+        }
+        KanbanAction::Attach { id, path } => {
+            let resolved = resolve(&id)?;
+            if !path.is_file() {
+                return Err(format!("{} is not a file", path.display()));
+            }
+            let absolute = std::fs::canonicalize(&path).unwrap_or(path.clone());
+            store
+                .attach(&resolved, "file", &absolute.display().to_string())
+                .map_err(|e| e.to_string())?;
+            println!("attached {} to {}", absolute.display(), resolved);
+        }
+        KanbanAction::Attachments { id } => {
+            let resolved = resolve(&id)?;
+            let rows = store
+                .attachments_with_ids(&resolved)
+                .map_err(|e| e.to_string())?;
+            if rows.is_empty() {
+                println!("no attachments on {resolved}");
+            } else {
+                for (attachment_id, kind, value) in rows {
+                    println!("  [{attachment_id}] {kind}: {value}");
+                }
+            }
+        }
+        KanbanAction::AttachRm { attachment_id } => {
+            if store
+                .remove_attachment(attachment_id)
+                .map_err(|e| e.to_string())?
+            {
+                println!("attachment {attachment_id} removed");
+            } else {
+                return Err(format!("attachment {attachment_id} not found"));
+            }
+        }
+        KanbanAction::Tail { id, follow, limit } => {
+            let resolved = resolve(&id)?;
+            let print_event = |event: &ulnclaw::kanban::TaskEvent| {
+                println!(
+                    "{}  {:<14} {}",
+                    kanban_epoch_label(event.created_at),
+                    event.kind,
+                    event.payload
+                );
+            };
+            let events = store.events(&resolved).map_err(|e| e.to_string())?;
+            for event in events.iter().rev().take(limit).rev() {
+                print_event(event);
+            }
+            if follow {
+                let mut last_id = events.last().map(|e| e.id).unwrap_or(0);
+                println!("— following {resolved} (Ctrl+C to stop)");
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let fresh = store.events(&resolved).map_err(|e| e.to_string())?;
+                    let new_events: Vec<ulnclaw::kanban::TaskEvent> = fresh
+                        .into_iter()
+                        .filter(|e| e.id > last_id)
+                        .collect();
+                    for event in &new_events {
+                        print_event(event);
+                        last_id = event.id;
+                    }
+                }
+            }
+        }
+        KanbanAction::Stats => {
+            let counts = store.board_status_counts().map_err(|e| e.to_string())?;
+            let board = store.current_board().map_err(|e| e.to_string())?;
+            println!("board '{board}':");
+            let order = [
+                "triage", "todo", "ready", "running", "scheduled", "blocked", "done", "archived",
+            ];
+            let mut total = 0i64;
+            for status in order {
+                if let Some((_, count)) = counts.iter().find(|(s, _)| s == status) {
+                    println!(
+                        "  {} {:<10} {}",
+                        ulnclaw::kanban::status_icon(status),
+                        status,
+                        count
+                    );
+                    total += count;
+                }
+            }
+            for (status, count) in counts.iter().filter(|(s, _)| !order.contains(&s.as_str())) {
+                println!("  ? {:<10} {}", status, count);
+                total += count;
+            }
+            println!("  total: {total}");
         }
         KanbanAction::Gc => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

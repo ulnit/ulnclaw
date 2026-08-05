@@ -1253,6 +1253,55 @@ impl KanbanStore {
 
     /// (slug, total tasks, active tasks) per board (hermes
     /// `_board_task_counts`).
+    /// Rename a board's display name (hermes `boards rename`).
+    pub fn rename_board(&self, slug: &str, name: &str) -> Result<()> {
+        if name.trim().is_empty() {
+            return Err(AgentError::session("kanban: board name cannot be blank"));
+        }
+        let conn = self.conn.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE boards SET name = ?2 WHERE slug = ?1",
+                params![slug, name.trim()],
+            )
+            .map_err(db_error("boards rename"))?;
+        if updated == 0 {
+            return Err(AgentError::session(format!("kanban: board {slug} not found")));
+        }
+        Ok(())
+    }
+
+    /// Set a board's default working directory (hermes `boards set-workdir`).
+    pub fn set_board_workdir(&self, slug: &str, workdir: Option<&str>) -> Result<()> {
+        let workdir = workdir.map(str::trim).filter(|w| !w.is_empty());
+        let conn = self.conn.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE boards SET default_workdir = ?2 WHERE slug = ?1",
+                params![slug, workdir],
+            )
+            .map_err(db_error("boards set-workdir"))?;
+        if updated == 0 {
+            return Err(AgentError::session(format!("kanban: board {slug} not found")));
+        }
+        Ok(())
+    }
+
+    /// Per-status task counts of the current board (hermes `kanban stats`).
+    pub fn board_status_counts(&self) -> Result<Vec<(String, i64)>> {
+        let board = self.current_board()?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT status, COUNT(*) FROM tasks WHERE board = ?1 GROUP BY status")
+            .map_err(db_error("stats"))?;
+        let rows = stmt
+            .query_map(params![board], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(db_error("stats"))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("stats"))
+    }
+
     pub fn board_task_counts(&self) -> Result<Vec<(String, i64, i64)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -1717,17 +1766,195 @@ impl KanbanStore {
         )
     }
 
-    /// blocked → ready (hermes `unblock_task`).
+    /// blocked/scheduled → ready (hermes `unblock_task`).
     pub fn unblock_task(&self, id: &str) -> Result<Task> {
         self.transition(
             id,
-            &["blocked"],
+            &["blocked", "scheduled"],
             "ready",
             "unblocked",
             serde_json::json!({}),
             "",
             vec![],
         )
+    }
+
+    /// Park a task in the scheduled column — waiting on time, not human
+    /// input (hermes `kanban schedule`). The reason doubles as a comment.
+    pub fn schedule_task(&self, id: &str, reason: &str) -> Result<Task> {
+        let task = self.transition(
+            id,
+            &["todo", "ready", "blocked"],
+            "scheduled",
+            "scheduled",
+            serde_json::json!({ "reason": reason }),
+            "",
+            vec![],
+        )?;
+        if !reason.trim().is_empty() {
+            self.add_comment(id, "scheduler", reason.trim())?;
+        }
+        Ok(task)
+    }
+
+    /// Manually promote a todo/blocked task to ready (hermes `kanban
+    /// promote`, the recovery path). Unless `force`, parents must all be
+    /// done/archived — otherwise the dispatcher would demote the task
+    /// again on the next tick.
+    pub fn promote_task(&self, id: &str, reason: &str, force: bool) -> Result<Task> {
+        if !force {
+            let blocked_by: Vec<String> = self
+                .parents_of(id)?
+                .into_iter()
+                .filter_map(|parent_id| match self.get_task(&parent_id) {
+                    Ok(Some(parent))
+                        if parent.status != "done" && parent.status != "archived" =>
+                    {
+                        Some(parent_id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !blocked_by.is_empty() {
+                return Err(AgentError::session(format!(
+                    "kanban: {} still has open parent(s) {} — use --force to promote anyway",
+                    id,
+                    blocked_by.join(", ")
+                )));
+            }
+        }
+        self.transition(
+            id,
+            &["todo", "blocked"],
+            "ready",
+            "promoted",
+            serde_json::json!({ "reason": reason, "force": force }),
+            "",
+            vec![],
+        )
+    }
+
+    /// Release an active worker claim on a running task without completing
+    /// it (hermes `kanban reclaim`): back to ready for a fresh worker.
+    pub fn reclaim_task(&self, id: &str, reason: &str) -> Result<Task> {
+        self.transition(
+            id,
+            &["running"],
+            "ready",
+            "reclaimed",
+            serde_json::json!({ "reason": reason }),
+            ", claim_lock = NULL, claim_expires = NULL, worker_pid = NULL,              last_heartbeat_at = NULL",
+            vec![],
+        )
+    }
+
+    /// Reassign a task, optionally reclaiming an active claim first
+    /// (hermes `kanban reassign`). `assignee` "none"/"" clears it.
+    pub fn reassign_task(
+        &self,
+        id: &str,
+        assignee: &str,
+        reclaim_first: bool,
+        reason: &str,
+    ) -> Result<Task> {
+        let task = self
+            .get_task(id)?
+            .ok_or_else(|| AgentError::session(format!("kanban: task {id} not found")))?;
+        if reclaim_first && task.status == "running" {
+            self.reclaim_task(id, reason)?;
+        }
+        let target = if assignee.eq_ignore_ascii_case("none") || assignee.trim().is_empty() {
+            None
+        } else {
+            Some(assignee.trim().to_string())
+        };
+        let conn = self.conn.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE tasks SET assignee = ?2 WHERE id = ?1 AND status NOT IN ('done', 'archived')",
+                params![id, target],
+            )
+            .map_err(db_error("reassign"))?;
+        drop(conn);
+        if updated == 0 {
+            return Err(AgentError::session(format!(
+                "kanban: task {id} not found or already terminal"
+            )));
+        }
+        self.append_event(
+            id,
+            "reassigned",
+            serde_json::json!({ "assignee": target, "reason": reason }),
+        )?;
+        self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
+    }
+
+    /// Edit a task's title/body (hermes `kanban edit`).
+    pub fn edit_task(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        body: Option<&str>,
+    ) -> Result<Task> {
+        if let Some(candidate) = title {
+            if candidate.trim().is_empty() {
+                return Err(AgentError::session("kanban: title cannot be blank"));
+            }
+        }
+        if title.is_none() && body.is_none() {
+            return Err(AgentError::session("kanban: nothing to edit"));
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut sets: Vec<String> = Vec::new();
+        if title.is_some() {
+            sets.push("title = ?2".to_string());
+        }
+        if body.is_some() {
+            sets.push(format!("body = ?{}", if title.is_some() { 3 } else { 2 }));
+        }
+        let sql = format!(
+            "UPDATE tasks SET {} WHERE id = ?1 AND status NOT IN ('archived')",
+            sets.join(", ")
+        );
+        let updated = match (title, body) {
+            (Some(title), Some(body)) => conn.execute(&sql, params![id, title.trim(), body]),
+            (Some(title), None) => conn.execute(&sql, params![id, title.trim()]),
+            (None, Some(body)) => conn.execute(&sql, params![id, body]),
+            (None, None) => unreachable!("checked above"),
+        }
+        .map_err(db_error("edit"))?;
+        drop(conn);
+        if updated == 0 {
+            return Err(AgentError::session(format!(
+                "kanban: task {id} not found or archived"
+            )));
+        }
+        self.append_event(id, "edited", serde_json::json!({}))?;
+        self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
+    }
+
+    /// Per-task model override (hermes `kanban set-model`).
+    pub fn set_model(&self, id: &str, model: Option<&str>) -> Result<Task> {
+        let model = model.map(str::trim).filter(|m| !m.is_empty());
+        let conn = self.conn.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE tasks SET model = ?2 WHERE id = ?1 AND status NOT IN ('done', 'archived')",
+                params![id, model],
+            )
+            .map_err(db_error("set-model"))?;
+        drop(conn);
+        if updated == 0 {
+            return Err(AgentError::session(format!(
+                "kanban: task {id} not found or already terminal"
+            )));
+        }
+        self.append_event(
+            id,
+            "model_set",
+            serde_json::json!({ "model": model }),
+        )?;
+        self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
     }
 
     pub fn archive_task(&self, id: &str) -> Result<Task> {
@@ -1906,6 +2133,39 @@ impl KanbanStore {
             .map_err(db_error("attachments"))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(db_error("attachments"))
+    }
+
+    /// Attachments of `task_id` as (id, kind, value) rows, oldest first.
+    pub fn attachments_with_ids(&self, task_id: &str) -> Result<Vec<(i64, String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, kind, value FROM task_attachments WHERE task_id = ?1 ORDER BY id ASC",
+            )
+            .map_err(db_error("attachments"))?;
+        let rows = stmt
+            .query_map(params![task_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error("attachments"))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_error("attachments"))
+    }
+
+    /// Delete one attachment by id (hermes `kanban attach-rm`).
+    pub fn remove_attachment(&self, attachment_id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let removed = conn
+            .execute(
+                "DELETE FROM task_attachments WHERE id = ?1",
+                params![attachment_id],
+            )
+            .map_err(db_error("attach-rm"))?;
+        Ok(removed > 0)
     }
 
     /// Child task ids of `task_id`, oldest link first.
@@ -2914,5 +3174,120 @@ mod tests {
             .decompose_triage_task(&plain.id, None, &children, "tester", true)
             .unwrap();
         assert!(outcome.is_none());
+    }
+
+    #[test]
+    fn schedule_unblock_roundtrip() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "wait for friday");
+        let scheduled = store.schedule_task(&task.id, "until the release train").unwrap();
+        assert_eq!(scheduled.status, "scheduled");
+        let comments = store.comments(&task.id).unwrap();
+        assert!(comments.iter().any(|c| c.body.contains("release train")));
+        let unblocked = store.unblock_task(&task.id).unwrap();
+        assert_eq!(unblocked.status, "ready");
+    }
+
+    #[test]
+    fn promote_respects_parents_unless_forced() {
+        let (_dir, store) = temp_store();
+        let parent = make_task(&store, "parent");
+        let child = make_task(&store, "child");
+        store.link_tasks(&parent.id, &child.id).unwrap();
+        let err = store.promote_task(&child.id, "", false).unwrap_err();
+        assert!(err.to_string().contains("--force"));
+        let forced = store.promote_task(&child.id, "override", true).unwrap();
+        assert_eq!(forced.status, "ready");
+        // Parent-done children promote without force.
+        let child2 = make_task(&store, "child2");
+        store.link_tasks(&parent.id, &child2.id).unwrap();
+        store.ready_task(&parent.id).unwrap();
+        store.claim_task(&parent.id, "host:test", 60).unwrap();
+        store.complete_task(&parent.id, None).unwrap();
+        let promoted = store.promote_task(&child2.id, "", false).unwrap();
+        assert_eq!(promoted.status, "ready");
+    }
+
+    #[test]
+    fn reclaim_releases_running_claim() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "busy");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:test", 60).unwrap();
+        store.set_worker_pid(&task.id, Some(999_999)).unwrap();
+        let reclaimed = store.reclaim_task(&task.id, "stuck worker").unwrap();
+        assert_eq!(reclaimed.status, "ready");
+        assert!(reclaimed.claim_lock.is_none());
+        assert!(reclaimed.worker_pid.is_none());
+    }
+
+    #[test]
+    fn reassign_with_reclaim_on_running_task() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "running one");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:test", 60).unwrap();
+        let reassigned = store
+            .reassign_task(&task.id, "other-profile", true, "handoff")
+            .unwrap();
+        assert_eq!(reassigned.status, "ready");
+        assert_eq!(reassigned.assignee.as_deref(), Some("other-profile"));
+        let cleared = store.reassign_task(&task.id, "none", false, "").unwrap();
+        assert!(cleared.assignee.is_none());
+    }
+
+    #[test]
+    fn edit_title_and_body() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "old title");
+        let edited = store
+            .edit_task(&task.id, Some("new title"), Some("new body"))
+            .unwrap();
+        assert_eq!(edited.title, "new title");
+        assert_eq!(edited.body, "new body");
+        let body_only = store.edit_task(&task.id, None, Some("body2")).unwrap();
+        assert_eq!(body_only.title, "new title");
+        assert_eq!(body_only.body, "body2");
+        assert!(store.edit_task(&task.id, Some("  "), None).is_err());
+    }
+
+    #[test]
+    fn set_model_override_and_clear() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "model task");
+        let pinned = store.set_model(&task.id, Some("gpt-5.2")).unwrap();
+        assert_eq!(pinned.model.as_deref(), Some("gpt-5.2"));
+        let cleared = store.set_model(&task.id, None).unwrap();
+        assert!(cleared.model.is_none());
+    }
+
+    #[test]
+    fn attachments_lifecycle_with_removal() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "with files");
+        store.attach(&task.id, "file", "/tmp/a.txt").unwrap();
+        store.attach(&task.id, "file", "/tmp/b.txt").unwrap();
+        let rows = store.attachments_with_ids(&task.id).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(store.remove_attachment(rows[0].0).unwrap());
+        assert!(!store.remove_attachment(rows[0].0).unwrap());
+        assert_eq!(store.attachments_with_ids(&task.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn board_rename_workdir_and_stats() {
+        let (_dir, store) = temp_store();
+        store.create_board("ops", Some("Operations"), Some("/srv")).unwrap();
+        store.rename_board("ops", "Ops Board").unwrap();
+        store.set_board_workdir("ops", Some("/tmp/ops")).unwrap();
+        let boards = store.list_boards().unwrap();
+        let ops = boards.iter().find(|b| b.slug == "ops").unwrap();
+        assert_eq!(ops.name, "Ops Board");
+
+        make_task(&store, "one");
+        make_task(&store, "two");
+        let counts = store.board_status_counts().unwrap();
+        let todo = counts.iter().find(|(s, _)| s == "todo").map(|(_, n)| *n);
+        assert_eq!(todo, Some(2));
     }
 }
