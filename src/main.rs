@@ -132,6 +132,18 @@ enum Commands {
     Init,
     /// List available skins/themes (hermes skin engine)
     Skins,
+    /// Diagnose configuration and dependencies (hermes doctor)
+    Doctor {
+        /// Attempt to fix issues automatically
+        #[arg(long)]
+        fix: bool,
+        /// Probe the configured provider API endpoint
+        #[arg(long)]
+        online: bool,
+        /// Output the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -786,6 +798,16 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 );
             }
             println!("Active skin: {} (set [display] skin in config.toml)", active);
+            Ok(())
+        }
+        Commands::Doctor { fix, online, json } => {
+            let opts = ulnclaw::doctor::DoctorOptions { fix, online, json };
+            let report = ulnclaw::doctor::run_doctor(&config, &opts);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            } else {
+                print!("{}", report.render());
+            }
             Ok(())
         }
     }
