@@ -377,6 +377,10 @@ re-read); the CLI exposes `ulnclaw models providers|list|info|refresh`.
   `errors.log` WARNING+, `gateway.log` gateway targets; hermes
   `_LOG_FORMAT` line format) plus the `ulnclaw logs` viewer
   (tail/follow/level/session/since/component filters)
+- `backup.rs` - backup/restore: full zip of `<home>` with exclusion
+  rules + WAL-safe SQLite snapshots, import overlay, quick state
+  snapshots (`state-snapshots/`), cron safety net; wired into
+  `ulnclaw update` (pre-update snapshot)
 
 ## Data Flow
 

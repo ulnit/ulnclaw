@@ -171,6 +171,25 @@ enum Commands {
         #[arg(long)]
         deep: bool,
     },
+    /// Back up the ulnclaw home directory to a zip (hermes backup)
+    Backup {
+        /// Snapshot management: list | restore <id> | prune [keep]
+        action: Vec<String>,
+        /// Output path for the zip (default: ~/ulnclaw-backup-<timestamp>.zip)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Quick snapshot: only critical state files (config, state.db, .env, cron)
+        #[arg(short, long)]
+        quick: bool,
+        /// Label for the snapshot (only used with --quick)
+        #[arg(short, long)]
+        label: Option<String>,
+    },
+    /// Restore from a backup zip, overlaying onto the current home (hermes import)
+    Import {
+        /// Path to the backup zip
+        zip: String,
+    },
     /// Update ulnclaw to the latest version (hermes update)
     Update {
         /// Check whether an update is available without installing anything
@@ -902,6 +921,86 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             print!("{}", ulnclaw::status::show_status(&config, &opts));
             Ok(())
         }
+        Commands::Backup { action, output, quick, label } => {
+            let home = ulnclaw::config::ulnclaw_home();
+            match action.first().map(|a| a.as_str()) {
+                Some("list") => {
+                    let snapshots = ulnclaw::backup::list_quick_snapshots(&home);
+                    if snapshots.is_empty() {
+                        println!("No quick snapshots yet. Create one with 'ulnclaw backup --quick'.");
+                    } else {
+                        println!("Quick snapshots in {}/{}:", home.display(), ulnclaw::backup::QUICK_SNAPSHOTS_DIR);
+                        for snapshot in &snapshots {
+                            println!(
+                                "  {:<32} {:>4} file(s)  {:>10}",
+                                snapshot.id,
+                                snapshot.files,
+                                ulnclaw::backup::format_size(snapshot.bytes as f64)
+                            );
+                        }
+                    }
+                    Ok(())
+                }
+                Some("restore") => {
+                    let Some(id) = action.get(1) else {
+                        return Err("usage: ulnclaw backup restore <snapshot-id>".into());
+                    };
+                    match ulnclaw::backup::restore_quick_snapshot(&home, id) {
+                        Ok(true) => println!("✓ Restored state from snapshot {id}."),
+                        Ok(false) => println!("Snapshot '{id}' not found or empty."),
+                        Err(e) => return Err(e),
+                    }
+                    Ok(())
+                }
+                Some("prune") => {
+                    let keep: usize = action
+                        .get(1)
+                        .and_then(|k| k.parse().ok())
+                        .unwrap_or(ulnclaw::backup::QUICK_DEFAULT_KEEP);
+                    let removed = ulnclaw::backup::prune_quick_snapshots(&home, keep);
+                    println!("Pruned {removed} snapshot(s) (keeping {keep}).");
+                    Ok(())
+                }
+                Some(unknown) => Err(format!(
+                    "Unknown backup action: '{unknown}'. Use list, restore <id>, or prune [keep]."
+                )),
+                None => {
+                    if quick {
+                        match ulnclaw::backup::create_quick_snapshot(&home, label.as_deref(), None, None)? {
+                            Some(id) => {
+                                println!("✓ Quick snapshot created: {id}");
+                                println!("  Restore with: ulnclaw backup restore {id}");
+                            }
+                            None => println!("No state files found to snapshot."),
+                        }
+                        Ok(())
+                    } else {
+                        println!("Scanning {} ...", home.display());
+                        let summary = ulnclaw::backup::create_backup(
+                            &home,
+                            output.as_ref().map(std::path::Path::new),
+                        )?;
+                        println!("Backing up {} files ...", summary.file_count);
+                        print!("{}", ulnclaw::backup::format_backup_summary(&summary));
+                        Ok(())
+                    }
+                }
+            }
+        }
+        Commands::Import { zip } => {
+            let home = ulnclaw::config::ulnclaw_home();
+            let zip_path = std::path::PathBuf::from(&zip);
+            // Safety net snapshot of current state before overlaying.
+            if let Some(id) = ulnclaw::backup::create_quick_snapshot(&home, Some("pre-import"), None, None)? {
+                println!("→ Current state snapshotted as {id} before import.");
+            }
+            let report = ulnclaw::backup::import_backup(&home, &zip_path)?;
+            print!("{}", ulnclaw::backup::format_import_report(&report));
+            if let Some(message) = ulnclaw::backup::restore_cron_jobs_if_emptied(&home) {
+                println!("{message}");
+            }
+            Ok(())
+        }
         Commands::Update { check, branch, yes } => {
             let opts = ulnclaw::update::UpdateOptions { check, branch, yes };
             let root = ulnclaw::update::find_repo_root()
@@ -913,8 +1012,16 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 }
                 print!("{}", ulnclaw::update::format_check_report(&outcome));
             } else {
+                // hermes _run_pre_update_backup: quick state snapshot first.
+                let home = ulnclaw::config::ulnclaw_home();
+                if let Some(id) = ulnclaw::backup::create_pre_update_backup(&home) {
+                    println!("→ Pre-update state snapshot: {id}");
+                }
                 let report = ulnclaw::update::apply_update(&root, &opts)?;
                 print!("{}", ulnclaw::update::format_update_report(&report));
+                if let Some(message) = ulnclaw::backup::restore_cron_jobs_if_emptied(&home) {
+                    println!("{message}");
+                }
             }
             Ok(())
         }

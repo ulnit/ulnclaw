@@ -385,6 +385,9 @@ CLI 提供 `ulnclaw models providers|list|info|refresh`。
   `errors.log` WARNING+、`gateway.log` 网关目标；hermes `_LOG_FORMAT`
   行格式）+ `ulnclaw logs` 查看器（tail/follow/level/session/since/
   component 过滤）
+- `backup.rs` - 备份/恢复：`<home>` 完整 zip（排除规则 + WAL 安全
+  SQLite 快照）、导入覆盖、快速状态快照（`state-snapshots/`）、
+  cron 安全网；接入 `ulnclaw update`（更新前快照）
 
 ## 数据流
 
