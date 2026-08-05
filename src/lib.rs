@@ -81,6 +81,7 @@ pub mod backup;
 pub mod banner;
 pub mod binary_ext;
 pub mod browser;
+pub mod bundles;
 pub mod checkpoint;
 pub mod config;
 pub mod config_cmd;

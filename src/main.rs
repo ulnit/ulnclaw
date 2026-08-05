@@ -51,6 +51,11 @@ enum Commands {
         #[command(subcommand)]
         action: Option<SkillAction>,
     },
+    /// Skill bundles — load multiple skills under one /command (hermes bundles)
+    Bundles {
+        #[command(subcommand)]
+        action: Option<BundlesAction>,
+    },
     /// Cron job management
     Cron {
         #[command(subcommand)]
@@ -530,6 +535,34 @@ enum SkillAction {
 }
 
 #[derive(Subcommand)]
+enum BundlesAction {
+    /// Show all bundles (default)
+    List,
+    /// Dump one bundle's contents
+    Show { name: String },
+    /// Build a new bundle
+    Create {
+        name: String,
+        /// Skills to include (repeatable)
+        #[arg(long = "skill", required = true)]
+        skills: Vec<String>,
+        /// Bundle description
+        #[arg(long)]
+        description: Option<String>,
+        /// Extra guidance injected above the skill bodies
+        #[arg(long)]
+        instruction: Option<String>,
+        /// Overwrite an existing bundle of the same name
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Remove a bundle
+    Delete { name: String },
+    /// Re-scan the bundles directory
+    Reload,
+}
+
+#[derive(Subcommand)]
 enum CuratorAction {
     /// Skill usage summary (states, provenance, pins, unmanaged)
     Status,
@@ -896,6 +929,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Sessions { action } => sessions_cmd(action).await,
         Commands::Tools => tools_cmd(&config),
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
+        Commands::Bundles { action } => bundles_cmd(action.unwrap_or(BundlesAction::List)),
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
@@ -1539,7 +1573,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -1947,7 +1981,48 @@ async fn handle_slash(
                 }
             }
         }
-        other => println!("unknown command: {} (/help for a list)", other),
+        other => {
+            // Skill bundles win over the unknown-command fallback (hermes
+            // bundle-over-skill slash precedence): /<bundle> loads every
+            // member skill into one turn.
+            let cmd_name = other.trim_start_matches('/');
+            match ulnclaw::bundles::resolve_bundle_command_key(cmd_name) {
+                Some(key) => {
+                    let skills_dir = agent.tool_context().home.join("skills");
+                    match ulnclaw::bundles::build_bundle_invocation_message(
+                        &key, rest, &skills_dir,
+                    ) {
+                        Some((message, loaded, missing)) => {
+                            let mut note = format!(
+                                "bundle {}: loaded {} skill(s)",
+                                key.trim_start_matches('/'),
+                                loaded.len()
+                            );
+                            if !missing.is_empty() {
+                                note.push_str(&format!("; missing: {}", missing.join(", ")));
+                            }
+                            println!("{note}");
+                            match agent.run(&message, Some(history.clone())).await {
+                                Ok(result) => {
+                                    println!("\n{}", result.content);
+                                    *history = result
+                                        .conversation
+                                        .into_iter()
+                                        .filter(|m| m.role != Role::System)
+                                        .collect();
+                                }
+                                Err(e) => println!("bundle run failed: {}", e),
+                            }
+                        }
+                        None => println!(
+                            "bundle {} has no loadable skills",
+                            key.trim_start_matches('/')
+                        ),
+                    }
+                }
+                None => println!("unknown command: {} (/help for a list)", other),
+            }
+        }
     }
     Ok(true)
 }
@@ -3236,6 +3311,80 @@ async fn skills_cmd(action: SkillAction) -> Result<(), String> {
             for file in ulnclaw::skills::linked_files(&skill.path) {
                 println!("  + {}", file);
             }
+        }
+    }
+    Ok(())
+}
+
+fn bundles_cmd(action: BundlesAction) -> Result<(), String> {
+    use ulnclaw::bundles;
+    match action {
+        BundlesAction::List => {
+            let list = bundles::list_bundles();
+            if list.is_empty() {
+                println!(
+                    "No bundles installed yet. Create one with:\n  \
+                     ulnclaw bundles create <name> --skill skill1 --skill skill2"
+                );
+                println!("Bundles directory: {}", bundles::bundles_dir().display());
+                return Ok(());
+            }
+            println!("Skill Bundles ({})", list.len());
+            for info in &list {
+                println!(
+                    "  /{:<20} {:<24} {:>2} skills  {}",
+                    info.slug,
+                    info.name,
+                    info.skills.len(),
+                    info.description
+                );
+            }
+            println!("Bundles directory: {}", bundles::bundles_dir().display());
+        }
+        BundlesAction::Show { name } => {
+            let Some(info) = bundles::get_bundle(&name) else {
+                return Err(format!("Bundle {name:?} not found."));
+            };
+            println!("/{}  {}", info.slug, info.name);
+            if !info.description.is_empty() {
+                println!("  {}", info.description);
+            }
+            println!("  File: {}", info.path.display());
+            println!("  Skills ({}):", info.skills.len());
+            for skill in &info.skills {
+                println!("    - {}", skill);
+            }
+            if !info.instruction.is_empty() {
+                println!("  Instruction: {}", info.instruction);
+            }
+        }
+        BundlesAction::Create {
+            name,
+            skills,
+            description,
+            instruction,
+            overwrite,
+        } => {
+            let path = bundles::save_bundle(
+                &name,
+                &skills,
+                description.as_deref().unwrap_or(""),
+                instruction.as_deref().unwrap_or(""),
+                overwrite,
+            )?;
+            println!("✓ Saved bundle '{}' -> {}", name, path.display());
+        }
+        BundlesAction::Delete { name } => {
+            let path = bundles::delete_bundle(&name)?;
+            println!("✓ Deleted bundle '{}' ({})", name, path.display());
+        }
+        BundlesAction::Reload => {
+            let before = bundles::scan_bundles();
+            let diff = bundles::reload_diff(&before);
+            // A one-shot CLI rescans from disk, so the diff is against the
+            // snapshot taken moments earlier; report the live total.
+            println!("Reloaded bundles directory: {}", bundles::bundles_dir().display());
+            println!("Total bundles: {}", diff.total);
         }
     }
     Ok(())

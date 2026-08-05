@@ -65,7 +65,7 @@ pub fn redact_log_text(text: &str) -> String {
     if text.is_empty() {
         return String::new();
     }
-    let mut out = crate::redact::redact_sensitive_text(text, crate::redact::RedactOpts::default());
+    let out = crate::redact::redact_sensitive_text(text, crate::redact::RedactOpts::default());
     redact_emails(&out)
 }
 

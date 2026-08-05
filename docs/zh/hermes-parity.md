@@ -68,6 +68,7 @@
 | 审批模式 CLI（`hermes_cli/approval_mode.py`） | ✅ 核心 | `ulnclaw approvals [manual|smart|off]`：查看当前生效的终端审批模式，或经规范配置写入器持久化新模式（config.toml `approvals.mode`），写入后重新读回校验生效，并按 hermes 风格报告用法错误/受管配置失败；模式语义（`manual` 人工确认、`smart` 先问辅助守护 LLM、`off` 硬底线之外自动放行）与终端守卫一致 |
 | 提示词体积诊断（`hermes_cli/prompt_size.py`） | ✅ 核心 | `ulnclaw prompt-size [--json]`：测量每次调用的固定负载——系统提示词按四层拆分（基础身份 / 持久记忆 / 环境 / 易变日期+模型）并给出字符数与字节数、记忆文件体积、工具数 + JSON schema KB、按 schema 从大到小排序的 toolset 清单（回答"想省 token 该关哪个"）、按 SKILL.md 从大到小排序的已装技能（技能按需加载、不在基础提示词内）；与 `Agent::effective_system_prompt` 共用 `agent::DEFAULT_SYSTEM_PROMPT` 及相同构件，数字与实际注入的提示词一致 |
 | 调试分享包（`hermes_cli/debug.py`） | ✅ 核心 | `ulnclaw debug report [--lines N] [--no-redact] [--output DIR]`：以本地文件方式收集 hermes 风格分享包（不上传 pastebin）——`report.txt`（强制脱敏的 `ulnclaw dump` + agent/errors/gateway 日志尾部）加每份存在的完整日志，均带 dump 头部与脱敏横幅；每个文件一次快照同时派生摘要/全文（防轮转竞态），机密经脱敏引擎 + 邮箱掩码处理，支持 `.1` 轮转回退，绝不改动磁盘日志 |
+| 技能束（`agent/skill_bundles.py`、`hermes_cli/bundles.py`） | ✅ 核心 | `ulnclaw bundles list|show|create|delete|reload`：`<home>/skill-bundles/` 下的 YAML 技能束，把一组技能合并加载（`name/description/skills/instruction`，缺省以文件名兜底、slug 归一化与技能一致、重名 slug 先到先得、坏 YAML 跳过不影响发现）；REPL `/<bundle> [指令]` 一次把全部成员技能的 SKILL.md 注入同一轮，带 hermes 风格头部（已载/缺失清单、束指令、用户指令），束优先于同名未知命令，连字符/下划线互通；缺失技能跳过并提示（与 `-s` 预载同样宽容） |
 
 ## 功能对标
 
