@@ -734,6 +734,8 @@ pub async fn serve_multiplex(
             hub.profiles.len()
         );
     }
+    let app = with_cors(app);
+
     let addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -751,6 +753,59 @@ pub async fn serve_multiplex(
     axum::serve(listener, app)
         .await
         .map_err(|e| AgentError::config(format!("gateway serve: {}", e)))
+}
+
+// ---------------------------------------------------------------------------
+// CORS middleware
+// ---------------------------------------------------------------------------
+
+/// Wrap a router in the local-app CORS layer.
+///
+/// Local-app CORS (desktop GUI / browser dashboards): the gateway binds
+/// 127.0.0.1 by default and is additionally key-gated, so permissive
+/// CORS for local origins matches the hermes dashboard model.
+pub fn with_cors(app: Router) -> Router {
+    app.layer(axum::middleware::from_fn(cors_middleware))
+}
+
+/// Permissive CORS for local apps (desktop GUI, browser dashboards).
+/// Echoes the request Origin when present; handles preflight OPTIONS.
+async fn cors_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let origin = request
+        .headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("*")
+        .to_string();
+    let is_preflight = request.method() == axum::http::Method::OPTIONS;
+    let mut response = if is_preflight {
+        let mut response = axum::response::Response::new(axum::body::Body::empty());
+        *response.status_mut() = axum::http::StatusCode::NO_CONTENT;
+        response
+    } else {
+        next.run(request).await
+    };
+    let headers = response.headers_mut();
+    headers.insert(
+        axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        origin.parse().unwrap_or_else(|_| "*".parse().unwrap()),
+    );
+    headers.insert(
+        axum::http::header::ACCESS_CONTROL_ALLOW_METHODS,
+        "GET, POST, PUT, PATCH, DELETE, OPTIONS".parse().unwrap(),
+    );
+    headers.insert(
+        axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+        "Content-Type, Authorization".parse().unwrap(),
+    );
+    headers.insert(
+        axum::http::header::ACCESS_CONTROL_MAX_AGE,
+        "86400".parse().unwrap(),
+    );
+    response
 }
 
 // ---------------------------------------------------------------------------
@@ -4568,5 +4623,77 @@ mod tests {
         let (status, body) = get_json(app, "/health", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_cors_echoes_origin_on_regular_request() {
+        let app = with_cors(router(test_state()));
+        let request = axum::http::Request::builder()
+            .uri("/health")
+            .method("GET")
+            .header("origin", "http://127.0.0.1:5180")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let allow = response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("cors origin header present")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(allow, "http://127.0.0.1:5180");
+    }
+
+    #[tokio::test]
+    async fn test_cors_preflight_returns_no_content_and_allow_headers() {
+        let app = with_cors(router(test_state()));
+        let request = axum::http::Request::builder()
+            .uri("/api/sessions")
+            .method("OPTIONS")
+            .header("origin", "tauri://localhost")
+            .header("access-control-request-method", "POST")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let headers = response.headers();
+        assert_eq!(
+            headers.get("access-control-allow-origin").unwrap().to_str().unwrap(),
+            "tauri://localhost"
+        );
+        assert!(headers
+            .get("access-control-allow-methods")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("POST"));
+        assert!(headers
+            .get("access-control-allow-headers")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Authorization"));
+    }
+
+    #[tokio::test]
+    async fn test_cors_defaults_to_wildcard_without_origin() {
+        let app = with_cors(router(test_state()));
+        let request = axum::http::Request::builder()
+            .uri("/health")
+            .method("GET")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "*"
+        );
     }
 }

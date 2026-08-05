@@ -13,8 +13,9 @@ ulnclaw re-implements the Hermes Agent engine in Rust: the same tool surface
 layout, the same toolset composition — with native performance and a single
 static musl binary. See the [parity matrix](docs/en/hermes-parity.md) for the
 full feature-by-feature mapping — core parity with hermes-agent v2026.8.3 is
-complete (messaging-platform gateways, desktop GUI, cloud sync, and the
-plugin system are intentionally out of scope).
+complete, including the messaging-platform gateways (Telegram/Discord/Slack),
+the plugin + shell-hook system, secrets vaults, computer-use, OAuth login +
+skill sync, and a Tauri desktop GUI (`desktop/`).
 
 ### Key Features
 
@@ -48,6 +49,12 @@ plugin system are intentionally out of scope).
 - **📸 Checkpoints** — transparent git-backed snapshots before file edits (shared shadow store, per-project chains), `ulnclaw checkpoints list/restore/diff/prune`
 - **📝 Working diff** — `ulnclaw diff [--staged|--all]` shows what changed in a git worktree (untracked files included), REPL `/gitdiff`
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`, `[auxiliary.title_generation]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
+- **📡 Messaging platforms** — Telegram/Discord/Slack adapters run inside `ulnclaw gateway` (`[messaging.*]`): allowlist-gated pairing (fail closed), one persistent session per chat, hermes-style reply chunking
+- **🔌 Plugins & hooks** — directory plugins (`~/.ulnclaw/plugins/<name>/plugin.toml`: hooks + subprocess tools) and `[hooks]` config shell hooks with hermes first-use consent (`plugins list/enable/disable/accept-hooks`); 23-event hermes hook catalog
+- **🔑 Secrets vaults** — external secret sources applied at startup before providers read env (`secrets status/sync`): command helper, Bitwarden Secrets Manager (`bws`), 1Password (`op://` refs) with full hermes precedence semantics
+- **🖱️ Computer use** — `computer_use` tool via the cua-driver daemon (MCP over stdio, full hermes schema), approval-gated like hermes; `computer-use status/doctor/install`
+- **🔄 OAuth + skill sync** — `auth login` RFC 8628 device flow against any `[oauth]` provider; `sync status/pull/push/now` keeps skills in sync over HTTP(S) or a shared directory
+- **🖥️ Desktop GUI** — `desktop/`: a Tauri 2 shell (replacing hermes' Electron app) that hosts the chat UI and manages the gateway child process; the gateway's local-app CORS also serves any browser dashboard
 
 ### CLI Quick Start
 
@@ -93,6 +100,8 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw secrets status   # external secret sources (secrets sync [--apply] fetches now)
 ./ulnclaw computer-use status # background desktop control via cua-driver (doctor/install)
 ./ulnclaw plugins list      # plugins + shell hooks (enable/disable/accept-hooks)
+./ulnclaw auth login        # OAuth device-flow login (status/refresh/logout/open)
+./ulnclaw sync status       # skill sync (pull/push/now/enable/disable/device)
 ./ulnclaw completion bash  # shell completions (bash/zsh/fish/elvish/powershell)
 ./ulnclaw dump             # copy-pasteable setup summary for support (--show-keys)
 ./ulnclaw version          # version + install info + update status
@@ -116,6 +125,8 @@ export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # or ws://.../devtools/brow
 # HTTP gateway (OpenAI-compatible API server, default 127.0.0.1:8642)
 ./ulnclaw gateway --host 127.0.0.1 --port 8642
 # messaging platforms run inside the gateway ([messaging.telegram|discord|slack])
+# the Tauri desktop app (desktop/) and any browser dashboard talk to this
+# gateway over HTTP/SSE (local-app CORS is built in; see desktop/README.md)
 curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \\
      -H "Content-Type: application/json" \\
      -d '{"messages":[{"role":"user","content":"Hello!"}]}' \\
@@ -236,7 +247,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 702 tests
+cargo test                     # 716 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -254,7 +265,9 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 相同的 SQLite 会话/记忆/技能/定时任务存储布局、相同的工具集组合方式 ——
 原生性能，单一静态 musl 二进制。完整的逐项对标见
 [对标矩阵](docs/zh/hermes-parity.md) —— 与 hermes-agent v2026.8.3 的核心
-对齐已完成（消息平台网关、桌面 GUI、云同步与插件体系有意不在范围内）。
+对齐已完成，含消息平台网关（Telegram/Discord/Slack）、插件与 shell 钩子
+体系、Secrets 保险库、computer-use、OAuth 登录 + 技能同步，以及 Tauri
+桌面 GUI（`desktop/`）。
 
 ### 核心特性
 
@@ -286,6 +299,12 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **📸 检查点** —— 文件编辑前的透明 git 快照（共享 shadow 存储、按项目快照链），`ulnclaw checkpoints list/restore/diff/prune`
 - **📝 工作区 diff** —— `ulnclaw diff [--staged|--all]` 显示 git 工作区变更（含未跟踪文件），REPL `/gitdiff`
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`、`[auxiliary.title_generation]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
+- **📡 消息平台** —— Telegram/Discord/Slack 适配器运行于 `ulnclaw gateway` 内（`[messaging.*]`）：白名单配对（fail closed）、每聊天一条持久会话、hermes 风格回复分块
+- **🔌 插件与钩子** —— 目录插件（`~/.ulnclaw/plugins/<name>/plugin.toml`：hooks + 子进程工具）与 `[hooks]` 配置式 shell 钩子，复刻 hermes 首次使用同意机制（`plugins list/enable/disable/accept-hooks`）；hermes 23 事件钩子目录
+- **🔑 Secrets 保险库** —— 外部秘密源在启动时、provider 读取 env 之前应用（`secrets status/sync`）：command 助手、Bitwarden Secrets Manager（`bws`）、1Password（`op://` 引用），完整复刻 hermes 优先级语义
+- **🖱️ Computer use** —— `computer_use` 工具经 cua-driver 守护进程（MCP over stdio，完整 hermes schema），与 hermes 相同的审批门控；`computer-use status/doctor/install`
+- **🔄 OAuth + 技能同步** —— `auth login` 对任意 `[oauth]` provider 执行 RFC 8628 设备流；`sync status/pull/push/now` 经 HTTP(S) 或共享目录同步技能
+- **🖥️ 桌面 GUI** —— `desktop/`：Tauri 2 外壳（取代 hermes 的 Electron 应用），承载聊天界面并管理 gateway 子进程；网关内置的本地应用 CORS 同样服务任意浏览器仪表盘
 
 ### CLI 快速开始
 
@@ -331,6 +350,8 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw secrets status   # 外部秘密源（secrets sync [--apply] 立即拉取）
 ./ulnclaw computer-use status # cua-driver 后台桌面控制（doctor/install）
 ./ulnclaw plugins list      # 插件与 shell 钩子（enable/disable/accept-hooks）
+./ulnclaw auth login        # OAuth 设备流登录（status/refresh/logout/open）
+./ulnclaw sync status       # 技能同步（pull/push/now/enable/disable/device）
 ./ulnclaw completion bash  # shell 补全脚本（bash/zsh/fish/elvish/powershell）
 ./ulnclaw dump             # 可粘贴的装机摘要，用于求助排查（--show-keys）
 ./ulnclaw version          # 版本 + 安装信息 + 升级状态
@@ -352,6 +373,8 @@ export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # 或 ws://.../devtools/bro
 # HTTP 网关（OpenAI 兼容 API 服务器，默认 127.0.0.1:8642）
 ./ulnclaw gateway --host 127.0.0.1 --port 8642
 # 消息平台随网关运行（[messaging.telegram|discord|slack]）
+# Tauri 桌面应用（desktop/）与任意浏览器仪表盘经 HTTP/SSE 连接本网关
+# （内置本地应用 CORS，见 desktop/README.md）
 curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \\
      -H "Content-Type: application/json" \\
      -d '{"messages":[{"role":"user","content":"你好！"}]}' \\
@@ -393,7 +416,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 702 个测试
+cargo test                     # 716 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

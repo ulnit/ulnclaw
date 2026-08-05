@@ -581,7 +581,7 @@ pub mod slack {
             .map_err(|e| AgentError::Tool(format!("slack connect: {e}")))?;
         eprintln!("[slack] socket-mode connected");
         let (mut sink, mut stream) = ws.split();
-        let mut own_bot_id: Option<String> = None;
+        let own_bot_id: Option<String> = None;
         while let Some(Ok(message)) = stream.next().await {
             let WsMessage::Text(text) = message else { continue };
             let Ok(envelope) = serde_json::from_str::<Value>(&text) else { continue };

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ulnclaw</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <span class="wordmark">ulnclaw</span>
+          <span id="gateway-dot" class="dot" title="gateway status"></span>
+        </div>
+        <button id="new-session" class="primary">New session</button>
+        <div id="session-list"></div>
+        <div class="sidebar-footer">
+          <button id="settings-btn" class="ghost">Settings</button>
+        </div>
+      </aside>
+      <main id="chat">
+        <header id="chat-header">
+          <span id="chat-title">Select or start a session</span>
+          <span id="model-badge"></span>
+        </header>
+        <div id="messages"></div>
+        <footer id="composer">
+          <textarea id="input" rows="3" placeholder="Message ulnclaw… (Enter to send, Shift+Enter for newline)"></textarea>
+          <button id="send" class="primary">Send</button>
+        </footer>
+      </main>
+      <dialog id="settings">
+        <form method="dialog">
+          <h2>Gateway settings</h2>
+          <label>Gateway URL
+            <input id="setting-url" type="text" placeholder="http://127.0.0.1:8642" />
+          </label>
+          <label>API key (optional, [gateway] key)
+            <input id="setting-key" type="password" placeholder="bearer token" />
+          </label>
+          <label class="check">
+            <input id="setting-manage" type="checkbox" />
+            Manage the gateway process (start/stop with the app)
+          </label>
+          <menu>
+            <button value="cancel">Cancel</button>
+            <button id="settings-save" value="default">Save</button>
+          </menu>
+        </form>
+      </dialog>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -9,7 +9,9 @@
 
 use crate::error::{AgentError, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

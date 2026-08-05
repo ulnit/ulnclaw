@@ -3472,7 +3472,8 @@ fn run_session_browse_tui(
                     // Ctrl+J (LF) / Ctrl+M (CR) are the classic Enter
                     // equivalents — some terminal paths deliver LF.
                     KeyCode::Enter
-                    | (KeyCode::Char('j') | KeyCode::Char('m'))
+                    | KeyCode::Char('j')
+                    | KeyCode::Char('m')
                         if matches!(key.code, KeyCode::Enter)
                             || key.modifiers.contains(KeyModifiers::CONTROL) =>
                     {

@@ -1,0 +1,22 @@
+[package]
+name = "ulnclaw-desktop"
+version = "0.2.0"
+description = "Tauri desktop shell for the ulnclaw agent"
+edition = "2021"
+license = "MIT"
+
+# The workspace root Cargo.toml does not include this crate by default;
+# build with `npm run tauri dev` / `npm run tauri build` from desktop/.
+
+[lib]
+name = "ulnclaw_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "rt"] }

@@ -122,9 +122,6 @@ struct HookCallback {
     event: String,
     /// Absolute script path (directory plugin) or command line (config).
     command: String,
-    /// True for config shell hooks (consent-tracked); plugin scripts are
-    /// trusted by installation (hermes user-source semantics).
-    needs_consent: bool,
 }
 
 struct PluginRuntime {
@@ -266,7 +263,6 @@ async fn build_runtime(home: &Path, config: &crate::config::UlncLawConfig) -> Pl
                             hooks.push(HookCallback {
                                 event: hook.clone(),
                                 command: script.display().to_string(),
-                                needs_consent: false,
                             });
                         } else {
                             warnings.push(format!(
@@ -304,7 +300,6 @@ async fn build_runtime(home: &Path, config: &crate::config::UlncLawConfig) -> Pl
                 hooks.push(HookCallback {
                     event: event.clone(),
                     command: command.clone(),
-                    needs_consent: true,
                 });
             } else if auto_accept {
                 allowlist.push(key);
@@ -312,7 +307,6 @@ async fn build_runtime(home: &Path, config: &crate::config::UlncLawConfig) -> Pl
                 hooks.push(HookCallback {
                     event: event.clone(),
                     command: command.clone(),
-                    needs_consent: true,
                 });
             } else {
                 warnings.push(format!(
@@ -790,7 +784,6 @@ mod tests {
         let callback = HookCallback {
             event: "pre_tool_call".into(),
             command: script.display().to_string(),
-            needs_consent: false,
         };
         let response = run_hook_callback(&callback, &json!({"hook_event_name": "pre_tool_call"})).await;
         assert_eq!(
@@ -808,7 +801,6 @@ mod tests {
         let callback = HookCallback {
             event: "pre_tool_call".into(),
             command: "/nonexistent-ulnclaw-hook".into(),
-            needs_consent: false,
         };
         assert!(run_hook_callback(&callback, &json!({})).await.is_none());
     }
