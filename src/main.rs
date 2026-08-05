@@ -1325,6 +1325,12 @@ async fn build_gateway_stack(
     // Cron scheduler: dispatch due jobs as tracked cron runs (hermes
     // scheduler loop). 30s polling matches the job-timing granularity.
     ulnclaw::gateway::spawn_cron_scheduler(state.clone(), 30);
+    if config.kanban.dispatch_in_gateway {
+        ulnclaw::gateway::spawn_kanban_dispatcher(
+            config.kanban.dispatch_interval_secs,
+            config.kanban.max_spawn,
+        );
+    }
     Ok(state)
 }
 
@@ -2045,6 +2051,47 @@ async fn one_shot(
     )
     .await;
     println!("{}", content);
+
+    // Kanban stop-guard (hermes agent/kanban_stop.py): a dispatcher-spawned
+    // worker must end on kanban_complete/kanban_block. If the run finished
+    // without moving the task to a terminal status, nudge and continue
+    // (bounded by STOP_NUDGE_MAX_ATTEMPTS).
+    if let Some(task_id) = ulnclaw::kanban::worker_task_env() {
+        let mut attempts = 0usize;
+        loop {
+            let needs_nudge = {
+                match ulnclaw::kanban::KanbanStore::open_default() {
+                    Ok(store) => match store.get_task(&task_id) {
+                        Ok(Some(task)) => !matches!(task.status.as_str(), "done" | "blocked"),
+                        _ => false,
+                    },
+                    Err(_) => false,
+                }
+            };
+            if !needs_nudge {
+                break;
+            }
+            let Some(nudge) = ulnclaw::kanban::build_kanban_stop_nudge(&task_id, attempts) else {
+                eprintln!(
+                    "kanban: worker for {task_id} ended without kanban_complete/kanban_block \
+                     after {attempts} nudge(s) — protocol violation"
+                );
+                break;
+            };
+            attempts += 1;
+            let result = agent
+                .run_with_session(&nudge, None, target.as_deref())
+                .await
+                .map_err(|e| e.to_string())?;
+            let content = ulnclaw::plugins::transform_llm_output(
+                &agent.context().session_id,
+                &cwd,
+                &result.content,
+            )
+            .await;
+            println!("{}", content);
+        }
+    }
     ulnclaw::plugins::fire_session_event(
         "on_session_end",
         &agent.context().session_id,
@@ -2515,6 +2562,15 @@ async fn handle_slash(
             .await
             .map_err(|e| e.to_string())?;
         }
+        "/kanban" => {
+            // Board ops inline (hermes `/kanban` → kanban.run_slash).
+            let home = ulnclaw::config::ulnclaw_home();
+            let rest = rest.to_string();
+            let output = tokio::task::spawn_blocking(move || ulnclaw::kanban::run_slash(&home, &rest))
+                .await
+                .map_err(|e| e.to_string())?;
+            print!("{output}");
+        }
         "/hatch" => {
             // Generate a brand-new pet from a description (hermes `/hatch`).
             // Runs the full image-model pipeline, so keep the blocking calls
@@ -2575,7 +2631,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /kanban [list|show|create|done|block|unblock|comment|boards]   coordination board (hermes /kanban)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /quit           exit"
             );
         }
         "/history" => {

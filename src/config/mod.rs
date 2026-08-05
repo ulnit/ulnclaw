@@ -723,6 +723,32 @@ pub struct UlncLawConfig {
     /// `agent/pet/generate` provider config).
     #[serde(default)]
     pub pets: PetsConfig,
+    /// Kanban dispatcher settings (hermes `kanban:` block).
+    #[serde(default)]
+    pub kanban: KanbanConfig,
+}
+
+/// `[kanban]` — dispatcher settings (hermes `kanban.*`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KanbanConfig {
+    /// Run dispatcher ticks inside the gateway (hermes
+    /// `kanban.dispatch_in_gateway`, default on).
+    pub dispatch_in_gateway: bool,
+    /// Seconds between dispatch ticks (hermes default 60).
+    pub dispatch_interval_secs: u64,
+    /// Max concurrent kanban workers (live concurrency cap).
+    pub max_spawn: usize,
+}
+
+impl Default for KanbanConfig {
+    fn default() -> Self {
+        Self {
+            dispatch_in_gateway: true,
+            dispatch_interval_secs: 60,
+            max_spawn: 2,
+        }
+    }
 }
 
 /// `[pets]` — image-generation endpoint overrides for the pet hatch

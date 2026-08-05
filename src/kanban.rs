@@ -161,6 +161,220 @@ pub fn default_spawn(home: &Path, task: &Task) -> std::result::Result<Option<i64
     Ok(Some(i64::from(child.id())))
 }
 
+/// In-process slash surface for the REPL `/kanban` command (hermes
+/// `kanban.run_slash`): one formatted string back, no process spawn.
+pub fn run_slash(home: &std::path::Path, rest: &str) -> String {
+    let mut parts = rest.split_whitespace();
+    let sub = parts.next().unwrap_or("list");
+    let store = match KanbanStore::open(home.join("kanban.db")) {
+        Ok(s) => s,
+        Err(e) => return format!("(._.) kanban error: {e}\n"),
+    };
+    match sub {
+        "boards" => {
+            let mut out = String::new();
+            let current = store.current_board().unwrap_or_default();
+            match store.list_boards() {
+                Ok(boards) => {
+                    for b in boards {
+                        let marker = if b.slug == current { "*" } else { " " };
+                        out.push_str(&format!("{marker} {:<20} {}\n", b.slug, b.name));
+                    }
+                }
+                Err(e) => return format!("(._.) kanban error: {e}\n"),
+            }
+            out
+        }
+        "list" => {
+            let status = parts.next();
+            match store.list_tasks(None, status, None, 50) {
+                Ok(tasks) => {
+                    if tasks.is_empty() {
+                        return "(o_o) no tasks on this board\n".to_string();
+                    }
+                    let mut out = String::new();
+                    for t in tasks {
+                        let assignee = t.assignee.as_deref().unwrap_or("(unassigned)");
+                        out.push_str(&format!(
+                            "{} {}  {:<9} {:<20} {}\n",
+                            status_icon(&t.status),
+                            t.id,
+                            t.status,
+                            assignee,
+                            t.title
+                        ));
+                    }
+                    out
+                }
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "show" => {
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban show <id>\n".to_string();
+            };
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                Ok(None) => return format!("(._.) task '{id}' not found\n"),
+                Err(e) => return format!("(._.) kanban error: {e}\n"),
+            };
+            let Some(task) = store.get_task(&id).ok().flatten() else {
+                return format!("(._.) task '{id}' not found\n")
+            };
+            let mut out = format!(
+                "{} {}  [{}]  {}\n",
+                status_icon(&task.status),
+                task.id,
+                task.status,
+                task.title
+            );
+            if !task.body.is_empty() {
+                out.push_str(&format!("{}\n", task.body));
+            }
+            if let Ok(comments) = store.comments(&id) {
+                for c in comments {
+                    out.push_str(&format!("  — {}: {}\n", c.author, c.body));
+                }
+            }
+            out
+        }
+        "create" => {
+            let title: Vec<&str> = parts.collect();
+            if title.is_empty() {
+                return "(o_o) usage: /kanban create <title>\n".to_string();
+            }
+            match store.create_task(&NewTask {
+                title: title.join(" "),
+                created_by: "repl".into(),
+                ..Default::default()
+            }) {
+                Ok(t) => format!("{} {} (todo)  {}\n", status_icon("todo"), t.id, t.title),
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "done" | "complete" => {
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban done <id> [result]\n".to_string();
+            };
+            let result: Vec<&str> = parts.collect();
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                _ => return format!("(._.) task '{id}' not found\n"),
+            };
+            let joined = result.join(" ");
+            match store.complete_task(&id, if joined.is_empty() { None } else { Some(&joined) }) {
+                Ok(t) => format!("✓ {} done\n", t.id),
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "block" => {
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban block <id> <reason>\n".to_string();
+            };
+            let reason: Vec<&str> = parts.collect();
+            if reason.is_empty() {
+                return "(o_o) usage: /kanban block <id> <reason>\n".to_string();
+            }
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                _ => return format!("(._.) task '{id}' not found\n"),
+            };
+            match store.block_task(&id, &reason.join(" ")) {
+                Ok(t) => format!("⊘ {} blocked\n", t.id),
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "unblock" => {
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban unblock <id>\n".to_string();
+            };
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                _ => return format!("(._.) task '{id}' not found\n"),
+            };
+            match store.unblock_task(&id) {
+                Ok(t) => format!("▶ {} ready\n", t.id),
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "comment" => {
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban comment <id> <text>\n".to_string();
+            };
+            let text: Vec<&str> = parts.collect();
+            if text.is_empty() {
+                return "(o_o) usage: /kanban comment <id> <text>\n".to_string();
+            }
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                _ => return format!("(._.) task '{id}' not found\n"),
+            };
+            match store.add_comment(&id, "repl", &text.join(" ")) {
+                Ok(()) => format!("comment added to {}\n", id),
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        _ => {
+            "(o_o) usage: /kanban [boards|list [status]|show <id>|create <title>|done <id> \
+             [result]|block <id> <reason>|unblock <id>|comment <id> <text>]\n"
+                .to_string()
+        }
+    }
+}
+
+/// Resolve an exact id or unique prefix against the store.
+fn resolve_any_id(store: &KanbanStore, id: &str) -> Result<Option<String>> {
+    if store.get_task(id)?.is_some() {
+        return Ok(Some(id.to_string()));
+    }
+    store.resolve_task_id(id)
+}
+
+/// The task this process works on when spawned as a kanban worker
+/// (hermes `HERMES_KANBAN_TASK`; ulnclaw native name first).
+pub fn worker_task_env() -> Option<String> {
+    crate::config::get_env_value("ULNCLAW_KANBAN_TASK")
+        .or_else(|| crate::config::get_env_value("HERMES_KANBAN_TASK"))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Whether the kanban stop-guard is active for this process (hermes
+/// `kanban_stop_nudge_enabled`): on when a worker task is set, unless
+/// `ULNCLAW_KANBAN_STOP_NUDGE` explicitly disables it.
+pub fn stop_nudge_enabled() -> bool {
+    if let Some(flag) = crate::config::get_env_value("ULNCLAW_KANBAN_STOP_NUDGE") {
+        if matches!(flag.trim().to_lowercase().as_str(), "0" | "false" | "no" | "off") {
+            return false;
+        }
+    }
+    worker_task_env().is_some()
+}
+
+/// Default nudge budget (hermes `_DEFAULT_MAX_ATTEMPTS`).
+pub const STOP_NUDGE_MAX_ATTEMPTS: usize = 2;
+
+/// Synthetic follow-up for a worker that tried to finish without a
+/// terminal board tool (hermes `build_kanban_stop_nudge`).
+pub fn build_kanban_stop_nudge(task_id: &str, attempts: usize) -> Option<String> {
+    if !stop_nudge_enabled() || attempts >= STOP_NUDGE_MAX_ATTEMPTS {
+        return None;
+    }
+    let tid = if task_id.trim().is_empty() { "this task".to_string() } else { task_id.trim().to_string() };
+    Some(format!(
+        "[System: You are an ulnclaw kanban worker. A plain-text reply is NOT a \
+         terminal state for the board.\n\n\
+         Task `{tid}` is still `running`. Ending now without a board tool causes a \
+         protocol violation (clean exit with no `kanban_complete` / `kanban_block`).\n\n\
+         Do this immediately in your next response — do not narrate intent:\n\
+         1. Finish any remaining deliverable (write the required file(s) now).\n\
+         2. Call `kanban_complete(result=...)` if the work is done, OR \
+         `kanban_block(result=<reason>)` if you are blocked.\n\n\
+         Never end a turn with only a promise of future action. Repeated protocol \
+         violations will block this task and require manual intervention.]"
+    ))
+}
+
 /// Best-effort liveness check for a local pid (hermes `_pid_alive`).
 fn pid_alive(pid: i64) -> bool {
     if pid <= 0 {

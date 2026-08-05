@@ -3524,6 +3524,44 @@ async fn spawn_job_run(
     Some(run_id)
 }
 
+/// Start the embedded kanban dispatcher loop (hermes hosts the dispatcher
+/// in the gateway, ticking every 60 s by default): reclaim stale claims,
+/// promote parent-done todos, spawn detached workers for ready tasks.
+pub fn spawn_kanban_dispatcher(interval_secs: u64, max_spawn: usize) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(5)));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let Ok(store) = crate::kanban::KanbanStore::open_default() else {
+                    return;
+                };
+                let home = crate::config::ulnclaw_home();
+                match store.dispatch_once(
+                    |task| crate::kanban::default_spawn(&home, task),
+                    Some(max_spawn.max(1)),
+                    false,
+                    2,
+                ) {
+                    Ok(result) if !result.spawned.is_empty() || !result.reclaimed.is_empty() => {
+                        tracing::info!(
+                            "kanban dispatch: {} reclaimed, {} promoted, {} spawned",
+                            result.reclaimed.len(),
+                            result.promoted.len(),
+                            result.spawned.len()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("kanban dispatch tick failed: {e}"),
+                }
+            })
+            .await;
+        }
+    })
+}
+
 /// Start the cron scheduler loop (hermes scheduler): every `poll_secs`
 /// dispatch each due job as a tracked cron run. Called from the gateway
 /// command once the cron store is wired; does nothing when absent.

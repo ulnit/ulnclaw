@@ -234,10 +234,7 @@ fn kanban_engine(ctx: &ToolContext) -> Result<crate::kanban::KanbanStore> {
 /// The task this process is working on, if it was spawned as a kanban
 /// worker (hermes `HERMES_KANBAN_TASK`).
 fn kanban_worker_task() -> Option<String> {
-    crate::config::get_env_value("ULNCLAW_KANBAN_TASK")
-        .or_else(|| crate::config::get_env_value("HERMES_KANBAN_TASK"))
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+    crate::kanban::worker_task_env()
 }
 
 fn kanban_is_worker() -> bool {
