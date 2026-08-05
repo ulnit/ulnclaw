@@ -1578,6 +1578,10 @@ async fn gateway_cmd(
     }
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
     let state = build_gateway_stack(config, &home, gateway.key.clone()).await?;
+    // One kanban notification delivery loop per gateway process (the
+    // kanban store is shared; multiplex profile stacks must not spawn
+    // their own notifiers or deliveries would duplicate).
+    ulnclaw::gateway::spawn_kanban_notifier();
 
     // `/p/<profile>` multiplexing (hermes api_server parity): every route
     // is mirrored under `/p/<profile>/...`. With `[gateway]

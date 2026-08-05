@@ -255,7 +255,18 @@
   内容寻址隔离备份 + 仅索引损坏的 REINDEX 自动修复，其余情况保守
   失败）、`kanban assignees`（配置名册与看板 assignee 合并、按状态
   计数）、`kanban daemon`（hermes 已弃用的存根，指向网关；`--force`
-  保留独立循环）以及 `ls`/`new` 可见别名。
+  保留独立循环）以及 `ls`/`new` 可见别名；P135 接通通知投递：
+  网关运行 kanban notifier 循环（hermes kanban_watchers 通知器，
+  5 秒一拍），轮询 `kanban_notify_subs`，领取未送达的终态事件
+  （completed/blocked/gave_up/crashed/timed_out/status，其中
+  archived/unblocked 只推游标不发声，避免堵塞后续事件），按 hermes
+  消息格式渲染（✔ 完成 + 交接首行、⏸ 阻塞 + 原因、⏱ 超时、
+  ✖ 崩溃/放弃、🔄 状态变更，带 @assignee 与 [board] 标签），经已
+  注册的平台发送器投递，投递后推进每个订阅的游标；订阅在任务
+  崩溃/重试周期中保留，仅当任务真正 done/archived 时移除（去重靠
+  游标）。与 hermes 的范围差异：无按 profile 的适配器归属（单一
+  共享存储）、无线程路由与死聊天清理（PlatformSender 无失败通
+  道），发送视为已送达。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

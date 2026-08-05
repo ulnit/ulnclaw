@@ -3660,6 +3660,189 @@ async fn auto_decompose_tick(provider_factory: Option<&DispatcherProviderFactory
     }
 }
 
+/// Terminal event kinds delivered to notify subscribers (hermes
+/// `TERMINAL_KINDS`). `archived` / `unblocked` are claimed (cursor
+/// advances past them so they can't wedge a later completed/blocked
+/// event behind an unclaimed row) but intentionally silent.
+const NOTIFY_TERMINAL_KINDS: &[&str] = &[
+    "completed",
+    "blocked",
+    "gave_up",
+    "crashed",
+    "timed_out",
+    "status",
+    "archived",
+    "unblocked",
+];
+
+/// Start the kanban notification delivery loop (hermes kanban notifier):
+/// every 5 s, poll `kanban_notify_subs`, deliver unseen terminal events
+/// to each subscribed chat via the registered platform sender, advance
+/// the subscription cursor after delivery, and drop the subscription
+/// once the task reaches a truly final status (done / archived).
+pub fn spawn_kanban_notifier() -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Initial delay so the gateway can finish wiring platform
+        // adapters (hermes does the same 5 s wait).
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            notifier_tick().await;
+        }
+    })
+}
+
+/// One notifier pass over every subscription.
+async fn notifier_tick() {
+    let Ok(store) = crate::kanban::KanbanStore::open_default() else {
+        return;
+    };
+    let subs = match store.list_notify_subs(None) {
+        Ok(subs) => subs,
+        Err(e) => {
+            tracing::debug!("kanban notifier: list_notify_subs failed ({e})");
+            return;
+        }
+    };
+    for sub in subs {
+        // No connected adapter for this platform: skip WITHOUT advancing
+        // the cursor so events are still delivered once the adapter
+        // comes up (hermes rewind semantics).
+        let Some(sender) = crate::messaging::platform_sender(&sub.platform) else {
+            continue;
+        };
+        let thread = if sub.thread_id.is_empty() {
+            None
+        } else {
+            Some(sub.thread_id.as_str())
+        };
+        let (cursor, events) = match store.unseen_events_for_sub(
+            &sub.task_id,
+            &sub.platform,
+            &sub.chat_id,
+            thread,
+            Some(NOTIFY_TERMINAL_KINDS),
+        ) {
+            Ok(page) => page,
+            Err(e) => {
+                tracing::debug!("kanban notifier: unseen events for {} failed ({e})", sub.task_id);
+                continue;
+            }
+        };
+        if events.is_empty() {
+            continue;
+        }
+        let task = store.get_task(&sub.task_id).ok().flatten();
+        for event in &events {
+            let Some(message) = format_notify_message(task.as_ref(), event) else {
+                continue; // silent kinds (archived / unblocked)
+            };
+            // Scoped delivery: PlatformSender has no thread routing or
+            // failure channel, so thread_id rides in the subscription
+            // row only and sends are assumed delivered.
+            sender.send_text(&sub.chat_id, &message).await;
+            tracing::debug!(
+                "kanban notifier: delivered {} event for {} to {}/{}",
+                event.kind,
+                sub.task_id,
+                sub.platform,
+                sub.chat_id
+            );
+        }
+        if let Err(e) = store.advance_notify_cursor(
+            &sub.task_id,
+            &sub.platform,
+            &sub.chat_id,
+            thread,
+            cursor,
+        ) {
+            tracing::debug!("kanban notifier: cursor advance failed ({e})");
+        }
+        // Subscriptions are removed only when the task reaches a truly
+        // final status (done / archived) — crash/retry cycles must keep
+        // notifying (hermes policy; the cursor handles dedup).
+        if let Some(task) = task.as_ref() {
+            if task.status == "done" || task.status == "archived" {
+                store
+                    .remove_notify_sub(&sub.task_id, &sub.platform, &sub.chat_id, thread)
+                    .ok();
+            }
+        }
+    }
+}
+
+/// Render one terminal event as a chat message (hermes notifier message
+/// formats). Returns `None` for intentionally silent kinds.
+fn format_notify_message(
+    task: Option<&crate::kanban::Task>,
+    event: &crate::kanban::TaskEvent,
+) -> Option<String> {
+    let board_tag = task
+        .map(|t| format!("[{}] ", t.board))
+        .unwrap_or_default();
+    let who_tag = task
+        .and_then(|t| t.assignee.as_deref())
+        .filter(|a| !a.is_empty())
+        .map(|a| format!("@{a} "))
+        .unwrap_or_default();
+    let task_id = task.map(|t| t.id.as_str()).unwrap_or("?");
+    let title: String = task
+        .map(|t| t.title.chars().take(120).collect())
+        .unwrap_or_default();
+    let payload_str = |key: &str, limit: usize| -> Option<String> {
+        let s = event.payload.get(key)?.as_str()?;
+        let first = s.trim().lines().next().unwrap_or("");
+        Some(first.chars().take(limit).collect())
+    };
+    let message = match event.kind.as_str() {
+        "completed" => {
+            let handoff = payload_str("summary", 200)
+                .or_else(|| payload_str("result", 200))
+                .or_else(|| {
+                    task.and_then(|t| t.result.as_deref())
+                        .map(|r| r.trim().lines().next().unwrap_or("").chars().take(160).collect())
+                })
+                .map(|h| format!("\n{h}"))
+                .unwrap_or_default();
+            format!("✔ {board_tag}{who_tag}Kanban {task_id} done — {title}{handoff}")
+        }
+        "blocked" => {
+            let reason = payload_str("reason", 160)
+                .map(|r| format!(": {r}"))
+                .unwrap_or_default();
+            format!("⏸ {board_tag}{who_tag}Kanban {task_id} blocked{reason}")
+        }
+        "gave_up" => {
+            let err = payload_str("error", 200)
+                .map(|e| format!("\n{e}"))
+                .unwrap_or_default();
+            format!("✖ {board_tag}{who_tag}Kanban {task_id} gave up after repeated spawn failures{err}")
+        }
+        "crashed" => format!(
+            "✖ {board_tag}{who_tag}Kanban {task_id} worker crashed (pid gone); dispatcher will retry"
+        ),
+        "timed_out" => {
+            let limit = event
+                .payload
+                .get("limit_seconds")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            format!(
+                "⏱ {board_tag}{who_tag}Kanban {task_id} timed out (max_runtime={limit}s); will retry"
+            )
+        }
+        "status" => {
+            let new_status = payload_str("status", 40).unwrap_or_default();
+            format!("🔄 {board_tag}{who_tag}Kanban {task_id} → {new_status}")
+        }
+        // archived / unblocked advance the cursor silently.
+        _ => return None,
+    };
+    Some(message)
+}
+
 /// Start the cron scheduler loop (hermes scheduler): every `poll_secs`
 /// dispatch each due job as a tracked cron run. Called from the gateway
 /// command once the cron store is wired; does nothing when absent.
@@ -5697,5 +5880,91 @@ mod tests {
                 .unwrap(),
             "*"
         );
+    }
+
+    fn notifier_task(status: &str) -> crate::kanban::Task {
+        crate::kanban::Task {
+            id: "t_abc".into(),
+            board: "default".into(),
+            title: "Ship the widget".into(),
+            body: String::new(),
+            assignee: Some("alice".into()),
+            status: status.into(),
+            priority: 0,
+            created_by: "tester".into(),
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            tenant: None,
+            model: None,
+            result: Some("legacy result".into()),
+            claim_lock: None,
+            claim_expires: None,
+            last_heartbeat_at: None,
+            worker_pid: None,
+            skills: None,
+            max_runtime_seconds: None,
+            idempotency_key: None,
+        }
+    }
+
+    fn notifier_event(kind: &str, payload: serde_json::Value) -> crate::kanban::TaskEvent {
+        crate::kanban::TaskEvent {
+            id: 1,
+            task_id: "t_abc".into(),
+            kind: kind.into(),
+            payload,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn notifier_formats_terminal_messages_like_hermes() {
+        let task = notifier_task("done");
+        let msg = format_notify_message(
+            Some(&task),
+            &notifier_event("completed", serde_json::json!({"result": "all green\nsecond line"})),
+        )
+        .unwrap();
+        assert_eq!(
+            msg,
+            "✔ [default] @alice Kanban t_abc done — Ship the widget\nall green"
+        );
+
+        let msg = format_notify_message(
+            Some(&task),
+            &notifier_event("blocked", serde_json::json!({"reason": "needs api key"})),
+        )
+        .unwrap();
+        assert_eq!(msg, "⏸ [default] @alice Kanban t_abc blocked: needs api key");
+
+        let msg = format_notify_message(
+            Some(&task),
+            &notifier_event("timed_out", serde_json::json!({"limit_seconds": 600})),
+        )
+        .unwrap();
+        assert_eq!(
+            msg,
+            "⏱ [default] @alice Kanban t_abc timed out (max_runtime=600s); will retry"
+        );
+
+        // Silent kinds advance the cursor without a message.
+        assert!(format_notify_message(Some(&task), &notifier_event("archived", serde_json::json!({}))).is_none());
+        assert!(format_notify_message(Some(&task), &notifier_event("unblocked", serde_json::json!({}))).is_none());
+    }
+
+    #[test]
+    fn notifier_completed_prefers_summary_and_falls_back_to_result() {
+        let task = notifier_task("done");
+        let msg = format_notify_message(
+            Some(&task),
+            &notifier_event("completed", serde_json::json!({"summary": "handoff first"})),
+        )
+        .unwrap();
+        assert!(msg.ends_with("handoff first"));
+        let msg =
+            format_notify_message(Some(&task), &notifier_event("completed", serde_json::json!({})))
+                .unwrap();
+        assert!(msg.ends_with("legacy result"));
     }
 }

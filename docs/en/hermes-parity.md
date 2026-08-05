@@ -279,7 +279,20 @@ performance and a single static binary.
   (config roster merged with board assignees, per-status counts),
   `kanban daemon` (hermes-deprecated stub pointing at the gateway,
   `--force` keeps the standalone loop), and `ls`/`new` visible
-  aliases.
+  aliases; P135 wired notification delivery: the gateway runs a
+  kanban notifier loop (hermes kanban_watchers notifier, 5 s tick)
+  that polls `kanban_notify_subs`, claims unseen terminal events
+  (completed/blocked/gave_up/crashed/timed_out/status, with
+  archived/unblocked claimed-but-silent so they can't wedge later
+  events), renders hermes' message formats (✔ done + handoff first
+  line, ⏸ blocked + reason, ⏱ timed_out, ✖ crashed/gave_up, 🔄
+  status, @assignee + [board] tags) and sends them through the
+  registered platform sender, advancing the per-sub cursor after
+  delivery; subscriptions survive crash/retry cycles and are removed
+  only when the task reaches done/archived (cursor handles dedup).
+  Scoped vs hermes: no per-profile adapter ownership (single shared
+  store), no thread routing or dead-chat drop (PlatformSender exposes
+  no failure channel), sends assumed delivered.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the
