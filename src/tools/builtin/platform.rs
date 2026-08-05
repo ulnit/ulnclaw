@@ -1063,34 +1063,33 @@ fn register_browser(registry: &mut ToolRegistry) {
 // ---------------------------------------------------------------------------
 
 fn register_gated_stubs(registry: &mut ToolRegistry) {
-    // computer_use — requires a CUA driver (hermes: gated on cua-driver).
+    // computer_use — background desktop control via cua-driver (hermes
+    // tools/computer_use: schema.py + tool.py + cua_backend.py).
     registry.register(
         tool("computer_use")
             .description(
-                "Control the desktop: take screenshots, move the mouse, click, and type \
-                 (requires a computer-use driver).",
+                "Drive the desktop in the background via cua-driver — screenshots, mouse, \
+                 keyboard, scroll, drag — without stealing the user's cursor or keyboard \
+                 focus. Supported on macOS, Windows, and Linux. Preferred workflow: call \
+                 with action='capture' (mode='som' gives numbered element overlays), then \
+                 click by `element` index for reliability. Pixel coordinates are supported \
+                 for models trained on them. Works on any window — hidden, minimized, or \
+                 behind another app. Requires cua-driver to be installed.",
             )
-            .parameters(json!({
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["screenshot", "click", "type", "key", "scroll"], "description": "Action to perform"},
-                    "x": {"type": "integer", "description": "X coordinate for click"},
-                    "y": {"type": "integer", "description": "Y coordinate for click"},
-                    "text": {"type": "string", "description": "Text for type action"},
-                    "key": {"type": "string", "description": "Key for key action"}
-                },
-                "required": ["action"]
-            }))
-            .handler(|_args, _ctx| async move {
-                Ok(json!({
-                    "success": false,
-                    "error": "computer_use: no computer-use driver is available in this build."
-                }))
+            .parameters(crate::computer_use::tool_schema())
+            .handler(|args, ctx| {
+                async move { crate::computer_use::handle_computer_use(args, ctx).await }
             })
             .toolset("computer_use")
             .dangerous(true)
-            .emoji("🖥️")
-            .check_fn(|| ToolAvailability::unavailable("computer-use driver not installed"))
+            .emoji("\u{1f5b1}\u{fe0f}")
+            .check_fn(|| {
+                if crate::computer_use::resolve_cua_driver_cmd().is_some() {
+                    ToolAvailability::available()
+                } else {
+                    ToolAvailability::unavailable("cua-driver not installed (ulnclaw computer-use install)")
+                }
+            })
             .build()
             .expect("computer_use builds"),
     );

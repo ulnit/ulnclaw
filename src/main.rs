@@ -138,6 +138,11 @@ enum Commands {
         #[command(subcommand)]
         action: SecretsAction,
     },
+    /// Computer Use (cua-driver): status / doctor / install (hermes computer-use)
+    ComputerUse {
+        #[command(subcommand)]
+        action: ComputerUseAction,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -664,6 +669,27 @@ enum SecretsAction {
 }
 
 #[derive(Subcommand)]
+enum ComputerUseAction {
+    /// Print whether cua-driver is installed, its version, and the config
+    Status,
+    /// Run cua-driver's health_report and render the check matrix
+    Doctor {
+        /// Emit the raw structured payload as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install or upgrade cua-driver via the upstream installer script
+    Install {
+        /// Re-run the installer even when cua-driver is already found
+        #[arg(long)]
+        upgrade: bool,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum CuratorAction {
     /// Skill usage summary (states, provenance, pins, unmanaged)
     Status,
@@ -1067,6 +1093,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             Ok(())
         }
         Commands::Secrets { action } => secrets_cmd(&config, action),
+        Commands::ComputerUse { action } => computer_use_cmd(&config, action).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
@@ -2315,6 +2342,107 @@ fn print_diff_result(result: &serde_json::Value) {
             println!("{}", diff);
         }
     }
+}
+
+async fn computer_use_cmd(config: &UlncLawConfig, action: ComputerUseAction) -> Result<(), String> {
+    use ulnclaw::computer_use as cu;
+    let cfg = &config.computer_use;
+    match action {
+        ComputerUseAction::Status => {
+            match cu::resolve_cua_driver_cmd() {
+                Some(driver) => {
+                    println!("cua-driver: {driver}");
+                    if let Some(version) = cu::driver_version(&driver) {
+                        println!("version:    {version}");
+                    }
+                }
+                None => {
+                    println!("cua-driver: NOT INSTALLED");
+                    println!("{}", cu::cua_driver_install_hint());
+                }
+            }
+            println!(
+                "config:     telemetry={} max_image_dimension={} capture_after_mode={} no_overlay={}",
+                if cfg.cua_telemetry { "on" } else { "off (default)" },
+                cfg.max_image_dimension,
+                cfg.capture_after_mode,
+                match cfg.no_overlay {
+                    Some(true) => "force-off",
+                    Some(false) => "force-on",
+                    None => "auto",
+                }
+            );
+        }
+        ComputerUseAction::Doctor { json } => {
+            let payload = cu::health_report(cfg).await.map_err(|e| e.to_string())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?);
+                return Ok(());
+            }
+            let overall = payload
+                .get("overall")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            println!("overall: {overall}");
+            if let Some(checks) = payload.get("checks").and_then(|v| v.as_array()) {
+                for check in checks {
+                    let name = check.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let status = check.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                    let detail = check
+                        .get("detail")
+                        .or_else(|| check.get("message"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if detail.is_empty() {
+                        println!("  [{status:>7}] {name}");
+                    } else {
+                        println!("  [{status:>7}] {name}: {detail}");
+                    }
+                }
+            } else {
+                println!("{}", serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?);
+            }
+            if overall != "ok" {
+                return Err("computer-use doctor reported a degraded state".to_string());
+            }
+        }
+        ComputerUseAction::Install { upgrade, yes } => {
+            if cfg!(windows) {
+                return Err("automated install is POSIX-only; run the PowerShell installer: \
+                    irm https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1 | iex"
+                    .to_string());
+            }
+            if !upgrade && cu::resolve_cua_driver_cmd().is_some() {
+                println!("cua-driver already installed — use --upgrade to re-run the installer.");
+                return Ok(());
+            }
+            let script = "/bin/bash -c \"$(curl -fsSL \
+                https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh)\"";
+            println!("About to run the upstream cua-driver installer:");
+            println!("  {script}");
+            if !yes {
+                print!("Continue? [y/N] ");
+                use std::io::Write;
+                std::io::stdout().flush().ok();
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+                if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+                    println!("aborted.");
+                    return Ok(());
+                }
+            }
+            let status = std::process::Command::new("/bin/bash")
+                .arg("-c")
+                .arg("curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh | /bin/bash")
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err(format!("installer exited with {status}"));
+            }
+            println!("install finished.");
+        }
+    }
+    Ok(())
 }
 
 fn secrets_cmd(config: &UlncLawConfig, action: SecretsAction) -> Result<(), String> {

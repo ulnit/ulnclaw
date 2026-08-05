@@ -72,6 +72,7 @@
 | 导入其他 Agent 配置（`hermes_cli/agent_import.py`） | ✅ 核心 | `ulnclaw import-agent [claude-code|codex] [--source DIR] [--dry-run] [--overwrite]`：detect→parse→map→apply，逐项记录 imported/skipped/conflict/error；claude-code：`CLAUDE.md` → `memory/MEMORY.md` 条目（标题成为上下文前缀、跳过代码块/表格、去重），`.claude.json` + `settings.json` 的 `mcpServers` → config.toml `[[mcp.servers]]`（同名冲突保留原配置、机密风格 env 变量剥离并报告），`skills/` → `skills/claude-code-imports/`，权限规则以转换后的命令模式报告（ulnclaw 无 allowlist 配置面）；codex：`AGENTS.md` + `memories/*.md` → 记忆条目，`config.toml [mcp_servers.*]` → `[[mcp.servers]]`，`skills/` → `skills/codex-imports/`；记忆合并前先备份（`.bak.<ts>`）、迁移预算 2 万字符；凭据文件绝不读取，dry-run 不写任何文件 |
 | 会话技能标题修复（`hermes_cli/sessions_cmd.py retitle-skills`） | ✅ 核心 | `ulnclaw sessions retitle-skills [--limit N] [--apply]`（默认干跑）：`list_skill_scaffolded_sessions`（首个用户回合匹配 `[IMPORTANT: The user has invoked the` 脚手架且已有标题的会话）、`describe_skill_invocation` 从捆绑与单技能格式还原用户键入的调用（引号名称、`User instruction:` / `alongside the skill invocation:` 提取、摘录接缝切分、空白折叠）、`generate_title_forced` 绕过自动标题开关、`_is_titlelike` 拒绝命令输出型候选、唯一标题冲突经 `get_next_title_in_lineage` 去重（`base #2`、`#3`……） |
 | Secrets 保险库（`agent/secret_sources/`） | ✅ 核心 | `src/secrets.rs` + `ulnclaw secrets status|sync [--apply]`：外部秘密源在启动时、任何 provider 读取 env 之前应用（hermes env-loader 钩子）。三个来源，完整复刻 hermes 优先级语义 —— mapped 优先于 bulk、首个声明者胜出、`preserve_existing` 胜过一切、`override_existing` 可覆盖已有 `.env`/shell 值但绝不覆盖其他来源、引导令牌变量写入保护。`command`：经 `/bin/sh -c` 的任意 KEY=VALUE 助手（keepassxc-cli / secret-tool / tmpfs cat），硬超时降级为“无值”，stderr 丢弃，1 MiB 输出上限，支持引号/注释解析。`bitwarden`：Bitwarden Secrets Manager，经 `bws secret list <project> --output json`（PATH + `<home>/bin/bws` 查找、`BWS_SERVER_URL` 透传）。`onepassword`：映射式 `op://vault/item/field` 绑定，经 `op read -- <ref>` 解析，子进程仅继承最小允许清单 env，空值拒绝写入，单引用失败降级为警告。拉取错误只产生单行警告、绝不致命。hermes 的交互式 setup 向导、bws/op 自动安装与 TTL 磁盘缓存未移植 |
+| Computer Use（`tools/computer_use/`） | ✅ 核心 | `src/computer_use.rs` + `ulnclaw computer-use status|doctor|install`：经 cua-driver 守护进程的后台桌面控制（MCP over stdio，hermes `cua_backend.py`）。完整复刻 hermes 工具 schema（capture som/vision/ax、按 SOM 元素索引或坐标的 click 族、drag、scroll、type、组合键、set_value、wait、list_apps/list_windows/focus_app、cua_browser_* 类型化浏览器透传）。复刻 hermes 审批语义：capture 与列表类免费，其余动作一律走审批回调，无人值守时失败关闭。惰性共享 MCP 会话（`start_session`/`end_session`、`set_config` max_image_dimension、光标覆盖层策略含 `--no-overlay` 自动探测 + 默认 `CUA_DRIVER_RS_TELEMETRY_ENABLED=0`）。`doctor` 驱动 cua-driver 的 `health_report`。未移植：macOS TCC `permissions` 授权流程、嵌入式守护进程/socket 模式、截图驱逐 + 视觉后处理（驱动载荷直接透传） |
 | 会话浏览（`hermes_cli/sessions_cmd.py browse` + curses 挑选器） | ✅ 核心 | `ulnclaw sessions browse [--source S] [--limit N]`：TTY 上启用原始模式 TUI（crossterm 移植 curses 挑选器 —— 备用屏幕、↑/↓/PgUp/PgDn/Home/End 滚动导航、键入即过滤 + 退格、绿色 `▶` 选中高亮、Enter 选择、Esc 退出、"终端过小"保护、LF（`Ctrl+J`）形式的 Enter 同样接受）；管道/CI 场景回退为编号 stdin 挑选器；按最近活动排序的行（标题 → 首条用户消息预览回退、相对时间、来源、截断 id）、对标题/预览/id/来源的子串过滤、未指定 `--source` 时排除 `tool` 源会话（hermes 语义）；选中后以 `--resume <id>` 重新启动当前二进制（hermes `relaunch`）；存储查询 `list_sessions_for_browse` 单条 SQL 返回挑选器行 |
 | 会话恢复与单会话连续性（`cli.py --resume/--continue`） | ✅ 核心 | 全局 `-r/--resume <id或前缀>` 与 `-c/--continue` 标志，适用于 `chat` 与 `run`：整个 REPL 会话存于同一条会话记录（此前每轮都会新建记录）；恢复时用 `load_messages` 回填 REPL 历史（丢弃 system 行），打印 `Resuming session: <id> (标题)`，每轮经 `run_with_session` 写入同一 id；`/new` 轮换到新会话键并重置按会话的目标管理器；`latest_session_id` 按最近活动挑选 `--continue` 目标（跳过已归档）；所有带 id 的 `sessions` 动作（`show`/`export`/`recap`/`delete`/`rename`）均经 `resolve_session_id` 接受唯一前缀；hermes 的 `-c <会话名>` 标题查找不移植（`-c` 不带值） |
 | 会话库修复（`hermes_state.py repair_state_db_schema`） | ✅ 核心 | `ulnclaw sessions repair [--check-only] [--no-backup]`：健康探测（`db_opens_cleanly` —— `PRAGMA journal_mode` 首语句触发、`integrity_check`、sessions 读取、FTS MATCH 读探测、回滚式 FTS 写探测）后按破坏程度逐级升级 —— FTS5 `'rebuild'` 原地重建、`REINDEX` 修复过期 B 树索引、经 `writable_schema` 去重 `sqlite_master`（保留 FTS 索引）、删除 FTS 结构 + `VACUUM` 并在下次打开时重建（`initialize_schema` 回填滞后的外联内容索引）；先做带时间戳的原始备份 + WAL/SHM 附属文件；失败时指向离线 `sessions recover`；在打开存储之前执行，因为库结构损坏正是无法打开的情形 |
@@ -104,7 +105,7 @@
 | 记忆系统 | ✅ | MEMORY.md/USER.md，注入提示词 |
 | Cron 调度器 | ✅ | 任务存储 + 计划解析 + 轮询循环（`cron::run_scheduler`） |
 | MCP 客户端（`mcp_tool.py`） | ✅ 核心 | stdio JSON-RPC：initialize/tools/list/tools/call；`[[mcp.servers]]` 配置；工具注册为 `mcp__<server>__<tool>`；npx/uvx/pipx 启动前的 OSV 恶意软件检查（`osv_check.py` 移植：MAL-* 通告阻止启动、fail-open、1 小时结论缓存、`OSV_ENDPOINT`/`OSV_CHECK_CACHE_TTL` 覆盖） |
-| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`、`secrets status/sync`）、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
+| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`、`secrets status/sync`、`computer-use status/doctor/install`）、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
 | Git 工作区 diff（`working_diff.py`） | ✅ | `ulnclaw diff [--staged|--all] [--dir PATH] [paths...]` + REPL `/gitdiff [staged|all]`：working/staged/all 三模式，未跟踪文件经 `git diff --no-index` 折入（上限 50 个），带超时；基于检查点的 REPL `/diff` 保持独立 |
 | 委派（delegation） | ✅ | SubAgentRunner trait、深度限制、子会话 |
 | 混合智能体 MoA（`moa_loop.py`、`moa_config.py`） | ✅ 核心 | `[moa.presets.<name>]` 参考模型并行扇出 + 聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa <prompt>`）；loud/silent 降级策略、全部失败提前返回、聚合失败回退拼接结果；持久 `provider: moa` 门面、trace 与隐私过滤未移植 |
@@ -164,6 +165,9 @@
 - Secrets：`secrets sync` 干跑对比的是启动钩子已应用后的 env（hermes 行为
   相同）；交互式 `bitwarden setup`/`onepassword setup` 向导、bws/op 自动安装
   与 TTL 磁盘缓存未移植 —— 每次启动都重新拉取。
+- Computer-use：驱动载荷（SOM 截图 b64、AX 树）直接透传，不含 hermes 的 PNG
+  后处理/多模态驱逐层；macOS TCC `permissions` 授权流程与嵌入式守护进程
+  socket 模式未移植；`install` 直接调用上游 trycua 安装脚本。
 
 ## 完成状态
 
@@ -173,12 +177,12 @@ rename/optimize/repair/browse`）、启动恢复（`--resume`/`--continue`，
 一会话一记录的连续性）、CDP 浏览器客户端 + 接入层 + Camofox 后端、HTTP
 网关（含 `/v1/browser/*` 实时端点控制与 profile 多路复用）、技能/捆绑/
 记忆/目标/检查点/定时任务/用量分析/doctor、外部秘密源（command 助手 /
-Bitwarden / 1Password）及其余 CLI 均已移植。`sessions`
+Bitwarden / 1Password）、computer-use（cua-driver）及其余 CLI 均已移植。`sessions`
 面仅有意省略：`optimize-storage`（ulnclaw 自始即采用紧凑的外联内容 FTS
 布局，无旧布局可迁移）与 `-c <会话名>` 标题查找（`--continue` 不带值）。
 
 有意不移植（超出本地 agent 范围的 hermes 面）：消息平台网关
 （Telegram/Discord/Slack/WhatsApp-Cloud/XAI/… 等 gateway 平台）、Electron
 桌面应用/仪表盘/kanban GUI、OAuth + Nous 门户登录与云同步、插件/hook/
-egress 体系（含其后的云浏览器 provider）、`computer-use` 桌面控制、`pets`，以及小型桌面
+egress 体系（含其后的云浏览器 provider）、`pets`，以及小型桌面
 UX 命令（clipboard、focus_view、prompt_stash、uninstall）。

@@ -84,6 +84,7 @@ pub mod binary_ext;
 pub mod browser;
 pub mod bundles;
 pub mod checkpoint;
+pub mod computer_use;
 pub mod config;
 pub mod config_cmd;
 pub mod context;

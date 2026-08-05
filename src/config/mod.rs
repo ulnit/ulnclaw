@@ -698,6 +698,9 @@ pub struct UlncLawConfig {
     /// External secret sources (hermes `secrets.*`).
     #[serde(default)]
     pub secrets: crate::secrets::SecretsConfig,
+    /// Computer-use / cua-driver settings (hermes `computer_use:`).
+    #[serde(default)]
+    pub computer_use: crate::computer_use::ComputerUseConfig,
 }
 
 /// `[video_gen]` — video generation backend selection (hermes config.yaml
