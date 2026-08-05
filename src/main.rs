@@ -1745,6 +1745,13 @@ async fn make_agent_in(
     if let Some(approve) = approve_override {
         context = context.with_approve(approve);
     }
+    if !interactive && context.clarify.is_none() {
+        // Messaging-aware clarify (hermes clarify_gateway): renders the
+        // prompt on the current platform chat and blocks until the user
+        // taps a button or replies. Non-messaging runs (plain /api/chat,
+        // cron, one-shot) get the standard non-interactive error.
+        context = context.with_clarify(ulnclaw::messaging::messaging_clarify_fn());
+    }
 
     // Checkpoint auto-maintenance in the background (hermes startup hook).
     if config.checkpoints.enabled {

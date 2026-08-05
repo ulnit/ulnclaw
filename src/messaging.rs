@@ -141,6 +141,138 @@ pub struct DispatchOutcome {
     pub transcript_echoes: Vec<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Messaging turn context + platform senders (clarify gateway integration)
+// ---------------------------------------------------------------------------
+
+/// The platform chat a messaging turn belongs to. Carried as a tokio
+/// task-local so the messaging-aware clarify callback can render prompts
+/// back to the right chat without threading platform state through the
+/// tool layer.
+#[derive(Debug, Clone)]
+pub struct PlatformChatRef {
+    pub platform: String,
+    pub chat_id: String,
+    pub session_key: String,
+}
+
+tokio::task_local! {
+    static MESSAGING_CTX: PlatformChatRef;
+}
+
+/// The current turn's platform chat, when running inside a messaging
+/// dispatch task.
+pub fn current_messaging_ctx() -> Option<PlatformChatRef> {
+    MESSAGING_CTX.try_with(|c| c.clone()).ok()
+}
+
+/// Outbound channel for a platform adapter, registered when the platform
+/// loop starts. Used by the clarify gateway to render prompts mid-turn.
+#[async_trait::async_trait]
+pub trait PlatformSender: Send + Sync {
+    async fn send_text(&self, chat_id: &str, text: &str);
+    /// Render a clarify prompt natively (WhatsApp buttons/list). Returns
+    /// false when the platform has no native interactive support — the
+    /// caller falls back to numbered text.
+    async fn send_clarify(
+        &self,
+        _chat_id: &str,
+        _clarify_id: &str,
+        _question: &str,
+        _choices: &[String],
+    ) -> bool {
+        false
+    }
+}
+
+fn platform_senders() -> &'static std::sync::Mutex<HashMap<String, Arc<dyn PlatformSender>>> {
+    static SENDERS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Arc<dyn PlatformSender>>>> =
+        std::sync::OnceLock::new();
+    SENDERS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+pub fn register_platform_sender(platform: &str, sender: Arc<dyn PlatformSender>) {
+    platform_senders()
+        .lock()
+        .unwrap()
+        .insert(platform.to_string(), sender);
+}
+
+pub fn platform_sender(platform: &str) -> Option<Arc<dyn PlatformSender>> {
+    platform_senders().lock().unwrap().get(platform).cloned()
+}
+
+/// Numbered-text clarify rendering for platforms without native
+/// interactive messages.
+pub fn format_clarify_text(question: &str, choices: &[String], multi_select: bool) -> String {
+    let mut out = format!("❓ {}", question.trim());
+    if !choices.is_empty() {
+        out.push_str("\n\n");
+        for (i, choice) in choices.iter().enumerate() {
+            out.push_str(&format!("{}. {}\n", i + 1, choice.trim()));
+        }
+        out.push_str(if multi_select {
+            "\nReply with the numbers of all choices that apply."
+        } else {
+            "\nReply with the number of your choice (or type your own answer)."
+        });
+    }
+    out
+}
+
+/// Messaging-aware clarify callback for gateway agents (hermes
+/// `tools/clarify_gateway.py` integration): renders the prompt on the
+/// current platform (native buttons on WhatsApp, numbered text
+/// elsewhere) and blocks the tool until the user taps or replies. Runs
+/// without a messaging context (plain `/api/chat`, cron, one-shot)
+/// report the standard non-interactive error.
+pub fn messaging_clarify_fn() -> crate::tools::context::ClarifyFn {
+    Arc::new(|question, choices, multi| {
+        Box::pin(async move {
+            let Some(ctx) = current_messaging_ctx() else {
+                return Err(AgentError::tool(
+                    "No user is available to answer (non-interactive session). Proceed with \
+                     your best judgment and state your assumptions in the final answer.",
+                ));
+            };
+            let handle = crate::clarify_gateway::register(
+                &ctx.session_key,
+                &question,
+                &choices,
+                multi,
+            );
+            let Some(sender) = platform_sender(&ctx.platform) else {
+                crate::clarify_gateway::resolve(&handle.clarify_id, "");
+                return Err(AgentError::tool(format!(
+                    "clarify: platform '{}' has no registered sender",
+                    ctx.platform
+                )));
+            };
+            let mut rendered_natively = false;
+            if !choices.is_empty() {
+                rendered_natively = sender
+                    .send_clarify(&ctx.chat_id, &handle.clarify_id, &question, &choices)
+                    .await;
+            }
+            if !rendered_natively {
+                let text = if choices.is_empty() {
+                    format!("❓ {}", question.trim())
+                } else {
+                    format_clarify_text(&question, &choices, multi)
+                };
+                sender.send_text(&ctx.chat_id, &text).await;
+            }
+            match handle.rx.await {
+                Ok(answer) if !answer.is_empty() => Ok(answer),
+                Ok(_) => Err(AgentError::tool("clarify: no answer received")),
+                Err(_) => Err(AgentError::tool(
+                    "clarify was cancelled (gateway restart or session end)",
+                )),
+            }
+        })
+    })
+}
+
 impl Dispatcher {
     pub fn new(agent: Arc<Agent>, store: Arc<SqliteSessionStore>) -> Arc<Self> {
         Arc::new(Self {
@@ -159,6 +291,19 @@ impl Dispatcher {
     /// plus transcript echoes (hermes `_echo_pending_stt_transcripts_once`).
     pub async fn handle_event(self: &Arc<Self>, event: MessageEvent) -> Result<DispatchOutcome> {
         let key = Self::session_key(&event);
+        // Clarify text intercept (hermes `_maybe_intercept_clarify_text`):
+        // when a prompt awaits a typed answer, the next message resolves it
+        // instead of starting a fresh turn (the blocked clarify tool call
+        // in the in-flight turn receives the answer and continues).
+        if !event.text.trim().is_empty() {
+            if let Some(pending) = crate::clarify_gateway::pending_for_session(&key) {
+                if pending.awaiting_text
+                    && crate::clarify_gateway::resolve(&pending.clarify_id, &event.text)
+                {
+                    return Ok(DispatchOutcome::default());
+                }
+            }
+        }
         {
             let mut busy = self.busy.lock().await;
             if *busy.get(&key).unwrap_or(&false) {
@@ -169,7 +314,12 @@ impl Dispatcher {
             }
             busy.insert(key.clone(), true);
         }
-        let result = self.run_turn(&key, &event).await;
+        let chat_ref = PlatformChatRef {
+            platform: event.platform.clone(),
+            chat_id: event.chat_id.clone(),
+            session_key: key.clone(),
+        };
+        let result = MESSAGING_CTX.scope(chat_ref, self.run_turn(&key, &event)).await;
         self.busy.lock().await.insert(key, false);
         result
     }
@@ -602,12 +752,31 @@ pub mod telegram {
 
     const API: &str = "https://api.telegram.org";
 
+    struct Sender {
+        client: reqwest::Client,
+        token: String,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformSender for Sender {
+        async fn send_text(&self, chat_id: &str, text: &str) {
+            send_message(&self.client, &self.token, chat_id, text).await;
+        }
+    }
+
     pub async fn run(cfg: TelegramConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
         let Some(token) = resolve_token(&cfg.bot_token, "TELEGRAM_BOT_TOKEN") else {
             eprintln!("[telegram] disabled: no bot_token configured (set messaging.telegram.bot_token or TELEGRAM_BOT_TOKEN)");
             return;
         };
         let client = reqwest::Client::new();
+        register_platform_sender(
+            "telegram",
+            Arc::new(Sender {
+                client: client.clone(),
+                token: token.clone(),
+            }),
+        );
         match api(&client, &token, "getMe", json!({})).await {
             Ok(me) => {
                 let username = me.pointer("/result/username").and_then(|v| v.as_str()).unwrap_or("?");
@@ -884,11 +1053,28 @@ pub mod discord {
     const INTENT_DIRECT_MESSAGES: u64 = 1 << 12;
     const INTENT_MESSAGE_CONTENT: u64 = 1 << 15;
 
+    struct Sender {
+        token: String,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformSender for Sender {
+        async fn send_text(&self, chat_id: &str, text: &str) {
+            send_channel_message(&self.token, chat_id, text).await;
+        }
+    }
+
     pub async fn run(cfg: DiscordConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
         let Some(token) = resolve_token(&cfg.bot_token, "DISCORD_BOT_TOKEN") else {
             eprintln!("[discord] disabled: no bot_token configured (set messaging.discord.bot_token or DISCORD_BOT_TOKEN)");
             return;
         };
+        register_platform_sender(
+            "discord",
+            Arc::new(Sender {
+                token: token.clone(),
+            }),
+        );
         loop {
             if let Err(e) = run_session(&cfg, &token, dispatcher.clone(), pairing.clone()).await {
                 eprintln!("[discord] gateway session ended: {e} — reconnecting in 5s");
@@ -1115,6 +1301,17 @@ pub mod slack {
     use futures::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as WsMessage;
 
+    struct Sender {
+        bot_token: String,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformSender for Sender {
+        async fn send_text(&self, chat_id: &str, text: &str) {
+            post_message(&self.bot_token, chat_id, text).await;
+        }
+    }
+
     pub async fn run(cfg: SlackConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
         let Some(bot_token) = resolve_token(&cfg.bot_token, "SLACK_BOT_TOKEN") else {
             eprintln!("[slack] disabled: no bot_token configured (set messaging.slack.bot_token or SLACK_BOT_TOKEN)");
@@ -1124,6 +1321,12 @@ pub mod slack {
             eprintln!("[slack] disabled: no app_token configured (set messaging.slack.app_token or SLACK_APP_TOKEN)");
             return;
         };
+        register_platform_sender(
+            "slack",
+            Arc::new(Sender {
+                bot_token: bot_token.clone(),
+            }),
+        );
         loop {
             match run_socket_session(&cfg, &bot_token, &app_token, dispatcher.clone(), pairing.clone()).await {
                 Ok(()) => {}

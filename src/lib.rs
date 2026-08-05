@@ -85,6 +85,7 @@ pub mod browser;
 pub mod bundles;
 pub mod checkpoint;
 pub mod clipboard;
+pub mod clarify_gateway;
 pub mod computer_use;
 pub mod config;
 pub mod config_cmd;

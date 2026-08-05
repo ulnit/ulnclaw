@@ -537,6 +537,65 @@ pub async fn whatsapp_handle_webhook(
     }
     let payload: Value = serde_json::from_slice(raw_body)
         .map_err(|e| AgentError::config(format!("whatsapp webhook parse: {e}")))?;
+    // Clarify prompts render through the registered platform sender.
+    crate::messaging::register_platform_sender(
+        "whatsapp_cloud",
+        Arc::new(WhatsAppSender { cfg: cfg.clone() }),
+    );
+    // Interactive taps (clarify buttons/list rows) route to their
+    // resolvers BEFORE normal dispatch (hermes ordering); unclaimed taps
+    // fall back to text dispatch with the button title as the message.
+    for tap in whatsapp_parse_interactive_replies(&payload) {
+        let authorized = cfg
+            .allowed_sender_ids
+            .iter()
+            .any(|allowed| *allowed == tap.sender_id)
+            || pairing
+                .map(|store| store.is_approved("whatsapp_cloud", &tap.sender_id))
+                .unwrap_or(false);
+        if !authorized {
+            // Claim the tap without dispatching it (hermes semantics):
+            // unauthorized taps must not re-enter the agent loop as text.
+            eprintln!(
+                "[whatsapp_cloud] rejected unauthorized interactive tap from {} (button_id={})",
+                tap.sender_id, tap.button_id
+            );
+            continue;
+        }
+        if whatsapp_dispatch_interactive_tap(cfg, &tap).await {
+            continue;
+        }
+        // Stale tap / unrecognized id → treat the title as a normal
+        // text message (hermes graceful fallback).
+        if tap.title.trim().is_empty() {
+            continue;
+        }
+        let fallback_event = crate::messaging::MessageEvent {
+            platform: "whatsapp_cloud".into(),
+            chat_id: tap.chat_id.clone(),
+            sender_id: tap.sender_id.clone(),
+            sender_name: String::new(),
+            text: tap.title.clone(),
+            message_id: String::new(),
+            attachments: Vec::new(),
+        };
+        let outcome = match dispatcher.handle_event(fallback_event).await {
+            Ok(outcome) => outcome,
+            Err(e) => crate::messaging::DispatchOutcome {
+                reply: format!("error: {e}"),
+                transcript_echoes: Vec::new(),
+            },
+        };
+        let client = reqwest::Client::new();
+        for echo in &outcome.transcript_echoes {
+            if let Err(e) = whatsapp_send(&client, cfg, &tap.chat_id, echo).await {
+                eprintln!("[whatsapp_cloud] transcript echo failed: {e}");
+            }
+        }
+        if let Err(e) = whatsapp_send(&client, cfg, &tap.chat_id, &outcome.reply).await {
+            eprintln!("[whatsapp_cloud] tap-fallback reply failed: {e}");
+        }
+    }
     let parsed = whatsapp_parse_messages_full(&payload);
     for (mut event, media_refs) in parsed {
         // Download inbound media into the content-addressed cache before
@@ -1355,4 +1414,448 @@ mod tests {
         assert!(!msgraph_state_ok(&notification, "other"));
         assert!(!msgraph_state_ok(&json!({}), "s3cr3t"));
     }
+
+    // ------------------------------------------------------------------
+    // WhatsApp interactive messages (hermes whatsapp_cloud parity)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn label_truncation_respects_caps() {
+        assert_eq!(whatsapp_truncate_label("short", 20), "short");
+        assert_eq!(whatsapp_truncate_label("exactly-twenty-chars", 20), "exactly-twenty-chars");
+        let long = "a".repeat(30);
+        let out = whatsapp_truncate_label(&long, 20);
+        assert_eq!(out.chars().count(), 20);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn body_truncation_caps_at_1024() {
+        let long = "b".repeat(2000);
+        let out = whatsapp_truncate_body(&long);
+        assert_eq!(out.chars().count(), 1024);
+        assert!(out.ends_with("..."));
+        assert_eq!(whatsapp_truncate_body("fine"), "fine");
+    }
+
+    #[test]
+    fn clarify_payload_button_mode() {
+        let choices: Vec<String> = vec!["Alpha option".into(), "Beta option".into()];
+        let payload = whatsapp_build_clarify_interactive("cid1", "Pick one", &choices).unwrap();
+        assert_eq!(payload["type"], "button");
+        let body = payload.pointer("/body/text").and_then(|v| v.as_str()).unwrap();
+        assert!(body.contains("❓ Pick one"));
+        assert!(body.contains("1. Alpha option"));
+        assert!(body.contains("2. Beta option"));
+        let buttons = payload.pointer("/action/buttons").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(buttons.len(), 2);
+        assert_eq!(buttons[0].pointer("/reply/id").unwrap(), "cl:cid1:0");
+        assert_eq!(buttons[0].pointer("/reply/title").unwrap(), "1");
+        assert_eq!(buttons[1].pointer("/reply/id").unwrap(), "cl:cid1:1");
+    }
+
+    #[test]
+    fn clarify_payload_list_mode_with_other_row() {
+        let choices: Vec<String> = (1..=4).map(|i| format!("Choice {}", i)).collect();
+        let payload = whatsapp_build_clarify_interactive("cid2", "Pick", &choices).unwrap();
+        assert_eq!(payload["type"], "list");
+        let rows = payload
+            .pointer("/action/sections/0/rows")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(rows.len(), 5); // 4 choices + Other
+        assert_eq!(rows[0]["id"], "cl:cid2:0");
+        assert_eq!(rows[0]["description"], "Choice 1");
+        assert_eq!(rows[4]["id"], "cl:cid2:other");
+        assert_eq!(rows[4]["title"], "✏️ Other");
+        assert_eq!(payload.pointer("/action/button").unwrap(), "Choose");
+    }
+
+    #[test]
+    fn clarify_payload_open_ended_is_none() {
+        assert!(whatsapp_build_clarify_interactive("cid3", "Tell me", &[]).is_none());
+        let blanks: Vec<String> = vec!["  ".into()];
+        assert!(whatsapp_build_clarify_interactive("cid3", "Tell me", &blanks).is_none());
+    }
+
+    fn interactive_payload(button_id: &str, title: &str, list: bool) -> Value {
+        let kind = if list { "list_reply" } else { "button_reply" };
+        json!({"entry": [{"changes": [{"value": {"messages": [{
+            "type": "interactive",
+            "from": "15550001111",
+            "id": "wamid.test",
+            "interactive": {kind: {"id": button_id, "title": title}},
+        }]}}]}]})
+    }
+
+    #[test]
+    fn parse_interactive_taps_button_and_list() {
+        let button = whatsapp_parse_interactive_replies(&interactive_payload("cl:abc:1", "2", false));
+        assert_eq!(button.len(), 1);
+        assert_eq!(button[0].button_id, "cl:abc:1");
+        assert_eq!(button[0].title, "2");
+        assert_eq!(button[0].sender_id, "15550001111");
+
+        let list = whatsapp_parse_interactive_replies(&interactive_payload("cl:abc:other", "✏️ Other", true));
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].button_id, "cl:abc:other");
+
+        // Text messages are not taps.
+        let text = json!({"entry": [{"changes": [{"value": {"messages": [
+            {"type": "text", "from": "1", "text": {"body": "hi"}},
+        ]}}]}]});
+        assert!(whatsapp_parse_interactive_replies(&text).is_empty());
+    }
+
+    #[tokio::test]
+    async fn tap_dispatch_resolves_clarify_with_choice_text() {
+        let _guard = crate::clarify_gateway::test_lock().lock().unwrap();
+        crate::clarify_gateway::reset_for_tests();
+        let handle = crate::clarify_gateway::register(
+            "platform-whatsapp_cloud-15550001111",
+            "Pick",
+            &["First".to_string(), "Second".to_string()],
+            false,
+        );
+        let cfg = WhatsAppCloudConfig::default();
+        let tap = WaInteractiveTap {
+            sender_id: "15550001111".into(),
+            chat_id: "15550001111".into(),
+            button_id: format!("cl:{}:1", handle.clarify_id),
+            title: "2".into(),
+        };
+        assert!(whatsapp_dispatch_interactive_tap(&cfg, &tap).await);
+        // The waiter received the mapped choice text, not the title.
+        assert_eq!(handle.rx.await.unwrap(), "Second");
+    }
+
+    #[tokio::test]
+    async fn tap_dispatch_other_flips_to_text_mode() {
+        let _guard = crate::clarify_gateway::test_lock().lock().unwrap();
+        crate::clarify_gateway::reset_for_tests();
+        let handle = crate::clarify_gateway::register(
+            "platform-whatsapp_cloud-2",
+            "Pick",
+            &["A".to_string()],
+            false,
+        );
+        let cfg = WhatsAppCloudConfig::default();
+        let tap = WaInteractiveTap {
+            sender_id: "2".into(),
+            chat_id: "2".into(),
+            button_id: format!("cl:{}:other", handle.clarify_id),
+            title: "✏️ Other".into(),
+        };
+        // send fails (no token) but the flip still claims the tap.
+        assert!(whatsapp_dispatch_interactive_tap(&cfg, &tap).await);
+        assert!(crate::clarify_gateway::pending_for_session("platform-whatsapp_cloud-2")
+            .unwrap()
+            .awaiting_text);
+    }
+
+    #[tokio::test]
+    async fn stale_tap_falls_back() {
+        let _guard = crate::clarify_gateway::test_lock().lock().unwrap();
+        crate::clarify_gateway::reset_for_tests();
+        let cfg = WhatsAppCloudConfig::default();
+        let tap = WaInteractiveTap {
+            sender_id: "3".into(),
+            chat_id: "3".into(),
+            button_id: "cl:nonexistent:0".into(),
+            title: "1".into(),
+        };
+        assert!(!whatsapp_dispatch_interactive_tap(&cfg, &tap).await);
+        // Unrecognized prefixes fall back too.
+        let appr = WaInteractiveTap {
+            button_id: "appr:xyz:approve".into(),
+            ..tap.clone()
+        };
+        assert!(!whatsapp_dispatch_interactive_tap(&cfg, &appr).await);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp interactive messages (hermes whatsapp_cloud.py interactive half)
+// ---------------------------------------------------------------------------
+
+/// WhatsApp caps quick-reply button titles at 20 chars and list-row
+/// titles at 24 (descriptions at 72). Truncate with an ellipsis counted
+/// toward the limit (hermes `_truncate_button_label`).
+pub fn whatsapp_truncate_label(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= limit {
+        return text.to_string();
+    }
+    let cut = limit.saturating_sub(1).max(1);
+    let mut out: String = chars[..cut].iter().collect();
+    out.push('…');
+    out
+}
+
+/// `interactive.body.text` caps at 1024 chars (hermes `_truncate_body`).
+pub fn whatsapp_truncate_body(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= 1024 {
+        return text.to_string();
+    }
+    let mut out: String = chars[..1021].iter().collect();
+    out.push_str("...");
+    out
+}
+
+/// Build the clarify `interactive` payload (hermes `send_clarify`):
+/// 1–3 choices → `type=button` with numeric labels (full choice text in
+/// the body so long options survive the 20-char label cap); 4+ → 
+/// `type=list` with a per-row description and a final "✏️ Other" row.
+/// Button ids carry `cl:<clarify_id>:<idx|other>` for the inbound tap
+/// dispatch. Returns None for open-ended prompts (plain text instead).
+pub fn whatsapp_build_clarify_interactive(
+    clarify_id: &str,
+    question: &str,
+    choices: &[String],
+) -> Option<Value> {
+    if choices.is_empty() {
+        return None;
+    }
+    let choices: Vec<&str> = choices
+        .iter()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .take(10)
+        .collect();
+    if choices.is_empty() {
+        return None;
+    }
+    let option_lines: Vec<String> = choices
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("{}. {}", i + 1, c))
+        .collect();
+    let body_text =
+        whatsapp_truncate_body(&format!("❓ {}\n\n{}", question.trim(), option_lines.join("\n")));
+    if choices.len() <= 3 {
+        let buttons: Vec<Value> = (0..choices.len())
+            .map(|idx| {
+                json!({
+                    "type": "reply",
+                    "reply": {
+                        "id": format!("cl:{}:{}", clarify_id, idx),
+                        "title": whatsapp_truncate_label(&format!("{}", idx + 1), 20),
+                    },
+                })
+            })
+            .collect();
+        Some(json!({
+            "type": "button",
+            "body": {"text": body_text},
+            "action": {"buttons": buttons},
+        }))
+    } else {
+        let mut rows: Vec<Value> = choices
+            .iter()
+            .enumerate()
+            .map(|(idx, choice)| {
+                json!({
+                    "id": format!("cl:{}:{}", clarify_id, idx),
+                    "title": whatsapp_truncate_label(&format!("{}", idx + 1), 24),
+                    "description": whatsapp_truncate_label(choice, 72),
+                })
+            })
+            .collect();
+        rows.push(json!({
+            "id": format!("cl:{}:other", clarify_id),
+            "title": "✏️ Other",
+            "description": "Type your own answer",
+        }));
+        Some(json!({
+            "type": "list",
+            "body": {"text": body_text},
+            "action": {
+                "button": "Choose",
+                "sections": [{"title": "Options", "rows": rows}],
+            },
+        }))
+    }
+}
+
+/// POST an interactive message payload (hermes `_post_interactive`).
+/// Returns the Graph message id on success.
+pub async fn whatsapp_send_interactive(
+    client: &reqwest::Client,
+    cfg: &WhatsAppCloudConfig,
+    to: &str,
+    interactive: &Value,
+) -> Result<Option<String>> {
+    let url = cfg.graph_url("messages");
+    let payload = json!({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "interactive",
+        "interactive": interactive,
+    });
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.access_token))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AgentError::Tool(format!("whatsapp interactive send: {e}")))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or_else(|_| json!({}));
+    if !status.is_success() {
+        let message = body
+            .pointer("/error/message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        let code = body.pointer("/error/code").and_then(|v| v.as_i64());
+        let err = match code {
+            Some(code) => format!("graph error {} (HTTP {}): {}", code, status, message),
+            None => format!("HTTP {}: {}", status, message),
+        };
+        return Err(AgentError::Tool(err));
+    }
+    Ok(body
+        .pointer("/messages/0/id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string()))
+}
+
+/// PlatformSender for WhatsApp Cloud: text via Graph `messages`,
+/// clarify via native interactive buttons/list.
+pub struct WhatsAppSender {
+    pub cfg: WhatsAppCloudConfig,
+}
+
+#[async_trait::async_trait]
+impl crate::messaging::PlatformSender for WhatsAppSender {
+    async fn send_text(&self, chat_id: &str, text: &str) {
+        let client = reqwest::Client::new();
+        if let Err(e) = whatsapp_send(&client, &self.cfg, chat_id, text).await {
+            eprintln!("[whatsapp_cloud] clarify text send failed: {e}");
+        }
+    }
+
+    async fn send_clarify(
+        &self,
+        chat_id: &str,
+        clarify_id: &str,
+        question: &str,
+        choices: &[String],
+    ) -> bool {
+        let Some(interactive) = whatsapp_build_clarify_interactive(clarify_id, question, choices)
+        else {
+            return false;
+        };
+        let client = reqwest::Client::new();
+        match whatsapp_send_interactive(&client, &self.cfg, chat_id, &interactive).await {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("[whatsapp_cloud] interactive clarify rejected: {e}");
+                false
+            }
+        }
+    }
+}
+
+/// An inbound interactive tap (button_reply or list_reply).
+#[derive(Debug, Clone)]
+pub struct WaInteractiveTap {
+    pub sender_id: String,
+    pub chat_id: String,
+    pub button_id: String,
+    pub title: String,
+}
+
+/// Extract interactive replies from a webhook payload (hermes inbound
+/// `interactive` parsing: button_reply / list_reply carry id+title in
+/// different sub-objects).
+pub fn whatsapp_parse_interactive_replies(payload: &Value) -> Vec<WaInteractiveTap> {
+    let mut taps = Vec::new();
+    let Some(entries) = payload.get("entry").and_then(|v| v.as_array()) else {
+        return taps;
+    };
+    for entry in entries {
+        let Some(changes) = entry.get("changes").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for change in changes {
+            let Some(messages) = change
+                .pointer("/value/messages")
+                .and_then(|v| v.as_array())
+            else {
+                continue;
+            };
+            for message in messages {
+                if message.get("type").and_then(|v| v.as_str()) != Some("interactive") {
+                    continue;
+                }
+                let from = message
+                    .get("from")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if from.is_empty() {
+                    continue;
+                }
+                let inner = message
+                    .pointer("/interactive/button_reply")
+                    .or_else(|| message.pointer("/interactive/list_reply"));
+                let Some(inner) = inner else { continue };
+                let button_id = inner
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if button_id.is_empty() {
+                    continue;
+                }
+                taps.push(WaInteractiveTap {
+                    sender_id: from.clone(),
+                    chat_id: from,
+                    button_id,
+                    title: inner
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                });
+            }
+        }
+    }
+    taps
+}
+
+/// Route an inbound interactive tap to the matching resolver (hermes
+/// `_dispatch_interactive_reply`). Returns true when the tap was claimed
+/// (no further dispatch); false falls back to treating the button title
+/// as a normal text message (stale-tap / restart semantics).
+pub async fn whatsapp_dispatch_interactive_tap(
+    cfg: &WhatsAppCloudConfig,
+    tap: &WaInteractiveTap,
+) -> bool {
+    if let Some(rest) = tap.button_id.strip_prefix("cl:") {
+        let Some((clarify_id, choice)) = rest.split_once(':') else {
+            return false;
+        };
+        if choice == "other" {
+            if crate::clarify_gateway::mark_awaiting_text(clarify_id) {
+                let client = reqwest::Client::new();
+                if let Err(e) =
+                    whatsapp_send(&client, cfg, &tap.chat_id, "✏️ Type your answer:").await
+                {
+                    eprintln!("[whatsapp_cloud] clarify other-prompt failed: {e}");
+                }
+                return true;
+            }
+            return false;
+        }
+        return crate::clarify_gateway::resolve_tap(clarify_id, choice, &tap.title);
+    }
+    // appr:/sc: prefixes belong to gateway approval / slash-confirm
+    // flows that ulnclaw serves over HTTP; taps on them fall through to
+    // text dispatch (hermes fallback semantics).
+    false
 }
