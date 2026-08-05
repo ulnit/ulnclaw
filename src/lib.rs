@@ -135,6 +135,7 @@ pub mod session;
 pub mod skin;
 pub mod skill_usage;
 pub mod skills;
+pub mod signal;
 pub mod stt;
 pub mod status;
 pub mod think_scrubber;

@@ -34,6 +34,9 @@ pub struct MessagingConfig {
     pub discord: DiscordConfig,
     #[serde(default)]
     pub slack: SlackConfig,
+    /// Signal via signal-cli HTTP daemon (hermes `platforms.signal`).
+    #[serde(default)]
+    pub signal: crate::signal::SignalConfig,
     /// Offer pairing codes to unknown senders (hermes unauthorized-DM
     /// `pair` behavior). Approved codes join the allowlist as a union.
     #[serde(default = "default_pairing")]
@@ -694,8 +697,16 @@ pub async fn run_messaging(
             slack::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.signal.enabled {
+        let cfg = msg.signal.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::signal::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack] enabled = true)");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal] enabled = true)");
         return;
     }
     for task in tasks {
