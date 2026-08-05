@@ -99,7 +99,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw update --check   # check for updates (ulnclaw update applies: stash -> ff pull -> rebuild)
 ./ulnclaw config           # show/get/set/unset config (env-style keys go to .env)
 ./ulnclaw secrets status   # external secret sources (secrets sync [--apply] fetches now)
-./ulnclaw secrets bitwarden setup   # wizard: install bws, store token, pick project (also: install/status/disable; onepassword setup/status/set/remove/disable)
+./ulnclaw secrets bitwarden setup   # wizard: install bws, store token, pick project (also: install/status/token/disable; onepassword setup/status/set/remove/disable)
 ./ulnclaw computer-use status # background desktop control via cua-driver (doctor/install)
 ./ulnclaw plugins list      # plugins + shell hooks (enable/disable/accept-hooks)
 ./ulnclaw hooks doctor      # probe every consented hook (list/test/revoke)
@@ -252,7 +252,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 814 tests
+cargo test                     # 815 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -354,7 +354,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw update --check   # 检查更新（ulnclaw update 应用：stash -> ff 拉取 -> 重建）
 ./ulnclaw config           # 配置 show/get/set/unset（env 风格键写入 .env）
 ./ulnclaw secrets status   # 外部秘密源（secrets sync [--apply] 立即拉取）
-./ulnclaw secrets bitwarden setup   # 向导：安装 bws、存令牌、选项目（另有 install/status/disable；onepassword setup/status/set/remove/disable）
+./ulnclaw secrets bitwarden setup   # 向导：安装 bws、存令牌、选项目（另有 install/status/token/disable；onepassword setup/status/set/remove/disable）
 ./ulnclaw computer-use status # cua-driver 后台桌面控制（doctor/install）
 ./ulnclaw plugins list      # 插件与 shell 钩子（enable/disable/accept-hooks）
 ./ulnclaw hooks doctor      # 逐个探测已同意的钩子（list/test/revoke）
@@ -426,7 +426,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 814 个测试
+cargo test                     # 815 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

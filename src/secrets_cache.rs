@@ -136,6 +136,22 @@ pub const BWS_ENCRYPTED_CACHE_BASENAME: &str = "bws_cache.enc.json";
 const ENCRYPTED_CACHE_VERSION: u64 = 1;
 const ENCRYPTED_CACHE_INFO: &[u8] = b"hermes-bws-encrypted-cache-v1";
 
+/// Drop all bws pull caches (hermes `bw.clear_caches()` on token
+/// rotation): old entries are keyed on the previous token's fingerprint,
+/// so the next startup must fetch fresh with the new credential.
+/// Returns the paths that were removed.
+pub fn clear_bws_caches(home: &Path) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    let cache_dir = home.join("cache");
+    for basename in [BWS_ENCRYPTED_CACHE_BASENAME, BWS_PLAINTEXT_CACHE_BASENAME] {
+        let path = cache_dir.join(basename);
+        if path.exists() && std::fs::remove_file(&path).is_ok() {
+            removed.push(path);
+        }
+    }
+    removed
+}
+
 /// SHA-256 prefix used as a cache key — never logged, never displayed
 /// (hermes `_token_fingerprint`).
 pub fn token_fingerprint(token: &str) -> String {
@@ -455,6 +471,28 @@ mod tests {
         assert_ne!(fp1, fp3);
         assert_eq!(fp1.len(), 16);
         assert!(fp1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn clear_bws_caches_removes_both_layers() {
+        let home = std::env::temp_dir().join(format!(
+            "ulnclaw-bws-clear-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let cache_dir = home.join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let enc = cache_dir.join(BWS_ENCRYPTED_CACHE_BASENAME);
+        let plain = cache_dir.join(BWS_PLAINTEXT_CACHE_BASENAME);
+        std::fs::write(&enc, "{}").unwrap();
+        std::fs::write(&plain, "{}").unwrap();
+        let removed = clear_bws_caches(&home);
+        assert_eq!(removed.len(), 2);
+        assert!(!enc.exists());
+        assert!(!plain.exists());
+        // Idempotent: nothing left to remove.
+        assert!(clear_bws_caches(&home).is_empty());
+        std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]

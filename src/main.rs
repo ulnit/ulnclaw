@@ -738,6 +738,15 @@ enum BitwardenSecretsAction {
     },
     /// Show config + binary + token validation status
     Status,
+    /// Rotate the access token: validate a new one, then store it in .env
+    Token {
+        /// Provide the new token non-interactively (default: masked prompt)
+        #[arg(long)]
+        access_token: Option<String>,
+        /// Store without probing Bitwarden first (not recommended)
+        #[arg(long)]
+        no_verify: bool,
+    },
     /// Turn off the Bitwarden integration
     Disable,
 }
@@ -3509,6 +3518,13 @@ fn secrets_cmd(config: &UlncLawConfig, action: SecretsAction) -> Result<(), Stri
                     ulnclaw::secrets_cmd::BitwardenCmd::Install { force }
                 }
                 BitwardenSecretsAction::Status => ulnclaw::secrets_cmd::BitwardenCmd::Status,
+                BitwardenSecretsAction::Token {
+                    access_token,
+                    no_verify,
+                } => ulnclaw::secrets_cmd::BitwardenCmd::Token {
+                    access_token,
+                    no_verify,
+                },
                 BitwardenSecretsAction::Disable => ulnclaw::secrets_cmd::BitwardenCmd::Disable,
             };
             ulnclaw::secrets_cmd::bitwarden_cmd(cmd)?;
