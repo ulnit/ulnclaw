@@ -2455,6 +2455,61 @@ async fn handle_slash(
                 }
             }
         }
+        "/pet" => {
+            // Toggle, browse, or adopt a petdex mascot (hermes `/pet`).
+            // Gallery/install calls use reqwest::blocking, so run the whole
+            // thing off the async REPL task.
+            let home = ulnclaw::config::ulnclaw_home();
+            let rest = rest.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                let low = rest.to_lowercase();
+                if rest.is_empty() || low == "toggle" {
+                    let (enabled, name, err) = ulnclaw::pets::toggle_pet_display(&home);
+                    if let Some(err) = err {
+                        println!("(x_x) {err}");
+                    } else if enabled {
+                        let name = name.unwrap_or_else(|| "your pet".to_string());
+                        println!("(^_^)b {name} is out — it'll pop in shortly.");
+                    } else {
+                        match name {
+                            Some(name) => println!("(-_-)zzZ {name} put away."),
+                            None => println!("(-_-)zzZ Pet put away."),
+                        }
+                    }
+                } else if matches!(low.as_str(), "list" | "gallery" | "browse" | "all") {
+                    let _ = ulnclaw::pets::cmd_list(&home, "", false, 40);
+                } else if low == "scale" || low.starts_with("scale ") {
+                    let value = rest["scale".len()..].trim();
+                    if value.is_empty() {
+                        println!("(o_o) Usage: /pet scale <factor>  (e.g. /pet scale 0.5)");
+                    } else {
+                        let _ = ulnclaw::pets::cmd_scale(value);
+                    }
+                } else if low == "off" {
+                    let _ = ulnclaw::pets::cmd_off();
+                } else {
+                    println!("(o_o) Fetching '{rest}' from petdex…");
+                    let code = ulnclaw::pets::cmd_install(&home, &rest, false, true);
+                    if code != 0 {
+                        println!("(x_x) Couldn't adopt '{rest}'.");
+                    }
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        "/hatch" => {
+            // Generate a brand-new pet from a description (hermes `/hatch`).
+            // Runs the full image-model pipeline, so keep the blocking calls
+            // off the async REPL task.
+            let home = ulnclaw::config::ulnclaw_home();
+            let concept = rest.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                ulnclaw::pets_generate::cmd_hatch(&home, &concept, None, None, None, 0)
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        }
         "/paste" => {
             // hermes clipboard: save the clipboard image as PNG under the
             // ulnclaw home and hand the agent a path reference.
@@ -2503,7 +2558,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /quit           exit"
             );
         }
         "/history" => {
