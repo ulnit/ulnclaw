@@ -267,6 +267,19 @@ impl ToolRegistry {
         names
     }
 
+    /// Names of toolsets that are not disabled (banner display — hermes
+    /// restricts the banner to toolsets actually enabled for the agent).
+    pub fn enabled_toolset_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .toolsets
+            .keys()
+            .filter(|name| !self.disabled_toolsets.contains(name))
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Get tools in a specific toolset
     pub fn toolset_tools(&self, toolset: &str) -> Vec<&Tool> {
         self.toolsets

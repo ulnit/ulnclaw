@@ -381,6 +381,27 @@ impl Agent {
         self.tools.try_lock().map(|r| r.names()).unwrap_or_default()
     }
 
+    /// Enabled toolset names on this agent (banner display).
+    pub fn toolset_names(&self) -> Vec<String> {
+        self.tools
+            .try_lock()
+            .map(|r| r.enabled_toolset_names())
+            .unwrap_or_default()
+    }
+
+    /// Names of the tools belonging to one toolset (banner display).
+    pub fn toolset_tool_names(&self, toolset: &str) -> Vec<String> {
+        self.tools
+            .try_lock()
+            .map(|r| {
+                r.toolset_tools(toolset)
+                    .into_iter()
+                    .map(|t| t.definition.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The model used for provider calls: per-task override (session model
     /// lock) → configured model → the provider's default.
     fn effective_model(&self) -> String {

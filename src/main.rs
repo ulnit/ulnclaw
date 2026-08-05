@@ -935,15 +935,70 @@ fn print_tip() {
     }
 }
 
+/// Hermes-style welcome banner: wordmark + skin-colored panel with model,
+/// toolsets, skills, and update status. Degrades to plain summary lines
+/// when stdout is not a TTY.
+async fn print_welcome_banner(config: &UlncLawConfig, agent: &Arc<Agent>) {
+    let toolsets: Vec<(String, Vec<String>)> = agent
+        .toolset_names()
+        .into_iter()
+        .map(|toolset| {
+            let display = ulnclaw::banner::display_toolset_name(&toolset);
+            let tools = agent.toolset_tool_names(&toolset);
+            (display, tools)
+        })
+        .collect();
+    let total_tools: usize = toolsets.iter().map(|(_, tools)| tools.len()).sum();
+    // The models.dev lookup uses a blocking reqwest client, which must not
+    // run (or be dropped) inside the async runtime; spawn_blocking keeps it
+    // on a blocking thread. The 2s cap keeps startup snappy when the
+    // registry is unreachable — the task keeps running and warms the cache.
+    let lookup_provider = config.model.provider.clone();
+    let lookup_model = config.model.model.clone();
+    let context_length = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            ulnclaw::models_dev::lookup_models_dev_context(&lookup_provider, &lookup_model)
+        }),
+    )
+    .await
+    .ok()
+    .and_then(|joined| joined.ok())
+    .flatten();
+    let info = ulnclaw::banner::BannerInfo {
+        model: config.model.model.clone(),
+        provider: config.model.provider.clone(),
+        cwd: std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        session_id: Some(agent.context().session_id.clone()),
+        context_length,
+        toolsets,
+        skills: ulnclaw::banner::get_available_skills(),
+        total_tools,
+        yolo: config.approvals.mode == "off",
+        update_behind: ulnclaw::banner::get_update_result(std::time::Duration::from_millis(500)),
+    };
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        let term_width = ulnclaw::banner::terminal_width();
+        println!("{}", ulnclaw::banner::build_startup_display(&info, term_width));
+    } else {
+        println!(
+            "ulnclaw {} — model: {} ({})",
+            ulnclaw::VERSION,
+            config.model.model,
+            config.model.provider
+        );
+        println!("Type /help for commands, /quit to exit.");
+    }
+}
+
 async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
+    // Kick off the git update check while the agent is being constructed
+    // (hermes prefetch_update_check on the startup path).
+    ulnclaw::banner::prefetch_update_check();
     let agent = make_agent(config, true, None).await?;
-    println!(
-        "ulnclaw {} — model: {} ({})",
-        ulnclaw::VERSION,
-        config.model.model,
-        config.model.provider
-    );
-    println!("Type /help for commands, /quit to exit.");
+    print_welcome_banner(config, &agent).await;
     // Random feature tip (hermes startup tip), tinted with the active
     // skin's banner_dim.
     print_tip();
