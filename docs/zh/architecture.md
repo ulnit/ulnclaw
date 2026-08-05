@@ -321,7 +321,8 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
   `POST /api/sessions/:id/model`（会话级模型锁，经 task-local provider
   模型覆盖在每一轮生效）、
   `GET /api/sessions/:id/messages`、`POST /api/sessions/:id/chat`、
-  `POST /api/sessions/:id/chat/stream`（SSE）
+  `POST /api/sessions/:id/chat/stream`（SSE）、
+  `GET /api/sessions/:id/recap`（本地回合回顾，不调用 LLM）
 - `GET/POST /api/jobs`、`GET/PATCH/DELETE /api/jobs/:id`、
   `POST /api/jobs/:id/pause|resume|run` — 经 HTTP 管理定时任务
   （与 CLI 共用 SQLite 任务存储）
@@ -330,6 +331,16 @@ hermes `gateway/platforms/api_server.py` 核心的移植。
 - `POST /v1/runs`（202 + run_id）、`GET /v1/runs`、`GET /v1/runs/:id`、
   `GET /v1/runs/:id/events`（SSE 生命周期事件，含 `approval.request`）、
   `POST /v1/runs/:id/stop`、`POST /v1/runs/:id/approval`（解决待审批）
+- `GET /v1/browser/status`、`POST /v1/browser/connect`、
+  `POST /v1/browser/disconnect` —— 浏览器 CDP 端点实时控制：connect 先经
+  `/json/version` 验证再应用进程级覆盖；status 报告后端/来源/模式
+  （managed/endpoint/camofox）；disconnect 恢复默认模式
+- `GET /metrics` —— Prometheus 计数器/仪表（请求数、令牌、工具调用、活跃
+  会话/运行；ulnclaw 运维扩展）
+- `GET /api/usage` —— 令牌核算：进程计数、全库历史总量、按会话明细
+  （ulnclaw 运维扩展）
+- `GET /v1/delegations`、`GET /v1/delegations/:id` —— 后台委派登记
+  （ulnclaw 运维扩展）
 
 **Profile 多路复用（`/p/<profile>`）：** 所有路由额外镜像到
 `/p/<profile>/...`（对齐 hermes api_server）。`[gateway] multiplex_profiles

@@ -304,7 +304,8 @@ a port of hermes' `gateway/platforms/api_server.py` core.
   `POST /api/sessions/:id/model` (per-session model lock, enforced via a
   task-local provider model override on every turn),
   `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/chat`,
-  `POST /api/sessions/:id/chat/stream` (SSE)
+  `POST /api/sessions/:id/chat/stream` (SSE),
+  `GET /api/sessions/:id/recap` (local turn recap, no LLM call)
 - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/:id`,
   `POST /api/jobs/:id/pause|resume|run` — cron job management over HTTP
   (shares the CLI's SQLite job store)
@@ -314,6 +315,17 @@ a port of hermes' `gateway/platforms/api_server.py` core.
   `GET /v1/runs/:id/events` (SSE lifecycle events incl.
   `approval.request`), `POST /v1/runs/:id/stop`,
   `POST /v1/runs/:id/approval` (resolve pending approval)
+- `GET /v1/browser/status`, `POST /v1/browser/connect`,
+  `POST /v1/browser/disconnect` — live browser CDP endpoint control:
+  connect verifies the endpoint against `/json/version` before applying
+  the process-lifetime override; status reports backend/source/mode
+  (managed/endpoint/camofox); disconnect reverts to default mode
+- `GET /metrics` — Prometheus counters/gauges (requests, tokens, tool
+  calls, active sessions/runs; ulnclaw ops extension)
+- `GET /api/usage` — token accounting: process counters, all-time store
+  totals, per-session rows (ulnclaw ops extension)
+- `GET /v1/delegations`, `GET /v1/delegations/:id` — background
+  delegation registry (ulnclaw ops extension)
 
 **Profile multiplexing (`/p/<profile>`):** every route is additionally
 mirrored under `/p/<profile>/...` (hermes api_server parity). With
