@@ -51,7 +51,7 @@ skill sync, and a Tauri desktop GUI (`desktop/`).
 - **🌐 Providers** — OpenAI-compatible endpoints (OpenAI, OpenRouter, DashScope, Ollama, llama.cpp) plus a native Anthropic Messages API provider (tool_use/tool_result blocks, SSE streaming, OAuth bearer), keyless local providers; per-task auxiliary routing (`[auxiliary.compression]`, `[auxiliary.vision]`, `[auxiliary.title_generation]`) sends secondary calls to a different provider/model; `[model] fallbacks` failover chain with per-turn primary restore
 - **📡 Messaging platforms** — Telegram/Discord/Slack adapters run inside `ulnclaw gateway` (`[messaging.*]`), WhatsApp Cloud + Microsoft Graph ingress mount as gateway webhook routes (`/webhooks/whatsapp` HMAC-verified, `/webhooks/msgraph` clientState-verified), plus a generic signed-webhook platform (`[messaging.webhook]` routes at `/webhooks/hook/<name>` — Svix/GitHub/GitLab/HMAC-V2 signature schemes, per-route rate limits, delivery-id idempotency, `deliver_only` zero-LLM push): allowlist-gated pairing (fail closed) plus hermes-style interactive pairing codes (`pairing list/approve/revoke/clear-pending`), media attachments cached under `media-cache/` and delivered as path references (outbound `MEDIA:` tags upload natively on Telegram/Discord), one persistent session per chat, hermes-style reply chunking
 - **🔌 Plugins & hooks** — directory plugins (`~/.ulnclaw/plugins/<name>/plugin.toml`: hooks + subprocess tools) and `[hooks]` config shell hooks with hermes first-use consent (`plugins list/enable/disable/accept-hooks`, `hooks list/test/revoke/doctor`); the core fires all 13 hook events hermes emits at runtime (pre/post tool & LLM calls, API request lifecycle, session boundaries, gateway dispatch gating)
-- **🔑 Secrets vaults** — external secret sources applied at startup before providers read env (`secrets status/sync`): command helper, Bitwarden Secrets Manager (`bws`), 1Password (`op://` refs) with full hermes precedence semantics
+- **🔑 Secrets vaults** — external secret sources applied at startup before providers read env (`secrets status/sync`): command helper, Bitwarden Secrets Manager (`bws` — pinned auto-install, AES-GCM-encrypted TTL cache, `secrets bitwarden setup` wizard), 1Password (`op://` refs, `secrets onepassword setup/set`) with full hermes precedence semantics
 - **🖱️ Computer use** — `computer_use` tool via the cua-driver daemon (MCP over stdio, full hermes schema), approval-gated like hermes; `computer-use status/doctor/install`
 - **🔄 OAuth + skill sync** — `auth login` RFC 8628 device flow against any `[oauth]` provider; `sync status/pull/push/now` keeps skills in sync over HTTP(S) or a shared directory
 - **🖥️ Desktop GUI** — `desktop/`: a Tauri 2 shell (replacing hermes' Electron app) that hosts the chat UI and manages the gateway child process; the gateway's local-app CORS also serves any browser dashboard
@@ -98,6 +98,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw update --check   # check for updates (ulnclaw update applies: stash -> ff pull -> rebuild)
 ./ulnclaw config           # show/get/set/unset config (env-style keys go to .env)
 ./ulnclaw secrets status   # external secret sources (secrets sync [--apply] fetches now)
+./ulnclaw secrets bitwarden setup   # wizard: install bws, store token, pick project (also: install/status/disable; onepassword setup/status/set/remove/disable)
 ./ulnclaw computer-use status # background desktop control via cua-driver (doctor/install)
 ./ulnclaw plugins list      # plugins + shell hooks (enable/disable/accept-hooks)
 ./ulnclaw hooks doctor      # probe every consented hook (list/test/revoke)
@@ -250,7 +251,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 775 tests
+cargo test                     # 783 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -304,7 +305,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🌐 Provider** —— OpenAI 兼容端点（OpenAI、OpenRouter、DashScope、Ollama、llama.cpp）+ 原生 Anthropic Messages API provider（tool_use/tool_result 块、SSE 流式、OAuth bearer），本地 provider 免密钥；按任务辅助路由（`[auxiliary.compression]`、`[auxiliary.vision]`、`[auxiliary.title_generation]`）可将二次调用发往不同 provider/模型；`[model] fallbacks` 回退链（按轮恢复主 provider）
 - **📡 消息平台** —— Telegram/Discord/Slack 适配器运行于 `ulnclaw gateway` 内（`[messaging.*]`），WhatsApp Cloud 与 Microsoft Graph 接入挂载为网关 webhook 路由（`/webhooks/whatsapp` HMAC 校验、`/webhooks/msgraph` clientState 校验），另有通用签名 webhook 平台（`[messaging.webhook]` 路由 `/webhooks/hook/<name>` —— Svix/GitHub/GitLab/HMAC-V2 签名方案、每路由限流、投递 id 幂等、`deliver_only` 零 LLM 推送）：白名单配对（fail closed）+ hermes 风格交互式配对码（`pairing list/approve/revoke/clear-pending`）、媒体附件缓存于 `media-cache/` 并以路径引用交付（出站 `MEDIA:` 标签在 Telegram/Discord 原生上传）、每聊天一条持久会话、hermes 风格回复分块
 - **🔌 插件与钩子** —— 目录插件（`~/.ulnclaw/plugins/<name>/plugin.toml`：hooks + 子进程工具）与 `[hooks]` 配置式 shell 钩子，复刻 hermes 首次使用同意机制（`plugins list/enable/disable/accept-hooks`、`hooks list/test/revoke/doctor`）；核心触发 hermes 运行期实际发出的全部 13 个钩子事件（工具/LLM 前后、API 请求生命周期、会话边界、网关分发门控）
-- **🔑 Secrets 保险库** —— 外部秘密源在启动时、provider 读取 env 之前应用（`secrets status/sync`）：command 助手、Bitwarden Secrets Manager（`bws`）、1Password（`op://` 引用），完整复刻 hermes 优先级语义
+- **🔑 Secrets 保险库** —— 外部秘密源在启动时、provider 读取 env 之前应用（`secrets status/sync`）：command 助手、Bitwarden Secrets Manager（`bws` —— 固定版本自动安装、AES-GCM 加密 TTL 缓存、`secrets bitwarden setup` 向导）、1Password（`op://` 引用、`secrets onepassword setup/set`），完整复刻 hermes 优先级语义
 - **🖱️ Computer use** —— `computer_use` 工具经 cua-driver 守护进程（MCP over stdio，完整 hermes schema），与 hermes 相同的审批门控；`computer-use status/doctor/install`
 - **🔄 OAuth + 技能同步** —— `auth login` 对任意 `[oauth]` provider 执行 RFC 8628 设备流；`sync status/pull/push/now` 经 HTTP(S) 或共享目录同步技能
 - **🖥️ 桌面 GUI** —— `desktop/`：Tauri 2 外壳（取代 hermes 的 Electron 应用），承载聊天界面并管理 gateway 子进程；网关内置的本地应用 CORS 同样服务任意浏览器仪表盘
@@ -351,6 +352,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw update --check   # 检查更新（ulnclaw update 应用：stash -> ff 拉取 -> 重建）
 ./ulnclaw config           # 配置 show/get/set/unset（env 风格键写入 .env）
 ./ulnclaw secrets status   # 外部秘密源（secrets sync [--apply] 立即拉取）
+./ulnclaw secrets bitwarden setup   # 向导：安装 bws、存令牌、选项目（另有 install/status/disable；onepassword setup/status/set/remove/disable）
 ./ulnclaw computer-use status # cua-driver 后台桌面控制（doctor/install）
 ./ulnclaw plugins list      # 插件与 shell 钩子（enable/disable/accept-hooks）
 ./ulnclaw hooks doctor      # 逐个探测已同意的钩子（list/test/revoke）
@@ -422,7 +424,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 775 个测试
+cargo test                     # 783 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

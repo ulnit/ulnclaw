@@ -127,6 +127,8 @@ pub mod prompt_stash;
 pub mod provider;
 pub mod redact;
 pub mod secrets;
+pub mod secrets_cache;
+pub mod secrets_cmd;
 pub mod security_audit;
 pub mod session;
 pub mod skin;

@@ -311,7 +311,7 @@ pub fn unset_config_value(key: &str) -> Result<String, String> {
     Ok(format!("✓ Unset {key} from {}", path.display()))
 }
 
-fn set_env_value(name: &str, value: &str) -> Result<(), String> {
+pub fn set_env_value(name: &str, value: &str) -> Result<(), String> {
     let path = env_path();
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let mut lines: Vec<String> = Vec::new();

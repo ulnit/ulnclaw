@@ -703,6 +703,75 @@ enum SecretsAction {
         #[arg(long)]
         apply: bool,
     },
+    /// Bitwarden Secrets Manager backend (hermes `secrets bitwarden`)
+    Bitwarden {
+        #[command(subcommand)]
+        action: BitwardenSecretsAction,
+    },
+    /// 1Password backend (hermes `secrets onepassword`)
+    #[command(name = "onepassword")]
+    OnePassword {
+        #[command(subcommand)]
+        action: OnePasswordSecretsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BitwardenSecretsAction {
+    /// Interactive wizard: install bws, store access token, pick project
+    Setup {
+        /// Provide the access token non-interactively (stored in .env)
+        #[arg(long)]
+        access_token: Option<String>,
+        /// Bitwarden region / self-hosted endpoint (skips the prompt)
+        #[arg(long)]
+        server_url: Option<String>,
+        /// Pre-select a project UUID instead of prompting
+        #[arg(long)]
+        project_id: Option<String>,
+    },
+    /// Download and verify the pinned bws binary
+    Install {
+        /// Re-download even if a managed copy already exists
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show config + binary + token validation status
+    Status,
+    /// Turn off the Bitwarden integration
+    Disable,
+}
+
+#[derive(Subcommand)]
+enum OnePasswordSecretsAction {
+    /// Wizard: locate op, store service-account token, enable the source
+    Setup {
+        /// Absolute path to the op binary (default: resolve via PATH)
+        #[arg(long)]
+        binary_path: Option<String>,
+        /// op account shorthand passed as --account
+        #[arg(long)]
+        account: Option<String>,
+        /// Service-account token to store in .env (default: prompt/env)
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Show config + op binary + references
+    Status,
+    /// Map an env var to an op:// reference
+    Set {
+        /// Environment variable name
+        name: String,
+        /// op://vault/item/field reference
+        reference: String,
+    },
+    /// Remove an env-var → reference mapping
+    Remove {
+        /// Environment variable name
+        name: String,
+    },
+    /// Turn off the 1Password integration
+    Disable,
 }
 
 #[derive(Subcommand)]
@@ -3417,6 +3486,47 @@ fn secrets_cmd(config: &UlncLawConfig, action: SecretsAction) -> Result<(), Stri
             } else if !report.applied.is_empty() {
                 println!("Dry run — re-run with --apply to export into this process.");
             }
+        }
+        SecretsAction::Bitwarden { action } => {
+            let cmd = match action {
+                BitwardenSecretsAction::Setup {
+                    access_token,
+                    server_url,
+                    project_id,
+                } => ulnclaw::secrets_cmd::BitwardenCmd::Setup {
+                    access_token,
+                    server_url,
+                    project_id,
+                },
+                BitwardenSecretsAction::Install { force } => {
+                    ulnclaw::secrets_cmd::BitwardenCmd::Install { force }
+                }
+                BitwardenSecretsAction::Status => ulnclaw::secrets_cmd::BitwardenCmd::Status,
+                BitwardenSecretsAction::Disable => ulnclaw::secrets_cmd::BitwardenCmd::Disable,
+            };
+            ulnclaw::secrets_cmd::bitwarden_cmd(cmd)?;
+        }
+        SecretsAction::OnePassword { action } => {
+            let cmd = match action {
+                OnePasswordSecretsAction::Setup {
+                    binary_path,
+                    account,
+                    token,
+                } => ulnclaw::secrets_cmd::OnePasswordCmd::Setup {
+                    binary_path,
+                    account,
+                    token,
+                },
+                OnePasswordSecretsAction::Status => ulnclaw::secrets_cmd::OnePasswordCmd::Status,
+                OnePasswordSecretsAction::Set { name, reference } => {
+                    ulnclaw::secrets_cmd::OnePasswordCmd::Set { name, reference }
+                }
+                OnePasswordSecretsAction::Remove { name } => {
+                    ulnclaw::secrets_cmd::OnePasswordCmd::Remove { name }
+                }
+                OnePasswordSecretsAction::Disable => ulnclaw::secrets_cmd::OnePasswordCmd::Disable,
+            };
+            ulnclaw::secrets_cmd::onepassword_cmd(cmd)?;
         }
     }
     Ok(())

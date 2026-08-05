@@ -85,10 +85,22 @@ pub struct BitwardenSourceConfig {
     /// May beat pre-existing `.env`/shell values (never another source).
     #[serde(default)]
     pub override_existing: bool,
+    /// Fetch-cache TTL in seconds; 0 disables BOTH cache layers (hermes
+    /// `cache_ttl_seconds`, default 300).
+    #[serde(default = "default_cache_ttl")]
+    pub cache_ttl_seconds: u64,
+    /// Auto-install the pinned `bws` binary into `<home>/bin` on first
+    /// use (hermes `auto_install`).
+    #[serde(default = "default_true")]
+    pub auto_install: bool,
 }
 
 fn default_token_env() -> String {
     "BWS_ACCESS_TOKEN".to_string()
+}
+
+fn default_cache_ttl() -> u64 {
+    300
 }
 
 impl Default for BitwardenSourceConfig {
@@ -99,6 +111,8 @@ impl Default for BitwardenSourceConfig {
             project_id: String::new(),
             server_url: String::new(),
             override_existing: false,
+            cache_ttl_seconds: default_cache_ttl(),
+            auto_install: true,
         }
     }
 }
@@ -126,6 +140,10 @@ pub struct OnePasswordSourceConfig {
     /// Per-reference `op read` timeout (hermes `_OP_RUN_TIMEOUT`).
     #[serde(default = "default_op_timeout")]
     pub timeout_seconds: u64,
+    /// Fetch-cache TTL in seconds; 0 disables BOTH cache layers (hermes
+    /// `cache_ttl_seconds`, default 300).
+    #[serde(default = "default_cache_ttl")]
+    pub cache_ttl_seconds: u64,
     /// Mapped bindings are explicit, so they beat pre-existing `.env`/shell
     /// values by default (hermes `override_existing=True`); never another
     /// secret source.
@@ -154,6 +172,7 @@ impl Default for OnePasswordSourceConfig {
             binary_path: String::new(),
             account: String::new(),
             timeout_seconds: default_op_timeout(),
+            cache_ttl_seconds: default_cache_ttl(),
             override_existing: true,
         }
     }
@@ -302,9 +321,22 @@ pub fn fetch_command_source(cfg: &CommandSourceConfig) -> FetchResult {
     result
 }
 
-/// Locate the `bws` binary: `PATH` first, then `<home>/bin/bws`
-/// (hermes `find_bws` without the auto-install wizard).
+/// Locate the `bws` binary (hermes `find_bws`):
+/// 1. `<home>/bin/bws` (the managed copy — preferred)
+/// 2. `bws` on the system PATH
+///
+/// `install_if_missing` downloads and verifies the pinned version when
+/// neither resolves (auto-install failures degrade to None, never block).
 pub fn find_bws(home: &Path) -> Option<PathBuf> {
+    find_bws_maybe_install(home, false)
+}
+
+/// `find_bws` with the hermes `install_if_missing` switch.
+pub fn find_bws_maybe_install(home: &Path, install_if_missing: bool) -> Option<PathBuf> {
+    let managed = home.join("bin").join("bws");
+    if managed.is_file() {
+        return Some(managed);
+    }
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in path_var.split(':') {
             let candidate = Path::new(dir).join("bws");
@@ -313,12 +345,227 @@ pub fn find_bws(home: &Path) -> Option<PathBuf> {
             }
         }
     }
-    let local = home.join("bin").join("bws");
-    if local.is_file() {
-        Some(local)
-    } else {
-        None
+    if install_if_missing {
+        match install_bws(home, false) {
+            Ok(path) => return Some(path),
+            Err(e) => eprintln!("[secrets] bws auto-install failed: {e}"),
+        }
     }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// bws auto-install (hermes install_bws)
+// ---------------------------------------------------------------------------
+
+/// Pinned upstream version. Bump deliberately — never auto-resolve
+/// "latest" because upstream release shape (asset names, CLI flags) is
+/// allowed to change between majors (hermes `_BWS_VERSION`).
+pub const BWS_VERSION: &str = "2.0.0";
+
+const BWS_RELEASE_BASE: &str =
+    "https://github.com/bitwarden/sdk-sm/releases/download/bws-v2.0.0";
+const BWS_CHECKSUM_NAME: &str = "bws-sha256-checksums-2.0.0.txt";
+/// Whole-request timeout. Hermes uses 60s; release CDN transfers of the
+/// ~6 MB zip routinely exceed that on slow links, so ulnclaw allows 5 min.
+const BWS_DOWNLOAD_TIMEOUT_SECS: u64 = 300;
+
+/// Map (os, arch, libc) → the upstream asset filename (hermes
+/// `_platform_asset_name`; Linux defaults to gnu and switches to musl
+/// only when `ldd --version` says so).
+pub fn bws_platform_asset_name() -> Result<String, String> {
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else {
+        return Err(format!(
+            "unsupported architecture for bws auto-install: {}",
+            std::env::consts::ARCH
+        ));
+    };
+    if cfg!(target_os = "macos") {
+        // Universal binary works on both Intel and Apple Silicon.
+        return Ok(format!("bws-macos-universal-{BWS_VERSION}.zip"));
+    }
+    if cfg!(target_os = "windows") {
+        return Ok(format!("bws-{arch}-pc-windows-msvc-{BWS_VERSION}.zip"));
+    }
+    if cfg!(target_os = "linux") {
+        let libc = if ldd_is_musl() { "musl" } else { "gnu" };
+        return Ok(format!("bws-{arch}-unknown-linux-{libc}-{BWS_VERSION}.zip"));
+    }
+    Err(format!(
+        "unsupported platform for bws auto-install: {}",
+        std::env::consts::OS
+    ))
+}
+
+fn ldd_is_musl() -> bool {
+    // ldd --version writes to stderr on glibc, stdout on musl. Getting it
+    // wrong falls back to a clear error from the binary loader (hermes).
+    let output = std::process::Command::new("ldd")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output();
+    match output {
+        Ok(out) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            combined.to_ascii_lowercase().contains("musl")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Download, verify, and install the pinned `bws` binary (hermes
+/// `install_bws`). Returns the installed path; errors propagate so the
+/// setup wizard can show them (auto-install callers catch and degrade).
+pub fn install_bws(home: &Path, force: bool) -> Result<PathBuf, String> {
+    let bin_dir = home.join("bin");
+    std::fs::create_dir_all(&bin_dir)
+        .map_err(|e| format!("cannot create {}: {e}", bin_dir.display()))?;
+    let target = bin_dir.join("bws");
+    if target.is_file() && !force {
+        return Ok(target);
+    }
+
+    let asset_name = bws_platform_asset_name()?;
+    let asset_url = format!("{BWS_RELEASE_BASE}/{asset_name}");
+    let checksum_url = format!("{BWS_RELEASE_BASE}/{BWS_CHECKSUM_NAME}");
+
+    eprintln!("[secrets] downloading {asset_url}");
+    // reqwest::blocking spins up its own tokio runtime, which cannot be
+    // dropped inside ours — run the download on a dedicated thread.
+    let (zip_bytes, checksum_text) = download_bws_assets(&asset_url, &checksum_url)?;
+
+    let expected = expected_sha256(&checksum_text, &asset_name)?;
+    let actual = sha256_hex(&zip_bytes);
+    if !expected.eq_ignore_ascii_case(&actual) {
+        return Err(format!(
+            "checksum mismatch for {asset_name}: expected {expected}, got {actual}"
+        ));
+    }
+
+    let extracted = extract_bws_from_zip(&zip_bytes, "bws")?;
+
+    // Move into place atomically: stage in the final directory so the
+    // rename can't cross filesystems (hermes staged install).
+    let staged = bin_dir.join(format!(".bws_staging_{}", std::process::id()));
+    std::fs::write(&staged, &extracted).map_err(|e| format!("stage binary: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
+    }
+    std::fs::rename(&staged, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&staged);
+        format!("install binary: {e}")
+    })?;
+    eprintln!("[secrets] installed bws {BWS_VERSION} at {}", target.display());
+    Ok(target)
+}
+
+fn download_bws_assets(asset_url: &str, checksum_url: &str) -> Result<(Vec<u8>, String), String> {
+    let asset_url = asset_url.to_string();
+    let checksum_url = checksum_url.to_string();
+    // reqwest::blocking spins up its own tokio runtime, which cannot be
+    // dropped inside ours — run the download on a dedicated thread.
+    // Transient connection resets are common on release CDNs, so retry.
+    let handle = std::thread::spawn(move || -> Result<(Vec<u8>, String), String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(BWS_DOWNLOAD_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| format!("http client: {e}"))?;
+        let mut last_error = String::new();
+        for attempt in 1..=3 {
+            let asset = client
+                .get(&asset_url)
+                .send()
+                .and_then(|r| r.error_for_status())
+                .and_then(|r| r.bytes())
+                .map(|b| b.to_vec());
+            let checksums = client
+                .get(&checksum_url)
+                .send()
+                .and_then(|r| r.error_for_status())
+                .and_then(|r| r.text());
+            match (asset, checksums) {
+                (Ok(zip_bytes), Ok(checksum_text)) => return Ok((zip_bytes, checksum_text)),
+                (Err(e), _) | (_, Err(e)) => {
+                    last_error = format!("{e}");
+                    if attempt < 3 {
+                        std::thread::sleep(std::time::Duration::from_secs(2 * attempt));
+                    }
+                }
+            }
+        }
+        Err(format!("download failed after 3 attempts: {last_error}"))
+    });
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err("download thread panicked".to_string()),
+    }
+}
+
+/// Parse the upstream `bws-sha256-checksums-X.Y.Z.txt` (standard
+/// sha256sum output: `<hex>  <filename>`) — hermes `_expected_sha256`.
+fn expected_sha256(checksum_text: &str, asset_name: &str) -> Result<String, String> {
+    for line in checksum_text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 && parts[parts.len() - 1] == asset_name {
+            return Ok(parts[0].to_string());
+        }
+    }
+    Err(format!("no checksum entry for {asset_name}"))
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Find `binary_name` inside the zip (shortest path wins — root over
+/// nested, hermes `_pick_zip_member`) and extract it with a zip-slip
+/// guard (hermes `_safe_extract_member`).
+fn extract_bws_from_zip(zip_bytes: &[u8], binary_name: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))
+        .map_err(|e| format!("corrupt archive: {e}"))?;
+    let mut candidates: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        let entry = archive.by_index_raw(i).map_err(|e| format!("archive entry: {e}"))?;
+        let name = entry.name().to_string();
+        if name.split('/').last() == Some(binary_name) {
+            candidates.push(name);
+        }
+    }
+    if candidates.is_empty() {
+        return Err(format!("could not find {binary_name} inside downloaded archive"));
+    }
+    candidates.sort_by_key(|name| name.len());
+    let member = candidates.remove(0);
+    // Zip-slip guard: member names must stay inside the extraction root.
+    let normalized = member.trim_start_matches('/');
+    if normalized.split('/').any(|seg| seg == "..") {
+        return Err(format!("refusing to extract unsafe archive member {member:?}"));
+    }
+    let mut file = archive
+        .by_name(&member)
+        .map_err(|e| format!("archive member: {e}"))?;
+    let mut out = Vec::new();
+    file.read_to_end(&mut out)
+        .map_err(|e| format!("read archive member: {e}"))?;
+    if out.is_empty() {
+        return Err(format!("archive member {member:?} is empty"));
+    }
+    Ok(out)
 }
 
 /// Fetch via Bitwarden Secrets Manager: `bws secret list <project>
@@ -338,9 +585,30 @@ pub fn fetch_bitwarden_source(cfg: &BitwardenSourceConfig, home: &Path) -> Fetch
         result.error = Some("no project_id configured".to_string());
         return result;
     }
-    let Some(bws) = find_bws(home) else {
+    // Encrypted disk cache (hermes): back-to-back CLI invocations don't
+    // each pay the bws round-trip. TTL 0 disables both cache layers.
+    let cache_key = format!(
+        "{}|{}|{}",
+        crate::secrets_cache::token_fingerprint(token.trim()),
+        cfg.project_id.trim(),
+        cfg.server_url.trim()
+    );
+    let ttl = cfg.cache_ttl_seconds as f64;
+    if ttl > 0.0 {
+        if let Some(cached) = crate::secrets_cache::read_encrypted_bws_cache(
+            home,
+            &cache_key,
+            token.trim(),
+            ttl,
+        ) {
+            result.secrets = cached.secrets;
+            result.ok = true;
+            return result;
+        }
+    }
+    let Some(bws) = find_bws_maybe_install(home, cfg.auto_install) else {
         result.error = Some(
-            "bws binary not found (install Bitwarden Secrets Manager CLI or place it in <home>/bin)"
+            "bws binary not found (install Bitwarden Secrets Manager CLI, place it in <home>/bin, or enable auto_install)"
                 .to_string(),
         );
         return result;
@@ -400,6 +668,23 @@ pub fn fetch_bitwarden_source(cfg: &BitwardenSourceConfig, home: &Path) -> Fetch
                 result.secrets.insert(key.to_string(), value.to_string());
             }
             result.ok = true;
+            // Persist the successful pull for the next process (hermes
+            // encrypted cache write).
+            if ttl > 0.0 {
+                let fetched_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                crate::secrets_cache::write_encrypted_bws_cache(
+                    home,
+                    &cache_key,
+                    token.trim(),
+                    &crate::secrets_cache::CachedFetch {
+                        secrets: result.secrets.clone(),
+                        fetched_at,
+                    },
+                );
+            }
         }
         Err(e) => {
             result.error = Some(format!("unparseable bws output: {e}"));
@@ -576,6 +861,32 @@ pub fn fetch_onepassword_source(cfg: &OnePasswordSourceConfig) -> FetchResult {
         result.ok = true;
         return result;
     }
+    let home = crate::config::ulnclaw_home();
+    let token_value = std::env::var(&cfg.service_account_token_env)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    // Cache key (hermes): token fingerprint | account | refs fingerprint
+    // (the disk file is already partitioned by home).
+    let refs_canonical: String = valid
+        .iter()
+        .map(|(name, reference)| format!("{name}={reference}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cache_key = format!(
+        "{}|{}|{}",
+        crate::secrets_cache::token_fingerprint(&token_value),
+        cfg.account.trim(),
+        crate::secrets_cache::token_fingerprint(&refs_canonical)
+    );
+    let ttl = cfg.cache_ttl_seconds as f64;
+    if ttl > 0.0 {
+        if let Some(cached) = crate::secrets_cache::OP_DISK_CACHE.read(&cache_key, ttl, &home) {
+            result.secrets = cached.secrets;
+            result.ok = true;
+            return result;
+        }
+    }
     let op = match find_op(&cfg.binary_path) {
         Some(op) => op,
         None => {
@@ -586,19 +897,36 @@ pub fn fetch_onepassword_source(cfg: &OnePasswordSourceConfig) -> FetchResult {
             return result;
         }
     };
-    let token_value = std::env::var(&cfg.service_account_token_env)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let mut read_errors = 0usize;
     for (name, reference) in &valid {
         match run_op_read(&op, reference, &cfg.account, &token_value, cfg.timeout_seconds) {
             Ok(value) => {
                 result.secrets.insert(name.clone(), value);
             }
-            Err(err) => result.warnings.push(format!("onepassword: {err}")),
+            Err(err) => {
+                result.warnings.push(format!("onepassword: {err}"));
+                read_errors += 1;
+            }
         }
     }
     result.ok = true;
+    // Only a complete, error-free pull is cached, so a transient auth
+    // failure isn't frozen in for the whole TTL window (hermes).
+    if ttl > 0.0 && read_errors == 0 && !result.secrets.is_empty() {
+        let fetched_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        crate::secrets_cache::OP_DISK_CACHE.write(
+            &cache_key,
+            &crate::secrets_cache::CachedFetch {
+                secrets: result.secrets.clone(),
+                fetched_at,
+            },
+            ttl,
+            &home,
+        );
+    }
     result
 }
 
