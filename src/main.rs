@@ -407,6 +407,16 @@ enum SessionAction {
     /// Reclaim disk space: merge FTS5 segments + VACUUM, no data change
     /// (hermes sessions optimize)
     Optimize,
+    /// Interactive session browser — browse, filter, and resume sessions
+    /// (hermes sessions browse)
+    Browse {
+        /// Filter by source (cli, cron, gateway, ...)
+        #[arg(long)]
+        source: Option<String>,
+        /// Max sessions to load
+        #[arg(long, default_value = "500")]
+        limit: usize,
+    },
     /// Repair a malformed state.db schema so hidden sessions reappear
     /// (hermes sessions repair)
     Repair {
@@ -2475,6 +2485,19 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
                 println!("Database size: {:.1} MB", metadata.len() as f64 / (1024.0 * 1024.0));
             }
         }
+        SessionAction::Browse { source, limit } => {
+            // Hermes browse excludes "tool" sessions unless a source filter
+            // is given explicitly.
+            let excludes: Vec<&str> = if source.is_some() { vec![] } else { vec!["tool"] };
+            let rows = store
+                .list_sessions_for_browse(limit.max(1), source.as_deref(), &excludes)
+                .map_err(|e| e.to_string())?;
+            if rows.is_empty() {
+                println!("No sessions found.");
+                return Ok(());
+            }
+            run_session_browse(&rows)?;
+        }
         SessionAction::Delete { id, yes } => {
             let resolved = store
                 .resolve_session_id(&id)
@@ -2546,6 +2569,122 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Dependency-free interactive session picker (the hermes `sessions
+/// browse` curses TUI adapted to plain stdin): numbered list, live
+/// substring filter, resume by number via process relaunch.
+fn run_session_browse(rows: &[ulnclaw::session::sqlite::BrowseRow]) -> Result<(), String> {
+    use ulnclaw::session::sqlite::BrowseRow;
+    let mut filter = String::new();
+    loop {
+        let filtered: Vec<&BrowseRow> = rows
+            .iter()
+            .filter(|r| {
+                if filter.is_empty() {
+                    return true;
+                }
+                let q = filter.to_lowercase();
+                r.title
+                    .as_deref()
+                    .map(|t| t.to_lowercase().contains(&q))
+                    .unwrap_or(false)
+                    || r.preview
+                        .as_deref()
+                        .map(|p| p.to_lowercase().contains(&q))
+                        .unwrap_or(false)
+                    || r.id.to_lowercase().contains(&q)
+                    || r.source.to_lowercase().contains(&q)
+            })
+            .collect();
+        println!();
+        if filter.is_empty() {
+            println!(
+                "Browse sessions ({} total) — type a number to resume, text to filter, q to quit",
+                rows.len()
+            );
+        } else {
+            println!(
+                "Browse sessions — filter: {filter} ({}) — number to resume, Enter clears filter, q to quit",
+                filtered.len()
+            );
+        }
+        let page = &filtered[..filtered.len().min(20)];
+        for (idx, row) in page.iter().enumerate() {
+            let title = row
+                .title
+                .clone()
+                .filter(|t| !t.trim().is_empty())
+                .or_else(|| row.preview.clone())
+                .unwrap_or_else(|| row.id.clone());
+            println!(
+                "  {:>2}. {:<50.50}  {:<10}  {:<6}  {}",
+                idx + 1,
+                title,
+                relative_time(row.last_active),
+                row.source,
+                &row.id[..row.id.len().min(18)]
+            );
+        }
+        if filtered.len() > page.len() {
+            println!("      … {} more — type text to narrow", filtered.len() - page.len());
+        }
+        print!("\n> ");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+            return Ok(()); // EOF
+        }
+        let input = line.trim().to_string();
+        if input == "q" || input == "quit" {
+            println!("Cancelled.");
+            return Ok(());
+        }
+        if input.is_empty() {
+            filter.clear();
+            continue;
+        }
+        if let Ok(n) = input.parse::<usize>() {
+            if n >= 1 && n <= page.len() {
+                let selected = page[n - 1];
+                println!("Resuming session: {}", selected.id);
+                return relaunch_resume(&selected.id);
+            }
+            println!("No such entry — pick 1-{} or type text to filter.", page.len());
+            continue;
+        }
+        filter = input;
+    }
+}
+
+/// Hermes `_relative_time` rendering for the browse picker.
+fn relative_time(ts: f64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let secs = (now - ts) as i64;
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86400)
+    }
+}
+
+/// Relaunch the current binary with `--resume <id>` (hermes `relaunch`);
+/// the child inherits the environment (ULNCLAW_HOME, config overrides).
+fn relaunch_resume(session_id: &str) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let status = std::process::Command::new(&exe)
+        .arg("--resume")
+        .arg(session_id)
+        .status()
+        .map_err(|e| format!("failed to relaunch {}: {}", exe.display(), e))?;
+    std::process::exit(status.code().unwrap_or(0));
 }
 
 /// Resolve a user-supplied session id or unique prefix for the id-taking

@@ -117,6 +117,17 @@ pub struct SqliteSessionStore {
     has_fts: bool,
 }
 
+/// One row of the interactive session browser (the hermes
+/// `list_sessions_rich` fields the browse picker renders).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrowseRow {
+    pub id: String,
+    pub title: Option<String>,
+    pub preview: Option<String>,
+    pub source: String,
+    pub last_active: f64,
+}
+
 /// Maximum session title length in characters (hermes `MAX_TITLE_LENGTH`).
 pub const MAX_TITLE_LENGTH: usize = 100;
 
@@ -1171,6 +1182,56 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Rows for the interactive session browser (hermes
+    /// `list_sessions_rich` browse surface): newest activity first,
+    /// optional exact-source filter and source exclusion list, with the
+    /// first non-empty user message as preview.
+    pub fn list_sessions_for_browse(
+        &self,
+        limit: usize,
+        source: Option<&str>,
+        exclude_sources: &[&str],
+    ) -> Result<Vec<BrowseRow>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut sql = String::from(
+            "SELECT s.id, s.title, s.source,
+                    COALESCE(s.last_activity_at, s.started_at),
+                    (SELECT m.content FROM messages m
+                     WHERE m.session_id = s.id AND m.role = 'user'
+                       AND m.content IS NOT NULL AND m.content != ''
+                     ORDER BY m.id LIMIT 1)
+             FROM sessions s WHERE s.archived = 0",
+        );
+        let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(source) = source {
+            sql.push_str(" AND s.source = ?");
+            values.push(Box::new(source.to_string()));
+        }
+        for excluded in exclude_sources {
+            sql.push_str(" AND s.source != ?");
+            values.push(Box::new((*excluded).to_string()));
+        }
+        sql.push_str(
+            " ORDER BY COALESCE(s.last_activity_at, s.started_at) DESC LIMIT ?",
+        );
+        values.push(Box::new(limit as i64));
+        let params: Vec<&dyn rusqlite::ToSql> = values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql).map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok(BrowseRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    source: row.get(2)?,
+                    last_active: row.get(3)?,
+                    preview: row.get(4)?,
+                })
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))
+    }
+
     /// Most recent non-archived session id by last activity (hermes
     /// `--continue` target selection). `None` when the store is empty.
     pub fn latest_session_id(&self) -> Result<Option<String>> {
@@ -1876,6 +1937,53 @@ mod tests {
         let counts = store.session_count_by_source().unwrap();
         assert_eq!(counts[0], ("cli".to_string(), 2));
         assert_eq!(counts[1], ("cron".to_string(), 1));
+    }
+
+    #[test]
+    fn browse_rows_order_filter_and_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let first = store.create_session("cli", None, None).unwrap();
+        store.append_message(&first, &user_msg("first user line")).unwrap();
+        store
+            .append_message(
+                &first,
+                &Message {
+                    role: Role::Assistant,
+                    content: Some("reply".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        let second = store.create_session("cron", None, None).unwrap();
+        store.append_message(&second, &user_msg("cron line")).unwrap();
+        let tool_session = store.create_session("tool", None, None).unwrap();
+
+        // Default browse excludes nothing on the store side (CLI passes the
+        // exclusion list); newest first, preview = first user message.
+        let rows = store.list_sessions_for_browse(100, None, &[]).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].id, tool_session); // newest, no messages
+        assert_eq!(rows[0].preview, None);
+        let cron_row = rows.iter().find(|r| r.id == second).unwrap();
+        assert_eq!(cron_row.preview.as_deref(), Some("cron line"));
+
+        // Excluding tool sources (hermes default browse behavior).
+        let rows = store.list_sessions_for_browse(100, None, &["tool"]).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.source != "tool"));
+
+        // Source filter.
+        let rows = store.list_sessions_for_browse(100, Some("cron"), &[]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, second);
+
+        // Archived sessions disappear.
+        store.set_session_archived(&first, true).unwrap();
+        let rows = store.list_sessions_for_browse(100, Some("cli"), &[]).unwrap();
+        assert!(rows.is_empty());
     }
 
     #[test]
