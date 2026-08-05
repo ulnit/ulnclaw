@@ -688,6 +688,18 @@ pub struct VideoGenConfig {
     /// default.
     #[serde(default)]
     pub model: Option<String>,
+    /// FAL-specific settings (hermes `video_gen.fal:`).
+    #[serde(default)]
+    pub fal: FalVideoGenConfig,
+}
+
+/// `[video_gen.fal]` — FAL backend tuning (hermes `video_gen.fal:`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FalVideoGenConfig {
+    /// FAL model family id (`pixverse-v6`, `veo3.1`, ...); overrides the
+    /// top-level `video_gen.model` when it names a known family.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// `[x_search]` — xAI X-search tuning (port of hermes `x_search.*`).

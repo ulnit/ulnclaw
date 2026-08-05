@@ -16,6 +16,8 @@ use crate::tools::{tool, ToolAvailability, ToolContext, ToolRegistry};
 use serde_json::{json, Value};
 
 pub fn register(registry: &mut ToolRegistry) {
+    // Compiled-in backends (hermes plugin auto-discovery).
+    crate::video_gen_backends::register_all_providers();
     registry.register(video_generate_tool());
     registry.register(flux3_text_to_video_tool());
     registry.register(flux3_image_to_video_tool());
@@ -23,6 +25,8 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register(flux3_video_continuation_tool());
     registry.register(flux3_get_result_tool());
     registry.register(flux3_prompting_guide_tool());
+    registry.register(xai_video_edit_tool());
+    registry.register(xai_video_extend_tool());
 }
 
 // ===========================================================================
@@ -1394,6 +1398,179 @@ follow them and state the absolute path in plain text.
 Report what you did rather than what the job says it did: the echoed prompt
 field describes intent and often overstates what the render preserved.
 "#;
+
+// ===========================================================================
+// xai_video_edit / xai_video_extend (hermes tools/xai_video_tools.py)
+// ===========================================================================
+
+fn configured_for_xai_video() -> bool {
+    crate::config::UlncLawConfig::load(None)
+        .map(|cfg| {
+            cfg.video_gen
+                .provider
+                .as_deref()
+                .map(|s| s.trim() == "xai")
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+fn xai_video_tools_check() -> ToolAvailability {
+    // hermes _check_xai_video_requirements: configured provider + creds.
+    if configured_for_xai_video() && crate::video_gen_xai::has_xai_video_credentials() {
+        ToolAvailability::available()
+    } else {
+        ToolAvailability::unavailable(
+            "xAI video edit/extend require [video_gen] provider = 'xai' and xAI credentials",
+        )
+    }
+}
+
+/// Require a public HTTP(S) MP4 URL (hermes `_normalize_public_video_url`).
+fn normalize_public_video_url(value: Option<&Value>) -> Option<String> {
+    let cleaned = value.and_then(|v| v.as_str()).map(|s| s.trim().to_string())?;
+    if cleaned.is_empty() {
+        return None;
+    }
+    let lower = cleaned.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        Some(cleaned)
+    } else {
+        None
+    }
+}
+
+fn xai_provider_not_configured_error() -> Value {
+    json!({
+        "success": false,
+        "error": "xAI video edit/extend tools require [video_gen] provider = 'xai' in config.toml.",
+        "error_type": "provider_not_configured",
+        "provider": "xai"
+    })
+}
+
+fn xai_video_edit_tool() -> crate::tools::Tool {
+    tool("xai_video_edit")
+        .description(
+            "Edit an existing video with xAI Imagine. This is separate from `video_generate` \
+             because video editing is provider-specific. `video_url` must be the public HTTPS \
+             MP4 URL from a prior Imagine result (`video` or `public_url` on files-cdn).",
+        )
+        .parameters(json!({
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Instruction for how xAI should modify the source video."
+                },
+                "video_url": {
+                    "type": "string",
+                    "description": "Public HTTPS MP4 URL of the source video — the `video` or `public_url` from a prior xAI Imagine result."
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional xAI Imagine model override."
+                }
+            },
+            "required": ["prompt", "video_url"]
+        }))
+        .handler(|args, _ctx| async move {
+            let prompt = args
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let video_url = normalize_public_video_url(args.get("video_url"));
+            let model = args
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+
+            let Some(prompt) = prompt else {
+                return Ok(json!({"success": false, "error": "prompt is required for xAI video edit"}));
+            };
+            let Some(video_url) = video_url else {
+                return Ok(json!({
+                    "success": false,
+                    "error": "video_url must be a public HTTPS MP4 URL (the `video`/`public_url` from a prior Imagine result)"
+                }));
+            };
+            if !configured_for_xai_video() {
+                return Ok(xai_provider_not_configured_error());
+            }
+            Ok(crate::video_gen_xai::run_xai_video_edit(&prompt, &video_url, model.as_deref()).await)
+        })
+        .toolset("video_gen")
+        .emoji("🎬")
+        .check_fn(xai_video_tools_check)
+        .build()
+        .expect("xai_video_edit builds")
+}
+
+fn xai_video_extend_tool() -> crate::tools::Tool {
+    tool("xai_video_extend")
+        .description(
+            "Extend an existing video with xAI Imagine. This is separate from `video_generate` \
+             because video extension is provider-specific. `video_url` must be the public \
+             HTTPS MP4 URL from a prior Imagine result (`video` or `public_url` on files-cdn).",
+        )
+        .parameters(json!({
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Instruction for how xAI should continue the source video."
+                },
+                "video_url": {
+                    "type": "string",
+                    "description": "Public HTTPS MP4 URL of the source video — the `video` or `public_url` from a prior xAI Imagine result."
+                },
+                "duration": {
+                    "type": "integer",
+                    "description": "Desired extension duration in seconds. xAI clamps this to its supported range."
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional xAI Imagine model override."
+                }
+            },
+            "required": ["prompt", "video_url"]
+        }))
+        .handler(|args, _ctx| async move {
+            let prompt = args
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let video_url = normalize_public_video_url(args.get("video_url"));
+            let model = args
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let duration = args.get("duration").map(coerce_int).unwrap_or(None);
+
+            let Some(prompt) = prompt else {
+                return Ok(json!({"success": false, "error": "prompt is required for xAI video extend"}));
+            };
+            let Some(video_url) = video_url else {
+                return Ok(json!({
+                    "success": false,
+                    "error": "video_url must be a public HTTPS MP4 URL (the `video`/`public_url` from a prior Imagine result)"
+                }));
+            };
+            if !configured_for_xai_video() {
+                return Ok(xai_provider_not_configured_error());
+            }
+            Ok(crate::video_gen_xai::run_xai_video_extend(&prompt, &video_url, duration, model.as_deref()).await)
+        })
+        .toolset("video_gen")
+        .emoji("🎬")
+        .check_fn(xai_video_tools_check)
+        .build()
+        .expect("xai_video_extend builds")
+}
 
 #[cfg(test)]
 mod tests {

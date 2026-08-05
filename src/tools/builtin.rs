@@ -66,6 +66,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "close_terminal", "read_terminal", "focus_pane", "open_preview",
         "x_search",
         "video_generate",
+        "xai_video_edit", "xai_video_extend",
         "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
         "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",
         "bfl_flux3_get_result", "bfl_flux3_prompting_guide",
