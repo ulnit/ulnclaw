@@ -44,6 +44,10 @@ pub struct MessagingConfig {
     /// Microsoft Graph change-notification ingress (gateway router).
     #[serde(default)]
     pub msgraph: crate::webhook_platforms::MsGraphConfig,
+    /// Generic inbound-webhook platform: signed routes from external
+    /// services (hermes `platforms.webhook`).
+    #[serde(default)]
+    pub webhook: crate::webhook_platforms::WebhookConfig,
 }
 
 fn default_pairing() -> bool {
@@ -498,6 +502,38 @@ fn resolve_token(configured: &str, env_var: &str) -> Option<String> {
         return Some(trimmed.to_string());
     }
     std::env::var(env_var).ok().filter(|v| !v.trim().is_empty())
+}
+
+/// Public token resolution for cross-module delivery targets
+/// (generic-webhook `deliver = "telegram"`; hermes webhook.py reuses the
+/// platform credentials).
+pub fn resolve_telegram_token_public(cfg: &TelegramConfig) -> Option<String> {
+    resolve_token(&cfg.bot_token, "TELEGRAM_BOT_TOKEN")
+}
+
+/// Public send wrapper (see `resolve_telegram_token_public`).
+pub async fn telegram_send_public(client: &reqwest::Client, token: &str, chat_id: &str, text: &str) {
+    telegram::send_message(client, token, chat_id, text).await
+}
+
+/// Public token resolution for webhook `deliver = "discord"`.
+pub fn resolve_discord_token_public(cfg: &DiscordConfig) -> Option<String> {
+    resolve_token(&cfg.bot_token, "DISCORD_BOT_TOKEN")
+}
+
+/// Public send wrapper (see `resolve_discord_token_public`).
+pub async fn discord_send_public(token: &str, channel_id: &str, text: &str) {
+    discord::send_channel_message(token, channel_id, text).await
+}
+
+/// Public token resolution for webhook `deliver = "slack"`.
+pub fn resolve_slack_bot_token_public(cfg: &SlackConfig) -> Option<String> {
+    resolve_token(&cfg.bot_token, "SLACK_BOT_TOKEN")
+}
+
+/// Public send wrapper (see `resolve_slack_bot_token_public`).
+pub async fn slack_send_public(token: &str, channel: &str, text: &str) {
+    slack::post_message(token, channel, text).await
 }
 
 // ---------------------------------------------------------------------------

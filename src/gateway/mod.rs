@@ -616,7 +616,135 @@ fn attach_webhook_routes(
         );
         tracing::info!("gateway webhook route mounted: /webhooks/msgraph");
     }
+    if config.messaging.webhook.enabled && !config.messaging.webhook.routes.is_empty() {
+        router = router.route("/webhooks/hook/:name", post(generic_webhook_route));
+        let names: Vec<&str> = config
+            .messaging
+            .webhook
+            .routes
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        tracing::info!(
+            "gateway webhook route mounted: /webhooks/hook/:name (routes: {})",
+            names.join(", ")
+        );
+    }
     router
+}
+
+/// Process-wide generic-webhook runtime (rate limits + idempotency),
+/// mirroring the hermes WebhookPlatform instance state.
+static WEBHOOK_RUNTIME: OnceLock<Arc<crate::webhook_platforms::WebhookRuntime>> = OnceLock::new();
+
+fn webhook_runtime() -> Arc<crate::webhook_platforms::WebhookRuntime> {
+    WEBHOOK_RUNTIME
+        .get_or_init(|| Arc::new(crate::webhook_platforms::WebhookRuntime::default()))
+        .clone()
+}
+
+/// Max inbound webhook body (hermes: 1 MiB).
+const WEBHOOK_BODY_LIMIT: usize = 1024 * 1024;
+
+async fn generic_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    use crate::webhook_platforms as wp;
+    let ack = |status: &str| -> Response {
+        (StatusCode::OK, Json(json!({ "status": status, "route": name }))).into_response()
+    };
+    let config = &state.agent.context().config;
+    let wh = &config.messaging.webhook;
+    let Some(route) = wh.routes.iter().find(|r| r.name == name).cloned() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("unknown webhook route '{name}'") })),
+        )
+            .into_response();
+    };
+    if body.len() > WEBHOOK_BODY_LIMIT {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": "webhook body exceeds 1 MiB limit" })),
+        )
+            .into_response();
+    }
+    let header_pairs: Vec<(String, String)> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.as_str().to_string(), s.to_string())))
+        .collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if !wp::webhook_signature_ok(&route.name, &body, &header_pairs, &route.secret, now as i64) {
+        tracing::warn!("[webhook] route '{}' rejected: invalid signature", route.name);
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "invalid signature" })),
+        )
+            .into_response();
+    }
+    let runtime = webhook_runtime();
+    if wp::webhook_rate_limited(&runtime, &route.name, wh.rate_limit, now).await {
+        tracing::warn!("[webhook] route '{}' rate limited", route.name);
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "rate limit exceeded" })),
+        )
+            .into_response();
+    }
+    // Idempotency: X-Webhook-Delivery-Id wins, then svix-id (hermes order).
+    let delivery_id = header_pairs
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-webhook-delivery-id"))
+        .or_else(|| header_pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case("svix-id")))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    if wp::webhook_already_seen(&runtime, &delivery_id, now).await {
+        tracing::info!("[webhook] route '{}' duplicate delivery '{delivery_id}' acked", route.name);
+        return ack("duplicate");
+    }
+    let (allowed, event) = wp::webhook_event_allowed(&route, &header_pairs);
+    if !allowed {
+        tracing::info!(
+            "[webhook] route '{}' skipping event '{event}' (not in filter)",
+            route.name
+        );
+        return ack("skipped");
+    }
+    let body_text = String::from_utf8_lossy(&body).to_string();
+    let prompt = wp::webhook_render_prompt(&route.prompt, &event, &body_text);
+    if route.deliver_only {
+        wp::webhook_deliver(config, &route, &prompt).await;
+        return ack("delivered");
+    }
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let event_msg = crate::messaging::MessageEvent {
+        platform: "webhook".into(),
+        chat_id: route.name.clone(),
+        sender_id: "webhook".into(),
+        sender_name: format!("webhook:{}", route.name),
+        text: prompt,
+        message_id: delivery_id.clone(),
+        attachments: Vec::new(),
+    };
+    let reply = match dispatcher.handle_event(event_msg).await {
+        Ok(reply) => reply,
+        Err(e) => {
+            tracing::error!("[webhook] route '{}' agent turn failed: {e}", route.name);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("agent turn failed: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    wp::webhook_deliver(config, &route, &reply).await;
+    ack("ok")
 }
 
 async fn whatsapp_verify_route(
