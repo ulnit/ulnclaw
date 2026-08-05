@@ -106,6 +106,7 @@ pub mod hermes_time;
 pub mod insights;
 pub mod mcp;
 pub mod managed_gateway;
+pub mod media_cache;
 pub mod messaging;
 pub mod oauth;
 pub mod pairing;

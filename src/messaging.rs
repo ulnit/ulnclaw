@@ -88,6 +88,16 @@ pub struct SlackConfig {
     pub allowed_channel_ids: Vec<String>,
 }
 
+/// A downloaded attachment cached in `<home>/media-cache/` (hermes media
+/// pipeline input).
+#[derive(Debug, Clone)]
+pub struct MediaAttachment {
+    pub path: std::path::PathBuf,
+    pub mime: String,
+    pub bytes: u64,
+    pub original_name: String,
+}
+
 /// Normalized incoming message (hermes `MessageEvent`, core fields).
 #[derive(Debug, Clone)]
 pub struct MessageEvent {
@@ -97,6 +107,9 @@ pub struct MessageEvent {
     pub sender_name: String,
     pub text: String,
     pub message_id: String,
+    /// Cached media attachments (empty when the message had none or the
+    /// download failed — failures degrade to a text note, never fatal).
+    pub attachments: Vec<MediaAttachment>,
 }
 
 /// Per-chat conversation runner: one session per platform+chat
@@ -162,11 +175,15 @@ impl Dispatcher {
                     .collect();
             }
         }
-        let prompt = if event.sender_name.is_empty() {
+        let mut prompt = if event.sender_name.is_empty() {
             event.text.clone()
         } else {
             format!("{}: {}", event.sender_name, event.text)
         };
+        // Cached attachments are referenced by path so the agent can apply
+        // vision_analyze / video_analyze / read_file (hermes text-fallback
+        // semantics for media).
+        prompt.push_str(&attachment_note(&event.attachments));
         let result = self
             .agent
             .run_with_session(&prompt, Some(history.clone()), Some(key))
@@ -214,6 +231,151 @@ fn pairing_offer(
             Some("Too many pairing requests right now~ Please try again later!".to_string())
         }
     }
+}
+
+/// Attachment download cap (Discord's free-tier upload limit — hermes
+/// applies a similar ceiling).
+const MAX_MEDIA_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Cache downloaded bytes and wrap failures into a text note (hermes
+/// degrades attachment problems to text, never fatal).
+fn cache_attachment(
+    data: Vec<u8>,
+    mime: &str,
+    original_name: &str,
+) -> Option<MediaAttachment> {
+    if data.is_empty() || data.len() as u64 > MAX_MEDIA_BYTES {
+        return None;
+    }
+    let home = crate::config::ulnclaw_home();
+    match crate::media_cache::cache_media_bytes(&home, &data, mime, original_name) {
+        Ok(path) => Some(MediaAttachment {
+            path,
+            mime: if mime.is_empty() {
+                "application/octet-stream".to_string()
+            } else {
+                crate::media_cache::normalize_mime(mime)
+            },
+            bytes: data.len() as u64,
+            original_name: original_name.to_string(),
+        }),
+        Err(e) => {
+            eprintln!("[messaging] media cache write failed: {e}");
+            None
+        }
+    }
+}
+
+/// Download one attachment URL into the media cache. `auth` is an
+/// optional Authorization header (Slack private file URLs need the bot
+/// bearer). Failures degrade to None with a log line (hermes policy).
+async fn download_to_cache(
+    client: &reqwest::Client,
+    url: &str,
+    auth: Option<&str>,
+    mime: &str,
+    original_name: &str,
+    declared_size: u64,
+) -> Option<MediaAttachment> {
+    if declared_size > MAX_MEDIA_BYTES {
+        eprintln!(
+            "[messaging] skipping attachment {original_name:?}: {declared_size} bytes exceeds the {MAX_MEDIA_BYTES} byte cap"
+        );
+        return None;
+    }
+    let mut request = client.get(url);
+    if let Some(auth) = auth {
+        request = request.header("Authorization", auth);
+    }
+    match request.send().await.and_then(|r| r.error_for_status()) {
+        Ok(response) => match response.bytes().await {
+            Ok(bytes) => cache_attachment(bytes.to_vec(), mime, original_name),
+            Err(e) => {
+                eprintln!("[messaging] attachment download failed: {e}");
+                None
+            }
+        },
+        Err(e) => {
+            eprintln!("[messaging] attachment download failed: {e}");
+            None
+        }
+    }
+}
+
+/// Render attachments as a text note appended to the user message —
+/// the agent can inspect images via `vision_analyze`, video via
+/// `video_analyze`, and documents via `read_file` (hermes falls back to
+/// exactly this text reference when native multimodal injection fails).
+fn attachment_note(attachments: &[MediaAttachment]) -> String {
+    if attachments.is_empty() {
+        return String::new();
+    }
+    let mut note = String::from("\n\n[Attached media]\n");
+    for attachment in attachments {
+        let name = if attachment.original_name.is_empty() {
+            String::new()
+        } else {
+            format!(" \"{}\"", attachment.original_name)
+        };
+        note.push_str(&format!(
+            "- {} ({}, {} bytes){}\n",
+            attachment.path.display(),
+            attachment.mime,
+            attachment.bytes,
+            name
+        ));
+    }
+    note.push_str(
+        "Inspect images with vision_analyze, video with video_analyze,          documents with read_file.",
+    );
+    note
+}
+
+/// Extract `MEDIA:<path>` delivery tags from a reply (hermes
+/// `extract_media`): returns the cleaned text plus the file paths, in
+/// order of appearance. Tags may stand alone on a line; surrounding
+/// whitespace-only lines are dropped with them.
+pub fn extract_media_tags(text: &str) -> (String, Vec<std::path::PathBuf>) {
+    let mut cleaned: Vec<String> = Vec::new();
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("MEDIA:") {
+            let candidate = rest.trim().trim_matches('`');
+            if !candidate.is_empty() {
+                let expanded = if let Some(stripped) = candidate.strip_prefix("~/") {
+                    std::env::var_os("HOME")
+                        .map(|home| {
+                            std::path::PathBuf::from(home)
+                                .join(stripped)
+                                .display()
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| candidate.to_string())
+                } else {
+                    candidate.to_string()
+                };
+                if std::path::Path::new(&expanded).is_file() {
+                    paths.push(std::path::PathBuf::from(expanded));
+                    continue;
+                }
+            }
+        }
+        cleaned.push(line.to_string());
+    }
+    // Collapse runs of blank lines left behind by removed tags.
+    let mut out = String::new();
+    let mut prev_blank = false;
+    for line in &cleaned {
+        let blank = line.trim().is_empty();
+        if blank && prev_blank {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        prev_blank = blank;
+    }
+    (out.trim_end_matches('\n').to_string(), paths)
 }
 
 /// `pre_gateway_dispatch` plugin hook (hermes fires it BEFORE auth so
@@ -364,7 +526,13 @@ pub mod telegram {
                 let update_id = update.get("update_id").and_then(|v| v.as_i64()).unwrap_or(0);
                 offset = Some(offset.unwrap_or(0).max(update_id));
                 let Some(message) = update.get("message") else { continue };
-                let Some(text) = message.get("text").and_then(|v| v.as_str()) else { continue };
+                let text = message.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                // Media (photo/document/video/audio/voice) is downloaded
+                // and cached; media-only messages still flow (hermes).
+                let attachments = download_media(&client, &token, message).await;
+                if text.is_empty() && attachments.is_empty() {
+                    continue;
+                }
                 let chat = message.get("chat").cloned().unwrap_or(json!({}));
                 let chat_id = chat
                     .get("id")
@@ -392,6 +560,7 @@ pub mod telegram {
                         .get("message_id")
                         .map(|v| v.to_string())
                         .unwrap_or_default(),
+                    attachments,
                 };
                 // Plugin gate before auth (hermes ordering).
                 if !pre_gateway_dispatch_gate(&mut event).await {
@@ -424,7 +593,19 @@ pub mod telegram {
                         Ok(text) => text,
                         Err(e) => format!("error: {e}"),
                     };
-                    send_message(&client, &token, &event.chat_id, &reply).await;
+                    // MEDIA:<path> tags become native attachments (hermes
+                    // extract_media); the rest is sent as text.
+                    let (reply_text, media_paths) = extract_media_tags(&reply);
+                    if !reply_text.trim().is_empty() {
+                        send_message(&client, &token, &event.chat_id, &reply_text).await;
+                    }
+                    for path in &media_paths {
+                        if crate::media_cache::mime_for_ext(path).starts_with("image/") {
+                            send_photo(&client, &token, &event.chat_id, path).await;
+                        } else {
+                            send_document(&client, &token, &event.chat_id, path).await;
+                        }
+                    }
                 });
             }
         }
@@ -455,6 +636,109 @@ pub mod telegram {
 
     /// Send a reply, splitting at 4096-char Telegram limit (hermes chunks
     /// long replies the same way).
+    /// Download the message's first media payload (photo > document >
+    /// video > audio > voice, hermes precedence) via getFile and cache it.
+    async fn download_media(
+        client: &reqwest::Client,
+        token: &str,
+        message: &Value,
+    ) -> Vec<MediaAttachment> {
+        let (file_id, mime, name): (String, &str, String) =
+            if let Some(photo) = message.get("photo").and_then(|v| v.as_array()) {
+                // Bot API sends photos as a size ladder; last = largest.
+                match photo.last().and_then(|p| p.get("file_id").and_then(|v| v.as_str())) {
+                    Some(file_id) => (file_id.to_string(), "image/jpeg", String::new()),
+                    None => return Vec::new(),
+                }
+            } else if let Some(media) = message
+                .get("document")
+                .or_else(|| message.get("video"))
+                .or_else(|| message.get("audio"))
+                .or_else(|| message.get("voice"))
+            {
+                let Some(file_id) = media.get("file_id").and_then(|v| v.as_str()) else {
+                    return Vec::new();
+                };
+                let mime = if message.get("voice").is_some() {
+                    "audio/ogg"
+                } else {
+                    media.get("mime_type").and_then(|v| v.as_str()).unwrap_or("")
+                };
+                let name = media
+                    .get("file_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                (file_id.to_string(), mime, name)
+            } else {
+                return Vec::new();
+            };
+        let info = match api(client, token, "getFile", json!({"file_id": file_id})).await {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!("[telegram] getFile failed: {e}");
+                return Vec::new();
+            }
+        };
+        let Some(file_path) = info.pointer("/result/file_path").and_then(|v| v.as_str()) else {
+            return Vec::new();
+        };
+        let url = format!("{API}/file/bot{token}/{file_path}");
+        match client.get(&url).send().await.and_then(|r| r.error_for_status()) {
+            Ok(response) => match response.bytes().await {
+                Ok(bytes) => cache_attachment(bytes.to_vec(), mime, &name)
+                    .into_iter()
+                    .collect(),
+                Err(e) => {
+                    eprintln!("[telegram] media download failed: {e}");
+                    Vec::new()
+                }
+            },
+            Err(e) => {
+                eprintln!("[telegram] media download failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Send a photo (MEDIA: delivery, hermes extract_media path).
+    pub async fn send_photo(client: &reqwest::Client, token: &str, chat_id: &str, path: &std::path::Path) {
+        let Ok(data) = tokio::fs::read(path).await else {
+            eprintln!("[telegram] cannot read media {}", path.display());
+            return;
+        };
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "media".to_string());
+        let form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("photo", reqwest::multipart::Part::bytes(data).file_name(file_name));
+        let url = format!("{API}/bot{token}/sendPhoto");
+        if let Err(e) = client.post(&url).multipart(form).send().await {
+            eprintln!("[telegram] sendPhoto failed: {e}");
+        }
+    }
+
+    /// Send a non-image file (MEDIA: delivery).
+    pub async fn send_document(client: &reqwest::Client, token: &str, chat_id: &str, path: &std::path::Path) {
+        let Ok(data) = tokio::fs::read(path).await else {
+            eprintln!("[telegram] cannot read media {}", path.display());
+            return;
+        };
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "media".to_string());
+        let form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("document", reqwest::multipart::Part::bytes(data).file_name(file_name));
+        let url = format!("{API}/bot{token}/sendDocument");
+        if let Err(e) = client.post(&url).multipart(form).send().await {
+            eprintln!("[telegram] sendDocument failed: {e}");
+        }
+    }
+
     pub async fn send_message(client: &reqwest::Client, token: &str, chat_id: &str, text: &str) {
         for chunk in chunk_text(text, 4000) {
             let params = json!({"chat_id": chat_id, "text": chunk});
@@ -570,9 +854,32 @@ pub mod discord {
         if data.get("author").and_then(|a| a.get("bot")).and_then(|v| v.as_bool()).unwrap_or(false) {
             return;
         }
-        let Some(text) = data.get("content").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) else {
-            return;
+        let text = data.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        // Attachment downloads run before any gate so media-only messages
+        // still flow (hermes). Discord exposes url/filename/content_type.
+        let attachments = {
+            let client = reqwest::Client::new();
+            let mut downloaded = Vec::new();
+            if let Some(items) = data.get("attachments").and_then(|v| v.as_array()) {
+                for item in items {
+                    let Some(url) = item.get("url").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let name = item.get("filename").and_then(|v| v.as_str()).unwrap_or("");
+                    let mime = item.get("content_type").and_then(|v| v.as_str()).unwrap_or("");
+                    let size = item.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                    if let Some(attachment) =
+                        download_to_cache(&client, url, None, mime, name, size).await
+                    {
+                        downloaded.push(attachment);
+                    }
+                }
+            }
+            downloaded
         };
+        if text.is_empty() && attachments.is_empty() {
+            return;
+        }
         let channel_id = data.get("channel_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
         if channel_id.is_empty() {
             return;
@@ -590,6 +897,7 @@ pub mod discord {
                 .to_string(),
             text: text.to_string(),
             message_id: data.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            attachments,
         };
         // Plugin gate before auth (hermes ordering).
         if !pre_gateway_dispatch_gate(&mut event).await {
@@ -619,8 +927,38 @@ pub mod discord {
                 Ok(text) => text,
                 Err(e) => format!("error: {e}"),
             };
-            send_channel_message(&token, &event.chat_id, &reply).await;
+            let (reply_text, media_paths) = extract_media_tags(&reply);
+            if !reply_text.trim().is_empty() {
+                send_channel_message(&token, &event.chat_id, &reply_text).await;
+            }
+            for path in &media_paths {
+                send_attachment(&token, &event.chat_id, path).await;
+            }
         });
+    }
+
+    /// Upload a file as a native Discord attachment (MEDIA: delivery).
+    async fn send_attachment(token: &str, channel_id: &str, path: &std::path::Path) {
+        let Ok(data) = tokio::fs::read(path).await else {
+            eprintln!("[discord] cannot read media {}", path.display());
+            return;
+        };
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "media".to_string());
+        let form = reqwest::multipart::Form::new()
+            .part("files[0]", reqwest::multipart::Part::bytes(data).file_name(file_name));
+        let url = format!("https://discord.com/api/v10/channels/{channel_id}/messages");
+        let response = reqwest::Client::new()
+            .post(&url)
+            .header("Authorization", format!("Bot {token}"))
+            .multipart(form)
+            .send()
+            .await;
+        if let Err(e) = response.and_then(|r| r.error_for_status()) {
+            eprintln!("[discord] attachment upload failed: {e}");
+        }
     }
 
     /// POST /channels/{id}/messages with 2000-char Discord chunking.
@@ -729,11 +1067,39 @@ pub mod slack {
                 }
                 let channel = event.get("channel").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let text = event.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if channel.is_empty() || text.is_empty() {
+                let has_files = event
+                    .get("files")
+                    .and_then(|v| v.as_array())
+                    .map(|files| !files.is_empty())
+                    .unwrap_or(false);
+                if channel.is_empty() || (text.is_empty() && !has_files) {
                     continue;
                 }
                 // Strip a leading <@BOTID> mention so the agent sees clean text.
                 let text = strip_mention(&text);
+                // Slack file URLs are private — the bot bearer authenticates
+                // the download (hermes slack adapter behavior).
+                let attachments = {
+                    let client = reqwest::Client::new();
+                    let auth = format!("Bearer {bot_token}");
+                    let mut downloaded = Vec::new();
+                    if let Some(files) = event.get("files").and_then(|v| v.as_array()) {
+                        for file in files {
+                            let Some(url) = file.get("url_private").and_then(|v| v.as_str()) else {
+                                continue;
+                            };
+                            let name = file.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            let mime = file.get("mimetype").and_then(|v| v.as_str()).unwrap_or("");
+                            let size = file.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                            if let Some(attachment) =
+                                download_to_cache(&client, url, Some(&auth), mime, name, size).await
+                            {
+                                downloaded.push(attachment);
+                            }
+                        }
+                    }
+                    downloaded
+                };
                 let mut message_event = MessageEvent {
                     platform: "slack".into(),
                     chat_id: channel.clone(),
@@ -741,6 +1107,7 @@ pub mod slack {
                     sender_name: event.get("user").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     text,
                     message_id: event.get("ts").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    attachments,
                 };
                 // Plugin gate before auth (hermes ordering).
                 if !pre_gateway_dispatch_gate(&mut message_event).await {
@@ -865,6 +1232,68 @@ mod tests {
     }
 
     #[test]
+    fn extract_media_tags_splits_paths_and_text() {
+        let dir = std::env::temp_dir().join(format!(
+            "ulnclaw-media-tags-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let media = dir.join("clip.mp4");
+        std::fs::write(&media, b"fake").unwrap();
+
+        // Existing path is extracted; missing paths stay as literal text.
+        let reply = format!(
+            "Here is your clip!\nMEDIA: {}\nMEDIA: /does/not/exist.png\nEnjoy!",
+            media.display()
+        );
+        let (text, paths) = extract_media_tags(&reply);
+        assert_eq!(paths, vec![media.clone()]);
+        assert!(text.contains("Here is your clip!"));
+        assert!(text.contains("Enjoy!"));
+        assert!(text.contains("/does/not/exist.png"), "missing files stay literal");
+        assert!(!text.contains(&format!("MEDIA: {}", media.display())));
+
+        // Tilde expansion (restore HOME — env is process-global).
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", dir.to_string_lossy().to_string());
+        let home_media = dir.join("home.mp3");
+        std::fs::write(&home_media, b"x").unwrap();
+        let (text, paths) = extract_media_tags("MEDIA: ~/home.mp3");
+        assert_eq!(paths, vec![home_media]);
+        assert!(text.trim().is_empty());
+        match previous_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+
+        // No tags → unchanged.
+        let (text, paths) = extract_media_tags("plain reply");
+        assert!(paths.is_empty());
+        assert_eq!(text, "plain reply");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn attachment_note_lists_paths_and_hints() {
+        assert_eq!(attachment_note(&[]), "");
+        let note = attachment_note(&[MediaAttachment {
+            path: std::path::PathBuf::from("/tmp/cache/abc.jpg"),
+            mime: "image/jpeg".into(),
+            bytes: 1234,
+            original_name: "pic.jpg".into(),
+        }]);
+        assert!(note.contains("/tmp/cache/abc.jpg"));
+        assert!(note.contains("image/jpeg"));
+        assert!(note.contains("1234 bytes"));
+        assert!(note.contains("pic.jpg"));
+        assert!(note.contains("vision_analyze"));
+    }
+
+    #[test]
     fn session_key_is_deterministic() {
         let event = MessageEvent {
             platform: "telegram".into(),
@@ -873,6 +1302,7 @@ mod tests {
             sender_name: "u".into(),
             text: "hi".into(),
             message_id: "m".into(),
+            attachments: Vec::new(),
         };
         assert_eq!(Dispatcher::session_key(&event), "platform-telegram--100123");
     }
