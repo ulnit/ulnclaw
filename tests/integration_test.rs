@@ -253,3 +253,25 @@ async fn test_agent_creation() {
     // Agent is created successfully - actual API calls would fail without a real endpoint
     drop(agent);
 }
+
+/// `ulnclaw completion <shell>` emits a usable script for each supported
+/// shell (hermes completion parity — bash/zsh/fish plus clap_complete
+/// extras).
+#[test]
+fn test_completion_scripts() {
+    let bin = env!("CARGO_BIN_EXE_ulnclaw");
+    for (shell, needle) in [
+        ("bash", "_ulnclaw"),
+        ("zsh", "#compdef ulnclaw"),
+        ("fish", "complete -c ulnclaw"),
+    ] {
+        let output = std::process::Command::new(bin)
+            .args(["completion", shell])
+            .output()
+            .expect("run ulnclaw completion");
+        assert!(output.status.success(), "{shell} failed: {:?}", output.status);
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains(needle), "{shell} script missing {needle}");
+        assert!(text.len() > 500, "{shell} script suspiciously small");
+    }
+}

@@ -171,6 +171,11 @@ enum Commands {
         #[arg(long)]
         deep: bool,
     },
+    /// Generate shell completion scripts (hermes completion)
+    Completion {
+        /// Shell to generate completions for (bash, zsh, fish, elvish, powershell)
+        shell: clap_complete::Shell,
+    },
     /// View and edit configuration (hermes config)
     Config {
         /// Subcommand: show (default) | get <key> | set <key> <value> | unset <key> | path | env-path | edit
@@ -643,6 +648,13 @@ fn build_provider(config: &UlncLawConfig) -> Result<Arc<dyn ulnclaw::provider::P
 
 #[tokio::main]
 async fn main() {
+    // Rust blocks SIGPIPE by default; restore the default handler so piping
+    // into `head` (e.g. `ulnclaw completion bash | head`) exits silently
+    // instead of panicking on a closed stdout.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
     init_logging(cli.verbose);
 
@@ -938,6 +950,11 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Status { all: _, deep } => {
             let opts = ulnclaw::status::StatusOptions { deep };
             print!("{}", ulnclaw::status::show_status(&config, &opts));
+            Ok(())
+        }
+        Commands::Completion { shell } => {
+            let mut cmd = <Cli as clap::CommandFactory>::command();
+            clap_complete::generate(shell, &mut cmd, "ulnclaw", &mut std::io::stdout());
             Ok(())
         }
         Commands::Config { args, json, force } => {
