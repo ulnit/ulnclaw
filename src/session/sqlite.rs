@@ -1150,6 +1150,129 @@ impl SqliteSessionStore {
         .optional()
         .map_err(|e| AgentError::session(e.to_string()))
     }
+
+    // --- prune / archive (hermes sessions prune) -------------------------
+
+    /// Sessions a matching `prune_sessions` / `archive_sessions` call would
+    /// touch, oldest activity first (hermes `list_prune_candidates`).
+    pub fn list_prune_candidates(
+        &self,
+        filters: &crate::session::filters::PruneFilters,
+    ) -> Result<Vec<PruneCandidate>> {
+        let (where_clause, params) = filters.where_clause();
+        let sql = format!(
+            "SELECT s.id, s.source, s.title, s.model, s.started_at,
+                    {} AS last_active,
+                    s.message_count, s.archived
+             FROM sessions s WHERE {}
+             ORDER BY last_active ASC, s.started_at ASC",
+            crate::session::filters::LAST_ACTIVE_EXPR,
+            where_clause
+        );
+        let values = filter_params_to_values(&params);
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(values), |row| {
+                Ok(PruneCandidate {
+                    id: row.get(0)?,
+                    source: row.get(1)?,
+                    title: row.get(2)?,
+                    model: row.get(3)?,
+                    started_at: row.get(4)?,
+                    last_active: row.get(5)?,
+                    message_count: row.get(6)?,
+                    archived: row.get::<_, i64>(7)? != 0,
+                })
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))
+    }
+
+    /// Delete every session matching the filters (messages + FTS rows
+    /// first). Only ENDED sessions are ever candidates. Returns the number
+    /// of sessions deleted (hermes `prune_sessions`).
+    pub fn prune_sessions(
+        &self,
+        filters: &crate::session::filters::PruneFilters,
+    ) -> Result<usize> {
+        let candidates = self.list_prune_candidates(filters)?;
+        for candidate in &candidates {
+            self.delete_session(&candidate.id)?;
+        }
+        Ok(candidates.len())
+    }
+
+    /// Soft-hide every session matching the filters by flipping
+    /// `archived = 1` — nothing is deleted; repeat runs are idempotent
+    /// (hermes `archive_sessions`).
+    pub fn archive_sessions(
+        &self,
+        filters: &crate::session::filters::PruneFilters,
+    ) -> Result<usize> {
+        let mut filters = filters.clone();
+        if filters.archived.is_none() {
+            filters.archived = Some(false); // only not-yet-archived rows
+        }
+        let candidates = self.list_prune_candidates(&filters)?;
+        for candidate in &candidates {
+            self.set_session_archived(&candidate.id, true)?;
+        }
+        Ok(candidates.len())
+    }
+
+    /// Flip the archived flag on one session (hermes `set_session_archived`).
+    pub fn set_session_archived(&self, session_id: &str, archived: bool) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "UPDATE sessions SET archived = ?2 WHERE id = ?1",
+            params![session_id, if archived { 1 } else { 0 }],
+        )
+        .map_err(|e| AgentError::session(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Session counts grouped by source, most numerous first (hermes
+    /// `sessions stats`).
+    pub fn session_count_by_source(&self) -> Result<Vec<(String, i64)>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT source, COUNT(*) FROM sessions GROUP BY source ORDER BY COUNT(*) DESC")
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))
+    }
+}
+
+/// One prune/archive candidate row (hermes `list_prune_candidates` shape).
+#[derive(Debug, Clone)]
+pub struct PruneCandidate {
+    pub id: String,
+    pub source: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub started_at: f64,
+    /// Latest message timestamp, falling back to `started_at`.
+    pub last_active: f64,
+    pub message_count: i64,
+    pub archived: bool,
+}
+
+fn filter_params_to_values(
+    params: &[crate::session::filters::FilterParam],
+) -> Vec<rusqlite::types::Value> {
+    params
+        .iter()
+        .map(|param| match param {
+            crate::session::filters::FilterParam::Real(v) => rusqlite::types::Value::Real(*v),
+            crate::session::filters::FilterParam::Int(v) => rusqlite::types::Value::Integer(*v),
+            crate::session::filters::FilterParam::Text(s) => rusqlite::types::Value::Text(s.clone()),
+        })
+        .collect()
 }
 
 impl SessionStore for SqliteSessionStore {
@@ -1459,5 +1582,129 @@ mod tests {
         let child = store.create_child_session(&parent, "delegate", None).unwrap();
         let child_session = store.load_session(&child).unwrap().unwrap();
         assert_eq!(child_session.parent_id.as_deref(), Some(parent.as_str()));
+    }
+
+    // --- prune / archive -------------------------------------------------
+
+    use crate::session::filters::PruneFilters;
+
+    fn now() -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+    }
+
+    #[test]
+    fn prune_candidates_only_ended_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let ended_cli = store.create_session("cli", Some("model-a"), None).unwrap();
+        store.append_message(&ended_cli, &user_msg("hello")).unwrap();
+        store.end_session(&ended_cli, "ended").unwrap();
+        let ended_cron = store.create_session("cron", Some("model-a"), None).unwrap();
+        store.end_session(&ended_cron, "ended").unwrap();
+        let live = store.create_session("cli", Some("model-b"), None).unwrap();
+        store.append_message(&live, &user_msg("busy")).unwrap();
+
+        // Source filter + ended-only policy: the live cli session is never
+        // a candidate.
+        let filters = PruneFilters {
+            source: Some("cli".into()),
+            ..Default::default()
+        };
+        let candidates = store.list_prune_candidates(&filters).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, ended_cli);
+        assert_eq!(candidates[0].source, "cli");
+        assert!(!candidates[0].archived);
+
+        // No filters → both ended sessions, oldest activity first.
+        let all = store.list_prune_candidates(&PruneFilters::default()).unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn archive_is_soft_hide_and_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let ended = store.create_session("cli", Some("model-a"), None).unwrap();
+        store.append_message(&ended, &user_msg("hello")).unwrap();
+        store.end_session(&ended, "ended").unwrap();
+
+        let filters = PruneFilters {
+            source: Some("cli".into()),
+            ..Default::default()
+        };
+        assert_eq!(store.archive_sessions(&filters).unwrap(), 1);
+        // Idempotent — already-archived rows are skipped.
+        assert_eq!(store.archive_sessions(&filters).unwrap(), 0);
+        // Messages survive; the row is just hidden.
+        assert!(store.load_session(&ended).unwrap().is_some());
+
+        // Prune with the CLI default (archived=false) skips archived rows…
+        let mut unarchived_only = filters.clone();
+        unarchived_only.archived = Some(false);
+        assert_eq!(store.prune_sessions(&unarchived_only).unwrap(), 0);
+        // …until archived=None (both), the --include-archived equivalent.
+        assert_eq!(store.prune_sessions(&filters).unwrap(), 1);
+        assert!(store.load_session(&ended).unwrap().is_none());
+    }
+
+    #[test]
+    fn prune_time_title_and_message_filters() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let titled = store.create_session("cli", Some("gpt-x"), None).unwrap();
+        store.append_message(&titled, &user_msg("one")).unwrap();
+        store.append_message(&titled, &user_msg("two")).unwrap();
+        store.set_session_title(&titled, "Fix the parser").unwrap();
+        store.end_session(&titled, "ended").unwrap();
+        let untitled = store.create_session("cli", Some("gpt-y"), None).unwrap();
+        store.end_session(&untitled, "compression").unwrap();
+
+        // Last-active window: future bound matches, past bound doesn't.
+        let mut filters = PruneFilters::default();
+        filters.last_active_before = Some(now() + 60.0);
+        assert_eq!(store.list_prune_candidates(&filters).unwrap().len(), 2);
+        filters.last_active_before = Some(now() - 60.0);
+        assert_eq!(store.list_prune_candidates(&filters).unwrap().len(), 0);
+
+        // Title substring (case-insensitive).
+        let mut filters = PruneFilters::default();
+        filters.title_like = Some("PARSER".into());
+        let candidates = store.list_prune_candidates(&filters).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, titled);
+
+        // Model substring + end_reason exact.
+        let mut filters = PruneFilters::default();
+        filters.model_like = Some("gpt".into());
+        assert_eq!(store.list_prune_candidates(&filters).unwrap().len(), 2);
+        let mut filters = PruneFilters::default();
+        filters.end_reason = Some("compression".into());
+        let candidates = store.list_prune_candidates(&filters).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, untitled);
+
+        // Message-count bounds.
+        let mut filters = PruneFilters::default();
+        filters.min_messages = Some(2);
+        assert_eq!(store.list_prune_candidates(&filters).unwrap().len(), 1);
+        let mut filters = PruneFilters::default();
+        filters.max_messages = Some(0);
+        assert_eq!(store.list_prune_candidates(&filters).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn session_count_by_source_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        store.create_session("cli", None, None).unwrap();
+        store.create_session("cli", None, None).unwrap();
+        store.create_session("cron", None, None).unwrap();
+        let counts = store.session_count_by_source().unwrap();
+        assert_eq!(counts[0], ("cli".to_string(), 2));
+        assert_eq!(counts[1], ("cron".to_string(), 1));
     }
 }

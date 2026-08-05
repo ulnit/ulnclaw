@@ -164,6 +164,139 @@ enum SessionAction {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Prune (delete) ended sessions matching filters (hermes sessions prune)
+    Prune {
+        #[command(flatten)]
+        filters: SessionFilterArgs,
+        /// Also prune archived sessions (default: skip them)
+        #[arg(long)]
+        include_archived: bool,
+        /// Show candidates without deleting anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Archive (soft-hide, recoverable) ended sessions matching filters
+    /// (hermes sessions archive)
+    Archive {
+        #[command(flatten)]
+        filters: SessionFilterArgs,
+        /// Show candidates without archiving anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Session stats: totals, per-source counts, database size
+    /// (hermes sessions stats)
+    Stats,
+}
+
+/// Shared time/filter flags for `sessions prune` / `sessions archive`
+/// (hermes session_filters surface). Time values accept durations (`5h`,
+/// `30m`, `2d`, `1w`, bare number = days) or ISO timestamps
+/// (`2026-07-05`, `2026-07-05 14:30`).
+#[derive(clap::Args)]
+struct SessionFilterArgs {
+    /// Last activity older than this (duration or ISO timestamp)
+    #[arg(long)]
+    older_than: Option<String>,
+    /// Last activity newer than this (duration or ISO timestamp)
+    #[arg(long)]
+    newer_than: Option<String>,
+    /// Session started before this (duration or ISO timestamp)
+    #[arg(long)]
+    before: Option<String>,
+    /// Session started after this (duration or ISO timestamp)
+    #[arg(long)]
+    after: Option<String>,
+    /// Exact source match (cli, cron, gateway, ...)
+    #[arg(long)]
+    source: Option<String>,
+    /// Case-insensitive substring match on the session title
+    #[arg(long)]
+    title: Option<String>,
+    /// Exact end_reason match (e.g. compression, ended)
+    #[arg(long)]
+    end_reason: Option<String>,
+    /// Session cwd under this directory prefix
+    #[arg(long)]
+    cwd: Option<String>,
+    /// Minimum message count
+    #[arg(long)]
+    min_messages: Option<i64>,
+    /// Maximum message count
+    #[arg(long)]
+    max_messages: Option<i64>,
+    /// Case-insensitive substring match on the model id
+    #[arg(long)]
+    model: Option<String>,
+    /// Minimum total tokens (input + output)
+    #[arg(long)]
+    min_tokens: Option<i64>,
+    /// Maximum total tokens (input + output)
+    #[arg(long)]
+    max_tokens: Option<i64>,
+}
+
+impl SessionFilterArgs {
+    /// Translate CLI flags into prune filters (hermes `build_prune_filters`).
+    fn build(&self) -> Result<ulnclaw::session::filters::PruneFilters, String> {
+        use ulnclaw::session::filters::{parse_point_in_time, PruneFilters};
+        let mut filters = PruneFilters::default();
+        if let Some(value) = &self.older_than {
+            let bound = parse_point_in_time(value, "--older-than")?;
+            filters.last_active_before = Some(match filters.last_active_before {
+                Some(current) => current.min(bound),
+                None => bound,
+            });
+        }
+        if let Some(value) = &self.newer_than {
+            let bound = parse_point_in_time(value, "--newer-than")?;
+            filters.last_active_after = Some(match filters.last_active_after {
+                Some(current) => current.max(bound),
+                None => bound,
+            });
+        }
+        if let Some(value) = &self.before {
+            let bound = parse_point_in_time(value, "--before")?;
+            filters.started_before = Some(match filters.started_before {
+                Some(current) => current.min(bound),
+                None => bound,
+            });
+        }
+        if let Some(value) = &self.after {
+            let bound = parse_point_in_time(value, "--after")?;
+            filters.started_after = Some(match filters.started_after {
+                Some(current) => current.max(bound),
+                None => bound,
+            });
+        }
+        if let Some(started_after) = filters.started_after {
+            if let Some(started_before) = filters.started_before {
+                if started_after >= started_before {
+                    return Err(format!(
+                        "Empty start-time window: the --after bound ({}) is not earlier than the --before bound ({})",
+                        ulnclaw::session::filters::format_epoch(Some(started_after)),
+                        ulnclaw::session::filters::format_epoch(Some(started_before))
+                    ));
+                }
+            }
+        }
+        filters.source = self.source.clone();
+        filters.title_like = self.title.clone();
+        filters.end_reason = self.end_reason.clone();
+        filters.cwd_prefix = self.cwd.clone();
+        filters.min_messages = self.min_messages;
+        filters.max_messages = self.max_messages;
+        filters.model_like = self.model.clone();
+        filters.min_tokens = self.min_tokens;
+        filters.max_tokens = self.max_tokens;
+        Ok(filters)
+    }
 }
 
 #[derive(Subcommand)]
@@ -1395,6 +1528,140 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
                 )
             );
         }
+        SessionAction::Prune { filters, include_archived, dry_run, yes } => {
+            let mut filters = filters.build()?;
+            // Hermes semantics: a truly bare `sessions prune` (no time
+            // window and no filters) means "older than 90 days". ANY
+            // filter suppresses the implicit cutoff.
+            if filters.is_empty() {
+                let cutoff = ulnclaw::session::filters::parse_point_in_time("90", "--older-than")
+                    .map_err(|e| e.to_string())?;
+                filters.last_active_before = Some(cutoff);
+            }
+            // Prune skips archived sessions unless --include-archived.
+            filters.archived = if include_archived { None } else { Some(false) };
+            run_session_prune(&store, filters, true, dry_run, yes)?;
+        }
+        SessionAction::Archive { filters, dry_run, yes } => {
+            let mut filters = filters.build()?;
+            if filters.is_empty() {
+                return Err(
+                    "Refusing to archive every ended session: pass at least one filter                      (e.g. --newer-than 5h, --source cli, --title codex)."
+                        .to_string(),
+                );
+            }
+            // Archive only targets not-yet-archived rows (idempotent).
+            filters.archived = Some(false);
+            run_session_prune(&store, filters, false, dry_run, yes)?;
+        }
+        SessionAction::Stats => {
+            let total = store.count_sessions().map_err(|e| e.to_string())?;
+            let messages = store.count_messages().map_err(|e| e.to_string())?;
+            println!("Total sessions: {}", total);
+            println!("Total messages: {}", messages);
+            for (source, count) in store.session_count_by_source().map_err(|e| e.to_string())? {
+                println!("  {}: {} sessions", source, count);
+            }
+            let db_path = home.join("state.db");
+            if let Ok(metadata) = std::fs::metadata(&db_path) {
+                println!("Database size: {:.1} MB", metadata.len() as f64 / (1024.0 * 1024.0));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Shared preview/confirm/execute flow for `sessions prune` and
+/// `sessions archive` (hermes sessions_cmd prune/archive branch).
+fn run_session_prune(
+    store: &SqliteSessionStore,
+    filters: ulnclaw::session::filters::PruneFilters,
+    delete: bool,
+    dry_run: bool,
+    yes: bool,
+) -> Result<(), String> {
+    use ulnclaw::session::filters::format_epoch;
+    let candidates = store
+        .list_prune_candidates(&filters)
+        .map_err(|e| e.to_string())?;
+    let verb = if delete { "Delete" } else { "Archive" };
+    if candidates.is_empty() {
+        println!("No sessions match ({}).", filters.describe());
+        return Ok(());
+    }
+    // Candidates are ordered oldest-activity-first; surface the span so a
+    // long-lived but recently used conversation cannot look old merely
+    // because of its creation date.
+    let oldest = candidates.first().map(|c| c.last_active);
+    let newest = candidates.last().map(|c| c.last_active);
+    let span = format!(
+        "oldest activity {}, newest activity {}",
+        format_epoch(oldest),
+        format_epoch(newest)
+    );
+    if dry_run || !yes {
+        let shown: Vec<_> = if dry_run { candidates.iter().collect() } else { candidates.iter().take(15).collect() };
+        let shown_count = shown.len();
+        println!(
+            "{} session(s) match ({}; {}):",
+            candidates.len(),
+            filters.describe(),
+            span
+        );
+        for candidate in shown {
+            let title = candidate.title.as_deref().unwrap_or("");
+            let title: String = title.chars().take(36).collect();
+            let model = candidate
+                .model
+                .as_deref()
+                .unwrap_or("-")
+                .rsplit('/')
+                .next()
+                .unwrap_or("-");
+            let model: String = model.chars().take(24).collect();
+            println!(
+                "  {}  {:<17} {:<10} {:<24} {:>4} msgs  {}",
+                candidate.id,
+                format_epoch(Some(candidate.last_active)),
+                candidate.source,
+                model,
+                candidate.message_count,
+                title
+            );
+        }
+        if candidates.len() > shown_count {
+            println!("  … and {} more", candidates.len() - shown_count);
+        }
+        if dry_run {
+            println!(
+                "Dry run — nothing {}.",
+                if delete { "deleted" } else { "archived" }
+            );
+            return Ok(());
+        }
+    }
+    if !yes {
+        print!("{} these {} session(s) ({})? [y/N] ", verb, candidates.len(), span);
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).ok();
+        if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+    let count = if delete {
+        store.prune_sessions(&filters).map_err(|e| e.to_string())?
+    } else {
+        store.archive_sessions(&filters).map_err(|e| e.to_string())?
+    };
+    if delete {
+        println!("Pruned {} session(s).", count);
+    } else {
+        println!(
+            "Archived {} session(s). They're hidden from listings but fully recoverable (nothing was deleted).",
+            count
+        );
     }
     Ok(())
 }

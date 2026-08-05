@@ -4,6 +4,7 @@
 //! with FTS5 full-text search and session lineage.
 
 pub mod export;
+pub mod filters;
 pub mod recap;
 pub mod recovery;
 pub mod sqlite;
