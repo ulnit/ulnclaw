@@ -670,6 +670,24 @@ pub struct UlncLawConfig {
     /// X (Twitter) search via xAI (hermes `x_search:`).
     #[serde(default)]
     pub x_search: XSearchConfig,
+    /// Video generation backend selection (hermes `video_gen:`).
+    #[serde(default)]
+    pub video_gen: VideoGenConfig,
+}
+
+/// `[video_gen]` — video generation backend selection (hermes config.yaml
+/// `video_gen:`). The provider names a registered `VideoGenProvider`;
+/// blank auto-selects when exactly one available provider is registered.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VideoGenConfig {
+    /// Active backend name (`xai`, `fal`, `deepinfra`, ...); blank
+    /// auto-selects a single available provider.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Default model for the active backend; blank uses the provider's
+    /// default.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// `[x_search]` — xAI X-search tuning (port of hermes `x_search.*`).

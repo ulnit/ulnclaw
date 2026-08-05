@@ -2039,6 +2039,7 @@ dependencies = [
  "dirs",
  "futures",
  "glob",
+ "percent-encoding",
  "regex",
  "reqwest",
  "rusqlite",
@@ -2054,6 +2055,7 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "walkdir",
 ]

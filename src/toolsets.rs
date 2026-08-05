@@ -47,6 +47,30 @@ pub fn toolsets() -> &'static std::collections::HashMap<&'static str, ToolsetDef
             tools: &["image_generate"],
             includes: &[],
         });
+        map.insert("video_gen", ToolsetDef {
+            description:
+                "Video generation tools. Single video_generate tool covers text-to-video \
+                 (prompt only), image-to-video (prompt + image_url), and reference-to-video. \
+                 Provider-specific edit/extend tools ship alongside (hermes video_gen)",
+            tools: &["video_generate", "xai_video_edit", "xai_video_extend"],
+            includes: &[],
+        });
+        map.insert("bfl", ToolsetDef {
+            description:
+                "Black Forest Labs FLUX 3 video generation through the Nous tool gateway: \
+                 per-mode submit tools (text, image, keyframes, continuation), a poll tool, \
+                 and a prompting guide. Generations take minutes, so submit returns a job id \
+                 and the model polls for the result.",
+            tools: &[
+                "bfl_flux3_text_to_video",
+                "bfl_flux3_image_to_video",
+                "bfl_flux3_keyframes_to_video",
+                "bfl_flux3_video_continuation",
+                "bfl_flux3_get_result",
+                "bfl_flux3_prompting_guide",
+            ],
+            includes: &[],
+        });
         map.insert("computer_use", ToolsetDef {
             description: "Desktop control via a computer-use driver",
             tools: &["computer_use"],
@@ -180,6 +204,9 @@ pub fn toolsets() -> &'static std::collections::HashMap<&'static str, ToolsetDef
                 "kanban_heartbeat", "kanban_comment", "kanban_create", "kanban_link",
                 "kanban_unblock", "kanban_attach", "kanban_attach_url", "kanban_attachments",
                 "computer_use",
+                "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
+                "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",
+                "bfl_flux3_get_result", "bfl_flux3_prompting_guide",
             ],
             includes: &["clarify"],
         });

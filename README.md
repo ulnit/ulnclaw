@@ -17,7 +17,7 @@ full feature-by-feature mapping.
 ### Key Features
 
 - **🤖 Agent loop** — tool calling with iteration budgets, usage accounting, memory injection, step/tool callbacks
-- **🔧 50+ built-in tools** — terminal/process, file read/write/patch/search, web search/extract, X (Twitter) search via xAI (`x_search`, opt-in toolset + `XAI_API_KEY`), video understanding (`video_analyze`, opt-in `video` toolset), memory, todo, session search, clarify, skills, delegation, execute_code, cronjob, vision, image generation, TTS, Home Assistant, kanban, tool search
+- **🔧 50+ built-in tools** — terminal/process, file read/write/patch/search, web search/extract, X (Twitter) search via xAI (`x_search`, opt-in toolset + `XAI_API_KEY`), video understanding (`video_analyze`, opt-in `video` toolset), memory, todo, session search, clarify, skills, delegation, execute_code, cronjob, vision, image generation, video generation (`video_generate` registry + BFL FLUX 3 via the Nous tool gateway), TTS, Home Assistant, kanban, tool search
 - **🧰 Toolsets** — hermes-compatible grouping (`coding`, `web`, `file`, `safe`, `debugging`, ...) with composition and enable/disable policy
 - **🛡️ Approval system** — command normalization, hardline floor (auto-block), confirm-before-run for costly operations; REPL prompts plus gateway run approvals over HTTP with fail-closed timeout and persisted `always` grants
 - **💾 SQLite state** — sessions/messages with FTS5 full-text search, lineage (parent/child sessions), cron jobs, kanban board; offline non-destructive `sessions recover` for damaged databases (rowid salvage, orphan-session reconstruction, FTS rebuild)
@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 363 tests
+cargo test                     # 381 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -224,7 +224,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 ### 核心特性
 
 - **🤖 Agent 循环** —— 工具调用、迭代预算、用量统计、记忆注入、步骤/工具回调
-- **🔧 50+ 内置工具** —— terminal/process、文件读/写/补丁/搜索、web 搜索/抽取、经 xAI 的 X（Twitter）搜索（`x_search`，可选工具集 + `XAI_API_KEY`）、视频理解（`video_analyze`，可选 `video` 工具集）、记忆、todo、会话搜索、clarify、技能、委派、execute_code、cronjob、视觉、图像生成、TTS、Home Assistant、kanban、工具搜索
+- **🔧 50+ 内置工具** —— terminal/process、文件读/写/补丁/搜索、web 搜索/抽取、经 xAI 的 X（Twitter）搜索（`x_search`，可选工具集 + `XAI_API_KEY`）、视频理解（`video_analyze`，可选 `video` 工具集）、记忆、todo、会话搜索、clarify、技能、委派、execute_code、cronjob、视觉、图像生成、视频生成（`video_generate` 注册表 + BFL FLUX 3 经 Nous 工具网关）、TTS、Home Assistant、kanban、工具搜索
 - **🧰 工具集** —— hermes 兼容分组（`coding`、`web`、`file`、`safe`、`debugging`……），支持组合与启用/禁用策略
 - **🛡️ 审批系统** —— 命令归一化、硬性底线（自动阻止）、高成本操作先确认再执行；REPL 提示 + 网关 HTTP 运行审批（fail-closed 超时、`always` 授权持久化）
 - **💾 SQLite 状态库** —— 会话/消息 FTS5 全文检索、会话血缘（父子会话）、定时任务、kanban 看板；受损数据库的离线非破坏性 `sessions recover`（rowid 抢救、孤儿会话重建、FTS 重建）
@@ -328,7 +328,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 363 个测试
+cargo test                     # 381 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

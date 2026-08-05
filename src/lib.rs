@@ -90,6 +90,7 @@ pub mod gateway;
 pub mod git_diff;
 pub mod hermes_time;
 pub mod mcp;
+pub mod managed_gateway;
 pub mod moa;
 pub mod models_dev;
 pub mod provider;
@@ -100,6 +101,7 @@ pub mod think_scrubber;
 pub mod title_generator;
 pub mod tools;
 pub mod toolsets;
+pub mod video_gen;
 pub mod url_safety;
 
 // Re-export core types for convenience
