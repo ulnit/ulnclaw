@@ -48,6 +48,9 @@ fn task_json(store: &KanbanStore, task: &crate::kanban::Task) -> Value {
         "claim_lock": task.claim_lock,
         "claim_expires": task.claim_expires,
         "last_heartbeat_at": task.last_heartbeat_at,
+        "skills": task.skills,
+        "max_runtime_seconds": task.max_runtime_seconds,
+        "idempotency_key": task.idempotency_key,
         "parents": parents,
         "children": children,
     })
@@ -163,6 +166,15 @@ pub struct CreateTaskBody {
     pub parents: Option<Vec<String>>,
     #[serde(default)]
     pub priority: Option<i64>,
+    /// Skills force-loaded into the dispatcher worker prompt.
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
+    /// Per-attempt runtime cap in seconds (dispatcher-enforced).
+    #[serde(default)]
+    pub max_runtime_seconds: Option<i64>,
+    /// Dedup key — an existing non-archived task with the key is returned.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 /// `POST /api/kanban/tasks` — create a task on the current board.
@@ -182,6 +194,9 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         tenant: None,
         model: None,
         created_by: "gateway".to_string(),
+        skills: body.skills.filter(|s| !s.is_empty()),
+        max_runtime_seconds: body.max_runtime_seconds,
+        idempotency_key: body.idempotency_key.filter(|k| !k.trim().is_empty()),
     }) {
         Ok(t) => t,
         Err(e) => return super::bad_request(&e.to_string(), None),

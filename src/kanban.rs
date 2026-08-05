@@ -62,6 +62,14 @@ pub struct Task {
     pub last_heartbeat_at: Option<i64>,
     /// Pid of the dispatcher-spawned worker (hermes `worker_pid`).
     pub worker_pid: Option<i64>,
+    /// Skills force-loaded into the dispatcher worker prompt (hermes
+    /// `skills` column, JSON array).
+    pub skills: Option<Vec<String>>,
+    /// Per-attempt runtime cap in seconds enforced by the dispatcher
+    /// (hermes `max_runtime_seconds`).
+    pub max_runtime_seconds: Option<i64>,
+    /// Creation dedup key (hermes `idempotency_key`).
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,20 +116,36 @@ pub struct DispatchResult {
     pub spawn_failed: Vec<String>,
     /// Tasks auto-blocked after `failure_limit` consecutive spawn failures.
     pub auto_blocked: Vec<String>,
+    /// Running tasks killed + requeued for exceeding max_runtime_seconds.
+    pub reaped: Vec<String>,
 }
 
 /// Worker brief for a dispatcher-spawned task (hermes spawns
 /// `hermes chat -q "work kanban task <id>"`; the ulnclaw one-shot is
 /// `ulnclaw run`).
-pub fn worker_prompt(task: &Task) -> String {
-    format!(
+pub fn worker_prompt(home: &Path, task: &Task) -> String {
+    let mut prompt = format!(
         "You are a kanban worker for task {} ({}). Start by calling kanban_show \
          (task_id defaults to your own task) to read the full brief, then do the \
          work. When finished you MUST call kanban_complete with a result summary; \
          if you cannot proceed, call kanban_block with the reason. Use \
          kanban_heartbeat to report progress on long steps.",
         task.id, task.title
-    )
+    );
+    // Force-loaded skills (hermes passes `--skills <name>` per task; the
+    // ulnclaw worker inlines the skill body into its founding prompt).
+    if let Some(skills) = task.skills.as_deref().filter(|s| !s.is_empty()) {
+        let skills_dir = home.join("skills");
+        for name in skills {
+            if let Some(message) =
+                crate::skills::build_skill_invocation_message(&skills_dir, name, "")
+            {
+                prompt.push_str("\n\n");
+                prompt.push_str(&message);
+            }
+        }
+    }
+    prompt
 }
 
 /// Dispatch-time spawn: prepare an isolated worktree (when enabled and
@@ -168,7 +192,7 @@ pub fn spawn_worker(
         .try_clone()
         .map_err(|e| format!("clone log handle: {e}"))?;
     let mut cmd = std::process::Command::new(&exe);
-    cmd.arg("run").arg(worker_prompt(task));
+    cmd.arg("run").arg(worker_prompt(home, task));
     if let Some(assignee) = task.assignee.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
         cmd.arg("--profile").arg(assignee);
     }
@@ -418,6 +442,8 @@ pub struct SwarmWorkerSpec {
     pub title: String,
     pub body: String,
     pub priority: i64,
+    /// Skills force-loaded into this worker (hermes spec.skills).
+    pub skills: Vec<String>,
 }
 
 /// Ids produced by [`KanbanStore::create_swarm`] (hermes `SwarmCreated`).
@@ -455,6 +481,7 @@ impl KanbanStore {
         verifier_assignee: &str,
         synthesizer_assignee: &str,
         created_by: &str,
+        idempotency_key: Option<&str>,
     ) -> Result<SwarmCreated> {
         let goal = goal.trim();
         if goal.is_empty() {
@@ -493,7 +520,45 @@ impl KanbanStore {
             tenant: None,
             model: None,
             created_by: created_by.to_string(),
+            idempotency_key: idempotency_key.map(str::to_string),
+            ..Default::default()
         })?;
+
+        // Idempotent recovery (hermes create_swarm): when the key returned
+        // an existing root, rebuild the topology from its blackboard
+        // instead of duplicating the graph.
+        if let Some(blackboard) = self.latest_blackboard(&root.id)? {
+            if let Some(topology) = blackboard.get("topology") {
+                let worker_ids: Vec<String> = topology
+                    .get("worker_ids")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let verifier_id = topology
+                    .get("verifier_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let synthesizer_id = topology
+                    .get("synthesizer_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !worker_ids.is_empty() && !verifier_id.is_empty() && !synthesizer_id.is_empty() {
+                    return Ok(SwarmCreated {
+                        root_id: root.id,
+                        worker_ids,
+                        verifier_id,
+                        synthesizer_id,
+                    });
+                }
+            }
+        }
         let context = swarm_context(&root.id, goal);
 
         let mut worker_ids = Vec::new();
@@ -506,6 +571,12 @@ impl KanbanStore {
                 tenant: None,
                 model: None,
                 created_by: created_by.to_string(),
+                skills: if spec.skills.is_empty() {
+                    None
+                } else {
+                    Some(spec.skills.clone())
+                },
+                ..Default::default()
             })?;
             self.link_tasks(&root.id, &worker.id)?;
             self.ready_task(&worker.id)?;
@@ -523,6 +594,8 @@ impl KanbanStore {
             tenant: None,
             model: None,
             created_by: created_by.to_string(),
+            skills: Some(vec!["requesting-code-review".to_string()]),
+            ..Default::default()
         })?;
         for worker_id in &worker_ids {
             self.link_tasks(worker_id, &verifier.id)?;
@@ -539,6 +612,8 @@ impl KanbanStore {
             tenant: None,
             model: None,
             created_by: created_by.to_string(),
+            skills: Some(vec!["humanizer".to_string()]),
+            ..Default::default()
         })?;
         self.link_tasks(&verifier.id, &synthesizer.id)?;
 
@@ -704,6 +779,13 @@ pub struct NewTask {
     pub tenant: Option<String>,
     pub model: Option<String>,
     pub created_by: String,
+    /// Skills force-loaded into the dispatcher worker prompt.
+    pub skills: Option<Vec<String>>,
+    /// Per-attempt runtime cap (seconds) enforced by the dispatcher.
+    pub max_runtime_seconds: Option<i64>,
+    /// Dedup key: creating with the key of an existing non-archived task
+    /// returns that task instead of a duplicate (hermes idempotency_key).
+    pub idempotency_key: Option<String>,
 }
 
 pub struct KanbanStore {
@@ -788,21 +870,38 @@ impl KanbanStore {
             );",
         )
         .map_err(db_error("schema"))?;
-        // Additive migration: pre-P122 stores lack the worker_pid column.
-        let has_worker_pid: bool = {
+        // Additive migrations: pre-P122 stores lack worker_pid; pre-P127
+        // stores lack skills / max_runtime_seconds / idempotency_key
+        // (hermes kanban_db column backfills).
+        let columns: std::collections::HashSet<String> = {
             let mut stmt = conn
                 .prepare("PRAGMA table_info(tasks)")
                 .map_err(db_error("migrate"))?;
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(1))
                 .map_err(db_error("migrate"))?;
-            let found = rows.flatten().any(|name| name == "worker_pid");
-            found
+            rows.flatten().collect()
         };
-        if !has_worker_pid {
+        if !columns.contains("worker_pid") {
             conn.execute_batch("ALTER TABLE tasks ADD COLUMN worker_pid INTEGER;")
                 .map_err(db_error("migrate worker_pid"))?;
         }
+        if !columns.contains("skills") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN skills TEXT;")
+                .map_err(db_error("migrate skills"))?;
+        }
+        if !columns.contains("max_runtime_seconds") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN max_runtime_seconds INTEGER;")
+                .map_err(db_error("migrate max_runtime_seconds"))?;
+        }
+        if !columns.contains("idempotency_key") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN idempotency_key TEXT;")
+                .map_err(db_error("migrate idempotency_key"))?;
+        }
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks(idempotency_key);",
+        )
+        .map_err(db_error("migrate idempotency index"))?;
         let store = Self {
             conn: Mutex::new(conn),
             path,
@@ -1013,14 +1112,45 @@ impl KanbanStore {
         if task.title.trim().is_empty() {
             return Err(AgentError::session("kanban: task title is required"));
         }
+        // Idempotency (hermes create_task): an existing non-archived task
+        // with the same key is returned as-is instead of duplicating.
+        let idempotency_key = task
+            .idempotency_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string);
+        if let Some(key) = &idempotency_key {
+            let existing = {
+                let conn = self.conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT id FROM tasks WHERE idempotency_key = ?1 \
+                     AND status != 'archived' ORDER BY created_at ASC LIMIT 1",
+                    params![key],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            };
+            if let Some(found_id) = existing {
+                if let Some(found) = self.get_task(&found_id)? {
+                    return Ok(found);
+                }
+            }
+        }
         let id = Self::new_task_id();
         let board = self.current_board()?;
         let now = Self::now();
+        let skills_json = task
+            .skills
+            .as_ref()
+            .filter(|skills| !skills.is_empty())
+            .map(|skills| serde_json::to_string(skills).unwrap_or_default());
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
-             created_by, created_at, tenant, model) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 'todo', ?6, ?7, ?8, ?9, ?10)",
+             created_by, created_at, tenant, model, skills, max_runtime_seconds, \
+             idempotency_key) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'todo', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 id,
                 board,
@@ -1032,6 +1162,9 @@ impl KanbanStore {
                 now,
                 task.tenant,
                 task.model,
+                skills_json,
+                task.max_runtime_seconds,
+                idempotency_key,
             ],
         )
         .map_err(db_error("create task"))?;
@@ -1061,12 +1194,18 @@ impl KanbanStore {
             claim_expires: row.get("claim_expires")?,
             last_heartbeat_at: row.get("last_heartbeat_at")?,
             worker_pid: row.get("worker_pid")?,
+            skills: row
+                .get::<_, Option<String>>("skills")?
+                .and_then(|raw| serde_json::from_str(&raw).ok()),
+            max_runtime_seconds: row.get("max_runtime_seconds")?,
+            idempotency_key: row.get("idempotency_key")?,
         })
     }
 
     const TASK_COLUMNS: &'static str = "id, board, title, body, assignee, status, priority, \
         created_by, created_at, started_at, completed_at, tenant, model, result, \
-        claim_lock, claim_expires, last_heartbeat_at, worker_pid";
+        claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
+        max_runtime_seconds, idempotency_key";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -1547,6 +1686,83 @@ impl KanbanStore {
     /// (hermes `release_stale_claims`). A stale claim whose worker pid is
     /// still alive gets extended instead of reclaimed, so a slow-but-healthy
     /// worker is not yanked mid-flight. Returns reclaimed task ids.
+    /// Kill + requeue running workers that exceeded their per-attempt
+    /// runtime cap (hermes `reap_timed_out`): SIGTERM with a 5 s grace,
+    /// SIGKILL after, task back to `ready` with a `timed_out` event so the
+    /// next tick re-spawns it. Returns reaped task ids.
+    pub fn reap_timed_out(&self) -> Result<Vec<String>> {
+        let now = Self::now();
+        let candidates: Vec<(String, Option<i64>, i64, i64)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, worker_pid, started_at, max_runtime_seconds FROM tasks \
+                     WHERE status = 'running' AND max_runtime_seconds IS NOT NULL \
+                     AND started_at IS NOT NULL",
+                )
+                .map_err(db_error("reap"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })
+                .map_err(db_error("reap"))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("reap"))?
+        };
+        let mut reaped = Vec::new();
+        for (id, worker_pid, started_at, limit) in candidates {
+            let elapsed = now - started_at;
+            if elapsed < limit {
+                continue;
+            }
+            let mut sigkill = false;
+            if let Some(pid) = worker_pid {
+                if pid_alive(pid) {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                    for _ in 0..10 {
+                        if !pid_alive(pid) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                    if pid_alive(pid) {
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGKILL);
+                        }
+                        sigkill = true;
+                    }
+                }
+            }
+            self.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE tasks SET status = 'ready', claim_lock = NULL, \
+                     claim_expires = NULL, worker_pid = NULL, last_heartbeat_at = NULL \
+                     WHERE id = ?1 AND status = 'running'",
+                    params![id],
+                )
+                .map_err(db_error("reap release"))?;
+            self.append_event(
+                &id,
+                "timed_out",
+                serde_json::json!({
+                    "elapsed_seconds": elapsed,
+                    "limit_seconds": limit,
+                    "sigkill": sigkill,
+                }),
+            )?;
+            reaped.push(id);
+        }
+        Ok(reaped)
+    }
+
     pub fn release_stale_claims(&self) -> Result<Vec<String>> {
         let now = Self::now();
         let stale: Vec<(String, Option<i64>)> = {
@@ -1687,6 +1903,7 @@ impl KanbanStore {
         F: FnMut(&Task) -> std::result::Result<Option<i64>, String>,
     {
         let mut result = DispatchResult::default();
+        result.reaped = self.reap_timed_out()?;
         result.reclaimed = self.release_stale_claims()?;
         result.promoted = self.recompute_ready()?;
 
@@ -2033,16 +2250,18 @@ mod tests {
                 title: "Research".into(),
                 body: "find facts".into(),
                 priority: 0,
+                skills: vec![],
             },
             SwarmWorkerSpec {
                 assignee: "bob".into(),
                 title: "Draft".into(),
                 body: "write draft".into(),
                 priority: 0,
+                skills: vec![],
             },
         ];
         let created = store
-            .create_swarm("Ship a report", &workers, "carol", "dave", "")
+            .create_swarm("Ship a report", &workers, "carol", "dave", "", None)
             .unwrap();
         assert_eq!(created.worker_ids.len(), 2);
 
@@ -2142,5 +2361,165 @@ mod tests {
         let extended = store.get_task(&task.id).unwrap().unwrap();
         assert_eq!(extended.status, "running");
         assert!(extended.claim_expires.unwrap() > 1);
+    }
+
+    #[test]
+    fn create_task_idempotency_returns_existing() {
+        let (_dir, store) = temp_store();
+        let first = store
+            .create_task(&NewTask {
+                title: "deploy".into(),
+                created_by: "tester".into(),
+                idempotency_key: Some("deploy-v1".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let second = store
+            .create_task(&NewTask {
+                title: "deploy (again)".into(),
+                created_by: "tester".into(),
+                idempotency_key: Some("deploy-v1".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(second.title, "deploy"); // original task, not the duplicate
+        let all = store.list_tasks(None, None, None, 100).unwrap();
+        assert_eq!(all.len(), 1);
+        // A different key still creates a fresh task.
+        let third = store
+            .create_task(&NewTask {
+                title: "deploy v2".into(),
+                created_by: "tester".into(),
+                idempotency_key: Some("deploy-v2".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_ne!(third.id, first.id);
+    }
+
+    fn swarm_specs() -> Vec<SwarmWorkerSpec> {
+        vec![
+            SwarmWorkerSpec {
+                assignee: "alice".into(),
+                title: "Research".into(),
+                body: "find facts".into(),
+                priority: 0,
+                skills: vec!["deep-research".into()],
+            },
+            SwarmWorkerSpec {
+                assignee: "bob".into(),
+                title: "Draft".into(),
+                body: "write draft".into(),
+                priority: 0,
+                skills: vec![],
+            },
+        ]
+    }
+
+    #[test]
+    fn swarm_skills_are_recorded() {
+        let (_dir, store) = temp_store();
+        let created = store
+            .create_swarm("Ship a report", &swarm_specs(), "carol", "dave", "", None)
+            .unwrap();
+        let researcher = store.get_task(&created.worker_ids[0]).unwrap().unwrap();
+        assert_eq!(researcher.skills.as_deref(), Some(&["deep-research".to_string()][..]));
+        let drafter = store.get_task(&created.worker_ids[1]).unwrap().unwrap();
+        assert!(drafter.skills.is_none());
+        let verifier = store.get_task(&created.verifier_id).unwrap().unwrap();
+        assert_eq!(
+            verifier.skills.as_deref(),
+            Some(&["requesting-code-review".to_string()][..])
+        );
+        let synthesizer = store.get_task(&created.synthesizer_id).unwrap().unwrap();
+        assert_eq!(synthesizer.skills.as_deref(), Some(&["humanizer".to_string()][..]));
+    }
+
+    #[test]
+    fn swarm_idempotency_key_recovers_topology() {
+        let (_dir, store) = temp_store();
+        let first = store
+            .create_swarm("Ship a report", &swarm_specs(), "carol", "dave", "", Some("swarm-42"))
+            .unwrap();
+        let before = store.list_tasks(None, None, None, 500).unwrap().len();
+        let second = store
+            .create_swarm("Ship a report", &swarm_specs(), "carol", "dave", "", Some("swarm-42"))
+            .unwrap();
+        assert_eq!(first.root_id, second.root_id);
+        assert_eq!(first.worker_ids, second.worker_ids);
+        assert_eq!(first.verifier_id, second.verifier_id);
+        assert_eq!(first.synthesizer_id, second.synthesizer_id);
+        let after = store.list_tasks(None, None, None, 500).unwrap().len();
+        assert_eq!(before, after, "no duplicate graph may be created");
+    }
+
+    #[test]
+    fn reap_timed_out_requeues_expired_worker() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "long job".into(),
+                created_by: "tester".into(),
+                max_runtime_seconds: Some(5),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:test", 60).unwrap();
+        // Age the attempt past the cap.
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET started_at = started_at - 60 WHERE id = ?1",
+                rusqlite::params![task.id],
+            )
+            .unwrap();
+
+        // Under the cap → untouched; over the cap → reaped back to ready.
+        assert!(store.reap_timed_out().unwrap().is_empty() == false);
+        let reaped = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(reaped.status, "ready");
+        assert!(reaped.claim_lock.is_none());
+        assert!(reaped.worker_pid.is_none());
+        let events = store.events(&task.id).unwrap();
+        assert!(events.iter().any(|e| e.kind == "timed_out"));
+    }
+
+    #[test]
+    fn worker_prompt_force_loads_skills() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let skill_dir = home.join("skills").join("test-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "# Test Skill\nAlways sign off with DONE-SKILL.").unwrap();
+        let task = Task {
+            id: "t_1".into(),
+            board: "default".into(),
+            title: "job".into(),
+            body: String::new(),
+            assignee: None,
+            status: "ready".into(),
+            priority: 0,
+            created_by: "tester".into(),
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            tenant: None,
+            model: None,
+            result: None,
+            claim_lock: None,
+            claim_expires: None,
+            last_heartbeat_at: None,
+            worker_pid: None,
+            skills: Some(vec!["test-skill".into()]),
+            max_runtime_seconds: None,
+            idempotency_key: None,
+        };
+        let prompt = worker_prompt(home, &task);
+        assert!(prompt.contains("kanban worker for task t_1"));
+        assert!(prompt.contains("DONE-SKILL"), "skill body must be inlined");
     }
 }

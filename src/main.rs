@@ -516,6 +516,15 @@ enum KanbanAction {
         tenant: Option<String>,
         #[arg(long)]
         model: Option<String>,
+        /// Skill force-loaded into the dispatcher worker (repeatable)
+        #[arg(long = "skill")]
+        skills: Vec<String>,
+        /// Per-attempt worker runtime cap in seconds
+        #[arg(long)]
+        max_runtime: Option<i64>,
+        /// Dedup key (hermes idempotency_key)
+        #[arg(long)]
+        idempotency_key: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -574,7 +583,7 @@ enum KanbanAction {
     Swarm {
         /// Swarm goal / final outcome
         goal: Vec<String>,
-        /// Parallel worker card ASSIGNEE:TITLE (repeatable)
+        /// Parallel worker card ASSIGNEE:TITLE[:skill,skill] (repeatable)
         #[arg(long = "worker")]
         workers: Vec<String>,
         /// Verifier assignee
@@ -583,6 +592,10 @@ enum KanbanAction {
         /// Synthesizer/writer assignee
         #[arg(long)]
         synthesizer: String,
+        /// Dedup key — rerunning with the same key recovers the swarm
+        /// instead of duplicating it (hermes idempotency_key)
+        #[arg(long)]
+        idempotency_key: Option<String>,
         /// Emit JSON output
         #[arg(long)]
         json: bool,
@@ -4096,6 +4109,9 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             priority,
             tenant,
             model,
+            skills,
+            max_runtime,
+            idempotency_key,
             json,
         } => {
             let title = title.join(" ");
@@ -4111,6 +4127,9 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     tenant,
                     model,
                     created_by: KanbanStore::claimer_id(),
+                    skills: if skills.is_empty() { None } else { Some(skills) },
+                    max_runtime_seconds: max_runtime,
+                    idempotency_key,
                 })
                 .map_err(|e| e.to_string())?;
             if json {
@@ -4183,6 +4202,12 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 kanban_epoch_label(task.created_at),
                 task.created_by
             );
+            if let Some(skills) = task.skills.as_deref().filter(|s| !s.is_empty()) {
+                println!("  skills:    {}", skills.join(", "));
+            }
+            if let Some(limit) = task.max_runtime_seconds {
+                println!("  max runtime: {limit}s per attempt");
+            }
             if let Some(result) = &task.result {
                 println!("result: {result}");
             }
@@ -4332,16 +4357,25 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!("unlinked {parent} → {child}");
         }
-        KanbanAction::Swarm { goal, workers, verifier, synthesizer, json } => {
+        KanbanAction::Swarm { goal, workers, verifier, synthesizer, idempotency_key, json } => {
             let goal = goal.join(" ");
             let mut specs: Vec<ulnclaw::kanban::SwarmWorkerSpec> = Vec::new();
             for raw in &workers {
-                let mut parts = raw.splitn(2, ':');
+                let mut parts = raw.splitn(3, ':');
                 let assignee = parts.next().unwrap_or("").trim().to_string();
                 let title = parts.next().unwrap_or("").trim().to_string();
+                let skills: Vec<String> = parts
+                    .next()
+                    .map(|list| {
+                        list.split(',')
+                            .map(|skill| skill.trim().to_string())
+                            .filter(|skill| !skill.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 if assignee.is_empty() || title.is_empty() {
                     return Err(format!(
-                        "kanban swarm: bad --worker '{raw}' (expected ASSIGNEE:TITLE)"
+                        "kanban swarm: bad --worker '{raw}' (expected ASSIGNEE:TITLE[:skill,skill])"
                     ));
                 }
                 specs.push(ulnclaw::kanban::SwarmWorkerSpec {
@@ -4349,10 +4383,11 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     title: title.clone(),
                     body: String::new(),
                     priority: 0,
+                    skills,
                 });
             }
             let created = store
-                .create_swarm(&goal, &specs, &verifier, &synthesizer, "")
+                .create_swarm(&goal, &specs, &verifier, &synthesizer, "", idempotency_key.as_deref())
                 .map_err(|e| e.to_string())?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&created).unwrap_or_default());

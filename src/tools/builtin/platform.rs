@@ -330,6 +330,7 @@ fn register_kanban(registry: &mut ToolRegistry) {
                     tenant: None,
                     model: None,
                     created_by: "agent".to_string(),
+                    ..Default::default()
                 }) {
                     Ok(t) => t,
                     Err(e) => return Ok(kanban_error(e)),
