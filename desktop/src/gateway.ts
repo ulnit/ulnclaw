@@ -122,6 +122,7 @@ export class GatewayClient {
     sessionId: string,
     message: string,
     onDelta: (chunk: string) => void,
+    onToolProgress?: (tool: string, status: string) => void,
   ): Promise<string> {
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/chat/stream`), {
       method: "POST",
@@ -136,6 +137,7 @@ export class GatewayClient {
     const decoder = new TextDecoder();
     let buffer = "";
     let full = "";
+    let eventName = "";
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -144,11 +146,23 @@ export class GatewayClient {
       buffer = lines.pop() || "";
       for (const line of lines) {
         const trimmed = line.trim();
+        if (trimmed.startsWith("event:")) {
+          eventName = trimmed.slice(6).trim();
+          continue;
+        }
         if (!trimmed.startsWith("data:")) continue;
         const payload = trimmed.slice(5).trim();
+        const currentEvent = eventName;
+        eventName = "";
         if (!payload || payload === "[DONE]") continue;
         try {
           const event = JSON.parse(payload);
+          if (currentEvent === "hermes.tool.progress") {
+            if (onToolProgress && typeof event?.tool === "string") {
+              onToolProgress(event.tool, String(event?.status ?? ""));
+            }
+            continue;
+          }
           const delta =
             event?.choices?.[0]?.delta?.content ??
             event?.delta ??
@@ -175,5 +189,24 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`chat: HTTP ${response.status}`);
     const value = await response.json();
     return value.content ?? value.reply ?? JSON.stringify(value);
+  }
+
+  /** Rename a session (PATCH accepts only `title` / `end_reason`). */
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}`), {
+      method: "PATCH",
+      headers: this.headers(),
+      body: JSON.stringify({ title }),
+    });
+    if (!response.ok) throw new Error(`rename session: HTTP ${response.status}`);
+  }
+
+  /** Delete a session and its transcript. */
+  async deleteSession(sessionId: string): Promise<void> {
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}`), {
+      method: "DELETE",
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`delete session: HTTP ${response.status}`);
   }
 }

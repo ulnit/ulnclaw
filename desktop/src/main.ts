@@ -47,6 +47,7 @@ const el = {
   modelBadge: document.getElementById("model-badge")!,
   input: document.getElementById("input") as HTMLTextAreaElement,
   send: document.getElementById("send") as HTMLButtonElement,
+  toolProgress: document.getElementById("tool-progress")!,
   settingsBtn: document.getElementById("settings-btn") as HTMLButtonElement,
   settings: document.getElementById("settings") as HTMLDialogElement,
   settingUrl: document.getElementById("setting-url") as HTMLInputElement,
@@ -58,14 +59,73 @@ function renderSessions(): void {
   el.sessionList.innerHTML = "";
   const sorted = [...state.sessions].sort((a, b) => b.last_activity_at - a.last_activity_at);
   for (const session of sorted.slice(0, 100)) {
-    const item = document.createElement("button");
+    const item = document.createElement("div");
     item.className = "session-item" + (state.current?.id === session.id ? " active" : "");
     const title = session.title || session.id.slice(0, 8);
     const when = new Date(session.last_activity_at * 1000).toLocaleString();
-    item.innerHTML = `<span class="title"></span><span class="when">${when}</span>`;
-    item.querySelector(".title")!.textContent = title;
+    const main = document.createElement("div");
+    main.className = "session-main";
+    main.innerHTML = `<span class="title"></span><span class="when">${when}</span>`;
+    main.querySelector(".title")!.textContent = title;
+    item.appendChild(main);
+    const actions = document.createElement("span");
+    actions.className = "session-actions";
+    const renameBtn = document.createElement("button");
+    renameBtn.className = "icon";
+    renameBtn.title = "Rename session";
+    renameBtn.textContent = "✎";
+    renameBtn.onclick = (event) => {
+      event.stopPropagation();
+      void renameSession(session);
+    };
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "icon danger";
+    deleteBtn.title = "Delete session";
+    deleteBtn.textContent = "🗑";
+    deleteBtn.onclick = (event) => {
+      event.stopPropagation();
+      void deleteSession(session);
+    };
+    actions.append(renameBtn, deleteBtn);
+    item.appendChild(actions);
     item.onclick = () => openSession(session);
     el.sessionList.appendChild(item);
+  }
+}
+
+async function renameSession(session: SessionRow): Promise<void> {
+  if (!state.client) return;
+  const current = session.title || session.id.slice(0, 8);
+  const next = window.prompt("Session title:", current);
+  if (next === null || next.trim() === "" || next === current) return;
+  try {
+    await state.client.renameSession(session.id, next.trim());
+    session.title = next.trim();
+    if (state.current?.id === session.id) {
+      state.current.title = session.title;
+      el.chatTitle.textContent = session.title;
+    }
+    renderSessions();
+  } catch (error) {
+    window.alert(`Rename failed: ${error}`);
+  }
+}
+
+async function deleteSession(session: SessionRow): Promise<void> {
+  if (!state.client) return;
+  const label = session.title || session.id.slice(0, 8);
+  if (!window.confirm(`Delete session "${label}" and its transcript?`)) return;
+  try {
+    await state.client.deleteSession(session.id);
+    state.sessions = state.sessions.filter((row) => row.id !== session.id);
+    if (state.current?.id === session.id) {
+      state.current = null;
+      el.chatTitle.textContent = "New session";
+      el.messages.innerHTML = "";
+    }
+    renderSessions();
+  } catch (error) {
+    window.alert(`Delete failed: ${error}`);
   }
 }
 
@@ -124,14 +184,24 @@ async function sendTurn(): Promise<void> {
   state.busy = true;
   el.send.disabled = true;
   el.input.value = "";
+  el.toolProgress.hidden = true;
+  el.toolProgress.textContent = "";
   addMessage("user", text);
   const bubble = addMessage("assistant", "");
   bubble.classList.add("streaming");
   try {
-    await state.client.chatStream(state.current.id, text, (chunk) => {
-      bubble.textContent = (bubble.textContent || "") + chunk;
-      el.messages.scrollTop = el.messages.scrollHeight;
-    });
+    await state.client.chatStream(
+      state.current.id,
+      text,
+      (chunk) => {
+        bubble.textContent = (bubble.textContent || "") + chunk;
+        el.messages.scrollTop = el.messages.scrollHeight;
+      },
+      (tool, status) => {
+        el.toolProgress.textContent = `⚙ ${tool} — ${status}`;
+        el.toolProgress.hidden = false;
+      },
+    );
     bubble.classList.remove("streaming");
     await refreshSessions();
   } catch (error) {
@@ -140,6 +210,8 @@ async function sendTurn(): Promise<void> {
   } finally {
     state.busy = false;
     el.send.disabled = false;
+    el.toolProgress.hidden = true;
+    el.toolProgress.textContent = "";
     el.input.focus();
   }
 }

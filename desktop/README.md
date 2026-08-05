@@ -32,7 +32,10 @@ child process.
 - The **webview talks HTTP directly to the gateway** (`/api/sessions`,
   `/api/chat` SSE streaming, `/api/config`, ...). The same endpoints power
   the REPL gateway mode and any browser dashboard, so the desktop UI is a
-  thin client with no bespoke bridge protocol.
+  thin client with no bespoke bridge protocol. Session rows show hover
+  rename ✎ / delete 🗑 actions (`PATCH`/`DELETE /api/sessions/:id`), and
+  streaming turns render a live `⚙ <tool> — <status>` strip fed by the
+  named `hermes.tool.progress` SSE events.
 - The **Tauri side only manages the process lifecycle**: locate the
   `ulnclaw` binary (PATH → `~/.local/bin` → `~/bin` → `~/.cargo/bin`),
   read the default port from `~/.ulnclaw/config.toml` (`[gateway] port`,
@@ -97,6 +100,9 @@ Rust 侧负责托管 `ulnclaw gateway` 子进程。
 - **webview 直接通过 HTTP 与 gateway 通信**（`/api/sessions`、
   `/api/chat` SSE 流式、`/api/config` 等）。这些端点与 REPL gateway 模式、
   浏览器仪表盘完全共用，桌面 UI 只是一个瘦客户端，没有额外的桥接协议。
+  会话行悬停出现重命名 ✎ / 删除 🗑 操作（`PATCH`/`DELETE
+  /api/sessions/:id`），流式回合通过命名 SSE 事件 `hermes.tool.progress`
+  实时渲染 `⚙ <tool> — <status>` 工具进度条。
 - **Tauri 侧只管理进程生命周期**：定位 `ulnclaw` 二进制（PATH →
   `~/.local/bin` → `~/bin` → `~/.cargo/bin`），从
   `~/.ulnclaw/config.toml` 读取默认端口（`[gateway] port`，默认
