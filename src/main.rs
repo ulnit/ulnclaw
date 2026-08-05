@@ -3987,8 +3987,11 @@ fn browse_row_matches(row: &ulnclaw::session::sqlite::BrowseRow, filter: &str) -
 
 /// Raw-mode terminal session browser (the hermes curses
 /// `_session_browse_picker` port): arrow-key navigation with scrolling,
-/// live type-to-filter, Enter selects, Esc quits. Returns the selected
-/// session id, or `None` when cancelled.
+/// wrapping at the list edges, live type-to-filter, Enter selects, bare
+/// `q` quits while no filter is active, and Esc clears the filter first
+/// (quitting on the second press). Renders hermes' dim column-header
+/// strip and a bottom footer with the cursor position + filtered-from
+/// count. Returns the selected session id, or `None` when cancelled.
 fn run_session_browse_tui(
     rows: &[ulnclaw::session::sqlite::BrowseRow],
 ) -> Result<Option<String>, String> {
@@ -4065,8 +4068,27 @@ fn run_session_browse_tui(
         }
         queue!(out, Print("\r\n")).map_err(|e| e.to_string())?;
 
-        // Viewport: header + one footer hint line.
-        let page_height = rows_h.saturating_sub(2).max(1);
+        // Column-header strip (hermes dim "Title / Preview  Active  Src  ID").
+        let name_width = cols.saturating_sub(3 + 10 + 6 + 18 + 6).max(20);
+        queue!(
+            out,
+            SetForegroundColor(Color::DarkGrey),
+            Print(format!(
+                "   {:<nw$}  {:<10}  {:<6}  {}",
+                "Title / Preview",
+                "Active",
+                "Src",
+                "ID",
+                nw = name_width
+            )),
+            ResetColor,
+            Print("\r\n\r\n")
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Viewport: header + column header + spacer above, footer below
+        // (hermes reserves four chrome rows).
+        let page_height = rows_h.saturating_sub(4).max(1);
         if cursor_idx < scroll_offset {
             scroll_offset = cursor_idx;
         }
@@ -4076,8 +4098,6 @@ fn run_session_browse_tui(
         if scroll_offset >= filtered.len() {
             scroll_offset = filtered.len().saturating_sub(1);
         }
-        // Layout: arrow 3 + active 10 + source 6 + id 18 + padding 6.
-        let name_width = cols.saturating_sub(3 + 10 + 6 + 18 + 6).max(20);
         let end = (scroll_offset + page_height).min(filtered.len());
         for (i, row) in filtered[scroll_offset..end].iter().enumerate() {
             let selected = scroll_offset + i == cursor_idx;
@@ -4093,20 +4113,34 @@ fn run_session_browse_tui(
             queue!(out, Print("\r\n")).map_err(|e| e.to_string())?;
         }
         if filtered.is_empty() {
-            queue!(out, Print("  (no sessions match — backspace to clear the filter)"))
-                .map_err(|e| e.to_string())?;
-        } else if filtered.len() > page_height {
             queue!(
                 out,
-                Print(format!(
-                    "  {}–{} of {} (type to narrow)",
-                    scroll_offset + 1,
-                    end,
-                    filtered.len()
-                ))
+                SetForegroundColor(Color::DarkGrey),
+                Print("  No sessions match the filter — backspace or Esc clears it."),
+                ResetColor
             )
             .map_err(|e| e.to_string())?;
         }
+        // Footer on the bottom row: cursor position + filtered-from count
+        // (hermes dim footer).
+        queue!(out, cursor::MoveTo(0, rows_h.saturating_sub(1) as u16))
+            .map_err(|e| e.to_string())?;
+        let footer = if filtered.is_empty() {
+            format!("  0/{} sessions", rows.len())
+        } else {
+            let mut text = format!("  {}/{} sessions", cursor_idx + 1, filtered.len());
+            if filtered.len() < rows.len() {
+                text.push_str(&format!(" (filtered from {})", rows.len()));
+            }
+            text
+        };
+        queue!(
+            out,
+            SetForegroundColor(Color::DarkGrey),
+            Print(footer),
+            ResetColor
+        )
+        .map_err(|e| e.to_string())?;
         out.flush().map_err(|e| e.to_string())?;
 
         match event::read().map_err(|e| e.to_string())? {
@@ -4117,7 +4151,15 @@ fn run_session_browse_tui(
                     return Ok(None);
                 }
                 match key.code {
-                    KeyCode::Esc => return Ok(None),
+                    KeyCode::Esc => {
+                        // hermes: first Esc clears the search, second quits.
+                        if filter.is_empty() {
+                            return Ok(None);
+                        }
+                        filter.clear();
+                        cursor_idx = 0;
+                        scroll_offset = 0;
+                    }
                     // Ctrl+J (LF) / Ctrl+M (CR) are the classic Enter
                     // equivalents — some terminal paths deliver LF.
                     KeyCode::Enter
@@ -4131,13 +4173,18 @@ fn run_session_browse_tui(
                         }
                     }
                     KeyCode::Up => {
-                        cursor_idx = cursor_idx.saturating_sub(1);
+                        // hermes: navigation wraps around the list.
+                        if !filtered.is_empty() {
+                            cursor_idx = if cursor_idx == 0 {
+                                filtered.len() - 1
+                            } else {
+                                cursor_idx - 1
+                            };
+                        }
                     }
                     KeyCode::Down => {
-                        if filtered.is_empty() {
-                            cursor_idx = 0;
-                        } else {
-                            cursor_idx = (cursor_idx + 1).min(filtered.len() - 1);
+                        if !filtered.is_empty() {
+                            cursor_idx = (cursor_idx + 1) % filtered.len();
                         }
                     }
                     KeyCode::PageUp => {
@@ -4159,6 +4206,10 @@ fn run_session_browse_tui(
                         }
                     }
                     KeyCode::Char(ch) => {
+                        // hermes: bare `q` with no active filter quits.
+                        if ch == 'q' && filter.is_empty() {
+                            return Ok(None);
+                        }
                         filter.push(ch);
                         cursor_idx = 0;
                         scroll_offset = 0;
