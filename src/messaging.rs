@@ -62,6 +62,9 @@ pub struct MessagingConfig {
     /// Official QQ Bot API v2 adapter (hermes `platforms.qq`).
     #[serde(default)]
     pub qq: crate::qqbot::QQBotConfig,
+    /// Yuanbao WS-gateway adapter (hermes `platforms.yuanbao`).
+    #[serde(default)]
+    pub yuanbao: crate::yuanbao::YuanbaoConfig,
 }
 
 fn default_pairing() -> bool {
@@ -732,8 +735,16 @@ pub async fn run_messaging(
             crate::qqbot::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.yuanbao.enabled {
+        let cfg = msg.yuanbao.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::yuanbao::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq] enabled = true)");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao] enabled = true)");
         return;
     }
     for task in tasks {

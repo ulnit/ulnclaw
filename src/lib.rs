@@ -149,6 +149,8 @@ pub mod uninstall;
 pub mod video_gen;
 pub mod webhook_platforms;
 pub mod qqbot;
+pub mod yuanbao;
+pub mod yuanbao_proto;
 pub mod weixin;
 pub mod video_gen_backends;
 pub mod video_gen_xai;
