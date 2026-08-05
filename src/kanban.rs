@@ -405,6 +405,188 @@ pub fn build_kanban_stop_nudge(task_id: &str, attempts: usize) -> Option<String>
 }
 
 // ---------------------------------------------------------------------------
+// Kanban Swarm v1 (hermes kanban_swarm.py): a durable, immediately
+// dispatchable graph — planning root (done, shared blackboard) → parallel
+// workers (ready) → verifier (waits for every worker) → synthesizer (waits
+// for the verifier). The dispatcher + parent-aware recompute_ready drive it.
+// ---------------------------------------------------------------------------
+
+/// One parallel worker card in a swarm (hermes `SwarmWorkerSpec`).
+#[derive(Debug, Clone)]
+pub struct SwarmWorkerSpec {
+    pub assignee: String,
+    pub title: String,
+    pub body: String,
+    pub priority: i64,
+}
+
+/// Ids produced by [`KanbanStore::create_swarm`] (hermes `SwarmCreated`).
+#[derive(Debug, Clone, Serialize)]
+pub struct SwarmCreated {
+    pub root_id: String,
+    pub worker_ids: Vec<String>,
+    pub verifier_id: String,
+    pub synthesizer_id: String,
+}
+
+/// Shared protocol context appended to every swarm card (hermes
+/// `_swarm_context`).
+fn swarm_context(root_id: &str, goal: &str) -> String {
+    format!(
+        "\n\n## Swarm protocol\n\
+         - Swarm root / shared blackboard: `{root_id}`.\n\
+         - Read sibling/parent handoffs from Kanban context before working.\n\
+         - Put machine-readable facts in completion metadata.\n\
+         - Put cross-worker notes on the root task using structured comments.\n\
+         - Goal: {goal}\n"
+    )
+}
+
+impl KanbanStore {
+    /// Create a durable swarm graph (hermes `create_swarm`). The root is
+    /// completed immediately (it stays the shared blackboard + audit
+    /// anchor), workers start `ready`, the verifier is linked to every
+    /// worker, and the synthesizer to the verifier — so the dispatcher
+    /// runs the whole pipeline without further orchestration.
+    pub fn create_swarm(
+        &self,
+        goal: &str,
+        workers: &[SwarmWorkerSpec],
+        verifier_assignee: &str,
+        synthesizer_assignee: &str,
+        created_by: &str,
+    ) -> Result<SwarmCreated> {
+        let goal = goal.trim();
+        if goal.is_empty() {
+            return Err(AgentError::session("kanban swarm: goal is required"));
+        }
+        if workers.is_empty() {
+            return Err(AgentError::session("kanban swarm: at least one worker is required"));
+        }
+        for (i, spec) in workers.iter().enumerate() {
+            if spec.assignee.trim().is_empty() || spec.title.trim().is_empty() {
+                return Err(AgentError::session(format!(
+                    "kanban swarm: workers[{}].assignee and .title are required",
+                    i + 1
+                )));
+            }
+        }
+        if verifier_assignee.trim().is_empty() {
+            return Err(AgentError::session("kanban swarm: verifier assignee is required"));
+        }
+        if synthesizer_assignee.trim().is_empty() {
+            return Err(AgentError::session("kanban swarm: synthesizer assignee is required"));
+        }
+        let created_by = if created_by.trim().is_empty() { "swarm-orchestrator" } else { created_by };
+
+        let first_line = goal.lines().next().unwrap_or(goal);
+        let root_title = format!("Swarm: {}", first_line.chars().take(80).collect::<String>());
+        let root = self.create_task(&NewTask {
+            title: root_title,
+            body: format!(
+                "Kanban Swarm v1 planning/root card. This card is completed \
+                 immediately so parallel workers can start while it remains the \
+                 shared blackboard and audit anchor.\n\nGoal:\n{goal}"
+            ),
+            assignee: Some(created_by.to_string()),
+            priority: 0,
+            tenant: None,
+            model: None,
+            created_by: created_by.to_string(),
+        })?;
+        let context = swarm_context(&root.id, goal);
+
+        let mut worker_ids = Vec::new();
+        for spec in workers {
+            let worker = self.create_task(&NewTask {
+                title: spec.title.trim().to_string(),
+                body: format!("{}{}", spec.body, context),
+                assignee: Some(spec.assignee.trim().to_string()),
+                priority: spec.priority,
+                tenant: None,
+                model: None,
+                created_by: created_by.to_string(),
+            })?;
+            self.link_tasks(&root.id, &worker.id)?;
+            self.ready_task(&worker.id)?;
+            worker_ids.push(worker.id);
+        }
+
+        let verifier = self.create_task(&NewTask {
+            title: "Verify swarm outputs".to_string(),
+            body: format!(
+                "Verify the completed worker tasks of this swarm against the goal.{}",
+                context
+            ),
+            assignee: Some(verifier_assignee.trim().to_string()),
+            priority: 0,
+            tenant: None,
+            model: None,
+            created_by: created_by.to_string(),
+        })?;
+        for worker_id in &worker_ids {
+            self.link_tasks(worker_id, &verifier.id)?;
+        }
+
+        let synthesizer = self.create_task(&NewTask {
+            title: "Synthesize swarm outputs".to_string(),
+            body: format!(
+                "Synthesize the verified swarm outputs into the final deliverable.{}",
+                context
+            ),
+            assignee: Some(synthesizer_assignee.trim().to_string()),
+            priority: 0,
+            tenant: None,
+            model: None,
+            created_by: created_by.to_string(),
+        })?;
+        self.link_tasks(&verifier.id, &synthesizer.id)?;
+
+        // Blackboard anchor: topology comment on the root + swarm event.
+        let topology = serde_json::json!({
+            "topology": {
+                "root_id": root.id,
+                "worker_ids": worker_ids,
+                "verifier_id": verifier.id,
+                "synthesizer_id": synthesizer.id,
+            }
+        });
+        self.add_comment(&root.id, "blackboard", &topology.to_string())?;
+        self.append_event(&root.id, "swarm", topology)?;
+        self.complete_task(&root.id, Some("planning complete; topology on blackboard"))?;
+
+        Ok(SwarmCreated {
+            root_id: root.id,
+            worker_ids,
+            verifier_id: verifier.id,
+            synthesizer_id: synthesizer.id,
+        })
+    }
+
+    /// Post a cross-worker note to the swarm blackboard (structured comment
+    /// on the root task; hermes `post_blackboard_update`).
+    pub fn post_blackboard_update(&self, root_id: &str, author: &str, note: &str) -> Result<()> {
+        self.add_comment(root_id, &format!("blackboard:{author}"), note)
+    }
+
+    /// Latest blackboard topology of a swarm root, if present (hermes
+    /// `latest_blackboard`).
+    pub fn latest_blackboard(&self, root_id: &str) -> Result<Option<Value>> {
+        for comment in self.comments(root_id)?.into_iter().rev() {
+            if !comment.author.starts_with("blackboard") {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(&comment.body) {
+                if value.get("topology").is_some() {
+                    return Ok(Some(value));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Worker worktree isolation (hermes spawns each kanban worker in its own
 // git worktree under <repo>/.worktrees/t_<hex> so parallel workers never
 // share a dirty checkout)
@@ -1840,6 +2022,64 @@ mod tests {
         assert_eq!(released.status, "ready");
         assert!(released.claim_lock.is_none());
         assert!(released.worker_pid.is_none());
+    }
+
+    #[test]
+    fn swarm_graph_topology_and_flow() {
+        let (_dir, store) = temp_store();
+        let workers = vec![
+            SwarmWorkerSpec {
+                assignee: "alice".into(),
+                title: "Research".into(),
+                body: "find facts".into(),
+                priority: 0,
+            },
+            SwarmWorkerSpec {
+                assignee: "bob".into(),
+                title: "Draft".into(),
+                body: "write draft".into(),
+                priority: 0,
+            },
+        ];
+        let created = store
+            .create_swarm("Ship a report", &workers, "carol", "dave", "")
+            .unwrap();
+        assert_eq!(created.worker_ids.len(), 2);
+
+        // Root: done, blackboard carries the topology.
+        let root = store.get_task(&created.root_id).unwrap().unwrap();
+        assert_eq!(root.status, "done");
+        let blackboard = store.latest_blackboard(&created.root_id).unwrap().unwrap();
+        let topology = blackboard.get("topology").unwrap();
+        assert_eq!(topology["verifier_id"], created.verifier_id);
+
+        // Workers: ready with swarm context in the body.
+        for id in &created.worker_ids {
+            let task = store.get_task(id).unwrap().unwrap();
+            assert_eq!(task.status, "ready");
+            assert!(task.body.contains("## Swarm protocol"));
+            assert_eq!(store.parents_of(id).unwrap(), vec![created.root_id.clone()]);
+        }
+
+        // Verifier waits for BOTH workers; synthesizer waits for verifier.
+        let verifier_parents = store.parents_of(&created.verifier_id).unwrap();
+        assert_eq!(verifier_parents.len(), 2);
+        assert_eq!(
+            store.parents_of(&created.synthesizer_id).unwrap(),
+            vec![created.verifier_id.clone()]
+        );
+
+        // Flow: complete workers -> verifier promotes; complete verifier ->
+        // synthesizer promotes.
+        assert!(store.recompute_ready().unwrap().is_empty());
+        for id in &created.worker_ids {
+            store.complete_task(id, Some("ok")).unwrap();
+        }
+        let promoted = store.recompute_ready().unwrap();
+        assert_eq!(promoted, vec![created.verifier_id.clone()]);
+        store.complete_task(&created.verifier_id, Some("verified")).unwrap();
+        let promoted = store.recompute_ready().unwrap();
+        assert_eq!(promoted, vec![created.synthesizer_id.clone()]);
     }
 
     #[test]

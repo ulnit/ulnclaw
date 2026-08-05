@@ -569,6 +569,24 @@ enum KanbanAction {
     Link { parent: String, child: String },
     /// Remove a parent→child dependency (hermes `kanban unlink`)
     Unlink { parent: String, child: String },
+    /// Create a Kanban Swarm v1 graph: parallel workers → verifier →
+    /// synthesizer (hermes `kanban swarm`)
+    Swarm {
+        /// Swarm goal / final outcome
+        goal: Vec<String>,
+        /// Parallel worker card ASSIGNEE:TITLE (repeatable)
+        #[arg(long = "worker")]
+        workers: Vec<String>,
+        /// Verifier assignee
+        #[arg(long)]
+        verifier: String,
+        /// Synthesizer/writer assignee
+        #[arg(long)]
+        synthesizer: String,
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove git worktrees of done/archived tasks (hermes dispatcher gc)
     Gc,
     /// One dispatcher pass: reclaim stale claims, promote parent-done
@@ -4313,6 +4331,39 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .unlink_tasks(&parent, &child)
                 .map_err(|e| e.to_string())?;
             println!("unlinked {parent} → {child}");
+        }
+        KanbanAction::Swarm { goal, workers, verifier, synthesizer, json } => {
+            let goal = goal.join(" ");
+            let mut specs: Vec<ulnclaw::kanban::SwarmWorkerSpec> = Vec::new();
+            for raw in &workers {
+                let mut parts = raw.splitn(2, ':');
+                let assignee = parts.next().unwrap_or("").trim().to_string();
+                let title = parts.next().unwrap_or("").trim().to_string();
+                if assignee.is_empty() || title.is_empty() {
+                    return Err(format!(
+                        "kanban swarm: bad --worker '{raw}' (expected ASSIGNEE:TITLE)"
+                    ));
+                }
+                specs.push(ulnclaw::kanban::SwarmWorkerSpec {
+                    assignee,
+                    title: title.clone(),
+                    body: String::new(),
+                    priority: 0,
+                });
+            }
+            let created = store
+                .create_swarm(&goal, &specs, &verifier, &synthesizer, "")
+                .map_err(|e| e.to_string())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&created).unwrap_or_default());
+            } else {
+                println!("swarm root: {} (blackboard)", created.root_id);
+                for id in &created.worker_ids {
+                    println!("  ▶ worker {id} (ready)");
+                }
+                println!("  ◇ verifier {} (waits for workers)", created.verifier_id);
+                println!("  ◆ synthesizer {} (waits for verifier)", created.synthesizer_id);
+            }
         }
         KanbanAction::Gc => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
