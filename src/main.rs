@@ -95,6 +95,12 @@ enum Commands {
         #[command(subcommand)]
         action: Option<ModelsAction>,
     },
+    /// Skill library curation — pin/archive/restore/prune/usage reports
+    /// (hermes `hermes curator`)
+    Curator {
+        #[command(subcommand)]
+        action: Option<CuratorAction>,
+    },
     /// What Hermes has learned, on a timeline — learned skills & memories
     /// (hermes `hermes journey`)
     Journey {
@@ -223,6 +229,59 @@ enum SkillAction {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum CuratorAction {
+    /// Skill usage summary (states, provenance, pins, unmanaged)
+    Status,
+    /// Pin a skill so auto-transitions never touch it
+    Pin { skill: String },
+    /// Unpin a skill
+    Unpin { skill: String },
+    /// Archive a skill now (recoverable via restore)
+    Archive { skill: String },
+    /// Restore an archived skill
+    Restore { skill: String },
+    /// List archived (recoverable) skills
+    ListArchived,
+    /// Usage telemetry table for every skill on disk
+    Usage {
+        /// Sort order: activity (default), name, or recent
+        #[arg(long, default_value = "activity")]
+        sort: String,
+        /// Emit rows as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Bulk-archive unpinned agent-created skills idle for >= N days
+    Prune {
+        /// Idle threshold in days
+        #[arg(long, default_value = "90")]
+        days: u64,
+        /// Preview without archiving
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Hand unmanaged skills to the curator (stamps provenance)
+    Adopt {
+        /// Skill name(s) to adopt
+        skill: Vec<String>,
+        /// Adopt every unmanaged skill
+        #[arg(long)]
+        all_unmanaged: bool,
+        /// Preview without changing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// List skills with no provenance marker
+    ListUnmanaged,
 }
 
 #[derive(Subcommand)]
@@ -509,6 +568,9 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             })
             .await
             .map_err(|e| e.to_string())?
+        }
+        Commands::Curator { action } => {
+            curator_cmd(action.unwrap_or(CuratorAction::Status))
         }
         Commands::Journey {
             action,
@@ -1181,6 +1243,270 @@ fn tools_cmd(config: &UlncLawConfig) -> Result<(), String> {
         println!("  {}", def.name);
     }
     Ok(())
+}
+
+// ── curator: skill library curation (hermes hermes_cli/curator.py) ────────
+
+fn curator_cmd(action: CuratorAction) -> Result<(), String> {
+    use ulnclaw::{curator, skill_usage};
+
+    let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    match action {
+        CuratorAction::Status => {
+            for (label, count) in curator::status_summary(&home) {
+                println!("  {:<28} {}", label, count);
+            }
+            Ok(())
+        }
+        CuratorAction::Pin { skill } => {
+            skill_usage::set_pinned(&home, &skill, true);
+            println!("curator: pinned '{}' (will bypass auto-transitions)", skill);
+            Ok(())
+        }
+        CuratorAction::Unpin { skill } => {
+            skill_usage::set_pinned(&home, &skill, false);
+            println!("curator: unpinned '{}'", skill);
+            Ok(())
+        }
+        CuratorAction::Archive { skill } => {
+            if skill_usage::get_record(&home, &skill)
+                .get("pinned")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return Err(format!(
+                    "'{}' is pinned — unpin first with `ulnclaw curator unpin {}`",
+                    skill, skill
+                ));
+            }
+            let (ok, message) = skill_usage::archive_skill(&home, &skill);
+            println!("curator: {}", message);
+            if ok { Ok(()) } else { Err(message) }
+        }
+        CuratorAction::Restore { skill } => {
+            let (ok, message) = skill_usage::restore_skill(&home, &skill);
+            println!("curator: {}", message);
+            if ok { Ok(()) } else { Err(message) }
+        }
+        CuratorAction::ListArchived => {
+            let names = skill_usage::list_archived_skill_names(&home);
+            if names.is_empty() {
+                println!("curator: no archived skills");
+                return Ok(());
+            }
+            for name in names {
+                println!("{}", name);
+            }
+            Ok(())
+        }
+        CuratorAction::Usage { sort, json } => {
+            let mut rows = skill_usage::usage_report(&home);
+            match sort.as_str() {
+                "name" => rows.sort_by(|a, b| a.name.cmp(&b.name)),
+                "recent" => rows.sort_by(|a, b| {
+                    b.last_activity_at
+                        .clone()
+                        .unwrap_or_default()
+                        .cmp(&a.last_activity_at.clone().unwrap_or_default())
+                }),
+                _ => rows.sort_by(|a, b| b.activity_count.cmp(&a.activity_count)),
+            }
+            if json {
+                let payload: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "name": r.name,
+                            "provenance": r.provenance,
+                            "use_count": r.use_count,
+                            "view_count": r.view_count,
+                            "patch_count": r.patch_count,
+                            "activity_count": r.activity_count,
+                            "last_activity_at": r.last_activity_at,
+                            "state": r.state,
+                            "pinned": r.pinned,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+            if rows.is_empty() {
+                println!("curator: no skills found");
+                return Ok(());
+            }
+            let agent = rows.iter().filter(|r| r.provenance == "agent").count();
+            println!(
+                "skills: {} total  (agent={}  user={})",
+                rows.len(),
+                agent,
+                rows.len() - agent
+            );
+            println!();
+            println!(
+                "  {:<40}  {:<6}  {:>4}  {:>4}  {:>5}  {:>4}  last_activity",
+                "skill", "origin", "use", "view", "patch", "act"
+            );
+            for row in &rows {
+                let name: String = row.name.chars().take(40).collect();
+                println!(
+                    "  {:<40}  {:<6}  {:>4}  {:>4}  {:>5}  {:>4}  {}",
+                    name,
+                    row.provenance,
+                    row.use_count,
+                    row.view_count,
+                    row.patch_count,
+                    row.activity_count,
+                    curator::fmt_ts(row.last_activity_at.as_deref())
+                );
+            }
+            Ok(())
+        }
+        CuratorAction::Prune { days, dry_run, yes } => {
+            if days < 1 {
+                return Err(format!("--days must be >= 1 (got {})", days));
+            }
+            let candidates = curator::prune_candidates(&home, days);
+            if candidates.is_empty() {
+                println!(
+                    "curator: nothing to prune (no unpinned agent-created skills idle >= {}d)",
+                    days
+                );
+                return Ok(());
+            }
+            println!("curator: {} skill(s) idle >= {}d:", candidates.len(), days);
+            for (name, idle) in &candidates {
+                println!("  {:<40} idle {}d", name, idle);
+            }
+            if dry_run {
+                println!("\n(dry run — no changes made)");
+                return Ok(());
+            }
+            if !yes {
+                print!("\nArchive {} skill(s)? [y/N] ", candidates.len());
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+                if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                    println!("curator: aborted");
+                    return Err("aborted".into());
+                }
+            }
+            let mut archived = 0usize;
+            let mut failures: Vec<(String, String)> = Vec::new();
+            for (name, _) in &candidates {
+                let (ok, message) = skill_usage::archive_skill(&home, name);
+                if ok {
+                    archived += 1;
+                } else {
+                    failures.push((name.clone(), message));
+                }
+            }
+            println!("\ncurator: archived {}/{}", archived, candidates.len());
+            if !failures.is_empty() {
+                println!("failures:");
+                for (name, message) in &failures {
+                    println!("  {}: {}", name, message);
+                }
+                return Err("some archives failed".into());
+            }
+            Ok(())
+        }
+        CuratorAction::Adopt { skill, all_unmanaged, dry_run, yes } => {
+            let mut names = skill;
+            if all_unmanaged {
+                if !names.is_empty() {
+                    return Err("pass either skill names or --all-unmanaged, not both".into());
+                }
+                names = skill_usage::list_unmanaged_skill_names(&home);
+                if names.is_empty() {
+                    println!("curator: no unmanaged skills to adopt");
+                    return Ok(());
+                }
+            }
+            if names.is_empty() {
+                return Err("name a skill to adopt, or pass --all-unmanaged".into());
+            }
+            if dry_run {
+                println!("curator: would adopt {} skill(s) (dry run):", names.len());
+                for name in &names {
+                    println!("  + {}", name);
+                }
+                return Ok(());
+            }
+            if all_unmanaged && !yes {
+                println!(
+                    "curator: adopt {} unmanaged skill(s) into curator management?",
+                    names.len()
+                );
+                println!("  they become eligible for pruning");
+                print!("  proceed? [y/N] ");
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+                if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                    println!("curator: aborted");
+                    return Err("aborted".into());
+                }
+            }
+            let mut failed = 0usize;
+            for name in &names {
+                let (ok, message) = skill_usage::adopt_skill(&home, name);
+                println!("curator: {}", message);
+                if !ok {
+                    failed += 1;
+                }
+            }
+            if names.len() > 1 {
+                println!("curator: adopted {}/{}", names.len() - failed, names.len());
+            }
+            if failed > 0 { Err("some adoptions failed".into()) } else { Ok(()) }
+        }
+        CuratorAction::ListUnmanaged => {
+            let rows = skill_usage::unmanaged_report(&home);
+            if rows.is_empty() {
+                println!("curator: no unmanaged skills — every skill has provenance");
+                return Ok(());
+            }
+            println!("unmanaged skills ({}):", rows.len());
+            let mut sorted = rows.clone();
+            sorted.sort_by(|a, b| {
+                a.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+            });
+            for row in &sorted {
+                let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let why = if row
+                    .get("has_provenance_key")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    "created_by:null"
+                } else {
+                    "no marker"
+                };
+                let activity = row.get("activity_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                let last = row
+                    .get("last_activity_at")
+                    .and_then(|v| v.as_str())
+                    .map(|ts| curator::fmt_ts(Some(ts)))
+                    .unwrap_or_else(|| "never".to_string());
+                println!(
+                    "  {:<44} activity={:>4}  last_activity={:<14}  ({})",
+                    name, activity, last, why
+                );
+            }
+            println!(
+                "\nadopt one with `ulnclaw curator adopt <name>`, or all with `ulnclaw curator adopt --all-unmanaged`"
+            );
+            Ok(())
+        }
+    }
 }
 
 // ── journey: the learning timeline (hermes hermes_cli/journey.py) ─────────

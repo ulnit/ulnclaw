@@ -209,7 +209,9 @@ pub fn forget(home: &Path, skill_name: &str) {
 pub fn latest_activity_at(record: &Value) -> Option<String> {
     let mut latest: Option<(chrono::DateTime<chrono::FixedOffset>, String)> = None;
     for key in ["last_used_at", "last_viewed_at", "last_patched_at"] {
-        let raw = record.get(key).and_then(|v| v.as_str())?;
+        let Some(raw) = record.get(key).and_then(|v| v.as_str()) else {
+            continue;
+        };
         let Some(dt) = parse_iso(Some(raw)) else { continue };
         match &latest {
             Some((prev, _)) if dt <= *prev => {}
@@ -226,6 +228,134 @@ pub fn activity_count(record: &Value) -> u64 {
         .iter()
         .map(|key| record.get(*key).and_then(|v| v.as_u64()).unwrap_or(0))
         .sum()
+}
+
+// ---------------------------------------------------------------------------
+// Reports (curator surfaces)
+// ---------------------------------------------------------------------------
+
+/// One row of [`usage_report`].
+pub struct UsageReportRow {
+    pub name: String,
+    pub provenance: String,
+    pub use_count: u64,
+    pub view_count: u64,
+    pub patch_count: u64,
+    pub activity_count: u64,
+    pub last_activity_at: Option<String>,
+    pub created_by: Option<String>,
+    pub state: String,
+    pub pinned: bool,
+    pub record: Value,
+}
+
+/// Usage telemetry for every skill on disk (hermes `usage_report`).
+pub fn usage_report(home: &Path) -> Vec<UsageReportRow> {
+    let skills_dir = home.join("skills");
+    let data = load_usage(home);
+    let mut rows: Vec<UsageReportRow> = Vec::new();
+    for skill in crate::skills::list_skills(&skills_dir) {
+        let record = data
+            .get(&skill.name)
+            .cloned()
+            .unwrap_or_else(empty_record);
+        let created_by = record
+            .get("created_by")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        rows.push(UsageReportRow {
+            provenance: if created_by.as_deref() == Some("agent") {
+                "agent".to_string()
+            } else {
+                "user".to_string()
+            },
+            use_count: record.get("use_count").and_then(|v| v.as_u64()).unwrap_or(0),
+            view_count: record.get("view_count").and_then(|v| v.as_u64()).unwrap_or(0),
+            patch_count: record.get("patch_count").and_then(|v| v.as_u64()).unwrap_or(0),
+            activity_count: activity_count(&record),
+            last_activity_at: latest_activity_at(&record),
+            state: record
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or(STATE_ACTIVE)
+                .to_string(),
+            pinned: record.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false),
+            name: skill.name,
+            created_by,
+            record,
+        });
+    }
+    rows
+}
+
+/// Names of archived (recoverable) skills — directory names under
+/// `<home>/skills/.archive` (hermes `list_archived_skill_names`).
+pub fn list_archived_skill_names(home: &Path) -> Vec<String> {
+    let root = archive_dir(home);
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Skills on disk that carry no provenance marker (`created_by`) — hermes
+/// `unmanaged_report`. `has_provenance_key` is true when a record exists
+/// but the marker is null.
+pub fn unmanaged_report(home: &Path) -> Vec<Value> {
+    let data = load_usage(home);
+    let mut rows = Vec::new();
+    for skill in crate::skills::list_skills(&home.join("skills")) {
+        match data.get(&skill.name) {
+            Some(record) => {
+                let has_key = record.get("created_by").map(|v| !v.is_null()).unwrap_or(false);
+                if has_key {
+                    continue; // managed
+                }
+                rows.push(json!({
+                    "name": skill.name,
+                    "has_provenance_key": true,
+                    "activity_count": activity_count(record),
+                    "last_activity_at": latest_activity_at(record),
+                }));
+            }
+            None => {
+                rows.push(json!({
+                    "name": skill.name,
+                    "has_provenance_key": false,
+                    "activity_count": 0,
+                    "last_activity_at": null,
+                }));
+            }
+        }
+    }
+    rows
+}
+
+/// Names of unmanaged skills (hermes `list_unmanaged_skill_names`).
+pub fn list_unmanaged_skill_names(home: &Path) -> Vec<String> {
+    unmanaged_report(home)
+        .iter()
+        .filter_map(|r| r.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect()
+}
+
+/// Hand an unmanaged skill to the curator by explicit user declaration
+/// (hermes `adopt_skill`): seeds the record and stamps provenance.
+pub fn adopt_skill(home: &Path, skill_name: &str) -> (bool, String) {
+    if skill_name.is_empty() {
+        return (false, "skill name required".to_string());
+    }
+    if crate::skills::find_skill(&home.join("skills"), skill_name).is_none() {
+        return (false, format!("skill '{}' not found", skill_name));
+    }
+    mark_agent_created(home, skill_name);
+    (true, format!("adopted '{}' into curator management", skill_name))
 }
 
 // ---------------------------------------------------------------------------

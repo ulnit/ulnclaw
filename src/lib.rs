@@ -85,6 +85,7 @@ pub mod desktop;
 pub mod env_guard;
 pub mod env_probe;
 pub mod environments;
+pub mod curator;
 pub mod error;
 pub mod gateway;
 pub mod git_diff;

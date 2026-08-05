@@ -304,8 +304,19 @@ pub async fn upload_managed_media(
 mod tests {
     use super::*;
 
+    /// Process-wide lock: the gateway tests below mutate shared env vars
+    /// (TOOL_GATEWAY_*) and would otherwise race under parallel test
+    /// threads.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn default_gateway_origin() {
+        let _guard = env_lock();
         // Clear overrides for a deterministic default.
         std::env::remove_var("TOOL_GATEWAY_DOMAIN");
         std::env::remove_var("TOOL_GATEWAY_SCHEME");
@@ -316,6 +327,7 @@ mod tests {
 
     #[test]
     fn vendor_env_override_wins() {
+        let _guard = env_lock();
         std::env::set_var("BFL_GATEWAY_URL", "http://127.0.0.1:9999/");
         let origin = build_vendor_gateway_url("bfl").expect("override builds");
         assert_eq!(origin, "http://127.0.0.1:9999");
@@ -324,6 +336,7 @@ mod tests {
 
     #[test]
     fn shared_domain_applies_to_all_vendors() {
+        let _guard = env_lock();
         std::env::remove_var("BFL_GATEWAY_URL");
         std::env::set_var("TOOL_GATEWAY_DOMAIN", "example.test");
         let origin = build_vendor_gateway_url("bfl").expect("shared domain builds");
@@ -333,6 +346,7 @@ mod tests {
 
     #[test]
     fn managed_url_trust_check() {
+        let _guard = env_lock();
         std::env::remove_var("TOOL_GATEWAY_DOMAIN");
         std::env::remove_var("TOOL_GATEWAY_URL");
         assert!(is_managed_nous_gateway_url(
@@ -344,6 +358,7 @@ mod tests {
 
     #[test]
     fn endpoints_shape() {
+        let _guard = env_lock();
         std::env::remove_var("TOOL_GATEWAY_DOMAIN");
         let endpoints = managed_vendor_endpoints("bfl").expect("endpoints resolve");
         assert!(endpoints.base_url.ends_with("/api/bfl"));
