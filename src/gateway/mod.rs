@@ -12,6 +12,8 @@
 //!   - `PATCH /api/sessions/:id` — update title / end_reason
 //!   - `POST /api/sessions/:id/fork` — branch a session into a child
 //!   - `POST /api/sessions/:id/model` — lock a session to a model
+//!   - `GET /api/pets/config`, `GET /api/pets`,
+//!     `GET /api/pets/:slug/spritesheet` — petdex mascot surfaces
 //!   - `GET/POST /api/kanban/boards`, `POST /api/kanban/boards/:slug/switch`,
 //!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`
@@ -42,6 +44,7 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 
 mod kanban;
+mod pets;
 
 use crate::agent::Agent;
 use crate::cron::{CronJob, CronStore};
@@ -589,6 +592,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
             "/api/jobs/:id",
             get(get_job).patch(update_job).delete(delete_job),
         )
+        .route("/api/pets/config", get(pets::config))
+        .route("/api/pets", get(pets::list))
+        .route("/api/pets/:slug/spritesheet", get(pets::spritesheet))
         .route("/api/kanban/boards", get(kanban::list_boards).post(kanban::create_board))
         .route("/api/kanban/boards/:slug/switch", post(kanban::switch_board))
         .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))

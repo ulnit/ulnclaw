@@ -46,6 +46,18 @@ child process.
   any local browser dashboard — call the API. The gateway still binds
   `127.0.0.1` and enforces the API key when one is configured.
 
+### Views and widgets
+
+- **Chat** — the session browser + streaming chat surface.
+- **Kanban** (tab in the sidebar) — four-column card wall over
+  `/api/kanban/*` (same engine + `kanban.db` as the CLI and agent tools):
+  quick-add, complete/block/unblock actions, task detail with comments,
+  board switcher, 5 s polling.
+- **Pet overlay** — the petdex mascot as an animated spritesheet canvas in
+  the bottom-right corner: `display.pet.*` config via `/api/pets/config`,
+  sheet from `/api/pets/:slug/spritesheet`, working (`running` row) while
+  `/v1/runs` has live runs, idle otherwise, click to wave.
+
 ### Prerequisites
 
 - **Rust** (stable) with the host target.
@@ -110,6 +122,17 @@ Rust 侧负责托管 `ulnclaw gateway` 子进程。
 - gateway CORS：`serve_multiplex` 增加了面向本地应用的宽松 CORS 层
   （回显 Origin + OPTIONS 预检），webview 与任何本地浏览器仪表盘因此可以
   直接调用 API。gateway 依然绑定 `127.0.0.1`，配置了 API key 时依旧强制校验。
+
+### 视图与挂件
+
+- **聊天** —— 会话浏览 + 流式聊天主界面。
+- **看板**（侧栏标签页）—— 基于 `/api/kanban/*` 的四列卡片墙（与 CLI、
+  agent 工具共用同一引擎和 `kanban.db`）：快速添加、完成/阻塞/解除阻塞、
+  带评论的任务详情、看板切换、5 秒轮询。
+- **宠物悬浮层** —— 右下角的 petdex 吉祥物精灵图动画画布：
+  `/api/pets/config` 读取 `display.pet.*` 配置，
+  `/api/pets/:slug/spritesheet` 加载精灵图，`/v1/runs` 有运行中任务时
+  播放工作状态，否则空闲，点击挥手。
 
 ### 前置条件
 

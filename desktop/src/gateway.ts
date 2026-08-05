@@ -48,6 +48,25 @@ export interface UploadReply {
   bytes: number;
 }
 
+export interface PetAtlasRow {
+  state: string;
+  row: number;
+  frames: number;
+}
+
+export interface PetConfig {
+  enabled: boolean;
+  slug: string | null;
+  scale: number | null;
+  render_mode: string | null;
+  atlas: {
+    frame_w: number;
+    frame_h: number;
+    columns: number;
+    rows: PetAtlasRow[];
+  };
+}
+
 export interface KanbanTask {
   id: string;
   board: string;
@@ -311,6 +330,35 @@ export class GatewayClient {
     const response = await fetch(url, { method: "POST", headers, body: blob });
     if (!response.ok) throw new Error(`upload: HTTP ${response.status}`);
     return response.json();
+  }
+
+  // ---- Petdex mascot surfaces ----
+
+  async petConfig(): Promise<PetConfig | null> {
+    try {
+      const response = await fetch(this.endpoint("/api/pets/config"), { headers: this.headers() });
+      if (!response.ok) return null;
+      return response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  spritesheetUrl(slug: string): string {
+    return this.endpoint(`/api/pets/${encodeURIComponent(slug)}/spritesheet`);
+  }
+
+  /** Number of in-flight /v1/runs (drives the pet's working animation). */
+  async activeRunCount(): Promise<number> {
+    try {
+      const response = await fetch(this.endpoint("/v1/runs"), { headers: this.headers() });
+      if (!response.ok) return 0;
+      const value = await response.json();
+      const runs = (value.data || []) as { finished_at: number | null }[];
+      return runs.filter((r) => r.finished_at === null || r.finished_at === 0).length;
+    } catch {
+      return 0;
+    }
   }
 
   // ---- Kanban board (shared with the CLI + agent tools) ----

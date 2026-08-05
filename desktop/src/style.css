@@ -224,3 +224,10 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
 .kanban-comment-when { opacity: 0.55; font-size: 0.85em; }
 .kanban-detail-compose { display: flex; gap: 8px; margin-bottom: 8px; }
 .kanban-detail-compose input { flex: 1; }
+
+/* ---- petdex mascot overlay ---- */
+#pet-overlay {
+  position: fixed; right: 14px; bottom: 12px; z-index: 50;
+  cursor: pointer; image-rendering: pixelated;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
+}

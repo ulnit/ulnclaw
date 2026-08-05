@@ -5,6 +5,7 @@
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
 import type { GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import { KanbanWidget } from "./kanban";
+import { PetOverlay } from "./pet";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -40,6 +41,7 @@ const state = {
   skills: [] as SkillRow[],
   pendingUploads: [] as { path: string; mime: string; bytes: number }[],
   kanban: null as KanbanWidget | null,
+  pet: null as PetOverlay | null,
   view: "chat" as "chat" | "kanban",
 };
 
@@ -533,6 +535,10 @@ async function start(): Promise<void> {
   };
   tabChat.onclick = () => switchView("chat");
   tabKanban.onclick = () => switchView("kanban");
+
+  // Petdex mascot overlay (display.pet.* driven, polls the gateway).
+  state.pet = new PetOverlay(() => state.client);
+  state.pet.start();
 
   await pollHealth();
   await refreshSessions();
