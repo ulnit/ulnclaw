@@ -122,6 +122,11 @@ enum Commands {
         #[arg(long)]
         overwrite: bool,
     },
+    /// Supply-chain security checks (hermes security)
+    Security {
+        #[command(subcommand)]
+        action: SecurityAction,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -577,6 +582,16 @@ enum BundlesAction {
 }
 
 #[derive(Subcommand)]
+enum SecurityAction {
+    /// Audit pinned MCP server packages against OSV.dev (hermes security audit)
+    Audit {
+        /// Emit findings as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum CuratorAction {
     /// Skill usage summary (states, provenance, pins, unmanaged)
     Status,
@@ -944,6 +959,31 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Tools => tools_cmd(&config),
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
         Commands::Bundles { action } => bundles_cmd(action.unwrap_or(BundlesAction::List)),
+        Commands::Security { action } => {
+            let SecurityAction::Audit { json } = action;
+            let components = ulnclaw::security_audit::discover_mcp_components(&config);
+            let total = components.len();
+            if total == 0 {
+                println!(
+                    "No auditable components found. Only MCP servers that pin a package \
+                     version (npx pkg@ver / uvx pkg==ver) are scanned."
+                );
+                return Ok(());
+            }
+            // reqwest's blocking client builds its own runtime — run it off
+            // the async main context.
+            let findings = tokio::task::spawn_blocking(move || {
+                ulnclaw::security_audit::run_audit(components)
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            if json {
+                println!("{}", ulnclaw::security_audit::render_json(&findings, total));
+            } else {
+                println!("{}", ulnclaw::security_audit::render_human(&findings, total));
+            }
+            Ok(())
+        }
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,

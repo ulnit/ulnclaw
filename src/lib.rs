@@ -116,6 +116,7 @@ pub mod projects_db;
 pub mod prompt_size;
 pub mod provider;
 pub mod redact;
+pub mod security_audit;
 pub mod session;
 pub mod skin;
 pub mod skill_usage;

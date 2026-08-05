@@ -91,6 +91,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw debug report     # redacted diagnostic bundle for support (--no-redact)
 ./ulnclaw bundles          # skill bundles: load N skills under one /command
 ./ulnclaw import-agent     # import Claude Code / Codex setups (--dry-run)
+./ulnclaw security audit   # OSV.dev audit of pinned MCP packages (--json)
 ./ulnclaw fallback         # fallback chain (add/remove/clear provider:model entries)
 ./ulnclaw backup           # zip backup of home (-q quick snapshot, backup list/restore/prune)
 ./ulnclaw import b.zip     # restore a backup zip (runtime-state files skipped, secrets 0600)
@@ -223,7 +224,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 634 tests
+cargo test                     # 643 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -317,6 +318,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw debug report     # 脱敏诊断包，用于求助分享（--no-redact）
 ./ulnclaw bundles          # 技能束：一个 /命令 加载一组技能
 ./ulnclaw import-agent     # 导入 Claude Code / Codex 配置（--dry-run）
+./ulnclaw security audit   # 固定版本 MCP 包的 OSV.dev 审计（--json）
 ./ulnclaw fallback         # 回退链管理（add/remove/clear provider:model 条目）
 ./ulnclaw backup           # home 目录 zip 备份（-q 快速快照，backup list/restore/prune）
 ./ulnclaw import b.zip     # 恢复备份 zip（跳过运行时状态文件，机密文件 0600）
@@ -368,7 +370,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 634 个测试
+cargo test                     # 643 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 
