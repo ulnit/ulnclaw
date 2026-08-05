@@ -4,6 +4,7 @@
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
 import type { GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
+import { KanbanWidget } from "./kanban";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -38,6 +39,8 @@ const state = {
   managedPid: null as number | null,
   skills: [] as SkillRow[],
   pendingUploads: [] as { path: string; mime: string; bytes: number }[],
+  kanban: null as KanbanWidget | null,
+  view: "chat" as "chat" | "kanban",
 };
 
 const el = {
@@ -508,6 +511,28 @@ async function start(): Promise<void> {
     void pollHealth();
     void refreshSessions();
   });
+
+  // View tabs: chat vs kanban board.
+  const chatMain = document.getElementById("chat")!;
+  const kanbanMain = document.getElementById("kanban")!;
+  const tabChat = document.getElementById("tab-chat") as HTMLButtonElement;
+  const tabKanban = document.getElementById("tab-kanban") as HTMLButtonElement;
+  state.kanban = new KanbanWidget(kanbanMain, () => state.client);
+  state.kanban.mount();
+  const switchView = (view: "chat" | "kanban") => {
+    state.view = view;
+    chatMain.hidden = view !== "chat";
+    kanbanMain.hidden = view !== "kanban";
+    tabChat.classList.toggle("active", view === "chat");
+    tabKanban.classList.toggle("active", view === "kanban");
+    if (view === "kanban") {
+      state.kanban!.start();
+    } else {
+      state.kanban!.stop();
+    }
+  };
+  tabChat.onclick = () => switchView("chat");
+  tabKanban.onclick = () => switchView("kanban");
 
   await pollHealth();
   await refreshSessions();

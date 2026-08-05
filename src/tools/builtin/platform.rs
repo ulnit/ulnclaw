@@ -218,85 +218,133 @@ fn register_homeassistant(registry: &mut ToolRegistry) {
 }
 
 // ---------------------------------------------------------------------------
-// Kanban — local multi-agent coordination board (SQLite-backed)
+// Kanban — local multi-agent coordination board. The agent tools share the
+// same KanbanStore engine (and the same kanban.db) as the `ulnclaw kanban`
+// CLI, mirroring hermes where kanban_* tools and `hermes kanban` both ride
+// hermes_cli/kanban_db.py. Worker/orchestrator gating follows hermes:
+// a process spawned with ULNCLAW_KANBAN_TASK (fallback HERMES_KANBAN_TASK)
+// is a worker — create/unblock/link are orchestrator-only.
 // ---------------------------------------------------------------------------
 
-fn kanban_store(ctx: &ToolContext) -> Result<rusqlite::Connection> {
-    let path = ctx.home.join("kanban.db");
-    let conn = rusqlite::Connection::open(&path)
-        .map_err(|e| crate::error::AgentError::tool(format!("open kanban db: {}", e)))?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS kanban_tasks (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            body TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'todo',
-            assignee TEXT,
-            parent_id TEXT,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS kanban_comments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            author TEXT NOT NULL,
-            body TEXT NOT NULL,
-            created_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS kanban_attachments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            value TEXT NOT NULL,
-            created_at REAL NOT NULL
-        );",
-    )
-    .map_err(|e| crate::error::AgentError::tool(format!("kanban schema: {}", e)))?;
-    Ok(conn)
+fn kanban_engine(ctx: &ToolContext) -> Result<crate::kanban::KanbanStore> {
+    crate::kanban::KanbanStore::open(ctx.home.join("kanban.db"))
+        .map_err(|e| crate::error::AgentError::tool(format!("open kanban db: {e}")))
 }
 
-fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
+/// The task this process is working on, if it was spawned as a kanban
+/// worker (hermes `HERMES_KANBAN_TASK`).
+fn kanban_worker_task() -> Option<String> {
+    crate::config::get_env_value("ULNCLAW_KANBAN_TASK")
+        .or_else(|| crate::config::get_env_value("HERMES_KANBAN_TASK"))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn kanban_is_worker() -> bool {
+    kanban_worker_task().is_some()
+}
+
+/// Resolve a task id argument, accepting unique prefixes like the CLI;
+/// falls back to the worker's own task when `id` is empty.
+fn kanban_resolve_id(
+    store: &crate::kanban::KanbanStore,
+    id: &str,
+) -> Result<Option<String>> {
+    let id = id.trim();
+    let id = if id.is_empty() {
+        match kanban_worker_task() {
+            Some(task) => task,
+            None => return Ok(None),
+        }
+    } else {
+        id.to_string()
+    };
+    if store.get_task(&id)?.is_some() {
+        return Ok(Some(id));
+    }
+    store.resolve_task_id(&id)
+}
+
+fn kanban_task_json(
+    store: &crate::kanban::KanbanStore,
+    task: &crate::kanban::Task,
+) -> serde_json::Value {
+    let parents = store.parents_of(&task.id).unwrap_or_default();
+    let children = store.children_of(&task.id).unwrap_or_default();
+    json!({
+        "id": task.id,
+        "title": task.title,
+        "body": task.body,
+        "status": task.status,
+        "assignee": task.assignee,
+        "priority": task.priority,
+        "created_by": task.created_by,
+        "created_at": task.created_at,
+        "started_at": task.started_at,
+        "completed_at": task.completed_at,
+        "result": task.result,
+        "parents": parents,
+        "children": children,
+    })
+}
+
+fn kanban_error(e: impl std::fmt::Display) -> serde_json::Value {
+    json!({"success": false, "error": e.to_string()})
 }
 
 fn register_kanban(registry: &mut ToolRegistry) {
-    use rusqlite::params;
-
     registry.register(
         tool("kanban_create")
-            .description("Create a kanban task on the local coordination board.")
+            .description("Create a kanban task on the local coordination board. Orchestrator-only: workers (ULNCLAW_KANBAN_TASK set) cannot create tasks.")
             .parameters(json!({
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Task title"},
                     "body": {"type": "string", "description": "Task description"},
-                    "assignee": {"type": "string", "description": "Optional assignee (agent name)"}
+                    "assignee": {"type": "string", "description": "Optional assignee (agent/profile name)"},
+                    "parents": {"type": "array", "items": {"type": "string"}, "description": "Optional parent task ids (this task becomes their child)"}
                 },
                 "required": ["title"]
             }))
             .handler(|args, ctx| async move {
-                let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                if kanban_is_worker() {
+                    return Ok(kanban_error("kanban_create is orchestrator-only; workers finish with kanban_complete/kanban_block"));
+                }
+                let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("").trim();
                 if title.is_empty() {
-                    return Ok(json!({"success": false, "error": "kanban_create: 'title' is required"}));
+                    return Ok(kanban_error("kanban_create: 'title' is required"));
                 }
-                let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
-                let assignee = args.get("assignee").and_then(|v| v.as_str());
-                let conn = match kanban_store(&ctx) {
-                    Ok(c) => c,
-                    Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+                let store = match kanban_engine(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                let id = format!("task-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-                if let Err(e) = conn.execute(
-                    "INSERT INTO kanban_tasks (id, title, body, status, assignee, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, 'todo', ?4, ?5, ?5)",
-                    params![id, title, body, assignee, now()],
-                ) {
-                    return Ok(json!({"success": false, "error": e.to_string()}));
+                let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
+                let assignee = args
+                    .get("assignee")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
+                let task = match store.create_task(&crate::kanban::NewTask {
+                    title: title.to_string(),
+                    body: body.to_string(),
+                    assignee,
+                    priority: 0,
+                    tenant: None,
+                    model: None,
+                    created_by: "agent".to_string(),
+                }) {
+                    Ok(t) => t,
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                if let Some(parents) = args.get("parents").and_then(|v| v.as_array()) {
+                    for parent in parents.iter().filter_map(|v| v.as_str()) {
+                        if let Some(parent_id) = store.resolve_task_id(parent).ok().flatten() {
+                            store.link_tasks(&parent_id, &task.id).ok();
+                        }
+                    }
                 }
-                Ok(json!({"success": true, "task_id": id}))
+                Ok(json!({"success": true, "task_id": task.id, "status": task.status}))
             })
             .toolset("kanban")
             .emoji("📋")
@@ -306,42 +354,38 @@ fn register_kanban(registry: &mut ToolRegistry) {
 
     registry.register(
         tool("kanban_list")
-            .description("List kanban tasks, optionally filtered by status (todo/doing/blocked/done).")
+            .description("List kanban tasks on the current board, optionally filtered by status (todo/ready/running/scheduled/blocked/done/archived).")
             .parameters(json!({
                 "type": "object",
                 "properties": {
-                    "status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"], "description": "Optional status filter"}
+                    "status": {"type": "string", "description": "Optional status filter (todo/ready/running/scheduled/blocked/done/archived)"},
+                    "limit": {"type": "integer", "description": "Max tasks to return (default 50)"}
                 },
                 "required": []
             }))
             .handler(|args, ctx| async move {
-                let conn = match kanban_store(&ctx) {
-                    Ok(c) => c,
-                    Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
-                };
-                let status = args.get("status").and_then(|v| v.as_str());
-                let (sql, params): (&str, Vec<String>) = if let Some(status) = status {
-                    ("SELECT id, title, status, assignee FROM kanban_tasks WHERE status = ?1 ORDER BY updated_at DESC", vec![status.to_string()])
-                } else {
-                    ("SELECT id, title, status, assignee FROM kanban_tasks ORDER BY updated_at DESC", vec![])
-                };
-                let mut stmt = match conn.prepare(sql) {
+                let store = match kanban_engine(&ctx) {
                     Ok(s) => s,
-                    Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                let rows: Vec<serde_json::Value> = stmt
-                    .query_map(rusqlite::params_from_iter(params.iter()), |row| {
-                        Ok(json!({
-                            "id": row.get::<_, String>(0)?,
-                            "title": row.get::<_, String>(1)?,
-                            "status": row.get::<_, String>(2)?,
-                            "assignee": row.get::<_, Option<String>>(3)?,
-                        }))
-                    })
-                    .map_err(|e| crate::error::AgentError::tool(e.to_string()))?
-                    .flatten()
-                    .collect();
-                Ok(json!({"success": true, "tasks": rows, "count": rows.len()}))
+                let status = args.get("status").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+                match store.list_tasks(None, status, None, limit.max(1)) {
+                    Ok(tasks) => {
+                        let rows: Vec<serde_json::Value> = tasks
+                            .iter()
+                            .map(|t| json!({
+                                "id": t.id,
+                                "title": t.title,
+                                "status": t.status,
+                                "assignee": t.assignee,
+                                "priority": t.priority,
+                            }))
+                            .collect();
+                        Ok(json!({"success": true, "count": rows.len(), "tasks": rows}))
+                    }
+                    Err(e) => Ok(kanban_error(e)),
+                }
             })
             .toolset("kanban")
             .emoji("📋")
@@ -349,109 +393,50 @@ fn register_kanban(registry: &mut ToolRegistry) {
             .expect("kanban_list builds"),
     );
 
-    let set_status = |name: &str, status: &'static str, desc: &str| {
-        tool(name)
-            .description(desc)
-            .parameters(json!({
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string", "description": "Task id to update"},
-                    "comment": {"type": "string", "description": "Optional comment explaining the transition"}
-                },
-                "required": ["task_id"]
-            }))
-            .handler(move |args, ctx| {
-                let status = status;
-                async move {
-                    let Some(task_id) = args.get("task_id").and_then(|v| v.as_str()) else {
-                        return Ok(json!({"success": false, "error": "task_id is required"}));
-                    };
-                    let conn = match kanban_store(&ctx) {
-                        Ok(c) => c,
-                        Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
-                    };
-                    match conn.execute(
-                        "UPDATE kanban_tasks SET status = ?2, updated_at = ?3 WHERE id = ?1",
-                        params![task_id, status, now()],
-                    ) {
-                        Ok(0) => return Ok(json!({"success": false, "error": format!("task '{}' not found", task_id)})),
-                        Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
-                        _ => {}
-                    }
-                    if let Some(comment) = args.get("comment").and_then(|v| v.as_str()) {
-                        conn.execute(
-                            "INSERT INTO kanban_comments (task_id, author, body, created_at) VALUES (?1, 'agent', ?2, ?3)",
-                            params![task_id, comment, now()],
-                        )
-                        .ok();
-                    }
-                    Ok(json!({"success": true, "task_id": task_id, "status": status}))
-                }
-            })
-            .toolset("kanban")
-            .emoji("📋")
-            .build()
-            .unwrap_or_else(|_| panic!("{} builds", name))
-    };
-
-    registry.register(set_status("kanban_complete", "done", "Mark a kanban task done."));
-    registry.register(set_status("kanban_block", "blocked", "Mark a kanban task blocked (add a comment saying why)."));
-    registry.register(set_status("kanban_unblock", "todo", "Unblock a kanban task (moves it back to todo)."));
-
     registry.register(
         tool("kanban_show")
-            .description("Show one kanban task with comments and attachments.")
+            .description("Show one kanban task with comments, attachments, and parent/child links. Workers may omit task_id to see their own task.")
             .parameters(json!({
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Task id"}
+                    "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"}
                 },
-                "required": ["task_id"]
+                "required": []
             }))
             .handler(|args, ctx| async move {
-                let Some(task_id) = args.get("task_id").and_then(|v| v.as_str()) else {
-                    return Ok(json!({"success": false, "error": "task_id is required"}));
+                let store = match kanban_engine(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                let conn = match kanban_store(&ctx) {
-                    Ok(c) => c,
-                    Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+                let id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                let id = match kanban_resolve_id(&store, id) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return Ok(kanban_error("task_id is required (no worker task in env)")),
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                let task = conn
-                    .query_row(
-                        "SELECT id, title, body, status, assignee FROM kanban_tasks WHERE id = ?1",
-                        params![task_id],
-                        |row| {
-                            Ok(json!({
-                                "id": row.get::<_, String>(0)?,
-                                "title": row.get::<_, String>(1)?,
-                                "body": row.get::<_, String>(2)?,
-                                "status": row.get::<_, String>(3)?,
-                                "assignee": row.get::<_, Option<String>>(4)?,
-                            }))
-                        },
-                    )
-                    .optional()
-                    .map_err(|e| crate::error::AgentError::tool(e.to_string()))?;
-                let Some(task) = task else {
-                    return Ok(json!({"success": false, "error": format!("task '{}' not found", task_id)}));
+                let task = match store.get_task(&id) {
+                    Ok(Some(task)) => task,
+                    Ok(None) => return Ok(kanban_error(format!("task '{id}' not found"))),
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                let mut stmt = conn.prepare("SELECT author, body FROM kanban_comments WHERE task_id = ?1 ORDER BY id").unwrap();
-                let comments: Vec<serde_json::Value> = stmt
-                    .query_map(params![task_id], |row| {
-                        Ok(json!({"author": row.get::<_, String>(0)?, "body": row.get::<_, String>(1)?}))
-                    })
-                    .unwrap()
-                    .flatten()
+                let comments: Vec<serde_json::Value> = store
+                    .comments(&id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|c| json!({"author": c.author, "body": c.body, "created_at": c.created_at}))
                     .collect();
-                let mut stmt = conn.prepare("SELECT kind, value FROM kanban_attachments WHERE task_id = ?1 ORDER BY id").unwrap();
-                let attachments: Vec<serde_json::Value> = stmt
-                    .query_map(params![task_id], |row| {
-                        Ok(json!({"kind": row.get::<_, String>(0)?, "value": row.get::<_, String>(1)?}))
-                    })
-                    .unwrap()
-                    .flatten()
+                let attachments: Vec<serde_json::Value> = store
+                    .attachments(&id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(kind, value)| json!({"kind": kind, "value": value}))
                     .collect();
-                Ok(json!({"success": true, "task": task, "comments": comments, "attachments": attachments}))
+                Ok(json!({
+                    "success": true,
+                    "task": kanban_task_json(&store, &task),
+                    "comments": comments,
+                    "attachments": attachments,
+                }))
             })
             .toolset("kanban")
             .emoji("📋")
@@ -461,31 +446,34 @@ fn register_kanban(registry: &mut ToolRegistry) {
 
     registry.register(
         tool("kanban_comment")
-            .description("Add a comment to a kanban task.")
+            .description("Add a comment to a kanban task. Workers may omit task_id to comment on their own task.")
             .parameters(json!({
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Task id"},
+                    "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"},
                     "body": {"type": "string", "description": "Comment text"}
                 },
-                "required": ["task_id", "body"]
+                "required": ["body"]
             }))
             .handler(|args, ctx| async move {
-                let task_id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-                let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
-                if task_id.is_empty() || body.is_empty() {
-                    return Ok(json!({"success": false, "error": "task_id and body are required"}));
+                let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("").trim();
+                if body.is_empty() {
+                    return Ok(kanban_error("kanban_comment: 'body' is required"));
                 }
-                let conn = match kanban_store(&ctx) {
-                    Ok(c) => c,
-                    Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+                let store = match kanban_engine(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                conn.execute(
-                    "INSERT INTO kanban_comments (task_id, author, body, created_at) VALUES (?1, 'agent', ?2, ?3)",
-                    params![task_id, body, now()],
-                )
-                .map_err(|e| crate::error::AgentError::tool(e.to_string()))?;
-                Ok(json!({"success": true}))
+                let id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                let id = match kanban_resolve_id(&store, id) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return Ok(kanban_error("task_id is required (no worker task in env)")),
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                match store.add_comment(&id, "agent", body) {
+                    Ok(()) => Ok(json!({"success": true, "task_id": id})),
+                    Err(e) => Ok(kanban_error(e)),
+                }
             })
             .toolset("kanban")
             .emoji("📋")
@@ -495,33 +483,61 @@ fn register_kanban(registry: &mut ToolRegistry) {
 
     registry.register(
         tool("kanban_heartbeat")
-            .description("Signal progress on a kanban task (updates its timestamp + optional progress comment).")
+            .description("Signal progress on a kanban task: refreshes the claim TTL and optionally records a progress comment. Workers may omit task_id.")
             .parameters(json!({
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Task id"},
+                    "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"},
                     "progress": {"type": "string", "description": "Short progress note"}
                 },
-                "required": ["task_id"]
+                "required": []
             }))
             .handler(|args, ctx| async move {
-                let task_id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-                if task_id.is_empty() {
-                    return Ok(json!({"success": false, "error": "task_id is required"}));
-                }
-                let conn = match kanban_store(&ctx) {
-                    Ok(c) => c,
-                    Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+                let store = match kanban_engine(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                conn.execute("UPDATE kanban_tasks SET status='doing', updated_at=?2 WHERE id=?1", params![task_id, now()]).ok();
-                if let Some(progress) = args.get("progress").and_then(|v| v.as_str()) {
-                    conn.execute(
-                        "INSERT INTO kanban_comments (task_id, author, body, created_at) VALUES (?1, 'agent', ?2, ?3)",
-                        params![task_id, format!("[heartbeat] {}", progress), now()],
-                    )
-                    .ok();
+                let id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                let id = match kanban_resolve_id(&store, id) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return Ok(kanban_error("task_id is required (no worker task in env)")),
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                let claimer = crate::kanban::KanbanStore::claimer_id();
+                let ttl = crate::kanban::DEFAULT_CLAIM_TTL_SECS;
+                // Hermes swarm semantics: heartbeats extend a live claim.
+                // Claim on demand so a fresh worker can heartbeat a task it
+                // just picked up (todo/ready/scheduled → running).
+                let outcome = match store.get_task(&id) {
+                    Ok(Some(task)) if task.status == "todo" => {
+                        // todo → ready → running (claim) → heartbeat.
+                        store
+                            .ready_task(&id)
+                            .and_then(|t| store.claim_task(&t.id, &claimer, ttl))
+                            .and_then(|t| store.heartbeat_task(&t.id, &claimer, ttl))
+                    }
+                    Ok(Some(task)) if task.status == "ready" => {
+                        store
+                            .claim_task(&id, &claimer, ttl)
+                            .and_then(|t| store.heartbeat_task(&t.id, &claimer, ttl))
+                    }
+                    Ok(Some(_)) => store.heartbeat_task(&id, &claimer, ttl),
+                    Ok(None) => return Ok(kanban_error(format!("task '{id}' not found"))),
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                match outcome {
+                    Ok(task) => {
+                        if let Some(progress) = args.get("progress").and_then(|v| v.as_str()) {
+                            if !progress.trim().is_empty() {
+                                store
+                                    .add_comment(&id, "agent", &format!("[heartbeat] {}", progress.trim()))
+                                    .ok();
+                            }
+                        }
+                        Ok(json!({"success": true, "task_id": task.id, "status": task.status}))
+                    }
+                    Err(e) => Ok(kanban_error(e)),
                 }
-                Ok(json!({"success": true, "task_id": task_id}))
             })
             .toolset("kanban")
             .emoji("📋")
@@ -529,27 +545,138 @@ fn register_kanban(registry: &mut ToolRegistry) {
             .expect("kanban_heartbeat builds"),
     );
 
-    registry.register(
-        tool("kanban_link")
-            .description("Link a kanban task to a parent task (subtask relationship).")
+    let terminal = |name: &'static str, done: bool, desc: &'static str| {
+        tool(name)
+            .description(desc)
             .parameters(json!({
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Child task id"},
-                    "parent_id": {"type": "string", "description": "Parent task id"}
+                    "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"},
+                    "result": {"type": "string", "description": if done { "Summary of what was accomplished" } else { "Why the task is blocked (required)" }},
+                    "comment": {"type": "string", "description": "Optional extra comment"}
+                },
+                "required": []
+            }))
+            .handler(move |args, ctx| {
+                async move {
+                    let store = match kanban_engine(&ctx) {
+                        Ok(s) => s,
+                        Err(e) => return Ok(kanban_error(e)),
+                    };
+                    let id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let id = match kanban_resolve_id(&store, id) {
+                        Ok(Some(id)) => id,
+                        Ok(None) => return Ok(kanban_error("task_id is required (no worker task in env)")),
+                        Err(e) => return Ok(kanban_error(e)),
+                    };
+                    let result = args.get("result").and_then(|v| v.as_str()).map(str::trim);
+                    let outcome = if done {
+                        store.complete_task(&id, result.filter(|s| !s.is_empty()))
+                    } else {
+                        match result.filter(|s| !s.is_empty()) {
+                            Some(reason) => store.block_task(&id, reason),
+                            None => return Ok(kanban_error("kanban_block: 'result' (the blocking reason) is required")),
+                        }
+                    };
+                    match outcome {
+                        Ok(task) => {
+                            if let Some(comment) = args.get("comment").and_then(|v| v.as_str()) {
+                                if !comment.trim().is_empty() {
+                                    store.add_comment(&id, "agent", comment.trim()).ok();
+                                }
+                            }
+                            Ok(json!({"success": true, "task_id": task.id, "status": task.status}))
+                        }
+                        Err(e) => Ok(kanban_error(e)),
+                    }
+                }
+            })
+            .toolset("kanban")
+            .emoji("📋")
+            .build()
+            .unwrap_or_else(|_| panic!("{name} builds"))
+    };
+    registry.register(terminal(
+        "kanban_complete",
+        true,
+        "Mark a kanban task done with a result summary. Terminal tool: workers must end with kanban_complete or kanban_block.",
+    ));
+    registry.register(terminal(
+        "kanban_block",
+        false,
+        "Mark a kanban task blocked with a reason. Terminal tool: workers must end with kanban_complete or kanban_block.",
+    ));
+
+    registry.register(
+        tool("kanban_unblock")
+            .description("Unblock a kanban task (moves it back to todo). Orchestrator-only.")
+            .parameters(json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task id (or unique prefix)"}
+                },
+                "required": ["task_id"]
+            }))
+            .handler(|args, ctx| async move {
+                if kanban_is_worker() {
+                    return Ok(kanban_error("kanban_unblock is orchestrator-only"));
+                }
+                let store = match kanban_engine(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                let id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                let id = match kanban_resolve_id(&store, id) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return Ok(kanban_error("task_id is required")),
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                match store.unblock_task(&id) {
+                    Ok(task) => Ok(json!({"success": true, "task_id": task.id, "status": task.status})),
+                    Err(e) => Ok(kanban_error(e)),
+                }
+            })
+            .toolset("kanban")
+            .emoji("📋")
+            .build()
+            .expect("kanban_unblock builds"),
+    );
+
+    registry.register(
+        tool("kanban_link")
+            .description("Link a kanban task to a parent task (subtask relationship). Orchestrator-only.")
+            .parameters(json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Child task id (or unique prefix)"},
+                    "parent_id": {"type": "string", "description": "Parent task id (or unique prefix)"}
                 },
                 "required": ["task_id", "parent_id"]
             }))
             .handler(|args, ctx| async move {
-                let task_id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-                let parent_id = args.get("parent_id").and_then(|v| v.as_str()).unwrap_or("");
-                let conn = match kanban_store(&ctx) {
-                    Ok(c) => c,
-                    Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+                if kanban_is_worker() {
+                    return Ok(kanban_error("kanban_link is orchestrator-only"));
+                }
+                let store = match kanban_engine(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                conn.execute("UPDATE kanban_tasks SET parent_id=?2, updated_at=?3 WHERE id=?1", params![task_id, parent_id, now()])
-                    .map_err(|e| crate::error::AgentError::tool(e.to_string()))?;
-                Ok(json!({"success": true}))
+                let child = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                let parent = args.get("parent_id").and_then(|v| v.as_str()).unwrap_or("");
+                let child = match kanban_resolve_id(&store, child) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return Ok(kanban_error("task_id and parent_id are required")),
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                let parent = match kanban_resolve_id(&store, parent) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return Ok(kanban_error("task_id and parent_id are required")),
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                match store.link_tasks(&parent, &child) {
+                    Ok(()) => Ok(json!({"success": true, "parent_id": parent, "child_id": child})),
+                    Err(e) => Ok(kanban_error(e)),
+                }
             })
             .toolset("kanban")
             .emoji("📋")
@@ -563,36 +690,39 @@ fn register_kanban(registry: &mut ToolRegistry) {
             .parameters(json!({
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Task id"},
+                    "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"},
                     value_field: {"type": "string", "description": "Attachment value"}
                 },
-                "required": ["task_id", value_field]
+                "required": [value_field]
             }))
             .handler(move |args, ctx| {
                 let kind = kind;
                 let value_field = value_field;
                 async move {
-                    let task_id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-                    let value = args.get(&value_field).and_then(|v| v.as_str()).unwrap_or("");
-                    if task_id.is_empty() || value.is_empty() {
-                        return Ok(json!({"success": false, "error": format!("task_id and {} are required", value_field)}));
+                    let value = args.get(&value_field).and_then(|v| v.as_str()).unwrap_or("").trim();
+                    if value.is_empty() {
+                        return Ok(kanban_error(format!("kanban: '{value_field}' is required")));
                     }
-                    let conn = match kanban_store(&ctx) {
-                        Ok(c) => c,
-                        Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+                    let store = match kanban_engine(&ctx) {
+                        Ok(s) => s,
+                        Err(e) => return Ok(kanban_error(e)),
                     };
-                    conn.execute(
-                        "INSERT INTO kanban_attachments (task_id, kind, value, created_at) VALUES (?1, ?2, ?3, ?4)",
-                        params![task_id, kind, value, now()],
-                    )
-                    .map_err(|e| crate::error::AgentError::tool(e.to_string()))?;
-                    Ok(json!({"success": true}))
+                    let id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let id = match kanban_resolve_id(&store, id) {
+                        Ok(Some(id)) => id,
+                        Ok(None) => return Ok(kanban_error("task_id is required (no worker task in env)")),
+                        Err(e) => return Ok(kanban_error(e)),
+                    };
+                    match store.attach(&id, kind, value) {
+                        Ok(()) => Ok(json!({"success": true, "task_id": id})),
+                        Err(e) => Ok(kanban_error(e)),
+                    }
                 }
             })
             .toolset("kanban")
             .emoji("📋")
             .build()
-            .unwrap_or_else(|_| panic!("{} builds", name))
+            .unwrap_or_else(|_| panic!("{name} builds"))
     };
     registry.register(attach("kanban_attach", "file", "path", "Attach a local file path to a kanban task."));
     registry.register(attach("kanban_attach_url", "url", "url", "Attach a URL to a kanban task."));
@@ -603,23 +733,26 @@ fn register_kanban(registry: &mut ToolRegistry) {
             .parameters(json!({
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Task id"}
+                    "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"}
                 },
-                "required": ["task_id"]
+                "required": []
             }))
             .handler(|args, ctx| async move {
-                let task_id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-                let conn = match kanban_store(&ctx) {
-                    Ok(c) => c,
-                    Err(e) => return Ok(json!({"success": false, "error": e.to_string()})),
+                let store = match kanban_engine(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(kanban_error(e)),
                 };
-                let mut stmt = conn.prepare("SELECT kind, value FROM kanban_attachments WHERE task_id = ?1 ORDER BY id").unwrap();
-                let attachments: Vec<serde_json::Value> = stmt
-                    .query_map(params![task_id], |row| {
-                        Ok(json!({"kind": row.get::<_, String>(0)?, "value": row.get::<_, String>(1)?}))
-                    })
-                    .unwrap()
-                    .flatten()
+                let id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                let id = match kanban_resolve_id(&store, id) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return Ok(kanban_error("task_id is required (no worker task in env)")),
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                let attachments: Vec<serde_json::Value> = store
+                    .attachments(&id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(kind, value)| json!({"kind": kind, "value": value}))
                     .collect();
                 Ok(json!({"success": true, "attachments": attachments}))
             })
@@ -629,8 +762,6 @@ fn register_kanban(registry: &mut ToolRegistry) {
             .expect("kanban_attachments builds"),
     );
 }
-
-use rusqlite::OptionalExtension;
 
 // ---------------------------------------------------------------------------
 // Browser tools — registered with faithful schemas, gated on CDP endpoint
@@ -1128,5 +1259,147 @@ fn register_gated_stubs(registry: &mut ToolRegistry) {
                 .build()
                 .unwrap_or_else(|_| panic!("{} builds", name)),
         );
+    }
+}
+
+#[cfg(test)]
+mod kanban_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn registry() -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        register_kanban(&mut registry);
+        registry
+    }
+
+    fn context() -> (std::path::PathBuf, Arc<ToolContext>) {
+        let dir = std::env::temp_dir().join(format!(
+            "ulnclaw-kanban-tools-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = Arc::new(
+            ToolContext::new()
+                .with_home(&dir)
+                .with_session_id("kanban-test"),
+        );
+        (dir, ctx)
+    }
+
+    #[tokio::test]
+    async fn kanban_tools_roundtrip_on_shared_engine() {
+        let (_dir, ctx) = context();
+        let registry = registry();
+
+        // Create two tasks.
+        let parent = registry
+            .dispatch(
+                "kanban_create",
+                json!({"title": "Parent goal", "body": "top level"}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(parent["success"], true);
+        let parent_id = parent["task_id"].as_str().unwrap().to_string();
+
+        let child = registry
+            .dispatch(
+                "kanban_create",
+                json!({"title": "Child task", "parents": [parent_id]}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(child["success"], true);
+        let child_id = child["task_id"].as_str().unwrap().to_string();
+
+        // Parent sees the child; prefix resolution works.
+        let shown = registry
+            .dispatch("kanban_show", json!({"task_id": &parent_id[..8]}), ctx.clone())
+            .await
+            .unwrap();
+        assert_eq!(shown["success"], true);
+        assert_eq!(shown["task"]["children"][0], child_id);
+
+        // Comment + heartbeat on the child.
+        let comment = registry
+            .dispatch(
+                "kanban_comment",
+                json!({"task_id": child_id, "body": "starting work"}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(comment["success"], true);
+        let heartbeat = registry
+            .dispatch(
+                "kanban_heartbeat",
+                json!({"task_id": child_id, "progress": "halfway"}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(heartbeat["success"], true);
+        assert_eq!(heartbeat["status"], "running");
+
+        // Block requires a reason, then unblock, then complete.
+        let block_missing = registry
+            .dispatch("kanban_block", json!({"task_id": child_id}), ctx.clone())
+            .await
+            .unwrap();
+        assert_eq!(block_missing["success"], false);
+        let blocked = registry
+            .dispatch(
+                "kanban_block",
+                json!({"task_id": child_id, "result": "need api key"}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked["status"], "blocked");
+        let unblocked = registry
+            .dispatch("kanban_unblock", json!({"task_id": child_id}), ctx.clone())
+            .await
+            .unwrap();
+        assert_eq!(unblocked["success"], true);
+        let completed = registry
+            .dispatch(
+                "kanban_complete",
+                json!({"task_id": child_id, "result": "done"}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(completed["status"], "done");
+
+        // Attachments + list filter.
+        let attach = registry
+            .dispatch(
+                "kanban_attach_url",
+                json!({"task_id": child_id, "url": "https://example.com/pr/1"}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(attach["success"], true);
+        let listed = registry
+            .dispatch("kanban_list", json!({"status": "done"}), ctx.clone())
+            .await
+            .unwrap();
+        assert_eq!(listed["count"], 1);
+        assert_eq!(listed["tasks"][0]["id"], child_id);
+
+        // The engine DB (same file the CLI uses) holds the rows.
+        let store = crate::kanban::KanbanStore::open(ctx.home.join("kanban.db")).unwrap();
+        assert!(store.get_task(&child_id).unwrap().is_some());
+        assert_eq!(store.comments(&child_id).unwrap().len(), 2);
+        assert_eq!(store.attachments(&child_id).unwrap().len(), 1);
+        assert_eq!(store.parents_of(&child_id).unwrap(), vec![parent_id]);
     }
 }

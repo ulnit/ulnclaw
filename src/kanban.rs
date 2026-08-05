@@ -161,6 +161,21 @@ impl KanbanStore {
                 payload     TEXT NOT NULL DEFAULT '{}',
                 created_at  INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS task_links (
+                parent_id   TEXT NOT NULL,
+                child_id    TEXT NOT NULL,
+                created_at  INTEGER NOT NULL,
+                PRIMARY KEY (parent_id, child_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_links_child ON task_links (child_id);
+            CREATE INDEX IF NOT EXISTS idx_links_parent ON task_links (parent_id);
+            CREATE TABLE IF NOT EXISTS task_attachments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id     TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                value       TEXT NOT NULL,
+                created_at  INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -783,6 +798,101 @@ impl KanbanStore {
             .map_err(db_error("events"))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(db_error("events"))
+    }
+
+    /// Link two tasks parent → child (hermes `link_tasks`). Idempotent;
+    /// both tasks must exist; self-links and exact duplicates are no-ops.
+    pub fn link_tasks(&self, parent_id: &str, child_id: &str) -> Result<()> {
+        if parent_id == child_id {
+            return Err(AgentError::session("kanban: cannot link a task to itself"));
+        }
+        if self.get_task(parent_id)?.is_none() {
+            return Err(AgentError::session(format!(
+                "kanban: parent task {parent_id} not found"
+            )));
+        }
+        if self.get_task(child_id)?.is_none() {
+            return Err(AgentError::session(format!(
+                "kanban: child task {child_id} not found"
+            )));
+        }
+        let conn = self.conn.lock().unwrap();
+        let inserted = conn
+            .execute(
+                "INSERT OR IGNORE INTO task_links (parent_id, child_id, created_at)                  VALUES (?1, ?2, ?3)",
+                params![parent_id, child_id, Self::now()],
+            )
+            .map_err(db_error("link"))?;
+        drop(conn);
+        if inserted > 0 {
+            self.append_event(
+                child_id,
+                "linked",
+                serde_json::json!({ "parent_id": parent_id }),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Parent task ids of `task_id`, oldest link first.
+    pub fn parents_of(&self, task_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT parent_id FROM task_links WHERE child_id = ?1 ORDER BY created_at ASC",
+            )
+            .map_err(db_error("parents"))?;
+        let rows = stmt
+            .query_map(params![task_id], |row| row.get::<_, String>(0))
+            .map_err(db_error("parents"))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("parents"))
+    }
+
+    /// Attach a file path or URL to a task (hermes task_attachments).
+    pub fn attach(&self, task_id: &str, kind: &str, value: &str) -> Result<()> {
+        if self.get_task(task_id)?.is_none() {
+            return Err(AgentError::session(format!(
+                "kanban: task {task_id} not found"
+            )));
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO task_attachments (task_id, kind, value, created_at)              VALUES (?1, ?2, ?3, ?4)",
+            params![task_id, kind, value, Self::now()],
+        )
+        .map_err(db_error("attach"))?;
+        Ok(())
+    }
+
+    /// Attachments of `task_id` as (kind, value) pairs, oldest first.
+    pub fn attachments(&self, task_id: &str) -> Result<Vec<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT kind, value FROM task_attachments WHERE task_id = ?1 ORDER BY id ASC",
+            )
+            .map_err(db_error("attachments"))?;
+        let rows = stmt
+            .query_map(params![task_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_error("attachments"))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_error("attachments"))
+    }
+
+    /// Child task ids of `task_id`, oldest link first.
+    pub fn children_of(&self, task_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT child_id FROM task_links WHERE parent_id = ?1 ORDER BY created_at ASC",
+            )
+            .map_err(db_error("children"))?;
+        let rows = stmt
+            .query_map(params![task_id], |row| row.get::<_, String>(0))
+            .map_err(db_error("children"))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("children"))
     }
 }
 

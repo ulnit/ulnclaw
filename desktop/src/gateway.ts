@@ -48,6 +48,44 @@ export interface UploadReply {
   bytes: number;
 }
 
+export interface KanbanTask {
+  id: string;
+  board: string;
+  title: string;
+  body: string;
+  assignee: string | null;
+  status: string;
+  priority: number;
+  created_by: string;
+  created_at: number;
+  started_at: number | null;
+  completed_at: number | null;
+  result: string | null;
+  parents: string[];
+  children: string[];
+}
+
+export interface KanbanBoard {
+  slug: string;
+  name: string;
+  current: boolean;
+  open_tasks: number;
+  total_tasks: number;
+}
+
+export interface KanbanComment {
+  id: number;
+  author: string;
+  body: string;
+  created_at: number;
+}
+
+export interface KanbanDetail {
+  task: KanbanTask;
+  comments: KanbanComment[];
+  attachments: { kind: string; value: string }[];
+}
+
 const SETTINGS_KEY = "ulnclaw.gateway";
 
 export function loadSettings(): GatewaySettings {
@@ -273,5 +311,83 @@ export class GatewayClient {
     const response = await fetch(url, { method: "POST", headers, body: blob });
     if (!response.ok) throw new Error(`upload: HTTP ${response.status}`);
     return response.json();
+  }
+
+  // ---- Kanban board (shared with the CLI + agent tools) ----
+
+  private async kanbanJson(path: string, init?: RequestInit): Promise<any | null> {
+    try {
+      const response = await fetch(this.endpoint(path), {
+        headers: this.headers(),
+        ...init,
+      });
+      if (!response.ok) return null;
+      return response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async kanbanBoards(): Promise<KanbanBoard[]> {
+    const value = await this.kanbanJson("/api/kanban/boards");
+    return (value?.boards || []) as KanbanBoard[];
+  }
+
+  async kanbanSwitchBoard(slug: string): Promise<boolean> {
+    const value = await this.kanbanJson(`/api/kanban/boards/${encodeURIComponent(slug)}/switch`, {
+      method: "POST",
+      body: "{}",
+    });
+    return Boolean(value?.ok);
+  }
+
+  async kanbanTasks(board?: string): Promise<KanbanTask[]> {
+    const query = board ? `?board=${encodeURIComponent(board)}&limit=500` : "?limit=500";
+    const value = await this.kanbanJson(`/api/kanban/tasks${query}`);
+    return (value?.tasks || []) as KanbanTask[];
+  }
+
+  async kanbanCreateTask(title: string, body?: string): Promise<KanbanTask | null> {
+    const value = await this.kanbanJson("/api/kanban/tasks", {
+      method: "POST",
+      body: JSON.stringify({ title, body: body || "" }),
+    });
+    return (value?.task || null) as KanbanTask | null;
+  }
+
+  async kanbanTask(id: string): Promise<KanbanDetail | null> {
+    return (await this.kanbanJson(`/api/kanban/tasks/${encodeURIComponent(id)}`)) as KanbanDetail | null;
+  }
+
+  async kanbanComplete(id: string, result?: string): Promise<boolean> {
+    const value = await this.kanbanJson(`/api/kanban/tasks/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ result: result || "" }),
+    });
+    return Boolean(value?.task);
+  }
+
+  async kanbanBlock(id: string, reason: string): Promise<boolean> {
+    const value = await this.kanbanJson(`/api/kanban/tasks/${encodeURIComponent(id)}/block`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+    return Boolean(value?.task);
+  }
+
+  async kanbanUnblock(id: string): Promise<boolean> {
+    const value = await this.kanbanJson(`/api/kanban/tasks/${encodeURIComponent(id)}/unblock`, {
+      method: "POST",
+      body: "{}",
+    });
+    return Boolean(value?.task);
+  }
+
+  async kanbanComment(id: string, body: string): Promise<boolean> {
+    const value = await this.kanbanJson(`/api/kanban/tasks/${encodeURIComponent(id)}/comment`, {
+      method: "POST",
+      body: JSON.stringify({ body, author: "desktop" }),
+    });
+    return Boolean(value?.ok);
   }
 }

@@ -25,9 +25,12 @@ const CANONICAL_TABLES: &[&str] = &[
     "state_meta",
     "async_delegations",
     "cron_jobs",
-    "kanban_tasks",
-    "kanban_comments",
-    "kanban_attachments",
+    "boards",
+    "tasks",
+    "task_links",
+    "task_comments",
+    "task_events",
+    "task_attachments",
 ];
 
 /// state_meta keys describing derived state; the destination regenerates

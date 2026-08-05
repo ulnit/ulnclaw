@@ -12,6 +12,10 @@
 //!   - `PATCH /api/sessions/:id` — update title / end_reason
 //!   - `POST /api/sessions/:id/fork` — branch a session into a child
 //!   - `POST /api/sessions/:id/model` — lock a session to a model
+//!   - `GET/POST /api/kanban/boards`, `POST /api/kanban/boards/:slug/switch`,
+//!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
+//!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`
+//!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
 //!     `POST /v1/runs/:id/stop`
@@ -36,6 +40,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
+
+mod kanban;
 
 use crate::agent::Agent;
 use crate::cron::{CronJob, CronStore};
@@ -583,6 +589,16 @@ pub fn router(state: Arc<GatewayState>) -> Router {
             "/api/jobs/:id",
             get(get_job).patch(update_job).delete(delete_job),
         )
+        .route("/api/kanban/boards", get(kanban::list_boards).post(kanban::create_board))
+        .route("/api/kanban/boards/:slug/switch", post(kanban::switch_board))
+        .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))
+        .route("/api/kanban/tasks/:id", get(kanban::get_task))
+        .route("/api/kanban/tasks/:id/complete", post(kanban::complete_task))
+        .route("/api/kanban/tasks/:id/block", post(kanban::block_task))
+        .route("/api/kanban/tasks/:id/unblock", post(kanban::unblock_task))
+        .route("/api/kanban/tasks/:id/comment", post(kanban::comment_task))
+        .route("/api/kanban/tasks/:id/link", post(kanban::link_task))
+        .route("/api/kanban/tasks/:id/claim", post(kanban::claim_task))
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
         .route("/api/jobs/:id/run", post(run_job_now))
