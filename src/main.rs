@@ -688,8 +688,22 @@ enum KanbanAction {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
-    /// Per-status task counts of the current board (hermes `kanban stats`)
-    Stats,
+    /// Per-status + per-assignee counts + oldest-ready age (hermes
+    /// `kanban stats`)
+    Stats { #[arg(long)] json: bool },
+    /// Live-stream board task_events to the terminal, Ctrl+C to exit
+    /// (hermes `kanban watch`)
+    Watch {
+        /// Only show events for tasks assigned to this profile
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Comma-separated event kinds to include
+        #[arg(long)]
+        kinds: Option<String>,
+        /// Poll interval in seconds (default 0.5)
+        #[arg(long, default_value = "0.5")]
+        interval: f64,
+    },
     /// Remove git worktrees of done/archived tasks (hermes dispatcher gc)
     Gc,
     /// One dispatcher pass: reclaim stale claims, promote parent-done
@@ -704,6 +718,9 @@ enum KanbanAction {
         /// Consecutive spawn failures before a task is auto-blocked
         #[arg(long, default_value = "2")]
         failure_limit: usize,
+        /// Emit the tick result as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -4772,30 +4789,84 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 }
             }
         }
-        KanbanAction::Stats => {
-            let counts = store.board_status_counts().map_err(|e| e.to_string())?;
+        KanbanAction::Stats { json } => {
+            let stats = store.board_stats().map_err(|e| e.to_string())?;
             let board = store.current_board().map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "board": board,
+                        "stats": stats,
+                    }))
+                    .map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
             println!("board '{board}':");
             let order = [
-                "triage", "todo", "ready", "running", "scheduled", "blocked", "done", "archived",
+                "triage", "todo", "ready", "running", "scheduled", "blocked", "done",
             ];
-            let mut total = 0i64;
             for status in order {
-                if let Some((_, count)) = counts.iter().find(|(s, _)| s == status) {
+                if let Some((_, count)) = stats.by_status.iter().find(|(s, _)| s == status) {
                     println!(
                         "  {} {:<10} {}",
                         ulnclaw::kanban::status_icon(status),
                         status,
                         count
                     );
-                    total += count;
                 }
             }
-            for (status, count) in counts.iter().filter(|(s, _)| !order.contains(&s.as_str())) {
-                println!("  ? {:<10} {}", status, count);
-                total += count;
+            if !stats.by_assignee.is_empty() {
+                println!("  by assignee:");
+                for (assignee, counts) in &stats.by_assignee {
+                    let joined = counts
+                        .iter()
+                        .map(|(status, count)| format!("{status}:{count}"))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    println!("    {assignee}: {joined}");
+                }
             }
-            println!("  total: {total}");
+            match stats.oldest_ready_age_seconds {
+                Some(age) if age > 0 => {
+                    println!("  oldest ready: {}m waiting", age / 60);
+                }
+                _ => {}
+            }
+        }
+        KanbanAction::Watch { assignee, kinds, interval } => {
+            let kinds: Option<Vec<String>> = kinds.map(|raw| {
+                raw.split(',')
+                    .map(|kind| kind.trim().to_string())
+                    .filter(|kind| !kind.is_empty())
+                    .collect()
+            });
+            let mut last_id = store.last_event_id().map_err(|e| e.to_string())?;
+            println!("— watching board events (Ctrl+C to stop)");
+            let sleep = std::time::Duration::from_secs_f64(interval.max(0.1));
+            loop {
+                let fresh = store
+                    .board_events_since(
+                        last_id,
+                        assignee.as_deref(),
+                        kinds.as_deref(),
+                        200,
+                    )
+                    .map_err(|e| e.to_string())?;
+                for (event, title) in &fresh {
+                    println!(
+                        "{}  {} {:<14} {} ({})",
+                        kanban_epoch_label(event.created_at),
+                        event.task_id,
+                        event.kind,
+                        title,
+                        event.payload
+                    );
+                    last_id = event.id;
+                }
+                std::thread::sleep(sleep);
+            }
         }
         KanbanAction::Gc => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -4803,7 +4874,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!("worktree gc: {removed} removed, {skipped} kept (active or not a worktree)");
         }
-        KanbanAction::Dispatch { max_spawn, dry_run, failure_limit } => {
+        KanbanAction::Dispatch { max_spawn, dry_run, failure_limit, json } => {
             let home = ulnclaw::config::ulnclaw_home();
             let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
             let use_worktrees = config.kanban.worktrees;
@@ -4815,6 +4886,13 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     failure_limit.max(1),
                 )
                 .map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
             if dry_run {
                 println!("dry run — would spawn {} task(s)", result.would_spawn.len());
                 for id in &result.would_spawn {

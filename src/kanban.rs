@@ -99,6 +99,17 @@ pub struct TaskEvent {
     pub created_at: i64,
 }
 
+/// Board health snapshot (hermes `board_stats`): per-status +
+/// per-assignee counts plus the oldest `ready` age — the clearest
+/// staleness signal for a router or HUD.
+#[derive(Debug, Clone, Serialize)]
+pub struct BoardStats {
+    pub by_status: Vec<(String, i64)>,
+    pub by_assignee: Vec<(String, Vec<(String, i64)>)>,
+    pub oldest_ready_age_seconds: Option<i64>,
+    pub now: i64,
+}
+
 /// Outcome of one [`KanbanStore::dispatch_once`] tick (hermes
 /// `DispatchResult`, scoped).
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1285,6 +1296,138 @@ impl KanbanStore {
             return Err(AgentError::session(format!("kanban: board {slug} not found")));
         }
         Ok(())
+    }
+
+    /// Per-status + per-assignee counts plus oldest-ready age of the
+    /// current board (hermes `board_stats`).
+    pub fn board_stats(&self) -> Result<BoardStats> {
+        let board = self.current_board()?;
+        let now = Self::now();
+        let (by_status, rows, oldest) = {
+            let conn = self.conn.lock().unwrap();
+            let by_status: Vec<(String, i64)> = {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT status, COUNT(*) FROM tasks WHERE board = ?1 \
+                         AND status != 'archived' GROUP BY status",
+                    )
+                    .map_err(db_error("stats"))?;
+                let found = stmt
+                    .query_map(params![board], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    })
+                    .map_err(db_error("stats"))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(db_error("stats"))?;
+                found
+            };
+            let rows: Vec<(String, String, i64)> = {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT assignee, status, COUNT(*) FROM tasks WHERE board = ?1 \
+                         AND status != 'archived' AND assignee IS NOT NULL \
+                         GROUP BY assignee, status ORDER BY assignee",
+                    )
+                    .map_err(db_error("stats"))?;
+                let found = stmt
+                    .query_map(params![board], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    })
+                    .map_err(db_error("stats"))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(db_error("stats"))?;
+                found
+            };
+            let oldest: Option<i64> = conn
+                .query_row(
+                    "SELECT MIN(created_at) FROM tasks WHERE board = ?1 AND status = 'ready'",
+                    params![board],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .unwrap_or(None);
+            (by_status, rows, oldest)
+        };
+        let mut by_assignee: Vec<(String, Vec<(String, i64)>)> = Vec::new();
+        for (assignee, status, count) in rows {
+            match by_assignee.iter_mut().find(|(name, _)| *name == assignee) {
+                Some((_, counts)) => counts.push((status, count)),
+                None => by_assignee.push((assignee, vec![(status, count)])),
+            }
+        }
+        Ok(BoardStats {
+            by_status,
+            by_assignee,
+            oldest_ready_age_seconds: oldest.map(|ts| now - ts),
+            now,
+        })
+    }
+
+    /// Highest task_events row id (watch start point; 0 when empty).
+    pub fn last_event_id(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM task_events", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_or(0))
+    }
+
+    /// Board-wide event stream newer than `after_id` for `kanban watch`
+    /// (hermes watch backend): optional assignee + kind filters, each hit
+    /// paired with its task title.
+    pub fn board_events_since(
+        &self,
+        after_id: i64,
+        assignee: Option<&str>,
+        kinds: Option<&[String]>,
+        limit: usize,
+    ) -> Result<Vec<(TaskEvent, String)>> {
+        let board = self.current_board()?;
+        let conn = self.conn.lock().unwrap();
+        let mut sql = String::from(
+            "SELECT e.id, e.task_id, e.kind, e.payload, e.created_at, t.title \
+             FROM task_events e JOIN tasks t ON t.id = e.task_id \
+             WHERE t.board = ?1 AND e.id > ?2",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(board), Box::new(after_id)];
+        if let Some(assignee) = assignee {
+            sql.push_str(" AND t.assignee = ?3");
+            param_values.push(Box::new(assignee.to_string()));
+        }
+        if let Some(kinds) = kinds.filter(|k| !k.is_empty()) {
+            let placeholders: Vec<String> = (0..kinds.len())
+                .map(|i| format!("?{}", param_values.len() + 1 + i))
+                .collect();
+            sql.push_str(&format!(" AND e.kind IN ({})", placeholders.join(", ")));
+            for kind in kinds {
+                param_values.push(Box::new(kind.clone()));
+            }
+        }
+        sql.push_str(&format!(" ORDER BY e.id ASC LIMIT {}", limit.max(1)));
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql).map_err(db_error("watch"))?;
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                let payload: String = row.get(3)?;
+                Ok((
+                    TaskEvent {
+                        id: row.get(0)?,
+                        task_id: row.get(1)?,
+                        kind: row.get(2)?,
+                        payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                        created_at: row.get(4)?,
+                    },
+                    row.get::<_, String>(5)?,
+                ))
+            })
+            .map_err(db_error("watch"))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("watch"))
     }
 
     /// Per-status task counts of the current board (hermes `kanban stats`).
@@ -3289,5 +3432,71 @@ mod tests {
         let counts = store.board_status_counts().unwrap();
         let todo = counts.iter().find(|(s, _)| s == "todo").map(|(_, n)| *n);
         assert_eq!(todo, Some(2));
+    }
+
+    #[test]
+    fn board_stats_counts_statuses_assignees_and_ready_age() {
+        let (_dir, store) = temp_store();
+        let a = store
+            .create_task(&NewTask {
+                title: "a".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .create_task(&NewTask {
+                title: "b".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&a.id).unwrap();
+        let stats = store.board_stats().unwrap();
+        let todo = stats.by_status.iter().find(|(s, _)| s == "todo").map(|(_, n)| *n);
+        let ready = stats.by_status.iter().find(|(s, _)| s == "ready").map(|(_, n)| *n);
+        assert_eq!(todo, Some(1));
+        assert_eq!(ready, Some(1));
+        let alice = stats.by_assignee.iter().find(|(name, _)| name == "alice").unwrap();
+        assert_eq!(alice.1.iter().map(|(_, n)| *n).sum::<i64>(), 2);
+        assert!(stats.oldest_ready_age_seconds.unwrap() >= 0);
+    }
+
+    #[test]
+    fn board_events_since_filters_and_streams() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "watched".into(),
+                assignee: Some("bob".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let start = store.last_event_id().unwrap();
+        store.ready_task(&task.id).unwrap();
+        store.block_task(&task.id, "nope").unwrap();
+        store.unblock_task(&task.id).unwrap();
+
+        // No filters: everything since the start point, paired with titles.
+        let all = store.board_events_since(start, None, None, 100).unwrap();
+        assert!(all.len() >= 3);
+        assert!(all.iter().all(|(_, title)| title == "watched"));
+
+        // Kind filter narrows the stream.
+        let kinds = vec!["blocked".to_string()];
+        let blocked_only = store
+            .board_events_since(start, None, Some(&kinds), 100)
+            .unwrap();
+        assert_eq!(blocked_only.len(), 1);
+        assert_eq!(blocked_only[0].0.kind, "blocked");
+
+        // Assignee filter: bob matches, carol sees nothing.
+        let bob = store.board_events_since(start, Some("bob"), None, 100).unwrap();
+        assert!(!bob.is_empty());
+        let carol = store.board_events_since(start, Some("carol"), None, 100).unwrap();
+        assert!(carol.is_empty());
     }
 }
