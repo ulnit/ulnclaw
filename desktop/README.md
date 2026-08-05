@@ -57,6 +57,13 @@ child process.
   the bottom-right corner: `display.pet.*` config via `/api/pets/config`,
   sheet from `/api/pets/:slug/spritesheet`, working (`running` row) while
   `/v1/runs` has live runs, idle otherwise, click to wave.
+- **Hatch overlay** (🥚 button in the sidebar footer) — hatch a brand-new
+  pet from the GUI (hermes pet-generate parity): prompt + style + draft
+  count → base-draft grid → pick one → live row-generation progress →
+  spritesheet preview, auto-adopted on success. Rides the gateway hatch-job
+  API (`POST /api/pets/hatch`, `GET /api/pets/hatch/:id`,
+  `POST /api/pets/hatch/:id/pick|cancel`,
+  `GET /api/pets/hatch/:id/draft/:index`).
 
 ### Prerequisites
 
@@ -133,6 +140,12 @@ Rust 侧负责托管 `ulnclaw gateway` 子进程。
   `/api/pets/config` 读取 `display.pet.*` 配置，
   `/api/pets/:slug/spritesheet` 加载精灵图，`/v1/runs` 有运行中任务时
   播放工作状态，否则空闲，点击挥手。
+- **孵化悬浮层**（侧栏底部 🥚 按钮）—— 从 GUI 孵化全新宠物（hermes
+  pet-generate 对位）：提示词 + 风格 + 草稿数 → 基础草稿网格 → 挑选 →
+  实时行生成进度 → 精灵图预览，成功后自动领养。基于网关孵化任务 API
+  （`POST /api/pets/hatch`、`GET /api/pets/hatch/:id`、
+  `POST /api/pets/hatch/:id/pick|cancel`、
+  `GET /api/pets/hatch/:id/draft/:index`）。
 
 ### 前置条件
 

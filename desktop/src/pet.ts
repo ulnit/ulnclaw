@@ -48,6 +48,11 @@ export class PetOverlay {
     }
   }
 
+  /** Force an immediate config/sheet re-poll (e.g. right after a hatch). */
+  refresh(): void {
+    void this.poll();
+  }
+
   stop(): void {
     if (this.pollTimer !== null) {
       window.clearInterval(this.pollTimer);

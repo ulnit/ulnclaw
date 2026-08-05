@@ -14,6 +14,10 @@
 //!   - `POST /api/sessions/:id/model` — lock a session to a model
 //!   - `GET /api/pets/config`, `GET /api/pets`,
 //!     `GET /api/pets/:slug/spritesheet` — petdex mascot surfaces
+//!   - `POST /api/pets/hatch`, `GET /api/pets/hatch/:id`,
+//!     `POST /api/pets/hatch/:id/pick|cancel`,
+//!     `GET /api/pets/hatch/:id/draft/:index` — hatch job pipeline
+//!     for the desktop hatch overlay
 //!   - `GET/POST /api/kanban/boards`, `POST /api/kanban/boards/:slug/switch`,
 //!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`
@@ -595,6 +599,14 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/pets/config", get(pets::config))
         .route("/api/pets", get(pets::list))
         .route("/api/pets/:slug/spritesheet", get(pets::spritesheet))
+        .route("/api/pets/hatch", post(pets::start_hatch))
+        .route("/api/pets/hatch/:id", get(pets::hatch_status))
+        .route("/api/pets/hatch/:id/pick", post(pets::pick_draft))
+        .route("/api/pets/hatch/:id/cancel", post(pets::cancel_hatch))
+        .route(
+            "/api/pets/hatch/:id/draft/:index",
+            get(pets::draft_image),
+        )
         .route("/api/kanban/boards", get(kanban::list_boards).post(kanban::create_board))
         .route("/api/kanban/boards/:slug/switch", post(kanban::switch_board))
         .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))

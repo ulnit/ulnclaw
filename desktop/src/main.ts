@@ -5,6 +5,7 @@
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
 import type { GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import { KanbanWidget } from "./kanban";
+import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
@@ -42,6 +43,7 @@ const state = {
   pendingUploads: [] as { path: string; mime: string; bytes: number }[],
   kanban: null as KanbanWidget | null,
   pet: null as PetOverlay | null,
+  hatch: null as HatchOverlay | null,
   view: "chat" as "chat" | "kanban",
 };
 
@@ -539,6 +541,16 @@ async function start(): Promise<void> {
   // Petdex mascot overlay (display.pet.* driven, polls the gateway).
   state.pet = new PetOverlay(() => state.client);
   state.pet.start();
+
+  // Desktop hatch overlay (gateway hatch jobs; hermes pet-generate parity).
+  const hatchBtn = document.createElement("button");
+  hatchBtn.id = "hatch-btn";
+  hatchBtn.className = "ghost";
+  hatchBtn.textContent = "\u{1F95A} Hatch pet";
+  const settingsBtn = document.getElementById("settings-btn")!;
+  settingsBtn.parentElement!.insertBefore(hatchBtn, settingsBtn);
+  state.hatch = new HatchOverlay(() => state.client, () => state.pet?.refresh());
+  hatchBtn.onclick = () => state.hatch!.open();
 
   await pollHealth();
   await refreshSessions();

@@ -641,6 +641,28 @@ pub fn hatch_pet(
     })
 }
 
+/// Derive a display name from a concept: title-case the first three words,
+/// cap at 28 chars (hermes desktop/CLI hatch naming).
+pub fn derive_pet_name(concept: &str) -> String {
+    let words: Vec<String> = concept
+        .split_whitespace()
+        .take(3)
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect();
+    let joined = words.join(" ");
+    if joined.is_empty() {
+        "Pet".to_string()
+    } else {
+        joined.chars().take(28).collect()
+    }
+}
+
 /// Convenience: end-to-end hatch from a text concept — one base draft, then
 /// the full pipeline (hermes REPL `/hatch` flow).
 pub fn run_hatch_flow(
@@ -656,23 +678,7 @@ pub fn run_hatch_flow(
         return Err("no base draft came back — try again".to_string());
     };
     let name = if display_name.trim().is_empty() {
-        let words: Vec<String> = concept
-            .split_whitespace()
-            .take(3)
-            .map(|w| {
-                let mut chars = w.chars();
-                match chars.next() {
-                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                    None => String::new(),
-                }
-            })
-            .collect();
-        let joined = words.join(" ");
-        if joined.is_empty() {
-            "Pet".to_string()
-        } else {
-            joined.chars().take(28).collect()
-        }
+        derive_pet_name(concept)
     } else {
         display_name.trim().to_string()
     };
@@ -798,21 +804,7 @@ pub fn cmd_hatch(
 
         let name = match display_name.map(str::trim).filter(|n| !n.is_empty()) {
             Some(name) => name.to_string(),
-            None => {
-                let joined: Vec<String> = concept
-                    .split_whitespace()
-                    .take(3)
-                    .map(|w| {
-                        let mut chars = w.chars();
-                        match chars.next() {
-                            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                            None => String::new(),
-                        }
-                    })
-                    .collect();
-                let joined = joined.join(" ");
-                if joined.is_empty() { "Pet".to_string() } else { joined.chars().take(28).collect() }
-            }
+            None => derive_pet_name(&concept),
         };
         let slug = crate::pets::slugify(&name);
 

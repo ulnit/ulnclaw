@@ -67,6 +67,33 @@ export interface PetConfig {
   };
 }
 
+export type HatchStatus =
+  | "generating_drafts"
+  | "awaiting_pick"
+  | "hatching"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface HatchJobResult {
+  slug: string;
+  display_name: string;
+  states: string[];
+  spritesheet: string;
+}
+
+export interface HatchJobStatus {
+  job_id: string;
+  status: HatchStatus;
+  prompt?: string;
+  style?: string | null;
+  name?: string;
+  drafts?: string[];
+  progress?: { event: string; detail: string }[];
+  result?: HatchJobResult | null;
+  error?: string | null;
+}
+
 export interface KanbanTask {
   id: string;
   board: string;
@@ -437,5 +464,63 @@ export class GatewayClient {
       body: JSON.stringify({ body, author: "desktop" }),
     });
     return Boolean(value?.ok);
+  }
+
+  // ---- Pet hatch jobs (desktop hatch overlay, hermes pet-generate parity) ----
+
+  /** Gateway hatch requests surface the server error message verbatim. */
+  private async hatchJson(path: string, init?: RequestInit): Promise<any> {
+    const response = await fetch(this.endpoint(path), {
+      headers: this.headers(),
+      ...init,
+    });
+    const value = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(value?.error?.message || `HTTP ${response.status}`);
+    }
+    return value;
+  }
+
+  async hatchStart(request: {
+    prompt: string;
+    style?: string;
+    name?: string;
+    drafts?: number;
+    auto?: boolean;
+  }): Promise<{ job_id: string }> {
+    return this.hatchJson("/api/pets/hatch", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async hatchJob(jobId: string): Promise<HatchJobStatus> {
+    return this.hatchJson(`/api/pets/hatch/${encodeURIComponent(jobId)}`);
+  }
+
+  async hatchPick(jobId: string, draft: number, name?: string): Promise<HatchJobStatus> {
+    return this.hatchJson(`/api/pets/hatch/${encodeURIComponent(jobId)}/pick`, {
+      method: "POST",
+      body: JSON.stringify({ draft, name: name || undefined }),
+    });
+  }
+
+  async hatchCancel(jobId: string): Promise<HatchJobStatus | null> {
+    try {
+      return await this.hatchJson(`/api/pets/hatch/${encodeURIComponent(jobId)}/cancel`, {
+        method: "POST",
+        body: "{}",
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /** Draft/spritesheet bytes need auth headers, so fetch them as blob URLs. */
+  async hatchImageBlob(pathName: string): Promise<string> {
+    const response = await fetch(this.endpoint(pathName), { headers: this.headers() });
+    if (!response.ok) throw new Error(`image: HTTP ${response.status}`);
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
   }
 }
