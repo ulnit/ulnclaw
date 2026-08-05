@@ -265,10 +265,20 @@ registry.register(tool);
   落入受限地址即清空页面；console/eval 表达式预筛私网 URL 字面量；页面
   处于私网时原始 `browser_cdp` 仅放行白名单方法；浏览器输出进入模型前
   强制脱敏
-- 实时端点切换：REPL `/browser connect <url>` 与网关
+- 本地 CDP 接入层（`browser/connect.rs`，hermes `browser_connect.py`
+  移植）：Chromium 系候选二进制发现（macOS/Windows/Linux，含 WSL
+  `/mnt/c` 安装位）、双栈回环探测（`discover_local_cdp_url` 先
+  `127.0.0.1` 后 `[::1]`）、端口仲裁（`local_port_in_use` →
+  `find_free_debug_port`）、带诊断的可视调试浏览器启动
+  （`launch_chrome_debug`：逐候选尝试、stderr 尾部写入
+  `<home>/chrome-debug/launch-stderr.log`、单实例吸收提示、
+  `manual_chrome_debug_command` 兜底命令）
+- 实时端点切换：REPL `/browser connect [url]` 与网关
   `POST /v1/browser/connect`（先经 `/json/version` 验证再生效）设置进程级
-  覆盖，优先于 `ULNCLAW_BROWSER_CDP`；`/browser disconnect` 与
-  `POST /v1/browser/disconnect` 清除；`GET /v1/browser/status` 报告
+  覆盖，优先于 `ULNCLAW_BROWSER_CDP`；裸 `/browser connect` 走 hermes
+  默认流程 —— 双栈探测 9222 端口、被占用时自动换端口、自动启动调试浏览
+  器——并注入系统备注让模型知晓浏览器工具已接管；`/browser disconnect`
+  与 `POST /v1/browser/disconnect` 清除；`GET /v1/browser/status` 报告
   来源/模式
 - Camofox 后端（`browser/camofox.rs`）：设置 `CAMOFOX_URL` 且无 CDP 覆盖
   时，全部 12 个 browser 工具改走 Camofox REST API（Camoufox 反检测浏览

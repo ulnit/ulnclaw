@@ -244,10 +244,21 @@ Chrome DevTools Protocol client backing the `browser_*` tools.
   console/eval expressions are pre-screened for private URL literals; raw
   `browser_cdp` calls are allowlisted while the page is private; browser
   outputs are force-redacted before reaching the model
-- Live endpoint override: REPL `/browser connect <url>` and gateway
+- Local CDP attach layer (`browser/connect.rs`, hermes `browser_connect.py`
+  port): Chromium-family candidate discovery across macOS/Windows/Linux
+  (incl. WSL `/mnt/c` installs), dual-stack loopback probes
+  (`discover_local_cdp_url` checks `127.0.0.1` then `[::1]`), port
+  arbitration (`local_port_in_use` → `find_free_debug_port`), and a
+  diagnostics-rich visible debug-browser launch (`launch_chrome_debug`:
+  per-candidate attempts, stderr tail in `<home>/chrome-debug/launch-stderr.log`,
+  single-instance absorption hint, `manual_chrome_debug_command` fallback)
+- Live endpoint override: REPL `/browser connect [url]` and gateway
   `POST /v1/browser/connect` (verified against `/json/version` before it
   sticks) set a process-lifetime override ahead of `ULNCLAW_BROWSER_CDP`;
-  `/browser disconnect` + `POST /v1/browser/disconnect` clear it;
+  bare `/browser connect` runs the hermes default flow — probe both
+  loopbacks on port 9222, arbitrate a squatted port, auto-launch the debug
+  browser — and injects a system note so the model knows browser tools are
+  live; `/browser disconnect` + `POST /v1/browser/disconnect` clear it;
   `GET /v1/browser/status` reports source/mode
 - Camofox backend (`browser/camofox.rs`): when `CAMOFOX_URL` is set and no
   CDP override is active, all 12 browser tools route through the Camofox

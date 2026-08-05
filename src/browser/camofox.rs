@@ -954,10 +954,10 @@ mod tests {
 
     /// Tests that mutate Camofox env vars share this lock (process-global).
     fn env_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        // Share the process-wide env lock so env-mutating tests across
+        // modules (models_dev, banner, browser::connect, camofox) never
+        // interleave.
+        crate::models_dev::test_env_lock()
     }
 
     fn clear_env() {
@@ -1082,6 +1082,9 @@ mod tests {
 
     #[test]
     fn managed_identity_is_deterministic_and_scoped() {
+        // Identity derives from $ULNCLAW_HOME — hold the env lock so no
+        // other test mutates it mid-assertion.
+        let _guard = env_lock();
         let (user_a, session_a) = managed_identity("task-1");
         let (user_a2, session_a2) = managed_identity("task-1");
         assert_eq!(user_a, user_a2, "same profile + task = same identity");

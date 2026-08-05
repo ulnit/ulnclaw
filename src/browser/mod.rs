@@ -12,6 +12,7 @@
 //! `DOM.resolveNode` + `Runtime.callFunctionOn`.
 
 pub mod camofox;
+pub mod connect;
 pub mod guard;
 
 use crate::error::{AgentError, Result};
@@ -767,6 +768,12 @@ const BROWSER_CANDIDATES: &[&str] = &[
     "chromium-browser",
     "chrome",
     "headless_shell",
+    "brave-browser",
+    "brave-browser-stable",
+    "brave",
+    "microsoft-edge",
+    "microsoft-edge-stable",
+    "msedge",
 ];
 
 /// Extra well-known install locations beyond PATH.
@@ -775,8 +782,13 @@ const BROWSER_EXTRA_PATHS: &[&str] = &[
     "/usr/local/bin",
     "/opt/google/chrome",
     "/snap/bin",
+    "/opt/brave.com/brave",
+    "/opt/brave-bin",
+    "/opt/microsoft/msedge",
     "/Applications/Google Chrome.app/Contents/MacOS",
     "/Applications/Chromium.app/Contents/MacOS",
+    "/Applications/Brave Browser.app/Contents/MacOS",
+    "/Applications/Microsoft Edge.app/Contents/MacOS",
 ];
 
 /// Locate a Chrome/Chromium binary (env override `ULNCLAW_BROWSER_PATH`).

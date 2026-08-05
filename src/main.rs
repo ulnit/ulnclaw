@@ -1093,6 +1093,10 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// System note injected into the conversation when `/browser connect`
+/// succeeds (hermes `_pending_input` context injection).
+const BROWSER_CONNECT_NOTE: &str = "[System note: The user invoked /browser connect and connected your browser tools to a Chromium-family dev/debug browser via Chrome DevTools Protocol. Your browser_navigate, browser_snapshot, browser_click, and other browser tools now control that CDP browser. The command itself is a signal that using browser tools for their current browser-related request is expected; do not wait for separate permission just because CDP is connected. This is typically an isolated debug profile, not the user's main everyday browser. It is still user-visible and may contain pages, logged-in sessions, or cookies in that debug profile, so avoid destructive actions, closing tabs, or navigating away unless the user's task calls for it.]";
+
 async fn handle_slash(
     input: &str,
     agent: &Arc<Agent>,
@@ -1112,7 +1116,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect <url>|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -1188,12 +1192,49 @@ async fn handle_slash(
                     }
                 }
                 "connect" => {
-                    let url = parts.next().unwrap_or("").trim();
+                    let url = parts.next().unwrap_or("").trim().to_string();
                     if url.is_empty() {
-                        println!("usage: /browser connect <ws://…|http://host:port|auto>");
+                        // Hermes default flow: probe both loopbacks, arbitrate
+                        // a squatted port, auto-launch a visible debug
+                        // browser with per-candidate diagnostics.
+                        let outcome = ulnclaw::browser::connect::connect_local_default(
+                            ulnclaw::browser::connect::DEFAULT_BROWSER_CDP_PORT,
+                        )
+                        .await;
+                        println!();
+                        for line in &outcome.messages {
+                            println!("   {line}");
+                        }
+                        if let Some(found) = outcome.url {
+                            match ulnclaw::browser::set_cdp_override(&found) {
+                                Ok(()) => {
+                                    println!();
+                                    println!("🌐 Browser connected to live Chromium-family browser via CDP");
+                                    println!("   Endpoint: {found}");
+                                    println!();
+                                    history.push(Message {
+                                        role: Role::User,
+                                        content: Some(BROWSER_CONNECT_NOTE.to_string()),
+                                        tool_calls: None,
+                                        tool_call_id: None,
+                                        name: None,
+                                    });
+                                }
+                                Err(e) => println!("connect failed: {e}"),
+                            }
+                        }
                     } else {
-                        match ulnclaw::browser::set_cdp_override(url) {
-                            Ok(()) => println!("browser endpoint set to {url} (live until disconnect/exit)"),
+                        match ulnclaw::browser::set_cdp_override(&url) {
+                            Ok(()) => {
+                                println!("browser endpoint set to {url} (live until disconnect/exit)");
+                                history.push(Message {
+                                    role: Role::User,
+                                    content: Some(BROWSER_CONNECT_NOTE.to_string()),
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                    name: None,
+                                });
+                            }
                             Err(e) => println!("connect failed: {e}"),
                         }
                     }
@@ -1201,6 +1242,16 @@ async fn handle_slash(
                 "disconnect" => {
                     ulnclaw::browser::clear_cdp_override();
                     println!("browser endpoint override cleared");
+                    history.push(Message {
+                        role: Role::User,
+                        content: Some(
+                            "[System note: The user has disconnected the browser tools from their                              live Chromium-family browser. Browser tools are back to default mode                              (managed local browser or configured endpoint).]"
+                                .to_string(),
+                        ),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    });
                 }
                 other => println!("unknown /browser subcommand: {other} (status|connect|disconnect)"),
             }
