@@ -87,6 +87,7 @@ pub mod config_cmd;
 pub mod context;
 pub mod cron;
 pub mod desktop;
+pub mod debug_cmd;
 pub mod doctor;
 pub mod dump;
 pub mod env_guard;

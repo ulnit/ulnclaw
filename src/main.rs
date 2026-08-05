@@ -169,6 +169,21 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Diagnostics: collect a redacted share bundle (hermes debug)
+    Debug {
+        /// Bundle subcommand (currently: report)
+        #[arg(default_value = "report")]
+        action: String,
+        /// Lines of recent log to include per file
+        #[arg(long, default_value = "200")]
+        lines: usize,
+        /// Include raw (unredacted) log content — handle with care
+        #[arg(long)]
+        no_redact: bool,
+        /// Output directory (default: ulnclaw-debug-<timestamp>)
+        #[arg(long)]
+        output: Option<String>,
+    },
     /// Diagnose configuration and dependencies (hermes doctor)
     Doctor {
         /// Attempt to fix issues automatically
@@ -980,6 +995,20 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             } else {
                 Err(result.message)
             }
+        }
+        Commands::Debug { action, lines, no_redact, output } => {
+            if action != "report" {
+                return Err(format!("unknown debug action '{action}' (expected: report)"));
+            }
+            let report = ulnclaw::debug_cmd::handle_debug_command(
+                &config,
+                cli.profile.as_deref(),
+                lines,
+                !no_redact,
+                output.as_deref(),
+            )?;
+            print!("{report}");
+            Ok(())
         }
         Commands::PromptSize { json } => {
             let home = ulnclaw::config::ulnclaw_home();
