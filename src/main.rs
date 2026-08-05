@@ -132,6 +132,18 @@ enum Commands {
     Init,
     /// List available skins/themes (hermes skin engine)
     Skins,
+    /// Usage insights and analytics over session history (hermes insights)
+    Insights {
+        /// Number of days to analyze
+        #[arg(long, default_value = "30")]
+        days: u32,
+        /// Filter by source (cli, gateway, cron, …)
+        #[arg(long)]
+        source: Option<String>,
+        /// Output the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Diagnose configuration and dependencies (hermes doctor)
     Doctor {
         /// Attempt to fix issues automatically
@@ -800,6 +812,18 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             println!("Active skin: {} (set [display] skin in config.toml)", active);
             Ok(())
         }
+        Commands::Insights { days, source, json } => {
+            let engine = ulnclaw::insights::InsightsEngine::open_default().map_err(|e| e.to_string())?;
+            let report = engine
+                .generate(days, source.as_deref(), Some(config.model.provider.as_str()))
+                .map_err(|e| e.to_string())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            } else {
+                print!("{}", ulnclaw::insights::format_terminal(&report));
+            }
+            Ok(())
+        }
         Commands::Doctor { fix, online, json } => {
             let opts = ulnclaw::doctor::DoctorOptions { fix, online, json };
             let report = ulnclaw::doctor::run_doctor(&config, &opts);
@@ -1138,7 +1162,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -1169,6 +1193,19 @@ async fn handle_slash(
         }
         "/usage" => {
             println!("(usage is tracked per session in state.db; see `ulnclaw sessions list`)");
+        }
+        "/insights" => {
+            let days: u32 = rest.parse().unwrap_or(30);
+            let provider = agent.tool_context().config.model.provider.clone();
+            match ulnclaw::insights::InsightsEngine::open(&ulnclaw::insights::default_store_path()) {
+                Ok(engine) => {
+                    match engine.generate(days, None, Some(provider.as_str())) {
+                        Ok(report) => print!("{}", ulnclaw::insights::format_terminal(&report)),
+                        Err(e) => println!("insights failed: {e}"),
+                    }
+                }
+                Err(e) => println!("insights failed: {e}"),
+            }
         }
         "/search" => {
             if rest.is_empty() {

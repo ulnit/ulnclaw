@@ -93,6 +93,7 @@ pub mod gateway;
 pub mod git_diff;
 pub mod goals;
 pub mod hermes_time;
+pub mod insights;
 pub mod mcp;
 pub mod managed_gateway;
 pub mod moa;

@@ -173,7 +173,6 @@ fn check_version(report: &mut DoctorReport) {
         }
         None => info(checks, "update check not applicable (no git checkout found)"),
     }
-    drop(checks);
     merge(report, issues, 0);
 }
 
@@ -250,7 +249,6 @@ fn check_config_files(report: &mut DoctorReport, config: &UlncLawConfig, home: &
     } else {
         info(checks, "no .env file (environment variables may be set directly)");
     }
-    drop(checks);
     merge(report, issues, fixed);
 }
 
@@ -305,7 +303,6 @@ fn check_directory_structure(report: &mut DoctorReport, home: &Path, opts: &Doct
     } else {
         info(checks, "state.db not created yet (created on first session)");
     }
-    drop(checks);
     merge(report, issues, fixed);
 }
 
@@ -320,7 +317,6 @@ fn check_auth_providers(report: &mut DoctorReport, config: &UlncLawConfig, home:
 
     if crate::provider::auxiliary::is_keyless(provider) {
         info(checks, format!("provider '{provider}' runs locally — no API key needed"));
-        drop(checks);
         merge(report, issues, 0);
         return;
     }
@@ -339,7 +335,6 @@ fn check_auth_providers(report: &mut DoctorReport, config: &UlncLawConfig, home:
     } else {
         info(checks, format!("base_url: {base_url} (provider default)"));
     }
-    drop(checks);
     merge(report, issues, 0);
 }
 
@@ -418,7 +413,6 @@ fn check_external_tools(report: &mut DoctorReport) {
     }
 
     ok(checks, "SQLite bundled (rusqlite) — no system library required");
-    drop(checks);
     merge(report, issues, 0);
 }
 
@@ -451,7 +445,6 @@ fn check_toolsets(report: &mut DoctorReport, config: &UlncLawConfig) {
         warn(checks, format!("toolset '{name}' resolved to no tools (unknown name?)"));
         issues.push(format!("toolset '{name}' is enabled but unknown"));
     }
-    drop(checks);
     merge(report, issues, 0);
 }
 
