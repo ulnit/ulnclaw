@@ -148,6 +148,7 @@ pub mod update;
 pub mod uninstall;
 pub mod video_gen;
 pub mod webhook_platforms;
+pub mod weixin;
 pub mod video_gen_backends;
 pub mod video_gen_xai;
 pub mod url_safety;

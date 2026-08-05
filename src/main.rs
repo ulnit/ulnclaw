@@ -81,6 +81,11 @@ enum Commands {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Weixin (WeChat iLink bot) account management
+    Weixin {
+        #[command(subcommand)]
+        action: WeixinAction,
+    },
     /// Filesystem checkpoint management (snapshot list/restore/prune)
     Checkpoints {
         #[command(subcommand)]
@@ -1424,6 +1429,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Sync { action } => sync_cmd(&config, action.unwrap_or(SyncAction::Status)).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
+        Commands::Weixin { action } => weixin_cmd(action).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
         Commands::Diff { staged, all, dir, paths } => {
             let mode = if all {
@@ -3703,6 +3709,42 @@ fn kanban_epoch_label(ts: i64) -> String {
         format!("{}h ago", secs / 3600)
     } else {
         format!("{}d ago", secs / 86400)
+    }
+}
+
+#[derive(Subcommand)]
+enum WeixinAction {
+    /// Log into WeChat by scanning an iLink QR code (persists credentials
+    /// under <home>/weixin/accounts/ for [messaging.weixin])
+    Login {
+        /// QR login timeout in seconds
+        #[arg(long, default_value = "480")]
+        timeout: u64,
+        /// iLink bot type
+        #[arg(long, default_value = "3")]
+        bot_type: String,
+    },
+}
+
+async fn weixin_cmd(action: WeixinAction) -> Result<(), String> {
+    match action {
+        WeixinAction::Login { timeout, bot_type } => {
+            let home = ulnclaw::config::ulnclaw_home();
+            match ulnclaw::weixin::qr_login(&home, &bot_type, timeout).await {
+                Ok(Some(creds)) => {
+                    println!(
+                        "Saved credentials for account {}. Enable the adapter with:",
+                        creds.get("account_id").map(|s| s.as_str()).unwrap_or("?")
+                    );
+                    println!("  [messaging.weixin]");
+                    println!("  enabled = true");
+                    println!("  account_id = \"{}\"", creds.get("account_id").map(|s| s.as_str()).unwrap_or(""));
+                    Ok(())
+                }
+                Ok(None) => Err("weixin login did not complete".into()),
+                Err(e) => Err(e),
+            }
+        }
     }
 }
 

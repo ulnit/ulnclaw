@@ -55,6 +55,10 @@ pub struct MessagingConfig {
     /// mounted on the gateway router.
     #[serde(default)]
     pub bluebubbles: crate::webhook_platforms::BlueBubblesConfig,
+    /// Weixin personal account via the iLink Bot API (hermes
+    /// `platforms.weixin`).
+    #[serde(default)]
+    pub weixin: crate::weixin::WeixinConfig,
 }
 
 fn default_pairing() -> bool {
@@ -709,8 +713,16 @@ pub async fn run_messaging(
             crate::signal::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.weixin.enabled {
+        let cfg = msg.weixin.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::weixin::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal] enabled = true)");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin] enabled = true)");
         return;
     }
     for task in tasks {

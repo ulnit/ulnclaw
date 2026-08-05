@@ -34,6 +34,9 @@ sha2 = "0.10"
 hmac = "0.12"
 hkdf = "0.12"
 aes-gcm = "0.10"
+aes = "0.8"
+md-5 = "0.10"
+qrcode = { version = "0.14", default-features = false }
 url = "2"
 percent-encoding = "2"
 clap = { version = "4", features = ["derive"] }
