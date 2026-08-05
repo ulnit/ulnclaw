@@ -82,6 +82,7 @@ pub mod binary_ext;
 pub mod browser;
 pub mod checkpoint;
 pub mod config;
+pub mod config_cmd;
 pub mod context;
 pub mod cron;
 pub mod desktop;

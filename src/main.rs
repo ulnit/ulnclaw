@@ -171,6 +171,17 @@ enum Commands {
         #[arg(long)]
         deep: bool,
     },
+    /// View and edit configuration (hermes config)
+    Config {
+        /// Subcommand: show (default) | get <key> | set <key> <value> | unset <key> | path | env-path | edit
+        args: Vec<String>,
+        /// Print the value as JSON (config get)
+        #[arg(long)]
+        json: bool,
+        /// Skip the unknown-key notice (config set)
+        #[arg(long)]
+        force: bool,
+    },
     /// Manage the fallback provider chain (hermes fallback)
     Fallback {
         /// Subcommand: list (default) | add <provider:model> | remove <N|provider:model> | clear
@@ -927,6 +938,13 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Status { all: _, deep } => {
             let opts = ulnclaw::status::StatusOptions { deep };
             print!("{}", ulnclaw::status::show_status(&config, &opts));
+            Ok(())
+        }
+        Commands::Config { args, json, force } => {
+            let out = ulnclaw::config_cmd::handle_config_command(&args, json, force)?;
+            if !out.is_empty() {
+                println!("{out}");
+            }
             Ok(())
         }
         Commands::Fallback { args, yes } => {
