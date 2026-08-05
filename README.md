@@ -115,6 +115,7 @@ export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # or ws://.../devtools/brow
 
 # HTTP gateway (OpenAI-compatible API server, default 127.0.0.1:8642)
 ./ulnclaw gateway --host 127.0.0.1 --port 8642
+# messaging platforms run inside the gateway ([messaging.telegram|discord|slack])
 curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \\
      -H "Content-Type: application/json" \\
      -d '{"messages":[{"role":"user","content":"Hello!"}]}' \\
@@ -235,7 +236,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 694 tests
+cargo test                     # 702 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -391,7 +392,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 694 个测试
+cargo test                     # 702 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

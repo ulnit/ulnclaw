@@ -707,6 +707,9 @@ pub struct UlncLawConfig {
     /// Shell-hook commands per lifecycle event (hermes `hooks:` block).
     #[serde(default)]
     pub hooks: crate::plugins::HooksConfig,
+    /// Messaging platform gateways (hermes gateway/platforms).
+    #[serde(default)]
+    pub messaging: crate::messaging::MessagingConfig,
 }
 
 /// `[video_gen]` — video generation backend selection (hermes config.yaml

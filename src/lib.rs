@@ -106,6 +106,7 @@ pub mod hermes_time;
 pub mod insights;
 pub mod mcp;
 pub mod managed_gateway;
+pub mod messaging;
 pub mod memory_cmd;
 pub mod moa;
 pub mod learning_graph;

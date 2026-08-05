@@ -74,6 +74,7 @@
 | Secrets 保险库（`agent/secret_sources/`） | ✅ 核心 | `src/secrets.rs` + `ulnclaw secrets status|sync [--apply]`：外部秘密源在启动时、任何 provider 读取 env 之前应用（hermes env-loader 钩子）。三个来源，完整复刻 hermes 优先级语义 —— mapped 优先于 bulk、首个声明者胜出、`preserve_existing` 胜过一切、`override_existing` 可覆盖已有 `.env`/shell 值但绝不覆盖其他来源、引导令牌变量写入保护。`command`：经 `/bin/sh -c` 的任意 KEY=VALUE 助手（keepassxc-cli / secret-tool / tmpfs cat），硬超时降级为“无值”，stderr 丢弃，1 MiB 输出上限，支持引号/注释解析。`bitwarden`：Bitwarden Secrets Manager，经 `bws secret list <project> --output json`（PATH + `<home>/bin/bws` 查找、`BWS_SERVER_URL` 透传）。`onepassword`：映射式 `op://vault/item/field` 绑定，经 `op read -- <ref>` 解析，子进程仅继承最小允许清单 env，空值拒绝写入，单引用失败降级为警告。拉取错误只产生单行警告、绝不致命。hermes 的交互式 setup 向导、bws/op 自动安装与 TTL 磁盘缓存未移植 |
 | Computer Use（`tools/computer_use/`） | ✅ 核心 | `src/computer_use.rs` + `ulnclaw computer-use status|doctor|install`：经 cua-driver 守护进程的后台桌面控制（MCP over stdio，hermes `cua_backend.py`）。完整复刻 hermes 工具 schema（capture som/vision/ax、按 SOM 元素索引或坐标的 click 族、drag、scroll、type、组合键、set_value、wait、list_apps/list_windows/focus_app、cua_browser_* 类型化浏览器透传）。复刻 hermes 审批语义：capture 与列表类免费，其余动作一律走审批回调，无人值守时失败关闭。惰性共享 MCP 会话（`start_session`/`end_session`、`set_config` max_image_dimension、光标覆盖层策略含 `--no-overlay` 自动探测 + 默认 `CUA_DRIVER_RS_TELEMETRY_ENABLED=0`）。`doctor` 驱动 cua-driver 的 `health_report`。未移植：macOS TCC `permissions` 授权流程、嵌入式守护进程/socket 模式、截图驱逐 + 视觉后处理（驱动载荷直接透传） |
 | 插件系统（`hermes_cli/plugins.py`、`agent/shell_hooks.py`） | ✅ 核心 | `src/plugins.rs` + `ulnclaw plugins list|enable|disable|accept-hooks`：以 shell-hook 线协议实现的 hermes 插件架构 Rust 原生化移植（静态二进制无法导入 Python 插件）。目录插件位于 `<home>/plugins/<name>/plugin.toml`（manifest：hooks + `[[tools]]`）；工具以 `plugin__<name>__<tool>` 注册，作为子进程运行、stdin 收 `{"tool", "arguments"}` JSON。配置式 shell 钩子 `[hooks] <event> = ["cmd"]`，复刻 hermes 首次使用同意机制（`shell-hooks-allowlist.json`、`auto_accept` / `ULNCLAW_ACCEPT_HOOKS`）。完整复刻 hermes `VALID_HOOKS` 目录（23 个事件）；当前已接线：`pre_tool_call`（block 决定在审批前否决）、`post_tool_call`、`transform_llm_output`、`on_session_start`/`on_session_end`；其余事件可经同一运行时调用。hermes 的 Python 插件导入、entry-point 包与 provider 注册未移植 |
+| 消息平台网关（`gateway/platforms/`） | ✅ 核心 | `src/messaging.rs` —— hermes 平台网关架构运行于 `ulnclaw gateway` 内：适配器将入站聊天消息归一化为 `MessageEvent`，每个聊天一个会话（`platform-<name>-<chat>`，经 `create_named_session`）承载对话连续性，回复经平台送回并按 hermes 风格分块。三个自包含适配器：Telegram（Bot API 长轮询 getUpdates/sendMessage）、Discord（Gateway v10 websocket IDENTIFY/心跳/MESSAGE_CREATE + REST 发送）、Slack（Socket Mode events_api 信封 + chat.postMessage）。复刻 hermes 配对语义：每个平台均受白名单门控，空白名单失败关闭并记录待添加的 id。其余 hermes 平台（Signal/WhatsApp-Cloud/微信/QQ/BlueBubbles/元宝/MS-Graph webhook）与媒体附件未移植 |
 | 会话浏览（`hermes_cli/sessions_cmd.py browse` + curses 挑选器） | ✅ 核心 | `ulnclaw sessions browse [--source S] [--limit N]`：TTY 上启用原始模式 TUI（crossterm 移植 curses 挑选器 —— 备用屏幕、↑/↓/PgUp/PgDn/Home/End 滚动导航、键入即过滤 + 退格、绿色 `▶` 选中高亮、Enter 选择、Esc 退出、"终端过小"保护、LF（`Ctrl+J`）形式的 Enter 同样接受）；管道/CI 场景回退为编号 stdin 挑选器；按最近活动排序的行（标题 → 首条用户消息预览回退、相对时间、来源、截断 id）、对标题/预览/id/来源的子串过滤、未指定 `--source` 时排除 `tool` 源会话（hermes 语义）；选中后以 `--resume <id>` 重新启动当前二进制（hermes `relaunch`）；存储查询 `list_sessions_for_browse` 单条 SQL 返回挑选器行 |
 | 会话恢复与单会话连续性（`cli.py --resume/--continue`） | ✅ 核心 | 全局 `-r/--resume <id或前缀>` 与 `-c/--continue` 标志，适用于 `chat` 与 `run`：整个 REPL 会话存于同一条会话记录（此前每轮都会新建记录）；恢复时用 `load_messages` 回填 REPL 历史（丢弃 system 行），打印 `Resuming session: <id> (标题)`，每轮经 `run_with_session` 写入同一 id；`/new` 轮换到新会话键并重置按会话的目标管理器；`latest_session_id` 按最近活动挑选 `--continue` 目标（跳过已归档）；所有带 id 的 `sessions` 动作（`show`/`export`/`recap`/`delete`/`rename`）均经 `resolve_session_id` 接受唯一前缀；hermes 的 `-c <会话名>` 标题查找不移植（`-c` 不带值） |
 | 会话库修复（`hermes_state.py repair_state_db_schema`） | ✅ 核心 | `ulnclaw sessions repair [--check-only] [--no-backup]`：健康探测（`db_opens_cleanly` —— `PRAGMA journal_mode` 首语句触发、`integrity_check`、sessions 读取、FTS MATCH 读探测、回滚式 FTS 写探测）后按破坏程度逐级升级 —— FTS5 `'rebuild'` 原地重建、`REINDEX` 修复过期 B 树索引、经 `writable_schema` 去重 `sqlite_master`（保留 FTS 索引）、删除 FTS 结构 + `VACUUM` 并在下次打开时重建（`initialize_schema` 回填滞后的外联内容索引）；先做带时间戳的原始备份 + WAL/SHM 附属文件；失败时指向离线 `sessions recover`；在打开存储之前执行，因为库结构损坏正是无法打开的情形 |
@@ -173,6 +174,9 @@
   `[hooks]` 配置），不是 Python 导入；当前仅 pre/post_tool_call、
   transform_llm_output 与会话生命周期钩子接入了 agent 主循环 —— 其余 hermes
   钩子事件已登记在目录中、可触发，但核心尚未发出。
+- 消息平台：当前仅文本（无媒体附件、语音、内联键盘）；移植了 hermes 十个
+  平台适配器中的三个；配对流程是静态白名单而非 hermes 的交互式配对码；
+  `pre_gateway_dispatch` 插件钩子尚未门控平台消息。
 
 ## 完成状态
 
@@ -182,12 +186,13 @@ rename/optimize/repair/browse`）、启动恢复（`--resume`/`--continue`，
 一会话一记录的连续性）、CDP 浏览器客户端 + 接入层 + Camofox 后端、HTTP
 网关（含 `/v1/browser/*` 实时端点控制与 profile 多路复用）、技能/捆绑/
 记忆/目标/检查点/定时任务/用量分析/doctor、外部秘密源（command 助手 /
-Bitwarden / 1Password）、computer-use（cua-driver）、子进程插件系统及其余 CLI 均已移植。`sessions`
+Bitwarden / 1Password）、computer-use（cua-driver）、子进程插件系统、
+消息平台网关（Telegram/Discord/Slack）及其余 CLI 均已移植。`sessions`
 面仅有意省略：`optimize-storage`（ulnclaw 自始即采用紧凑的外联内容 FTS
 布局，无旧布局可迁移）与 `-c <会话名>` 标题查找（`--continue` 不带值）。
 
-有意不移植（超出本地 agent 范围的 hermes 面）：消息平台网关
-（Telegram/Discord/Slack/WhatsApp-Cloud/XAI/… 等 gateway 平台）、Electron
+有意不移植（超出本地 agent 范围的 hermes 面）：长尾消息平台
+（Signal/WhatsApp-Cloud/微信/QQ/BlueBubbles/元宝/MS-Graph）、Electron
 桌面应用/仪表盘/kanban GUI、OAuth + Nous 门户登录与云同步、插件/hook/
 egress 体系（含其后的云浏览器 provider）、Python 插件导入/entry-point 包及其携带的 provider 注册、`pets`，以及小型桌面
 UX 命令（clipboard、focus_view、prompt_stash、uninstall）。

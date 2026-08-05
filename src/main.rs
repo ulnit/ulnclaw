@@ -996,6 +996,18 @@ async fn gateway_cmd(
         )
     };
 
+    // Messaging platform gateways (hermes gateway/platforms): platforms
+    // live in the gateway process alongside the HTTP API.
+    let msg = &config.messaging;
+    if msg.telegram.enabled || msg.discord.enabled || msg.slack.enabled {
+        let messaging_config = config.clone();
+        let agent = state.agent.clone();
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            ulnclaw::messaging::run_messaging(&messaging_config, agent, store).await;
+        });
+    }
+
     ulnclaw::gateway::serve_multiplex(state, Some(hub), &gateway.host, gateway.port)
         .await
         .map_err(|e| e.to_string())
