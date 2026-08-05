@@ -107,6 +107,8 @@ pub mod insights;
 pub mod mcp;
 pub mod managed_gateway;
 pub mod messaging;
+pub mod oauth;
+pub mod skills_sync;
 pub mod memory_cmd;
 pub mod moa;
 pub mod learning_graph;

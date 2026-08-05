@@ -107,7 +107,7 @@
 | 记忆系统 | ✅ | MEMORY.md/USER.md，注入提示词 |
 | Cron 调度器 | ✅ | 任务存储 + 计划解析 + 轮询循环（`cron::run_scheduler`） |
 | MCP 客户端（`mcp_tool.py`） | ✅ 核心 | stdio JSON-RPC：initialize/tools/list/tools/call；`[[mcp.servers]]` 配置；工具注册为 `mcp__<server>__<tool>`；npx/uvx/pipx 启动前的 OSV 恶意软件检查（`osv_check.py` 移植：MAL-* 通告阻止启动、fail-open、1 小时结论缓存、`OSV_ENDPOINT`/`OSV_CHECK_CACHE_TTL` 覆盖） |
-| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`、`secrets status/sync`、`computer-use status/doctor/install`、`plugins list/enable/disable/accept-hooks`）、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
+| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`、`secrets status/sync`、`computer-use status/doctor/install`、`plugins list/enable/disable/accept-hooks`、`auth login/status/refresh/logout`、`sync status/pull/push/now/enable/disable/device`）、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
 | Git 工作区 diff（`working_diff.py`） | ✅ | `ulnclaw diff [--staged|--all] [--dir PATH] [paths...]` + REPL `/gitdiff [staged|all]`：working/staged/all 三模式，未跟踪文件经 `git diff --no-index` 折入（上限 50 个），带超时；基于检查点的 REPL `/diff` 保持独立 |
 | 委派（delegation） | ✅ | SubAgentRunner trait、深度限制、子会话 |
 | 混合智能体 MoA（`moa_loop.py`、`moa_config.py`） | ✅ 核心 | `[moa.presets.<name>]` 参考模型并行扇出 + 聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa <prompt>`）；loud/silent 降级策略、全部失败提前返回、聚合失败回退拼接结果；持久 `provider: moa` 门面、trace 与隐私过滤未移植 |
@@ -177,6 +177,8 @@
 - 消息平台：当前仅文本（无媒体附件、语音、内联键盘）；移植了 hermes 十个
   平台适配器中的三个；配对流程是静态白名单而非 hermes 的交互式配对码；
   `pre_gateway_dispatch` 插件钩子尚未门控平台消息。
+- OAuth/同步：流程与提供方无关（任意 RFC 8628 端点），不绑定 Nous 门户；
+  同步只搬运技能包（无组织提案/审批工作流、无订阅门控）。
 
 ## 完成状态
 
@@ -193,6 +195,6 @@ Bitwarden / 1Password）、computer-use（cua-driver）、子进程插件系统�
 
 有意不移植（超出本地 agent 范围的 hermes 面）：长尾消息平台
 （Signal/WhatsApp-Cloud/微信/QQ/BlueBubbles/元宝/MS-Graph）、Electron
-桌面应用/仪表盘/kanban GUI、OAuth + Nous 门户登录与云同步、插件/hook/
+桌面应用/仪表盘/kanban GUI、插件/hook/
 egress 体系（含其后的云浏览器 provider）、Python 插件导入/entry-point 包及其携带的 provider 注册、`pets`，以及小型桌面
 UX 命令（clipboard、focus_view、prompt_stash、uninstall）。

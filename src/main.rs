@@ -148,6 +148,16 @@ enum Commands {
         #[command(subcommand)]
         action: Option<PluginsAction>,
     },
+    /// OAuth device-flow login: login/status/refresh/logout (hermes portal auth)
+    Auth {
+        #[command(subcommand)]
+        action: Option<AuthAction>,
+    },
+    /// Skill sync across devices: status/pull/push/now/enable/disable/device (hermes sync)
+    Sync {
+        #[command(subcommand)]
+        action: Option<SyncAction>,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -674,6 +684,42 @@ enum SecretsAction {
 }
 
 #[derive(Subcommand)]
+enum AuthAction {
+    /// Start the RFC 8628 device flow and wait for authorization
+    Login,
+    /// Show current login state
+    Status,
+    /// Refresh the access token using the stored refresh_token
+    Refresh,
+    /// Remove stored tokens
+    Logout,
+    /// Print the portal URL (open it manually)
+    Open,
+}
+
+#[derive(Subcommand)]
+enum SyncAction {
+    /// Show sync state: gate, opt-ins, device, manifest summary
+    Status,
+    /// Pull remote skills into the local skills directory
+    Pull,
+    /// Push opted-in skills to the sync endpoint
+    Push,
+    /// Reconcile now: pull then push
+    Now,
+    /// Opt a skill into sync
+    Enable { skill: String },
+    /// Opt a skill out of sync
+    Disable { skill: String },
+    /// Show or set this device's label
+    Device {
+        /// New device label
+        #[arg(long)]
+        name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum PluginsAction {
     /// List discovered plugins, their hooks and tools
     List,
@@ -1131,6 +1177,8 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Secrets { action } => secrets_cmd(&config, action),
         Commands::ComputerUse { action } => computer_use_cmd(&config, action).await,
         Commands::Plugins { action } => plugins_cmd(&config, action.unwrap_or(PluginsAction::List)).await,
+        Commands::Auth { action } => auth_cmd(&config, action.unwrap_or(AuthAction::Status)).await,
+        Commands::Sync { action } => sync_cmd(&config, action.unwrap_or(SyncAction::Status)).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
@@ -2427,6 +2475,161 @@ fn print_diff_result(result: &serde_json::Value) {
             println!("{}", diff);
         }
     }
+}
+
+async fn auth_cmd(config: &UlncLawConfig, action: AuthAction) -> Result<(), String> {
+    use ulnclaw::oauth;
+    let home = ulnclaw::config::ulnclaw_home();
+    let cfg = &config.oauth;
+    match action {
+        AuthAction::Login => {
+            let auth = oauth::device_authorize(cfg).await.map_err(|e| e.to_string())?;
+            for line in oauth::login_instructions(&auth) {
+                println!("{line}");
+            }
+            let tokens = oauth::poll_for_token(cfg, &auth).await.map_err(|e| e.to_string())?;
+            oauth::save_tokens(&home, &tokens).map_err(|e| e.to_string())?;
+            println!("✓ Logged in.");
+        }
+        AuthAction::Status => {
+            let tokens = oauth::load_tokens(&home);
+            if tokens.logged_in() {
+                println!("Auth: ✓ logged in");
+                if tokens.expires_at > 0 {
+                    let expired = tokens.expired();
+                    println!(
+                        "Access token expires: {} ({})",
+                        tokens.expires_at,
+                        if expired { "EXPIRED — run `ulnclaw auth refresh`" } else { "valid" }
+                    );
+                }
+                if !tokens.scope.is_empty() {
+                    println!("Scope: {}", tokens.scope);
+                }
+                println!("Refresh token: {}", if tokens.refresh_token.is_empty() { "none" } else { "stored" });
+            } else {
+                println!("Auth: not logged in (ulnclaw auth login)");
+            }
+            if cfg.token_url.is_empty() {
+                println!("Note: [oauth] is not configured — set device_authorization_url/token_url/client_id.");
+            }
+        }
+        AuthAction::Refresh => {
+            oauth::refresh(cfg, &home).await.map_err(|e| e.to_string())?;
+            println!("✓ Access token refreshed.");
+        }
+        AuthAction::Logout => {
+            oauth::clear_tokens(&home).map_err(|e| e.to_string())?;
+            println!("✓ Tokens removed.");
+        }
+        AuthAction::Open => {
+            if cfg.portal_url.is_empty() {
+                return Err("no [oauth] portal_url configured".to_string());
+            }
+            println!("{}", cfg.portal_url);
+        }
+    }
+    Ok(())
+}
+
+async fn sync_cmd(config: &UlncLawConfig, action: SyncAction) -> Result<(), String> {
+    use ulnclaw::skills_sync;
+    let home = ulnclaw::config::ulnclaw_home();
+    let cfg = &config.sync;
+    let oauth_cfg = &config.oauth;
+    match action {
+        SyncAction::Status => {
+            let state = skills_sync::load_state(&home);
+            println!("device id:   {}", state.device_id);
+            let label = if !state.device_name.is_empty() {
+                state.device_name.clone()
+            } else if !cfg.device_name.is_empty() {
+                cfg.device_name.clone()
+            } else {
+                "(unset)".to_string()
+            };
+            println!("device name: {label}");
+            if let Some(reason) = skills_sync::inert_reason(cfg) {
+                println!("gate:        INERT — {reason}");
+            } else {
+                println!("gate:        active ({})", cfg.base_url);
+                match skills_sync::read_manifest(cfg, oauth_cfg, &home).await {
+                    Ok(manifest) => {
+                        println!("remote skills: {}", manifest.skills.len());
+                        for (name, skill) in &manifest.skills {
+                            println!(
+                                "  {name} (from {}, {} file(s))",
+                                skill.device,
+                                skill.files.len()
+                            );
+                        }
+                    }
+                    Err(e) => println!("remote manifest: unavailable ({e})"),
+                }
+            }
+            if state.enabled.is_empty() {
+                println!("opted-in:    none (ulnclaw sync enable <skill>)");
+            } else {
+                println!("opted-in:    {}", state.enabled.join(", "));
+            }
+        }
+        SyncAction::Pull => {
+            match skills_sync::pull(cfg, oauth_cfg, &home).await {
+                Ok(names) if names.is_empty() => println!("Nothing new to pull."),
+                Ok(names) => println!("✓ Pulled: {}", names.join(", ")),
+                Err(e) => println!("{e}"),
+            }
+        }
+        SyncAction::Push => {
+            match skills_sync::push(cfg, oauth_cfg, &home).await {
+                Ok(names) if names.is_empty() => {
+                    println!("Nothing to push (no skills opted in — ulnclaw sync enable <skill>).")
+                }
+                Ok(names) => println!("✓ Pushed: {}", names.join(", ")),
+                Err(e) => println!("{e}"),
+            }
+        }
+        SyncAction::Now => {
+            match skills_sync::pull(cfg, oauth_cfg, &home).await {
+                Ok(names) if !names.is_empty() => println!("✓ Pulled: {}", names.join(", ")),
+                Ok(_) => println!("Nothing new to pull."),
+                Err(e) => println!("{e}"),
+            }
+            match skills_sync::push(cfg, oauth_cfg, &home).await {
+                Ok(names) if !names.is_empty() => println!("✓ Pushed: {}", names.join(", ")),
+                Ok(_) => println!("Nothing to push."),
+                Err(e) => println!("{e}"),
+            }
+        }
+        SyncAction::Enable { skill } => {
+            let skills_dir = home.join("skills");
+            if !skills_dir.join(&skill).join("SKILL.md").is_file() {
+                return Err(format!("skill {skill:?} not found in {}", skills_dir.display()));
+            }
+            let mut state = skills_sync::load_state(&home);
+            if !state.enabled.iter().any(|s| s == &skill) {
+                state.enabled.push(skill.clone());
+                skills_sync::save_state(&home, &state).map_err(|e| e.to_string())?;
+            }
+            println!("✓ {skill} opted into sync.");
+        }
+        SyncAction::Disable { skill } => {
+            let mut state = skills_sync::load_state(&home);
+            state.enabled.retain(|s| s != &skill);
+            skills_sync::save_state(&home, &state).map_err(|e| e.to_string())?;
+            println!("✓ {skill} opted out of sync.");
+        }
+        SyncAction::Device { name } => {
+            if let Some(name) = name {
+                let stored = skills_sync::set_device_name(&home, &name).map_err(|e| e.to_string())?;
+                println!("device label set to '{stored}'.");
+                println!("New pushes from this device will use this label.");
+            } else {
+                println!("{}", skills_sync::stable_device_id(&home));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn plugins_cmd(config: &UlncLawConfig, action: PluginsAction) -> Result<(), String> {

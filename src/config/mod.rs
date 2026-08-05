@@ -710,6 +710,12 @@ pub struct UlncLawConfig {
     /// Messaging platform gateways (hermes gateway/platforms).
     #[serde(default)]
     pub messaging: crate::messaging::MessagingConfig,
+    /// OAuth device-flow login (hermes portal auth, service-agnostic).
+    #[serde(default)]
+    pub oauth: crate::oauth::OAuthConfig,
+    /// Skill sync across devices (hermes `hermes sync`).
+    #[serde(default)]
+    pub sync: crate::skills_sync::SyncConfig,
 }
 
 /// `[video_gen]` — video generation backend selection (hermes config.yaml
