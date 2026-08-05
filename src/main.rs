@@ -688,6 +688,50 @@ enum KanbanAction {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Print the worker log for a task (hermes `kanban log`)
+    Log {
+        id: String,
+        /// Only print the last N bytes
+        #[arg(long)]
+        tail: Option<u64>,
+    },
+    /// Subscribe a gateway chat to a task's terminal events (hermes
+    /// `kanban notify-subscribe`)
+    NotifySubscribe {
+        id: String,
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        chat_id: String,
+        /// dm / group / channel (used by wake routing)
+        #[arg(long)]
+        chat_type: Option<String>,
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long)]
+        user_id: Option<String>,
+        /// Profile gateway that owns/delivers this subscription
+        #[arg(long)]
+        notifier_profile: Option<String>,
+    },
+    /// List notification subscriptions, optionally for one task (hermes
+    /// `kanban notify-list`)
+    NotifyList {
+        id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a gateway subscription from a task (hermes
+    /// `kanban notify-unsubscribe`)
+    NotifyUnsubscribe {
+        id: String,
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        chat_id: String,
+        #[arg(long)]
+        thread_id: Option<String>,
+    },
     /// Per-status + per-assignee counts + oldest-ready age (hermes
     /// `kanban stats`)
     Stats { #[arg(long)] json: bool },
@@ -4788,6 +4832,97 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     }
                 }
             }
+        }
+        KanbanAction::Log { id, tail } => {
+            let resolved = resolve(&id)?;
+            let home = ulnclaw::config::ulnclaw_home();
+            match ulnclaw::kanban::read_worker_log(&home, &resolved, tail) {
+                Some(content) => {
+                    print!("{content}");
+                    if !content.ends_with('\n') {
+                        println!();
+                    }
+                }
+                None => {
+                    return Err(format!(
+                        "(no log for {resolved} — task may not have spawned yet)"
+                    ));
+                }
+            }
+        }
+        KanbanAction::NotifySubscribe {
+            id,
+            platform,
+            chat_id,
+            chat_type,
+            thread_id,
+            user_id,
+            notifier_profile,
+        } => {
+            let resolved = resolve(&id)?;
+            store
+                .add_notify_sub(
+                    &resolved,
+                    &ulnclaw::kanban::NewNotifySub {
+                        platform: &platform,
+                        chat_id: &chat_id,
+                        chat_type: chat_type.as_deref(),
+                        thread_id: thread_id.as_deref(),
+                        user_id: user_id.as_deref(),
+                        notifier_profile: notifier_profile.as_deref(),
+                        delivery_metadata: None,
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            let thread_suffix = thread_id
+                .as_deref()
+                .map(|t| format!(":{t}"))
+                .unwrap_or_default();
+            println!("Subscribed {platform}:{chat_id}{thread_suffix} to {resolved}");
+        }
+        KanbanAction::NotifyList { id, json } => {
+            let resolved = match id {
+                Some(id) => Some(resolve(&id)?),
+                None => None,
+            };
+            let subs = store
+                .list_notify_subs(resolved.as_deref())
+                .map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&subs).map_err(|e| e.to_string())?
+                );
+            } else if subs.is_empty() {
+                println!("(no subscriptions)");
+            } else {
+                for s in &subs {
+                    let thr = if s.thread_id.is_empty() {
+                        String::new()
+                    } else {
+                        format!(":{}", s.thread_id)
+                    };
+                    let owner = s
+                        .notifier_profile
+                        .as_deref()
+                        .map(|p| format!("  owner={p}"))
+                        .unwrap_or_default();
+                    println!(
+                        "  {:10}  {}:{}{}  (since event {}){owner}",
+                        s.task_id, s.platform, s.chat_id, thr, s.last_event_id
+                    );
+                }
+            }
+        }
+        KanbanAction::NotifyUnsubscribe { id, platform, chat_id, thread_id } => {
+            let resolved = resolve(&id)?;
+            let removed = store
+                .remove_notify_sub(&resolved, &platform, &chat_id, thread_id.as_deref())
+                .map_err(|e| e.to_string())?;
+            if !removed {
+                return Err("(no such subscription)".into());
+            }
+            println!("Unsubscribed from {resolved}");
         }
         KanbanAction::Stats { json } => {
             let stats = store.board_stats().map_err(|e| e.to_string())?;

@@ -225,7 +225,14 @@
   rename/set-workdir；P130 新增全板 `kanban watch` 实时事件流
   （assignee/kind 过滤，hermes watch 后端）、`kanban stats` 采用 hermes
   `board_stats` 语义（按 assignee 统计 + 最老 ready 等待时长 +
-  `--json`）与 `kanban dispatch --json`。
+  `--json`）与 `kanban dispatch --json`；P131 移植网关通知底座：
+  `kanban_notify_subs` 表（task × platform × chat × thread 主键，
+  订阅时游标快照到当前最新事件、chat_type/profile/metadata 自愈）、
+  `kanban notify-subscribe / notify-list / notify-unsubscribe` CLI、
+  供网关通知器使用的 `unseen_events_for_sub` + `advance_notify_cursor`
+  构件，以及 `kanban log [--tail N]` —— 打印任务在
+  `<home>/kanban/worker-logs/` 下的 worker 日志，tail 采用 hermes 的
+  断行安全语义。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

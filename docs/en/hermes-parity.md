@@ -241,7 +241,15 @@ performance and a single static binary.
   rename/set-workdir; P130 added the board-wide `kanban watch`
   live event stream (assignee/kind filters, hermes watch backend),
   hermes `board_stats` semantics on `kanban stats` (per-assignee counts
-  + oldest-ready age + `--json`) and `kanban dispatch --json`.
+  + oldest-ready age + `--json`) and `kanban dispatch --json`; P131
+  ported the gateway notification substrate: the `kanban_notify_subs`
+  table (task × platform × chat × thread primary key, caught-up cursor
+  snapshot on subscribe, chat_type/profile/metadata self-heal), the
+  `kanban notify-subscribe / notify-list / notify-unsubscribe` CLI
+  surface, `unseen_events_for_sub` + `advance_notify_cursor` building
+  blocks for the gateway notifier, and `kanban log [--tail N]` which
+  prints a task's worker log from `<home>/kanban/worker-logs/` with
+  hermes' partial-line-safe tail.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

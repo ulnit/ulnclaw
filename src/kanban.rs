@@ -8,7 +8,7 @@
 //! `kanban_task_blocked` hooks that the plugin runtime validates
 //! (P95 wired the events; this engine emits them).
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -97,6 +97,39 @@ pub struct TaskEvent {
     pub kind: String,
     pub payload: Value,
     pub created_at: i64,
+}
+
+/// One gateway chat subscription to a task's terminal events (hermes
+/// `kanban_notify_subs` row). The gateway notifier polls
+/// [`KanbanStore::unseen_events_for_sub`] and advances
+/// `last_event_id` after delivery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifySub {
+    pub task_id: String,
+    pub platform: String,
+    pub chat_id: String,
+    pub chat_type: Option<String>,
+    pub thread_id: String,
+    pub user_id: Option<String>,
+    pub notifier_profile: Option<String>,
+    /// Free-form routing anchor (JSON), e.g. Telegram DM-topic reply ids.
+    pub delivery_metadata: Option<Value>,
+    pub created_at: i64,
+    pub last_event_id: i64,
+}
+
+/// Arguments for [`KanbanStore::add_notify_sub`].
+#[derive(Debug, Clone, Default)]
+pub struct NewNotifySub<'a> {
+    pub platform: &'a str,
+    pub chat_id: &'a str,
+    /// dm / group / channel (used by wake routing).
+    pub chat_type: Option<&'a str>,
+    pub thread_id: Option<&'a str>,
+    pub user_id: Option<&'a str>,
+    /// Profile gateway that owns/delivers this subscription.
+    pub notifier_profile: Option<&'a str>,
+    pub delivery_metadata: Option<Value>,
 }
 
 /// Board health snapshot (hermes `board_stats`): per-status +
@@ -224,6 +257,57 @@ pub fn spawn_worker(
     }
     let child = cmd.spawn().map_err(|e| format!("spawn worker: {e}"))?;
     Ok(Some(i64::from(child.id())))
+}
+
+/// `<home>/kanban/worker-logs/<id>.log` (hermes `worker_log_path`).
+pub fn worker_log_path(home: &Path, task_id: &str) -> PathBuf {
+    home.join("kanban")
+        .join("worker-logs")
+        .join(format!("{task_id}.log"))
+}
+
+/// Read the worker log for `task_id` (hermes `read_worker_log`).
+/// Returns `None` when the task has not spawned yet. With `tail_bytes`,
+/// only the last N bytes are returned — the partial first line is
+/// skipped unless the whole window is a single giant line.
+pub fn read_worker_log(home: &Path, task_id: &str, tail_bytes: Option<u64>) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let path = worker_log_path(home, task_id);
+    let mut file = std::fs::File::open(&path).ok()?;
+    let size = file.metadata().ok()?.len();
+    let mut buf: Vec<u8> = Vec::new();
+    match tail_bytes {
+        None => {
+            file.read_to_end(&mut buf).ok()?;
+        }
+        Some(tail) if size <= tail => {
+            file.read_to_end(&mut buf).ok()?;
+        }
+        Some(tail) => {
+            file.seek(SeekFrom::Start(size - tail)).ok()?;
+            let probe = size - tail;
+            let mut line: Vec<u8> = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                match file.read(&mut byte) {
+                    Ok(1) => {
+                        line.push(byte[0]);
+                        if byte[0] == b'\n' {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            let at_eof = file.stream_position().ok()? >= size;
+            if !line.ends_with(b"\n") && at_eof {
+                // One giant log line: don't skip anything.
+                file.seek(SeekFrom::Start(probe)).ok()?;
+            }
+            file.read_to_end(&mut buf).ok()?;
+        }
+    }
+    Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// In-process slash surface for the REPL `/kanban` command (hermes
@@ -1043,7 +1127,21 @@ impl KanbanStore {
             CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS kanban_notify_subs (
+                task_id           TEXT NOT NULL,
+                platform          TEXT NOT NULL,
+                chat_id           TEXT NOT NULL,
+                chat_type         TEXT,
+                thread_id         TEXT NOT NULL DEFAULT '',
+                user_id           TEXT,
+                notifier_profile  TEXT,
+                delivery_metadata TEXT,
+                created_at        INTEGER NOT NULL,
+                last_event_id     INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (task_id, platform, chat_id, thread_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_notify_task ON kanban_notify_subs(task_id);",
         )
         .map_err(db_error("schema"))?;
         // Additive migrations: pre-P122 stores lack worker_pid; pre-P127
@@ -2311,6 +2409,233 @@ impl KanbanStore {
         Ok(removed > 0)
     }
 
+    // ------------------------------------------------------------------
+    // Notification subscriptions (hermes kanban_notify_subs)
+    // ------------------------------------------------------------------
+
+    /// Subscribe a gateway chat to a task's terminal events (hermes
+    /// `add_notify_sub`). Idempotent: duplicate subscribes refresh
+    /// `chat_type` / `notifier_profile` / `delivery_metadata` when the
+    /// existing value is unset (or the metadata changed). New subs start
+    /// "caught up": `last_event_id` snaps to the task's current max
+    /// event id so subscribers never replay history.
+    pub fn add_notify_sub(&self, task_id: &str, spec: &NewNotifySub<'_>) -> Result<()> {
+        if self.get_task(task_id)?.is_none() {
+            return Err(AgentError::session(format!(
+                "kanban: no such task: {task_id}"
+            )));
+        }
+        let thread_id = spec.thread_id.unwrap_or("");
+        let metadata_json = spec
+            .delivery_metadata
+            .as_ref()
+            .map(|v| v.to_string())
+            .filter(|s| s != "null");
+        let now = Self::now();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO kanban_notify_subs
+                (task_id, platform, chat_id, chat_type, thread_id, user_id,
+                 notifier_profile, delivery_metadata, created_at, last_event_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                     COALESCE((SELECT MAX(id) FROM task_events WHERE task_id = ?1), 0))",
+            params![
+                task_id,
+                spec.platform,
+                spec.chat_id,
+                spec.chat_type,
+                thread_id,
+                spec.user_id,
+                spec.notifier_profile,
+                metadata_json,
+                now,
+            ],
+        )
+        .map_err(db_error("notify-subscribe"))?;
+        if let Some(chat_type) = spec.chat_type {
+            // Self-heal rows created before chat_type was persisted.
+            conn.execute(
+                "UPDATE kanban_notify_subs SET chat_type = ?1
+                 WHERE task_id = ?2 AND platform = ?3 AND chat_id = ?4 AND thread_id = ?5
+                   AND (chat_type IS NULL OR chat_type = '')",
+                params![chat_type, task_id, spec.platform, spec.chat_id, thread_id],
+            )
+            .map_err(db_error("notify-subscribe chat_type"))?;
+        }
+        if let Some(profile) = spec.notifier_profile {
+            // Self-heal legacy rows that predate notifier ownership.
+            conn.execute(
+                "UPDATE kanban_notify_subs SET notifier_profile = ?1
+                 WHERE task_id = ?2 AND platform = ?3 AND chat_id = ?4 AND thread_id = ?5
+                   AND (notifier_profile IS NULL OR notifier_profile = '')",
+                params![profile, task_id, spec.platform, spec.chat_id, thread_id],
+            )
+            .map_err(db_error("notify-subscribe profile"))?;
+        }
+        if let Some(meta) = &metadata_json {
+            // Duplicate subscribes refresh the routing anchor.
+            conn.execute(
+                "UPDATE kanban_notify_subs SET delivery_metadata = ?1
+                 WHERE task_id = ?2 AND platform = ?3 AND chat_id = ?4 AND thread_id = ?5",
+                params![meta, task_id, spec.platform, spec.chat_id, thread_id],
+            )
+            .map_err(db_error("notify-subscribe metadata"))?;
+        }
+        Ok(())
+    }
+
+    /// List notification subscriptions, optionally for one task (hermes
+    /// `list_notify_subs`).
+    pub fn list_notify_subs(&self, task_id: Option<&str>) -> Result<Vec<NotifySub>> {
+        let conn = self.conn.lock().unwrap();
+        let (sql, params_box): (String, Vec<Box<dyn rusqlite::ToSql>>) = match task_id {
+            Some(id) => (
+                "SELECT task_id, platform, chat_id, chat_type, thread_id, user_id,
+                        notifier_profile, delivery_metadata, created_at, last_event_id
+                 FROM kanban_notify_subs WHERE task_id = ?1
+                 ORDER BY created_at ASC".into(),
+                vec![Box::new(id.to_string())],
+            ),
+            None => (
+                "SELECT task_id, platform, chat_id, chat_type, thread_id, user_id,
+                        notifier_profile, delivery_metadata, created_at, last_event_id
+                 FROM kanban_notify_subs ORDER BY created_at ASC".into(),
+                Vec::new(),
+            ),
+        };
+        let mut stmt = conn.prepare(&sql).map_err(db_error("notify-list"))?;
+        let refs: Vec<&dyn rusqlite::ToSql> = params_box.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                let metadata: Option<String> = row.get(7)?;
+                Ok(NotifySub {
+                    task_id: row.get(0)?,
+                    platform: row.get(1)?,
+                    chat_id: row.get(2)?,
+                    chat_type: row.get(3)?,
+                    thread_id: row.get(4)?,
+                    user_id: row.get(5)?,
+                    notifier_profile: row.get(6)?,
+                    delivery_metadata: metadata
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .and_then(|s| serde_json::from_str(s).ok()),
+                    created_at: row.get(8)?,
+                    last_event_id: row.get(9)?,
+                })
+            })
+            .map_err(db_error("notify-list"))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_error("notify-list"))
+    }
+
+    /// Remove one subscription; returns whether a row existed (hermes
+    /// `remove_notify_sub`).
+    pub fn remove_notify_sub(
+        &self,
+        task_id: &str,
+        platform: &str,
+        chat_id: &str,
+        thread_id: Option<&str>,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let removed = conn
+            .execute(
+                "DELETE FROM kanban_notify_subs WHERE task_id = ?1
+                 AND platform = ?2 AND chat_id = ?3 AND thread_id = ?4",
+                params![task_id, platform, chat_id, thread_id.unwrap_or("")],
+            )
+            .map_err(db_error("notify-unsubscribe"))?;
+        Ok(removed > 0)
+    }
+
+    /// Advance a subscription's delivery cursor (hermes
+    /// `advance_notify_cursor`). Called by the gateway notifier after
+    /// events were successfully delivered.
+    pub fn advance_notify_cursor(
+        &self,
+        task_id: &str,
+        platform: &str,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        new_cursor: i64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE kanban_notify_subs SET last_event_id = ?1
+             WHERE task_id = ?2 AND platform = ?3 AND chat_id = ?4 AND thread_id = ?5",
+            params![new_cursor, task_id, platform, chat_id, thread_id.unwrap_or("")],
+        )
+        .map_err(db_error("notify-cursor"))?;
+        Ok(())
+    }
+
+    /// `(new_cursor, events)` unseen by one subscription (hermes
+    /// `unseen_events_for_sub`). Only events with `id > last_event_id`;
+    /// the cursor is NOT advanced here — call [`Self::advance_notify_cursor`]
+    /// after successful delivery.
+    pub fn unseen_events_for_sub(
+        &self,
+        task_id: &str,
+        platform: &str,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        kinds: Option<&[&str]>,
+    ) -> Result<(i64, Vec<TaskEvent>)> {
+        let conn = self.conn.lock().unwrap();
+        let cursor: Option<i64> = conn
+            .query_row(
+                "SELECT last_event_id FROM kanban_notify_subs
+                 WHERE task_id = ?1 AND platform = ?2 AND chat_id = ?3 AND thread_id = ?4",
+                params![task_id, platform, chat_id, thread_id.unwrap_or("")],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error("notify-unseen"))?;
+        let Some(cursor) = cursor else {
+            return Ok((0, Vec::new()));
+        };
+        let mut sql = String::from(
+            "SELECT id, task_id, kind, payload, created_at FROM task_events
+             WHERE task_id = ?1 AND id > ?2 ",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(task_id.to_string()),
+            Box::new(cursor),
+        ];
+        if let Some(kinds) = kinds.filter(|k| !k.is_empty()) {
+            sql.push_str("AND kind IN (");
+            for (i, _) in kinds.iter().enumerate() {
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str(&format!("?{}", i + 3));
+                param_values.push(Box::new(kinds[i].to_string()));
+            }
+            sql.push_str(") ");
+        }
+        sql.push_str("ORDER BY id ASC");
+        let mut stmt = conn.prepare(&sql).map_err(db_error("notify-unseen"))?;
+        let refs: Vec<&dyn rusqlite::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| {
+                let payload: String = row.get(3)?;
+                Ok(TaskEvent {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                    created_at: row.get(4)?,
+                })
+            })
+            .map_err(db_error("notify-unseen"))?;
+        let events: Vec<TaskEvent> = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_error("notify-unseen"))?;
+        let max_id = events.last().map(|e| e.id).unwrap_or(cursor).max(cursor);
+        Ok((max_id, events))
+    }
+
     /// Child task ids of `task_id`, oldest link first.
     pub fn children_of(&self, task_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
@@ -3498,5 +3823,174 @@ mod tests {
         assert!(!bob.is_empty());
         let carol = store.board_events_since(start, Some("carol"), None, 100).unwrap();
         assert!(carol.is_empty());
+    }
+
+    #[test]
+    fn notify_sub_lifecycle() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "notify me");
+        store.ready_task(&task.id).unwrap();
+
+        // Unknown task is rejected (hermes _cmd_notify_subscribe guard).
+        let err = store
+            .add_notify_sub(
+                "t_nope",
+                &NewNotifySub {
+                    platform: "telegram",
+                    chat_id: "1",
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("no such task"));
+
+        store
+            .add_notify_sub(
+                &task.id,
+                &NewNotifySub {
+                    platform: "telegram",
+                    chat_id: "42",
+                    chat_type: Some("group"),
+                    user_id: Some("u7"),
+                    notifier_profile: Some("default"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // Cursor snaps to the current max event id (no history replay).
+        let max_event = store.events(&task.id).unwrap().last().unwrap().id;
+        let subs = store.list_notify_subs(Some(&task.id)).unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].platform, "telegram");
+        assert_eq!(subs[0].chat_id, "42");
+        assert_eq!(subs[0].chat_type.as_deref(), Some("group"));
+        assert_eq!(subs[0].thread_id, "");
+        assert_eq!(subs[0].notifier_profile.as_deref(), Some("default"));
+        assert_eq!(subs[0].last_event_id, max_event);
+
+        // Duplicate subscribe is idempotent (INSERT OR IGNORE path).
+        store
+            .add_notify_sub(
+                &task.id,
+                &NewNotifySub {
+                    platform: "telegram",
+                    chat_id: "42",
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(store.list_notify_subs(None).unwrap().len(), 1);
+
+        // Same chat in a thread is a distinct subscription.
+        store
+            .add_notify_sub(
+                &task.id,
+                &NewNotifySub {
+                    platform: "telegram",
+                    chat_id: "42",
+                    thread_id: Some("t9"),
+                    delivery_metadata: Some(serde_json::json!({"reply_to": 5})),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let subs = store.list_notify_subs(Some(&task.id)).unwrap();
+        assert_eq!(subs.len(), 2);
+        let threaded = subs.iter().find(|s| s.thread_id == "t9").unwrap();
+        assert_eq!(
+            threaded.delivery_metadata.as_ref().unwrap()["reply_to"],
+            5
+        );
+
+        // Unsubscribe: exact key match only.
+        assert!(!store
+            .remove_notify_sub(&task.id, "telegram", "42", Some("zz"))
+            .unwrap());
+        assert!(store
+            .remove_notify_sub(&task.id, "telegram", "42", Some("t9"))
+            .unwrap());
+        assert!(store
+            .remove_notify_sub(&task.id, "telegram", "42", None)
+            .unwrap());
+        assert!(store.list_notify_subs(Some(&task.id)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn notify_unseen_events_and_cursor() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "watched task");
+        store
+            .add_notify_sub(
+                &task.id,
+                &NewNotifySub {
+                    platform: "slack",
+                    chat_id: "C1",
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        store.ready_task(&task.id).unwrap();
+        store.append_event(&task.id, "heartbeat", Value::Null).unwrap();
+        store.complete_task(&task.id, Some("done!")).unwrap();
+
+        // Everything after the subscribe cursor, kind-filtered or not.
+        let (cursor, events) = store
+            .unseen_events_for_sub(&task.id, "slack", "C1", None, None)
+            .unwrap();
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["ready", "heartbeat", "completed"]);
+        assert_eq!(cursor, events.last().unwrap().id);
+
+        let (_, done_only) = store
+            .unseen_events_for_sub(&task.id, "slack", "C1", None, Some(&["completed"]))
+            .unwrap();
+        assert_eq!(done_only.len(), 1);
+
+        // Unknown sub returns an empty page; cursor advances on request.
+        let (cursor2, _) = store
+            .unseen_events_for_sub(&task.id, "slack", "nope", None, None)
+            .unwrap();
+        assert_eq!(cursor2, 0);
+        store
+            .advance_notify_cursor(&task.id, "slack", "C1", None, cursor)
+            .unwrap();
+        let (_, events) = store
+            .unseen_events_for_sub(&task.id, "slack", "C1", None, None)
+            .unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn worker_log_read_and_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        assert_eq!(read_worker_log(home, "t_x", None), None);
+
+        let log_dir = home.join("kanban").join("worker-logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("t_x.log"), b"line one\nline two\nline three\n").unwrap();
+
+        // Full read.
+        assert_eq!(
+            read_worker_log(home, "t_x", None).unwrap(),
+            "line one\nline two\nline three\n"
+        );
+        // Tail larger than the file returns everything.
+        assert_eq!(
+            read_worker_log(home, "t_x", Some(1000)).unwrap(),
+            "line one\nline two\nline three\n"
+        );
+        // Tail from mid-line skips the partial first line.
+        assert_eq!(
+            read_worker_log(home, "t_x", Some(24)).unwrap(),
+            "line two\nline three\n"
+        );
+
+        // One giant line with no newline: raw tail, nothing skipped.
+        std::fs::write(log_dir.join("t_big.log"), "x".repeat(100)).unwrap();
+        let tail = read_worker_log(home, "t_big", Some(50)).unwrap();
+        assert_eq!(tail, "x".repeat(50));
     }
 }
