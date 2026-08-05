@@ -171,6 +171,29 @@ enum Commands {
         #[arg(long)]
         deep: bool,
     },
+    /// View and filter ulnclaw log files (hermes logs)
+    Logs {
+        /// Log to view: agent (default), errors, gateway, or 'list'
+        log_name: Option<String>,
+        /// Number of lines to show
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+        /// Follow the log in real time (like tail -f)
+        #[arg(short = 'f', long)]
+        follow: bool,
+        /// Minimum log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        #[arg(long)]
+        level: Option<String>,
+        /// Filter lines containing this session ID substring
+        #[arg(long)]
+        session: Option<String>,
+        /// Show lines since TIME ago (e.g. 1h, 30m, 2d)
+        #[arg(long)]
+        since: Option<String>,
+        /// Filter by component: gateway, agent, tools, cli, cron, browser
+        #[arg(long)]
+        component: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -731,15 +754,24 @@ async fn checkpoints_cmd(config: &UlncLawConfig, action: CheckpointAction) -> Re
 }
 
 fn init_logging(verbose: bool) {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::Layer;
     let filter = if verbose {
         EnvFilter::new("debug")
     } else {
         EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".into()))
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
+        .with_filter(filter);
+    // hermes_logging parity: rotating file handlers under <home>/logs/
+    // (agent.log INFO+, errors.log WARNING+, gateway.log gateway targets).
+    let file_layers = ulnclaw::logs::file_layers();
+    tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(file_layers)
         .init();
 }
 
@@ -856,6 +888,26 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Status { all: _, deep } => {
             let opts = ulnclaw::status::StatusOptions { deep };
             print!("{}", ulnclaw::status::show_status(&config, &opts));
+            Ok(())
+        }
+        Commands::Logs { log_name, lines, follow, level, session, since, component } => {
+            let name = log_name.unwrap_or_else(|| "agent".to_string());
+            if name == "list" {
+                print!("{}", ulnclaw::logs::list_logs());
+                return Ok(());
+            }
+            let opts = ulnclaw::logs::TailOptions {
+                num_lines: lines,
+                follow,
+                level,
+                session: session.clone(),
+                since: since.clone(),
+                component: component.clone(),
+            };
+            print!("{}", ulnclaw::logs::tail_log(&name, &opts)?);
+            if follow {
+                ulnclaw::logs::follow_log(&name, &opts)?;
+            }
             Ok(())
         }
     }

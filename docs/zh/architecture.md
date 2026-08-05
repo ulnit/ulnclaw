@@ -381,6 +381,10 @@ CLI 提供 `ulnclaw models providers|list|info|refresh`。
   ssh；命令包装 + shell 引号
 - `checkpoint.rs` - 透明的 git 快照（共享 bare 存储、按项目
   ref/index、编辑前钩子、restore/diff/prune）
+- `logs.rs` - 滚动文件日志（`<home>/logs/agent.log` INFO+、
+  `errors.log` WARNING+、`gateway.log` 网关目标；hermes `_LOG_FORMAT`
+  行格式）+ `ulnclaw logs` 查看器（tail/follow/level/session/since/
+  component 过滤）
 
 ## 数据流
 

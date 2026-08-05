@@ -79,6 +79,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw doctor             # diagnose config/deps (--fix, --online, --json)
 ./ulnclaw insights           # usage analytics over sessions (--days, --source, --json)
 ./ulnclaw status             # status of all components (--deep)
+./ulnclaw logs               # tail/filter logs (-f, -n, --level, --since, --component)
 
 # Browser automation: auto mode launches a managed headless Chrome/Chromium;
 # or point browser_* tools at an existing browser with remote debugging
@@ -208,7 +209,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 537 tests
+cargo test                     # 546 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -290,6 +291,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw doctor             # 诊断配置与依赖（--fix、--online、--json）
 ./ulnclaw insights           # 会话用量分析（--days、--source、--json）
 ./ulnclaw status             # 全组件状态总览（--deep）
+./ulnclaw logs               # 查看/过滤日志（-f、-n、--level、--since、--component）
 
 # 浏览器自动化：auto 模式自动启动托管的无头 Chrome/Chromium；
 # 也可将 browser_* 工具指向已开启远程调试的浏览器
@@ -338,7 +340,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 537 个测试
+cargo test                     # 546 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

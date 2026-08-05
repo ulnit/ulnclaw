@@ -373,6 +373,10 @@ re-read); the CLI exposes `ulnclaw models providers|list|info|refresh`.
   creation) / ssh; command wrapping + shell quoting
 - `checkpoint.rs` - transparent git-backed snapshots (shared bare store,
   per-project refs/indexes, pre-edit hooks, restore/diff/prune)
+- `logs.rs` - rotating file logging (`<home>/logs/agent.log` INFO+,
+  `errors.log` WARNING+, `gateway.log` gateway targets; hermes
+  `_LOG_FORMAT` line format) plus the `ulnclaw logs` viewer
+  (tail/follow/level/session/since/component filters)
 
 ## Data Flow
 
