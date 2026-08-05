@@ -232,7 +232,15 @@
   供网关通知器使用的 `unseen_events_for_sub` + `advance_notify_cursor`
   构件，以及 `kanban log [--tail N]` —— 打印任务在
   `<home>/kanban/worker-logs/` 下的 worker 日志，tail 采用 hermes 的
-  断行安全语义。
+  断行安全语义；P132 新增 `task_runs` 尝试历史表（hermes `Run` 生命
+  周期：认领时开 run，携带认领锁/TTL 与运行时限，心跳与 spawn 出的
+  worker pid 同步写入，按 hermes outcome 语义关闭 —— done/block/
+  reclaim/过期回收/超时分别对应 completed/blocked/reclaimed/
+  timed_out，CLI 直接完成未认领任务与调度器 spawn 失败则合成瞬时
+  run；重新认领时把残留活跃 run 恢复为 `reclaimed`）、
+  `kanban runs [--json] [--state-type status|outcome --state-name V]`
+  CLI（hermes 表格格式）与 `latest_run` / `latest_summary` 存储
+  辅助方法。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

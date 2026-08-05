@@ -249,7 +249,17 @@ performance and a single static binary.
   surface, `unseen_events_for_sub` + `advance_notify_cursor` building
   blocks for the gateway notifier, and `kanban log [--tail N]` which
   prints a task's worker log from `<home>/kanban/worker-logs/` with
-  hermes' partial-line-safe tail.
+  hermes' partial-line-safe tail; P132 added the `task_runs`
+  attempt-history table (hermes `Run` lifecycle: a run opens on claim
+  carrying claim lock/TTL + runtime cap, heartbeats and the spawned
+  worker pid are mirrored onto it, and it closes with hermes outcome
+  semantics — completed / blocked / reclaimed / timed_out on
+  done/block/reclaim/stale-release/timeout, plus instant synthesized
+  runs for CLI completes on never-claimed tasks and dispatcher spawn
+  failures; re-claim recovers stale active runs as `reclaimed`), the
+  `kanban runs [--json] [--state-type status|outcome --state-name V]`
+  CLI with hermes' table format, and `latest_run` / `latest_summary`
+  store helpers.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

@@ -695,6 +695,18 @@ enum KanbanAction {
         #[arg(long)]
         tail: Option<u64>,
     },
+    /// Attempt history for a task — one row per run (hermes `kanban runs`)
+    Runs {
+        id: String,
+        #[arg(long)]
+        json: bool,
+        /// With --state-name: filter runs by this task_runs column
+        #[arg(long, value_parser = ["status", "outcome"])]
+        state_type: Option<String>,
+        /// With --state-type: keep runs whose column equals this value
+        #[arg(long)]
+        state_name: Option<String>,
+    },
     /// Subscribe a gateway chat to a task's terminal events (hermes
     /// `kanban notify-subscribe`)
     NotifySubscribe {
@@ -4847,6 +4859,91 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     return Err(format!(
                         "(no log for {resolved} — task may not have spawned yet)"
                     ));
+                }
+            }
+        }
+        KanbanAction::Runs { id, json, state_type, state_name } => {
+            let resolved = resolve(&id)?;
+            match (&state_type, &state_name) {
+                (Some(_), None) | (None, Some(_)) => {
+                    return Err(
+                        "kanban runs: pass both --state-type and --state-name, or omit both"
+                            .into(),
+                    );
+                }
+                _ => {}
+            }
+            let runs = store
+                .list_runs(&resolved, true, state_type.as_deref(), state_name.as_deref())
+                .map_err(|e| e.to_string())?;
+            if json {
+                let rows: Vec<serde_json::Value> = runs
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "id": r.id,
+                            "profile": r.profile,
+                            "status": r.status,
+                            "outcome": r.outcome,
+                            "started_at": r.started_at,
+                            "ended_at": r.ended_at,
+                            "summary": r.summary,
+                            "error": r.error,
+                            "metadata": r.metadata,
+                            "worker_pid": r.worker_pid,
+                            "step_key": r.step_key,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?
+                );
+            } else if runs.is_empty() {
+                println!("(no runs yet for {resolved})");
+            } else {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                println!(
+                    "{:3}  {:12}  {:16}  {:>8}  STARTED",
+                    "#", "OUTCOME", "PROFILE", "ELAPSED"
+                );
+                for (i, r) in runs.iter().enumerate() {
+                    let end = r.ended_at.unwrap_or(now);
+                    let elapsed = (end - r.started_at).max(0);
+                    let el = if elapsed < 60 {
+                        format!("{elapsed}s")
+                    } else if elapsed < 3600 {
+                        format!("{}m", elapsed / 60)
+                    } else {
+                        format!("{:.1}h", elapsed as f64 / 3600.0)
+                    };
+                    let outcome = r.outcome.clone().unwrap_or_else(|| {
+                        if r.ended_at.is_none() {
+                            "(running)".into()
+                        } else {
+                            r.status.clone()
+                        }
+                    });
+                    println!(
+                        "{:3}  {:12}  {:16}  {:>8}  {}",
+                        i + 1,
+                        outcome,
+                        r.profile.as_deref().unwrap_or("-"),
+                        el,
+                        kanban_epoch_label(r.started_at)
+                    );
+                    if let Some(summary) = r.summary.as_deref().filter(|s| !s.is_empty()) {
+                        let first: String =
+                            summary.lines().next().unwrap_or("").chars().take(100).collect();
+                        println!("     → {first}");
+                    }
+                    if let Some(err) = r.error.as_deref().filter(|s| !s.is_empty()) {
+                        let first: String = err.chars().take(100).collect();
+                        println!("     ✖ {first}");
+                    }
                 }
             }
         }

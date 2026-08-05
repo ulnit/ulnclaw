@@ -118,6 +118,58 @@ pub struct NotifySub {
     pub last_event_id: i64,
 }
 
+/// One attempt to execute a task — a `task_runs` row (hermes `Run`).
+/// Created on claim, closed on complete/block/crash/timeout/spawn-failure/
+/// reclaim; retries produce multiple runs per task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Run {
+    pub id: i64,
+    pub task_id: String,
+    pub profile: Option<String>,
+    pub step_key: Option<String>,
+    /// running | done | blocked | crashed | timed_out | failed |
+    /// released | reclaimed
+    pub status: String,
+    pub claim_lock: Option<String>,
+    pub claim_expires: Option<i64>,
+    pub worker_pid: Option<i64>,
+    pub max_runtime_seconds: Option<i64>,
+    pub last_heartbeat_at: Option<i64>,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    /// completed | blocked | crashed | timed_out | spawn_failed |
+    /// gave_up | reclaimed (null while running)
+    pub outcome: Option<String>,
+    pub summary: Option<String>,
+    pub metadata: Option<Value>,
+    pub error: Option<String>,
+}
+
+fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
+    let metadata: Option<String> = row.get(14)?;
+    Ok(Run {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        profile: row.get(2)?,
+        step_key: row.get(3)?,
+        status: row.get(4)?,
+        claim_lock: row.get(5)?,
+        claim_expires: row.get(6)?,
+        worker_pid: row.get(7)?,
+        max_runtime_seconds: row.get(8)?,
+        last_heartbeat_at: row.get(9)?,
+        started_at: row.get(10)?,
+        ended_at: row.get(11)?,
+        outcome: row.get(12)?,
+        summary: row.get(13)?,
+        metadata: metadata
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| serde_json::from_str(s).ok()),
+        error: row.get(15)?,
+    })
+}
+
 /// Arguments for [`KanbanStore::add_notify_sub`].
 #[derive(Debug, Clone, Default)]
 pub struct NewNotifySub<'a> {
@@ -1141,7 +1193,27 @@ impl KanbanStore {
                 last_event_id     INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (task_id, platform, chat_id, thread_id)
             );
-            CREATE INDEX IF NOT EXISTS idx_notify_task ON kanban_notify_subs(task_id);",
+            CREATE INDEX IF NOT EXISTS idx_notify_task ON kanban_notify_subs(task_id);
+            CREATE TABLE IF NOT EXISTS task_runs (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id             TEXT NOT NULL,
+                profile             TEXT,
+                step_key            TEXT,
+                status              TEXT NOT NULL,
+                claim_lock          TEXT,
+                claim_expires       INTEGER,
+                worker_pid          INTEGER,
+                max_runtime_seconds INTEGER,
+                last_heartbeat_at   INTEGER,
+                started_at          INTEGER NOT NULL,
+                ended_at            INTEGER,
+                outcome             TEXT,
+                summary             TEXT,
+                metadata            TEXT,
+                error               TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_runs_task ON task_runs(task_id, started_at);
+            CREATE INDEX IF NOT EXISTS idx_runs_status ON task_runs(status);",
         )
         .map_err(db_error("schema"))?;
         // Additive migrations: pre-P122 stores lack worker_pid; pre-P127
@@ -1176,6 +1248,12 @@ impl KanbanStore {
             "CREATE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks(idempotency_key);",
         )
         .map_err(db_error("migrate idempotency index"))?;
+        // Pre-P132 stores lack the active-run pointer (hermes
+        // tasks.current_run_id).
+        if !columns.contains("current_run_id") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN current_run_id INTEGER;")
+                .map_err(db_error("migrate current_run_id"))?;
+        }
         let store = Self {
             conn: Mutex::new(conn),
             path,
@@ -1927,8 +2005,8 @@ impl KanbanStore {
                 params![id, lock, expires, now, claimer],
             )
             .map_err(db_error("claim"))?;
-        drop(conn);
         if updated == 0 {
+            drop(conn);
             let task = self.get_task(id)?;
             return match task {
                 Some(task)
@@ -1948,10 +2026,15 @@ impl KanbanStore {
                 None => Err(AgentError::session(format!("kanban: task {id} not found"))),
             };
         }
+        // One run row per attempt (hermes task_runs): recover any stale
+        // active run, then open the new one.
+        Self::recover_stale_run_conn(&conn, id, "invariant recovery on re-claim", now)?;
+        let run_id = Self::start_run_conn(&conn, id, &lock, expires, now)?;
+        drop(conn);
         self.append_event(
             id,
             "claimed",
-            serde_json::json!({ "lock": lock, "expires": expires, "claimer": claimer }),
+            serde_json::json!({ "lock": lock, "expires": expires, "claimer": claimer, "run_id": run_id }),
         )?;
         self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
     }
@@ -1969,6 +2052,15 @@ impl KanbanStore {
                 params![id, now, expires, claimer],
             )
             .map_err(db_error("heartbeat"))?;
+        if updated > 0 {
+            conn.execute(
+                "UPDATE task_runs SET last_heartbeat_at = ?2, claim_expires = ?3 \
+                  WHERE id = (SELECT current_run_id FROM tasks WHERE id = ?1) \
+                  AND ended_at IS NULL",
+                params![id, now, expires],
+            )
+            .map_err(db_error("heartbeat run"))?;
+        }
         drop(conn);
         if updated == 0 {
             return Err(AgentError::session(format!(
@@ -1991,12 +2083,20 @@ impl KanbanStore {
             ", completed_at = ?3, result = ?4, claim_lock = NULL, claim_expires = NULL",
             vec![Box::new(now), Box::new(result.map(|r| r.to_string()))],
         )?;
+        match self.close_active_run(id, "done", "completed", result, None)? {
+            Some(_) => {}
+            None => {
+                // CLI `kanban done` on a never-claimed task still leaves
+                // an attempt-history row (hermes _synthesize_ended_run).
+                self.synthesize_closed_run(id, "completed", result, None)?;
+            }
+        }
         Ok(task)
     }
 
     /// Block a task with a reason (hermes `block_task`).
     pub fn block_task(&self, id: &str, reason: &str) -> Result<Task> {
-        self.transition(
+        let task = self.transition(
             id,
             &["todo", "ready", "running", "scheduled"],
             "blocked",
@@ -2004,12 +2104,14 @@ impl KanbanStore {
             serde_json::json!({ "reason": reason }),
             ", claim_lock = NULL, claim_expires = NULL",
             vec![],
-        )
+        )?;
+        self.close_active_run(id, "blocked", "blocked", None, Some(reason))?;
+        Ok(task)
     }
 
     /// blocked/scheduled → ready (hermes `unblock_task`).
     pub fn unblock_task(&self, id: &str) -> Result<Task> {
-        self.transition(
+        let task = self.transition(
             id,
             &["blocked", "scheduled"],
             "ready",
@@ -2017,7 +2119,9 @@ impl KanbanStore {
             serde_json::json!({}),
             "",
             vec![],
-        )
+        )?;
+        self.recover_stale_run(id, "invariant recovery on unblock")?;
+        Ok(task)
     }
 
     /// Park a task in the scheduled column — waiting on time, not human
@@ -2078,7 +2182,7 @@ impl KanbanStore {
     /// Release an active worker claim on a running task without completing
     /// it (hermes `kanban reclaim`): back to ready for a fresh worker.
     pub fn reclaim_task(&self, id: &str, reason: &str) -> Result<Task> {
-        self.transition(
+        let task = self.transition(
             id,
             &["running"],
             "ready",
@@ -2086,7 +2190,17 @@ impl KanbanStore {
             serde_json::json!({ "reason": reason }),
             ", claim_lock = NULL, claim_expires = NULL, worker_pid = NULL,              last_heartbeat_at = NULL",
             vec![],
-        )
+        )?;
+        self.close_active_run(id, "reclaimed", "reclaimed", Some(reason), None)?;
+        Ok(task)
+    }
+
+    /// Close any stale active run as `reclaimed` (hermes invariant
+    /// recovery, public wrapper for non-transition call sites).
+    pub fn recover_stale_run(&self, task_id: &str, note: &str) -> Result<()> {
+        let now = Self::now();
+        let conn = self.conn.lock().unwrap();
+        Self::recover_stale_run_conn(&conn, task_id, note, now)
     }
 
     /// Reassign a task, optionally reclaiming an active claim first
@@ -2636,6 +2750,235 @@ impl KanbanStore {
         Ok((max_id, events))
     }
 
+    // ------------------------------------------------------------------
+    // Run attempt history (hermes task_runs)
+    // ------------------------------------------------------------------
+
+    /// Start a `running` run row for a freshly claimed task and point
+    /// `tasks.current_run_id` at it (hermes claim-time INSERT INTO
+    /// task_runs). Caller must hold `conn`.
+    fn start_run_conn(
+        conn: &Connection,
+        task_id: &str,
+        lock: &str,
+        expires: i64,
+        now: i64,
+    ) -> Result<i64> {
+        let (assignee, max_runtime): (Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT assignee, max_runtime_seconds FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(db_error("run start"))?;
+        conn.execute(
+            "INSERT INTO task_runs (
+                task_id, profile, status, claim_lock, claim_expires,
+                max_runtime_seconds, started_at
+             ) VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6)",
+            params![task_id, assignee, lock, expires, max_runtime, now],
+        )
+        .map_err(db_error("run start"))?;
+        let run_id = conn.last_insert_rowid();
+        conn.execute(
+            "UPDATE tasks SET current_run_id = ?2 WHERE id = ?1",
+            params![task_id, run_id],
+        )
+        .map_err(db_error("run start pointer"))?;
+        Ok(run_id)
+    }
+
+    /// Close any still-open run left over from a previous attempt as
+    /// `reclaimed` (hermes invariant recovery on re-claim / unblock).
+    /// Caller must hold `conn`.
+    fn recover_stale_run_conn(conn: &Connection, task_id: &str, note: &str, now: i64) -> Result<()> {
+        conn.execute(
+            "UPDATE task_runs
+                SET status = 'reclaimed', outcome = 'reclaimed',
+                    summary = COALESCE(summary, ?2),
+                    ended_at = ?3,
+                    claim_lock = NULL, claim_expires = NULL, worker_pid = NULL
+              WHERE id = (SELECT current_run_id FROM tasks WHERE id = ?1)
+                AND ended_at IS NULL",
+            params![task_id, note, now],
+        )
+        .map_err(db_error("run recover"))?;
+        conn.execute(
+            "UPDATE tasks SET current_run_id = NULL WHERE id = ?1",
+            params![task_id],
+        )
+        .map_err(db_error("run recover pointer"))?;
+        Ok(())
+    }
+
+    /// Close the task's active run (hermes `close_active_run`). Returns
+    /// the closed run id, or `None` when no run was active (e.g. a CLI
+    /// `done` on a never-claimed task). `summary` / `error` keep any
+    /// existing value when `None`.
+    pub fn close_active_run(
+        &self,
+        task_id: &str,
+        status: &str,
+        outcome: &str,
+        summary: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<Option<i64>> {
+        let now = Self::now();
+        let conn = self.conn.lock().unwrap();
+        let run_id: Option<i64> = conn
+            .query_row(
+                "SELECT current_run_id FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error("run close"))?
+            .flatten();
+        let Some(run_id) = run_id else {
+            return Ok(None);
+        };
+        conn.execute(
+            "UPDATE task_runs
+                SET status = ?2, outcome = ?3,
+                    summary = COALESCE(?4, summary),
+                    error = COALESCE(?5, error),
+                    ended_at = ?6,
+                    claim_lock = NULL, claim_expires = NULL, worker_pid = NULL
+              WHERE id = ?1 AND ended_at IS NULL",
+            params![run_id, status, outcome, summary, error, now],
+        )
+        .map_err(db_error("run close"))?;
+        conn.execute(
+            "UPDATE tasks SET current_run_id = NULL WHERE id = ?1",
+            params![task_id],
+        )
+        .map_err(db_error("run close pointer"))?;
+        drop(conn);
+        Ok(Some(run_id))
+    }
+
+    /// Record an "instant" closed run for an attempt that never held a
+    /// claim — CLI completes and dispatcher spawn failures (hermes
+    /// `_synthesize_ended_run`).
+    pub fn synthesize_closed_run(
+        &self,
+        task_id: &str,
+        outcome: &str,
+        summary: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<i64> {
+        let now = Self::now();
+        let conn = self.conn.lock().unwrap();
+        let profile: Option<String> = conn
+            .query_row(
+                "SELECT assignee FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error("run synthesize"))?
+            .flatten();
+        conn.execute(
+            "INSERT INTO task_runs (
+                task_id, profile, status, outcome, summary, error,
+                started_at, ended_at
+             ) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?6)",
+            params![task_id, profile, outcome, summary, error, now],
+        )
+        .map_err(db_error("run synthesize"))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Attempt history for a task, oldest first (hermes `list_runs`).
+    /// `state_type` is `status` or `outcome` and must pair with
+    /// `state_name`; `include_active=false` drops the running attempt.
+    pub fn list_runs(
+        &self,
+        task_id: &str,
+        include_active: bool,
+        state_type: Option<&str>,
+        state_name: Option<&str>,
+    ) -> Result<Vec<Run>> {
+        match (state_type, state_name) {
+            (None, None) => {}
+            (Some(t), Some(_)) if t == "status" || t == "outcome" => {}
+            (Some(_), Some(_)) => {
+                return Err(AgentError::session(
+                    "kanban runs: state-type must be 'status' or 'outcome'",
+                ));
+            }
+            _ => {
+                return Err(AgentError::session(
+                    "kanban runs: pass both --state-type and --state-name, or omit both",
+                ));
+            }
+        }
+        let mut sql = String::from(
+            "SELECT id, task_id, profile, step_key, status, claim_lock, claim_expires,
+                   worker_pid, max_runtime_seconds, last_heartbeat_at, started_at,
+                   ended_at, outcome, summary, metadata, error
+              FROM task_runs WHERE task_id = ?1 ",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(task_id.to_string())];
+        if !include_active {
+            sql.push_str("AND ended_at IS NOT NULL ");
+        }
+        if let (Some(state_type), Some(state_name)) = (state_type, state_name) {
+            sql.push_str(&format!("AND {state_type} = ?2 "));
+            param_values.push(Box::new(state_name.to_string()));
+        }
+        sql.push_str("ORDER BY started_at ASC, id ASC");
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql).map_err(db_error("runs"))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt
+            .query_map(refs.as_slice(), run_from_row)
+            .map_err(db_error("runs"))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error("runs"))
+    }
+
+    /// Most recent run regardless of outcome, active or closed (hermes
+    /// `latest_run`).
+    pub fn latest_run(&self, task_id: &str) -> Result<Option<Run>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, profile, step_key, status, claim_lock, claim_expires,
+                       worker_pid, max_runtime_seconds, last_heartbeat_at, started_at,
+                       ended_at, outcome, summary, metadata, error
+                  FROM task_runs WHERE task_id = ?1
+                 ORDER BY started_at DESC, id DESC LIMIT 1",
+            )
+            .map_err(db_error("latest run"))?;
+        let mut rows = stmt
+            .query_map(params![task_id], run_from_row)
+            .map_err(db_error("latest run"))?;
+        match rows.next() {
+            Some(row) => Ok(Some(row.map_err(db_error("latest run"))?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Latest non-null run summary for a task (hermes `latest_summary`)
+    /// — the worker's handoff, surfaced when `tasks.result` is empty.
+    pub fn latest_summary(&self, task_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let summary: Option<String> = conn
+            .query_row(
+                "SELECT summary FROM task_runs
+                  WHERE task_id = ?1 AND summary IS NOT NULL
+                  ORDER BY COALESCE(ended_at, 0) DESC, id DESC LIMIT 1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error("latest summary"))?
+            .flatten();
+        Ok(summary)
+    }
+
     /// Child task ids of `task_id`, oldest link first.
     pub fn children_of(&self, task_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
@@ -2731,6 +3074,7 @@ impl KanbanStore {
                     "sigkill": sigkill,
                 }),
             )?;
+            self.close_active_run(&id, "timed_out", "timed_out", None, None)?;
             reaped.push(id);
         }
         Ok(reaped)
@@ -2789,6 +3133,7 @@ impl KanbanStore {
                 )
                 .map_err(db_error("release claim"))?;
             self.append_event(&id, "released", serde_json::json!({ "reason": "stale_claim" }))?;
+            self.close_active_run(&id, "reclaimed", "reclaimed", None, None)?;
             reclaimed.push(id);
         }
         Ok(reclaimed)
@@ -2847,14 +3192,22 @@ impl KanbanStore {
 
     /// Record the pid of a dispatcher-spawned worker.
     pub fn set_worker_pid(&self, id: &str, pid: Option<i64>) -> Result<()> {
-        self.conn
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE tasks SET worker_pid = ?2 WHERE id = ?1",
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET worker_pid = ?2 WHERE id = ?1",
+            params![id, pid],
+        )
+        .map_err(db_error("worker_pid"))?;
+        if pid.is_some() {
+            // hermes _record_spawned also stamps the active run.
+            conn.execute(
+                "UPDATE task_runs SET worker_pid = ?2 \
+                  WHERE id = (SELECT current_run_id FROM tasks WHERE id = ?1) \
+                  AND ended_at IS NULL",
                 params![id, pid],
             )
-            .map_err(db_error("worker_pid"))?;
+            .map_err(db_error("worker_pid run"))?;
+        }
         Ok(())
     }
 
@@ -2934,6 +3287,7 @@ impl KanbanStore {
                         "spawn_failed",
                         serde_json::json!({ "error": err }),
                     )?;
+                    self.synthesize_closed_run(&id, "spawn_failed", None, Some(&err))?;
                     let streak = self.spawn_failure_streak(&id)?;
                     if streak >= failure_limit {
                         self.block_task(
@@ -3992,5 +4346,123 @@ mod tests {
         std::fs::write(log_dir.join("t_big.log"), "x".repeat(100)).unwrap();
         let tail = read_worker_log(home, "t_big", Some(50)).unwrap();
         assert_eq!(tail, "x".repeat(50));
+    }
+
+    #[test]
+    fn run_lifecycle_claim_complete() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "attempt history");
+        assert!(store.latest_run(&task.id).unwrap().is_none());
+
+        store.ready_task(&task.id).unwrap();
+        let claimed = store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        let run = store.latest_run(&task.id).unwrap().unwrap();
+        assert_eq!(run.status, "running");
+        assert_eq!(run.profile.as_deref(), Some("host:1"));
+        assert!(run.claim_lock.is_some());
+        assert!(run.ended_at.is_none());
+        assert_eq!(claimed.status, "running");
+
+        store.heartbeat_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        let run = store.latest_run(&task.id).unwrap().unwrap();
+        assert!(run.last_heartbeat_at.is_some());
+
+        store.set_worker_pid(&task.id, Some(4242)).unwrap();
+        let run = store.latest_run(&task.id).unwrap().unwrap();
+        assert_eq!(run.worker_pid, Some(4242));
+
+        store.complete_task(&task.id, Some("shipped")).unwrap();
+        let run = store.latest_run(&task.id).unwrap().unwrap();
+        assert_eq!(run.status, "done");
+        assert_eq!(run.outcome.as_deref(), Some("completed"));
+        assert_eq!(run.summary.as_deref(), Some("shipped"));
+        assert!(run.ended_at.is_some());
+        assert!(run.worker_pid.is_none(), "claim machinery cleared on close");
+        assert_eq!(
+            store.latest_summary(&task.id).unwrap().as_deref(),
+            Some("shipped")
+        );
+
+        // No active run remains: closing again is a no-op.
+        assert_eq!(
+            store.close_active_run(&task.id, "done", "completed", None, None).unwrap(),
+            None
+        );
+        // Closed runs survive the include_active=false view.
+        assert_eq!(store.list_runs(&task.id, false, None, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn run_block_reclaim_and_retries() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "retry me");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        store.block_task(&task.id, "needs api key").unwrap();
+        let run = store.latest_run(&task.id).unwrap().unwrap();
+        assert_eq!(run.outcome.as_deref(), Some("blocked"));
+        assert_eq!(run.error.as_deref(), Some("needs api key"));
+
+        // Retry: unblock → re-claim opens run #2.
+        store.unblock_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        store.reclaim_task(&task.id, "manual takeover").unwrap();
+        let runs = store.list_runs(&task.id, true, None, None).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].outcome.as_deref(), Some("blocked"));
+        assert_eq!(runs[1].outcome.as_deref(), Some("reclaimed"));
+        assert_eq!(runs[1].summary.as_deref(), Some("manual takeover"));
+
+        // State filters.
+        let blocked = store.list_runs(&task.id, true, Some("outcome"), Some("blocked")).unwrap();
+        assert_eq!(blocked.len(), 1);
+        let none = store.list_runs(&task.id, true, Some("outcome"), Some("completed")).unwrap();
+        assert!(none.is_empty());
+        assert!(store.list_runs(&task.id, true, Some("outcome"), None).is_err());
+        assert!(store.list_runs(&task.id, true, Some("bogus"), Some("x")).is_err());
+    }
+
+    #[test]
+    fn run_synthesized_for_unclaimed_complete_and_spawn_failure() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "cli done");
+        // CLI-style complete without a claim synthesizes an instant run.
+        store.complete_task(&task.id, Some("manual")).unwrap();
+        let runs = store.list_runs(&task.id, true, None, None).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].outcome.as_deref(), Some("completed"));
+        assert_eq!(runs[0].started_at, runs[0].ended_at.unwrap());
+
+        // Dispatcher spawn failure records an instant spawn_failed run.
+        let other = make_task(&store, "bad spawn");
+        store.synthesize_closed_run(&other.id, "spawn_failed", None, Some("exec format error")).unwrap();
+        let failed = store.list_runs(&other.id, true, Some("outcome"), Some("spawn_failed")).unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].error.as_deref(), Some("exec format error"));
+    }
+
+    #[test]
+    fn run_reclaim_stale_on_reclaim_by_new_claimer() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "stale run");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        // Force-expire the claim so a second claimer can take over.
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE tasks SET claim_expires = 1 WHERE id = ?1",
+                params![task.id],
+            )
+            .unwrap();
+        }
+        store.claim_task(&task.id, "host:2", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        let runs = store.list_runs(&task.id, true, None, None).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].outcome.as_deref(), Some("reclaimed"));
+        assert_eq!(runs[1].status, "running");
+        // hermes semantics: the run profile is the task's assignee at
+        // claim time (set by the first claim), not the new lock holder.
+        assert_eq!(runs[1].profile.as_deref(), Some("host:1"));
     }
 }
