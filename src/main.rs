@@ -782,6 +782,8 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
         config.model.provider
     );
     println!("Type /help for commands, /quit to exit.");
+    // Random feature tip (hermes startup tip).
+    println!("{}", ulnclaw::tips::format_tip(ulnclaw::tips::get_random_tip()));
 
     let mut history: Vec<Message> = Vec::new();
     let stdin = std::io::stdin();
@@ -888,6 +890,7 @@ async fn handle_slash(
         "/new" => {
             history.clear();
             println!("New conversation started.");
+            println!("{}", ulnclaw::tips::format_tip(ulnclaw::tips::get_random_tip()));
         }
         "/help" => {
             println!(
