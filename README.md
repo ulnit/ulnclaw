@@ -12,7 +12,9 @@ ulnclaw re-implements the Hermes Agent engine in Rust: the same tool surface
 (50+ built-in tools), the same SQLite session/memory/skills/cron storage
 layout, the same toolset composition — with native performance and a single
 static musl binary. See the [parity matrix](docs/en/hermes-parity.md) for the
-full feature-by-feature mapping.
+full feature-by-feature mapping — core parity with hermes-agent v2026.8.3 is
+complete (messaging-platform gateways, desktop GUI, cloud sync, and the
+plugin system are intentionally out of scope).
 
 ### Key Features
 
@@ -246,7 +248,8 @@ MIT OR Apache-2.0
 ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 内置工具）、
 相同的 SQLite 会话/记忆/技能/定时任务存储布局、相同的工具集组合方式 ——
 原生性能，单一静态 musl 二进制。完整的逐项对标见
-[对标矩阵](docs/zh/hermes-parity.md)。
+[对标矩阵](docs/zh/hermes-parity.md) —— 与 hermes-agent v2026.8.3 的核心
+对齐已完成（消息平台网关、桌面 GUI、云同步与插件体系有意不在范围内）。
 
 ### 核心特性
 

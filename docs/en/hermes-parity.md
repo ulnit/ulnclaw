@@ -147,10 +147,11 @@ performance and a single static binary.
   an external `agent-browser` daemon. The Camofox REST backend is ported
   (incl. managed persistence, via `CAMOFOX_MANAGED_PERSISTENCE` instead of
   hermes' config.yaml knob); other cloud browser providers are not ported.
-- The gateway implements the api_server platform subset; profile multiplexing
-  (`/p/<profile>/...`) is not ported.  The jobs API delivers locally only
-  (`deliver="local"`); hermes' external delivery targets and the NAS/Chronos
-  fire webhook (`/api/cron/fire`) are not ported.
+- The gateway implements the api_server platform subset (profile
+  multiplexing under `/p/<profile>/...` IS ported — see the feature table).
+  The jobs API delivers locally only (`deliver="local"`); hermes' external
+  delivery targets and the NAS/Chronos fire webhook (`/api/cron/fire`) are
+  not ported.
 - `/api/model/options` enriches the single configured provider row from the
   models.dev catalog (model list + capability/cost maps, `?refresh=true`);
   hermes' multi-provider picker inventory (probing multiple configured
@@ -163,3 +164,27 @@ performance and a single static binary.
   and their credential flows are not ported.
 - Checkpoints skip hermes' legacy pre-v2 store migration (fresh stores only)
   and the volume-identity orphan heuristic (workdir existence is used).
+
+## Completion status
+
+The agent core is at parity with hermes-agent v2026.8.3: every core tool,
+the full `sessions` surface (`list/show/search/export/recap/recover/prune/
+archive/stats/delete/rename/optimize/repair/browse`), startup resume
+(`--resume`/`--continue` with one-session-per-conversation continuity), the
+CDP browser client + attach layer + Camofox backend, the HTTP gateway
+(including the `/v1/browser/*` live-endpoint control and profile
+multiplexing), skills/bundles/memory/goals/checkpoints/cron/insights/doctor
+and the rest of the CLI are ported. The `sessions` surface intentionally
+omits only: `optimize-storage` (ulnclaw was built on the compact
+external-content FTS layout from day one — there is no legacy layout to
+migrate) and `retitle-skills` (LLM re-titling of skill-scaffolded sessions;
+requires skill-scaffold session tracking), plus `-c <session-name>` title
+lookup (`--continue` takes no value).
+
+Deliberately not ported (hermes surfaces outside the local-agent scope):
+messaging-platform gateways (Telegram/Discord/Slack/WhatsApp-Cloud/XAI/…
+gateway platforms), the Electron desktop app / dashboards / kanban GUI,
+OAuth + Nous portal login and cloud sync, the plugin/hook/egress system
+(including cloud browser providers behind it), `secrets` vault providers
+(Bitwarden/1Password), `computer-use` desktop control, `pets`, and small
+desktop-UX commands (clipboard, focus_view, prompt_stash, uninstall).

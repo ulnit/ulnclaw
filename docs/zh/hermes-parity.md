@@ -145,9 +145,10 @@
   守护进程。Camofox REST 后端已移植（含受管持久化，以
   `CAMOFOX_MANAGED_PERSISTENCE` 环境变量替代 hermes 的 config.yaml 开关）；
   其他云浏览器 provider 未移植。
-- 网关实现了 api_server 平台的子集；多 profile 复用（`/p/<profile>/...`）
-  未移植。任务 API 仅本地投递（`deliver="local"`）；hermes 的外部投递
-  目标与 NAS/Chronos 触发 webhook（`/api/cron/fire`）未移植。
+- 网关实现了 api_server 平台的子集（多 profile 复用
+  `/p/<profile>/...` 已移植 —— 见功能表）。任务 API 仅本地投递
+  （`deliver="local"`）；hermes 的外部投递目标与 NAS/Chronos 触发
+  webhook（`/api/cron/fire`）未移植。
 - `/api/model/options` 以 models.dev 目录增强已配置的单个 provider 行
   （模型清单 + 能力/成本映射、`?refresh=true`）；hermes 的多 provider
   选择器清单（多 provider 探测、精选模型、凭据池行）未移植。
@@ -158,3 +159,23 @@
   流程未移植。
 - 检查点跳过 hermes 的 pre-v2 旧存储迁移（仅全新存储），孤儿判定使用
   工作目录存在性（不记录卷设备/inode 证据）。
+
+## 完成状态
+
+agent 核心已与 hermes-agent v2026.8.3 对齐：全部核心工具、完整 `sessions`
+面（`list/show/search/export/recap/recover/prune/archive/stats/delete/
+rename/optimize/repair/browse`）、启动恢复（`--resume`/`--continue`，
+一会话一记录的连续性）、CDP 浏览器客户端 + 接入层 + Camofox 后端、HTTP
+网关（含 `/v1/browser/*` 实时端点控制与 profile 多路复用）、技能/捆绑/
+记忆/目标/检查点/定时任务/用量分析/doctor 及其余 CLI 均已移植。`sessions`
+面仅有意省略：`optimize-storage`（ulnclaw 自始即采用紧凑的外联内容 FTS
+布局，无旧布局可迁移）与 `retitle-skills`（技能脚手架会话的 LLM 重命名，
+需要技能脚手架会话跟踪），以及 `-c <会话名>` 标题查找（`--continue`
+不带值）。
+
+有意不移植（超出本地 agent 范围的 hermes 面）：消息平台网关
+（Telegram/Discord/Slack/WhatsApp-Cloud/XAI/… 等 gateway 平台）、Electron
+桌面应用/仪表盘/kanban GUI、OAuth + Nous 门户登录与云同步、插件/hook/
+egress 体系（含其后的云浏览器 provider）、`secrets` 保险库提供方
+（Bitwarden/1Password）、`computer-use` 桌面控制、`pets`，以及小型桌面
+UX 命令（clipboard、focus_view、prompt_stash、uninstall）。
