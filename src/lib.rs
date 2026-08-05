@@ -74,6 +74,7 @@
 
 pub mod active_sessions;
 pub mod agent;
+pub mod agent_import;
 pub mod ansi;
 pub mod approvals_cmd;
 pub mod async_delegation;

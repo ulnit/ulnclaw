@@ -108,6 +108,20 @@ enum Commands {
         #[arg(long)]
         yes: bool,
     },
+    /// Import Claude Code / Codex CLI setups into ulnclaw (hermes import-agent)
+    ImportAgent {
+        /// Agent to import from: claude-code | codex (default: auto-detect)
+        agent: Option<String>,
+        /// Source directory (default: ~/.claude or ~/.codex)
+        #[arg(long)]
+        source: Option<PathBuf>,
+        /// Preview only — write nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// Replace skills that already exist in the target
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -974,6 +988,40 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Memory { args, yes } => {
             let home = ulnclaw::config::ulnclaw_home();
             ulnclaw::memory_cmd::handle_memory_command(&home, &args, yes)
+        }
+        Commands::ImportAgent { agent, source, dry_run, overwrite } => {
+            let user_home = dirs::home_dir().ok_or("cannot resolve home directory")?;
+            let agents: Vec<String> = match agent {
+                Some(name) => vec![name],
+                None => ulnclaw::agent_import::detect_agents(&user_home),
+            };
+            if agents.is_empty() {
+                return Err(
+                    "No supported agent installs found (~/.claude, ~/.codex). \
+                     Specify one explicitly: ulnclaw import-agent <claude-code|codex> [--source DIR]"
+                        .to_string(),
+                );
+            }
+            for name in agents {
+                let default_dir = match name.as_str() {
+                    "claude-code" => user_home.join(".claude"),
+                    "codex" => user_home.join(".codex"),
+                    _ => return Err(format!("Unsupported agent: {name:?} (expected claude-code|codex)")),
+                };
+                let source_root = source.clone().unwrap_or(default_dir);
+                let target_root = ulnclaw::config::ulnclaw_home();
+                let importer = ulnclaw::agent_import::AgentImporter::new(
+                    &name,
+                    source_root,
+                    target_root,
+                    !dry_run,
+                    overwrite,
+                )
+                .map_err(|e| e)?;
+                let report = importer.run();
+                print!("{}", ulnclaw::agent_import::format_import_report(&report));
+            }
+            Ok(())
         }
         Commands::Curator { action } => {
             curator_cmd(action.unwrap_or(CuratorAction::Status))
