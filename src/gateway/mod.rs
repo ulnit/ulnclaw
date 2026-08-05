@@ -3545,10 +3545,37 @@ pub type DispatcherProviderFactory = std::sync::Arc<
         + Sync,
 >;
 
+/// Try to take the exclusive, non-blocking dispatcher lock at `path`
+/// (hermes `_acquire_singleton_lock`). The returned handle must stay
+/// open for as long as this process dispatches; dropping it releases
+/// the lock.
+fn try_acquire_dispatcher_lock_at(path: &std::path::Path) -> Option<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()?;
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        Some(file)
+    } else {
+        None
+    }
+}
+
 /// Start the embedded kanban dispatcher loop (hermes hosts the dispatcher
 /// in the gateway, ticking every 60 s by default): auto-decompose fresh
 /// triage tasks, reclaim stale claims, promote parent-done todos, spawn
 /// detached workers for ready tasks.
+///
+/// Only one gateway process machine-wide runs the dispatcher: an
+/// exclusive advisory lock next to `kanban.db` is the backstop that
+/// survives config drift and restart races (hermes singleton lock —
+/// concurrent dispatchers double reclaim frequency and claim events).
 ///
 /// The `[kanban] auto_decompose` toggle is re-read from config EVERY
 /// tick (hermes #49638): it is a safety switch — flipping it off must
@@ -3561,15 +3588,33 @@ pub fn spawn_kanban_dispatcher(
     provider_factory: Option<DispatcherProviderFactory>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let lock_path = crate::config::ulnclaw_home()
+            .join("kanban")
+            .join("dispatcher.lock");
+        // Held for the loop's lifetime; dropping releases the lock.
+        let _lock_guard = match try_acquire_dispatcher_lock_at(&lock_path) {
+            Some(handle) => handle,
+            None => {
+                tracing::warn!(
+                    "kanban dispatcher: another gateway holds {lock_path:?};                      this process will not dispatch (dispatch_in_gateway backstop)"
+                );
+                return;
+            }
+        };
         let mut interval =
             tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(5)));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Health telemetry (hermes HEALTH_WINDOW): warn when the ready
+        // queue stays non-empty but nothing spawns, throttled to 300 s.
+        const HEALTH_WINDOW: u32 = 6;
+        let mut bad_ticks: u32 = 0;
+        let mut last_warn_at: i64 = 0;
         loop {
             interval.tick().await;
             auto_decompose_tick(provider_factory.as_ref()).await;
-            let _ = tokio::task::spawn_blocking(move || {
+            let tick_outcome = tokio::task::spawn_blocking(move || -> Option<(usize, bool)> {
                 let Ok(store) = crate::kanban::KanbanStore::open_default() else {
-                    return;
+                    return None;
                 };
                 let home = crate::config::ulnclaw_home();
                 // Live re-read so [kanban] stale_timeout_seconds edits
@@ -3584,19 +3629,47 @@ pub fn spawn_kanban_dispatcher(
                     2,
                     stale_timeout,
                 ) {
-                    Ok(result) if !result.spawned.is_empty() || !result.reclaimed.is_empty() => {
-                        tracing::info!(
-                            "kanban dispatch: {} reclaimed, {} promoted, {} spawned",
-                            result.reclaimed.len(),
-                            result.promoted.len(),
-                            result.spawned.len()
-                        );
+                    Ok(result) => {
+                        if !result.spawned.is_empty() || !result.reclaimed.is_empty() {
+                            tracing::info!(
+                                "kanban dispatch: {} reclaimed, {} promoted, {} spawned",
+                                result.reclaimed.len(),
+                                result.promoted.len(),
+                                result.spawned.len()
+                            );
+                        }
+                        let ready_pending = store
+                            .list_tasks(None, Some("ready"), None, 1)
+                            .map(|tasks| !tasks.is_empty())
+                            .unwrap_or(false);
+                        Some((result.spawned.len(), ready_pending))
                     }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("kanban dispatch tick failed: {e}"),
+                    Err(e) => {
+                        tracing::warn!("kanban dispatch tick failed: {e}");
+                        None
+                    }
                 }
             })
             .await;
+            if let Ok(Some((spawned, ready_pending))) = tick_outcome {
+                if ready_pending && spawned == 0 {
+                    bad_ticks += 1;
+                } else {
+                    bad_ticks = 0;
+                }
+                if bad_ticks >= HEALTH_WINDOW {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    if now - last_warn_at >= 300 {
+                        tracing::warn!(
+                            "kanban dispatcher stuck: ready queue non-empty for                              {bad_ticks} consecutive ticks but 0 workers spawned.                              Check profile health (binary, PATH, credentials) and                              `ulnclaw kanban list --status ready`."
+                        );
+                        last_warn_at = now;
+                    }
+                }
+            }
         }
     })
 }
@@ -5885,6 +5958,24 @@ mod tests {
                 .to_str()
                 .unwrap(),
             "*"
+        );
+    }
+
+    #[test]
+    fn dispatcher_lock_is_exclusive() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("dispatcher.lock");
+        let first = super::try_acquire_dispatcher_lock_at(&lock_path);
+        assert!(first.is_some(), "first acquire must hold the lock");
+        // A second open file description in the same process contends.
+        assert!(
+            super::try_acquire_dispatcher_lock_at(&lock_path).is_none(),
+            "second acquire must fail while the first handle lives"
+        );
+        drop(first);
+        assert!(
+            super::try_acquire_dispatcher_lock_at(&lock_path).is_some(),
+            "lock must be reusable after the handle drops"
         );
     }
 
