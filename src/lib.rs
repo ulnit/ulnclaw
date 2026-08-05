@@ -90,6 +90,7 @@ pub mod env_probe;
 pub mod environments;
 pub mod curator;
 pub mod error;
+pub mod fallback;
 pub mod gateway;
 pub mod git_diff;
 pub mod goals;

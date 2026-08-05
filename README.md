@@ -81,6 +81,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw status             # status of all components (--deep)
 ./ulnclaw logs               # tail/filter logs (-f, -n, --level, --since, --component)
 ./ulnclaw update --check   # check for updates (ulnclaw update applies: stash -> ff pull -> rebuild)
+./ulnclaw fallback         # fallback chain (add/remove/clear provider:model entries)
 ./ulnclaw backup           # zip backup of home (-q quick snapshot, backup list/restore/prune)
 ./ulnclaw import b.zip     # restore a backup zip (runtime-state files skipped, secrets 0600)
 
@@ -212,7 +213,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 560 tests
+cargo test                     # 566 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -296,6 +297,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw status             # 全组件状态总览（--deep）
 ./ulnclaw logs               # 查看/过滤日志（-f、-n、--level、--since、--component）
 ./ulnclaw update --check   # 检查更新（ulnclaw update 应用：stash -> ff 拉取 -> 重建）
+./ulnclaw fallback         # 回退链管理（add/remove/clear provider:model 条目）
 ./ulnclaw backup           # home 目录 zip 备份（-q 快速快照，backup list/restore/prune）
 ./ulnclaw import b.zip     # 恢复备份 zip（跳过运行时状态文件，机密文件 0600）
 
@@ -346,7 +348,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 560 个测试
+cargo test                     # 566 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

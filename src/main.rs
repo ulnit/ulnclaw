@@ -171,6 +171,14 @@ enum Commands {
         #[arg(long)]
         deep: bool,
     },
+    /// Manage the fallback provider chain (hermes fallback)
+    Fallback {
+        /// Subcommand: list (default) | add <provider:model> | remove <N|provider:model> | clear
+        args: Vec<String>,
+        /// Assume yes (skip the clear confirmation)
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// Back up the ulnclaw home directory to a zip (hermes backup)
     Backup {
         /// Snapshot management: list | restore <id> | prune [keep]
@@ -919,6 +927,11 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Status { all: _, deep } => {
             let opts = ulnclaw::status::StatusOptions { deep };
             print!("{}", ulnclaw::status::show_status(&config, &opts));
+            Ok(())
+        }
+        Commands::Fallback { args, yes } => {
+            let home = ulnclaw::config::ulnclaw_home();
+            print!("{}", ulnclaw::fallback::handle_fallback_command(&home, &args, yes)?);
             Ok(())
         }
         Commands::Backup { action, output, quick, label } => {
