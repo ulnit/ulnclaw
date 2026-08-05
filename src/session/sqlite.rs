@@ -1171,6 +1171,20 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Most recent non-archived session id by last activity (hermes
+    /// `--continue` target selection). `None` when the store is empty.
+    pub fn latest_session_id(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.query_row(
+            "SELECT id FROM sessions WHERE archived = 0
+             ORDER BY COALESCE(last_activity_at, started_at) DESC LIMIT 1",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| AgentError::session(e.to_string()))
+    }
+
     /// Resolve an exact session id or a uniquely prefixed prefix to the
     /// full id (hermes `resolve_session_id`). Returns `None` for no
     /// match or an ambiguous prefix.
@@ -1862,6 +1876,29 @@ mod tests {
         let counts = store.session_count_by_source().unwrap();
         assert_eq!(counts[0], ("cli".to_string(), 2));
         assert_eq!(counts[1], ("cron".to_string(), 1));
+    }
+
+    #[test]
+    fn latest_session_id_prefers_last_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        assert_eq!(store.latest_session_id().unwrap(), None);
+        let first = store.create_session("cli", None, None).unwrap();
+        let second = store.create_session("cli", None, None).unwrap();
+        // Newest by started_at wins when no activity is recorded.
+        assert_eq!(store.latest_session_id().unwrap().as_deref(), Some(second.as_str()));
+        // Activity on the older session promotes it.
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET last_activity_at = ?2 WHERE id = ?1",
+            params![first, now_secs() + 10.0],
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(store.latest_session_id().unwrap().as_deref(), Some(first.as_str()));
+        // Archived sessions are skipped.
+        store.set_session_archived(&first, true).unwrap();
+        assert_eq!(store.latest_session_id().unwrap().as_deref(), Some(second.as_str()));
     }
 
     #[test]

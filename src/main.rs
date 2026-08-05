@@ -28,6 +28,12 @@ struct Cli {
     /// Verbose logging
     #[arg(short, long, global = true)]
     verbose: bool,
+    /// Resume an existing session by ID or unique prefix (hermes --resume)
+    #[arg(short = 'r', long, global = true)]
+    resume: Option<String>,
+    /// Continue the most recent session (hermes --continue)
+    #[arg(short = 'c', long, global = true)]
+    continue_last: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -819,7 +825,7 @@ async fn build_gateway_stack(
     let state_holder: Arc<tokio::sync::OnceCell<Arc<ulnclaw::gateway::GatewayState>>> =
         Arc::new(tokio::sync::OnceCell::new());
     let approve = ulnclaw::gateway::gateway_approve_fn(router.clone(), state_holder.clone());
-    let agent = make_agent_in(config, false, Some(approve), home).await?;
+    let agent = make_agent_in(config, false, Some(approve), home, None).await?;
     agent.context().set_async_delivery(true);
     let state = ulnclaw::gateway::GatewayState::new(
         agent,
@@ -976,13 +982,13 @@ fn init_logging(verbose: bool) {
 
 async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
     match cli.command.unwrap_or(Commands::Chat) {
-        Commands::Chat => chat_repl(&config).await,
+        Commands::Chat => chat_repl(&config, cli.resume.clone(), cli.continue_last).await,
         Commands::Run { prompt } => {
             let prompt = prompt.join(" ");
             if prompt.is_empty() {
                 return Err("usage: ulnclaw run \"your prompt\"".into());
             }
-            one_shot(&config, &prompt).await
+            one_shot(&config, &prompt, cli.resume.clone(), cli.continue_last).await
         }
         Commands::Sessions { action } => sessions_cmd(action).await,
         Commands::Tools => tools_cmd(&config),
@@ -1358,9 +1364,10 @@ async fn make_agent(
     config: &UlncLawConfig,
     interactive: bool,
     approve_override: Option<ulnclaw::tools::context::ApproveFn>,
+    session_id: Option<String>,
 ) -> Result<Arc<Agent>, String> {
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
-    make_agent_in(config, interactive, approve_override, &home).await
+    make_agent_in(config, interactive, approve_override, &home, session_id).await
 }
 
 /// Build an agent rooted at an explicit home directory — the multiplex
@@ -1371,6 +1378,7 @@ async fn make_agent_in(
     interactive: bool,
     approve_override: Option<ulnclaw::tools::context::ApproveFn>,
     home: &std::path::Path,
+    session_id: Option<String>,
 ) -> Result<Arc<Agent>, String> {
     let provider = build_provider(config)?;
     let mut registry = ToolRegistry::new();
@@ -1397,7 +1405,11 @@ async fn make_agent_in(
 
     let mut context = ToolContext::new()
         .with_home(home.to_path_buf())
-        .with_config(config.clone())
+        .with_config(config.clone());
+    if let Some(sid) = session_id {
+        context = context.with_session_id(sid);
+    }
+    context = context
         .with_async_delivery(interactive)
         .with_env_passthrough(&config.terminal.env_passthrough)
         .with_store(store.clone())
@@ -1478,11 +1490,46 @@ async fn make_agent_in(
     Ok(agent)
 }
 
-async fn one_shot(config: &UlncLawConfig, prompt: &str) -> Result<(), String> {
-    let agent = make_agent(config, false, None).await?;
-    let result = agent.run(prompt, None).await.map_err(|e| e.to_string())?;
+async fn one_shot(
+    config: &UlncLawConfig,
+    prompt: &str,
+    resume: Option<String>,
+    continue_last: bool,
+) -> Result<(), String> {
+    let target = resolve_resume_target(resume.as_deref(), continue_last)?;
+    let agent = make_agent(config, false, None, target.clone()).await?;
+    let result = agent
+        .run_with_session(prompt, None, target.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
     println!("{}", result.content);
     Ok(())
+}
+
+/// Resolve `--resume <id|prefix>` / `--continue` to a concrete session id
+/// (hermes startup resume). Returns `Ok(None)` when neither flag is set.
+fn resolve_resume_target(
+    resume: Option<&str>,
+    continue_last: bool,
+) -> Result<Option<String>, String> {
+    if resume.is_none() && !continue_last {
+        return Ok(None);
+    }
+    let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    let store = SqliteSessionStore::open(home.join("state.db")).map_err(|e| e.to_string())?;
+    if let Some(id) = resume {
+        store
+            .resolve_session_id(id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Session '{}' not found.", id))
+            .map(Some)
+    } else {
+        store
+            .latest_session_id()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No previous session to continue.".to_string())
+            .map(Some)
+    }
 }
 
 /// Print a random feature tip tinted with the active skin's banner_dim
@@ -1556,11 +1603,37 @@ async fn print_welcome_banner(config: &UlncLawConfig, agent: &Arc<Agent>) {
     }
 }
 
-async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
+async fn chat_repl(
+    config: &UlncLawConfig,
+    resume: Option<String>,
+    continue_last: bool,
+) -> Result<(), String> {
     // Kick off the git update check while the agent is being constructed
     // (hermes prefetch_update_check on the startup path).
     ulnclaw::banner::prefetch_update_check();
-    let agent = make_agent(config, true, None).await?;
+    // Resolve --resume/--continue before the agent exists (hermes startup
+    // resume): the whole REPL conversation lives in ONE session row.
+    let mut session_id = uuid::Uuid::new_v4().to_string();
+    let mut history: Vec<Message> = Vec::new();
+    let mut resumed_from: Option<String> = None;
+    if resume.is_some() || continue_last {
+        let target = resolve_resume_target(resume.as_deref(), continue_last)?.unwrap();
+        let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+        let pre_store =
+            SqliteSessionStore::open(home.join("state.db")).map_err(|e| e.to_string())?;
+        let messages = pre_store.load_messages(&target).map_err(|e| e.to_string())?;
+        history = messages
+            .into_iter()
+            .filter(|m| m.role != Role::System)
+            .collect();
+        let title = pre_store.get_session_title(&target).map_err(|e| e.to_string())?;
+        resumed_from = Some(match title {
+            Some(t) => format!("{} ({})", target, t),
+            None => target.clone(),
+        });
+        session_id = target;
+    }
+    let agent = make_agent(config, true, None, Some(session_id)).await?;
     // Cross-process active-session cap (hermes active_sessions): the lease
     // is released automatically when the REPL exits.
     let (_session_lease, session_limit_error) =
@@ -1577,9 +1650,11 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
     // skin's banner_dim.
     print_tip();
 
-    let mut history: Vec<Message> = Vec::new();
+    if let Some(label) = &resumed_from {
+        println!("Resuming session: {}", label);
+    }
     let stdin = std::io::stdin();
-    let session_key = agent.context().session_id.clone();
+    let mut session_key = agent.context().session_id.clone();
     let store = agent.context().store.clone();
     // Standing-goal (Ralph loop) manager for this session — state persists
     // in state.db keyed by session id (hermes GoalManager per live session).
@@ -1622,7 +1697,7 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
             continue;
         }
         if input.starts_with('/') {
-            match handle_slash(&input, &agent, &mut history, &mut goal_manager, &mut pending).await {
+            match handle_slash(&input, &agent, &mut history, &mut goal_manager, &mut pending, &mut session_key).await {
                 Ok(true) => continue,
                 Ok(false) => break,
                 Err(e) => {
@@ -1632,7 +1707,7 @@ async fn chat_repl(config: &UlncLawConfig) -> Result<(), String> {
             }
         }
 
-        match agent.run(&input, Some(history.clone())).await {
+        match agent.run_with_session(&input, Some(history.clone()), Some(&session_key)).await {
             Ok(result) => {
                 println!("\n{}", result.content);
                 // Keep the conversation going (drop system prompt from history).
@@ -1677,6 +1752,7 @@ async fn handle_slash(
     history: &mut Vec<Message>,
     goals: &mut ulnclaw::goals::GoalManager,
     pending: &mut Option<String>,
+    session_key: &mut String,
 ) -> Result<bool, String> {
     let mut parts = input.splitn(2, ' ');
     let cmd = parts.next().unwrap_or("");
@@ -1685,6 +1761,14 @@ async fn handle_slash(
         "/quit" | "/exit" | "/q" => return Ok(false),
         "/new" => {
             history.clear();
+            // Fresh conversation = fresh session row (hermes /new); rotate
+            // the live key and reset the per-session goal manager.
+            *session_key = uuid::Uuid::new_v4().to_string();
+            *goals = ulnclaw::goals::GoalManager::new(
+                session_key.clone(),
+                agent.context().store.clone(),
+                ulnclaw::goals::DEFAULT_MAX_TURNS,
+            );
             println!("New conversation started.");
             print_tip();
         }
@@ -2252,6 +2336,7 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
             }
         }
         SessionAction::Show { id } => {
+            let id = resolve_session_or_err(&store, &id)?;
             let Some(session) = store.load_session(&id).map_err(|e| e.to_string())? else {
                 return Err(format!("session '{}' not found", id));
             };
@@ -2268,6 +2353,7 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
             }
         }
         SessionAction::Export { id, out, format, no_verification } => {
+            let id = resolve_session_or_err(&store, &id)?;
             let row = store
                 .get_session_row(&id)
                 .map_err(|e| e.to_string())?
@@ -2335,6 +2421,7 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
             }
         }
         SessionAction::Recap { id } => {
+            let id = resolve_session_or_err(&store, &id)?;
             let row = store
                 .get_session_row(&id)
                 .map_err(|e| e.to_string())?
@@ -2459,6 +2546,16 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Resolve a user-supplied session id or unique prefix for the id-taking
+/// `sessions` actions (hermes resolve_session_id everywhere an id is
+/// accepted).
+fn resolve_session_or_err(store: &SqliteSessionStore, id: &str) -> Result<String, String> {
+    store
+        .resolve_session_id(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("session '{}' not found", id))
 }
 
 /// Shared preview/confirm/execute flow for `sessions prune` and
@@ -3679,7 +3776,7 @@ async fn cron_cmd(config: &UlncLawConfig, action: CronAction) -> Result<(), Stri
             // Unattended execution: the agent runs inside the cron
             // approval scope (`approvals.cron_mode` applies).
             use ulnclaw::tools::context::CronRunner;
-            let agent = make_agent(config, false, None).await?;
+            let agent = make_agent(config, false, None, None).await?;
             let started = std::time::Instant::now();
             match agent.run_prompt(&job.prompt, &job.skills).await {
                 Ok(answer) => {

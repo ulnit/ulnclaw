@@ -60,6 +60,8 @@ cargo build --release --target x86_64-unknown-linux-musl
 
 # Interactive chat (slash commands: /new /search /memory /skills /sessions /rollback /diff /recap /goal /subgoal ...)
 ./ulnclaw chat
+./ulnclaw chat --resume <session-id>   # resume a session by id or unique prefix (-r)
+./ulnclaw chat --continue              # continue the most recent session (-c)
 
 # Management subcommands
 ./ulnclaw tools            # list toolsets and enabled tools
@@ -226,7 +228,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 651 tests
+cargo test                     # 652 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -289,6 +291,8 @@ cargo build --release --target x86_64-unknown-linux-musl
 
 # 交互式聊天（斜杠命令：/new /search /memory /skills /sessions /rollback /diff /recap /goal /subgoal ……）
 ./ulnclaw chat
+./ulnclaw chat --resume <session-id>   # 按 id 或唯一前缀恢复会话（-r）
+./ulnclaw chat --continue              # 继续最近一次会话（-c）
 
 # 管理子命令
 ./ulnclaw tools            # 列出工具集与已启用工具
@@ -374,7 +378,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 651 个测试
+cargo test                     # 652 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 
