@@ -5905,6 +5905,9 @@ mod tests {
             skills: None,
             max_runtime_seconds: None,
             idempotency_key: None,
+            consecutive_failures: 0,
+            last_failure_error: None,
+            max_retries: None,
         }
     }
 

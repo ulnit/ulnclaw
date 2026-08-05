@@ -105,7 +105,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw secrets bitwarden setup   # wizard: install bws, store token, pick project (also: install/status/token/disable; onepassword setup/status/set/remove/disable)
 ./ulnclaw computer-use status # background desktop control via cua-driver (doctor/install)
 ./ulnclaw plugins list      # plugins + shell hooks (enable/disable/accept-hooks)
-./ulnclaw kanban list       # kanban task engine (init/boards/create/claim/done/block/comment/swarm/specify/decompose/diagnostics/schedule/promote/reclaim/reassign/edit/set-model/attach/tail/log/runs/context/repair/assignees/notify-subscribe/stats/...)
+./ulnclaw kanban list       # kanban task engine (init/boards/create [--max-runtime N --max-retries N]/claim/done/block/comment/swarm/specify/decompose/diagnostics/schedule/promote/reclaim/reassign/edit/set-model/attach/tail/log/runs/context/repair/assignees/notify-subscribe/stats/...)
 ./ulnclaw hooks doctor      # probe every consented hook (list/test/revoke)
 ./ulnclaw pairing list      # DM pairing codes for unknown senders (approve/revoke/clear-pending)
 ./ulnclaw weixin login      # WeChat iLink QR-scan login for [messaging.weixin]
@@ -365,7 +365,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw secrets bitwarden setup   # 向导：安装 bws、存令牌、选项目（另有 install/status/token/disable；onepassword setup/status/set/remove/disable）
 ./ulnclaw computer-use status # cua-driver 后台桌面控制（doctor/install）
 ./ulnclaw plugins list      # 插件与 shell 钩子（enable/disable/accept-hooks）
-./ulnclaw kanban list       # kanban 任务引擎（init/boards/create/claim/done/block/comment/swarm/specify/decompose/diagnostics/schedule/promote/reclaim/reassign/edit/set-model/attach/tail/log/runs/context/repair/assignees/notify-subscribe/stats/...）
+./ulnclaw kanban list       # kanban 任务引擎（init/boards/create [--max-runtime N --max-retries N]/claim/done/block/comment/swarm/specify/decompose/diagnostics/schedule/promote/reclaim/reassign/edit/set-model/attach/tail/log/runs/context/repair/assignees/notify-subscribe/stats/...）
 ./ulnclaw hooks doctor      # 逐个探测已同意的钩子（list/test/revoke）
 ./ulnclaw pairing list      # 陌生发送者的 DM 配对码（approve/revoke/clear-pending）
 ./ulnclaw weixin login      # 微信 iLink 扫码登录（[messaging.weixin]）

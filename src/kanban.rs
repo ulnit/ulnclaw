@@ -71,6 +71,15 @@ pub struct Task {
     pub max_runtime_seconds: Option<i64>,
     /// Creation dedup key (hermes `idempotency_key`).
     pub idempotency_key: Option<String>,
+    /// Dispatcher spawn/crash/timeout failures in a row (hermes
+    /// `consecutive_failures`); reset by completion and unblock.
+    pub consecutive_failures: i64,
+    /// Last failure message, capped (hermes `last_failure_error`).
+    pub last_failure_error: Option<String>,
+    /// Per-task circuit-breaker threshold override (hermes
+    /// `max_retries`): block on the Nth failure; NULL = dispatcher
+    /// default.
+    pub max_retries: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1340,6 +1349,9 @@ pub struct NewTask {
     /// Park the task in the triage column (hermes `kanban create --triage`):
     /// a specifier/decomposer fleshes it out and promotes it to `todo`.
     pub triage: bool,
+    /// Circuit-breaker threshold: block on the Nth failed attempt
+    /// (hermes `max_retries`; 1 trips on the first failure).
+    pub max_retries: Option<i64>,
 }
 
 pub struct KanbanStore {
@@ -1495,6 +1507,22 @@ impl KanbanStore {
         if !columns.contains("current_run_id") {
             conn.execute_batch("ALTER TABLE tasks ADD COLUMN current_run_id INTEGER;")
                 .map_err(db_error("migrate current_run_id"))?;
+        }
+        // Pre-P136 stores lack the unified failure-accounting columns
+        // (hermes consecutive_failures / last_failure_error / max_retries).
+        if !columns.contains("consecutive_failures") {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;",
+            )
+            .map_err(db_error("migrate consecutive_failures"))?;
+        }
+        if !columns.contains("last_failure_error") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN last_failure_error TEXT;")
+                .map_err(db_error("migrate last_failure_error"))?;
+        }
+        if !columns.contains("max_retries") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN max_retries INTEGER;")
+                .map_err(db_error("migrate max_retries"))?;
         }
         let store = Self {
             conn: Mutex::new(conn),
@@ -1925,8 +1953,8 @@ impl KanbanStore {
         conn.execute(
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
              created_by, created_at, tenant, model, skills, max_runtime_seconds, \
-             idempotency_key) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             idempotency_key, max_retries) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 id,
                 board,
@@ -1942,6 +1970,7 @@ impl KanbanStore {
                 skills_json,
                 task.max_runtime_seconds,
                 idempotency_key,
+                task.max_retries,
             ],
         )
         .map_err(db_error("create task"))?;
@@ -2054,13 +2083,17 @@ impl KanbanStore {
                 .and_then(|raw| serde_json::from_str(&raw).ok()),
             max_runtime_seconds: row.get("max_runtime_seconds")?,
             idempotency_key: row.get("idempotency_key")?,
+            consecutive_failures: row.get("consecutive_failures")?,
+            last_failure_error: row.get("last_failure_error")?,
+            max_retries: row.get("max_retries")?,
         })
     }
 
     const TASK_COLUMNS: &'static str = "id, board, title, body, assignee, status, priority, \
         created_by, created_at, started_at, completed_at, tenant, model, result, \
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
-        max_runtime_seconds, idempotency_key";
+        max_runtime_seconds, idempotency_key, consecutive_failures, \
+        last_failure_error, max_retries";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -2322,7 +2355,8 @@ impl KanbanStore {
             "done",
             "completed",
             serde_json::json!({ "result": result }),
-            ", completed_at = ?3, result = ?4, claim_lock = NULL, claim_expires = NULL",
+            ", completed_at = ?3, result = ?4, claim_lock = NULL, claim_expires = NULL, \
+             consecutive_failures = 0, last_failure_error = NULL",
             vec![Box::new(now), Box::new(result.map(|r| r.to_string()))],
         )?;
         match self.close_active_run(id, "done", "completed", result, None)? {
@@ -2351,7 +2385,8 @@ impl KanbanStore {
         Ok(task)
     }
 
-    /// blocked/scheduled → ready (hermes `unblock_task`).
+    /// blocked/scheduled → ready (hermes `unblock_task`). A deliberate
+    /// unblock is a fresh start for the dispatcher's retry budget.
     pub fn unblock_task(&self, id: &str) -> Result<Task> {
         let task = self.transition(
             id,
@@ -2359,7 +2394,7 @@ impl KanbanStore {
             "ready",
             "unblocked",
             serde_json::json!({}),
-            "",
+            ", consecutive_failures = 0, last_failure_error = NULL",
             vec![],
         )?;
         self.recover_stale_run(id, "invariant recovery on unblock")?;
@@ -3544,6 +3579,16 @@ impl KanbanStore {
                 }),
             )?;
             self.close_active_run(&id, "timed_out", "timed_out", None, None)?;
+            // Unified failure accounting: a timed-out attempt consumes
+            // the retry budget and may trip the breaker (ready → blocked
+            // + gave_up) — hermes _record_task_failure on the timeout
+            // path.
+            self.record_task_failure(
+                &id,
+                &format!("elapsed {elapsed}s > limit {limit}s"),
+                "timed_out",
+                2,
+            )?;
             reaped.push(id);
         }
         Ok(reaped)
@@ -3644,19 +3689,67 @@ impl KanbanStore {
         Ok(promoted)
     }
 
-    /// Consecutive spawn failures recorded for `task_id` (hermes counts
-    /// them to auto-block unfixable tasks).
-    fn spawn_failure_streak(&self, task_id: &str) -> Result<usize> {
-        let events = self.events(task_id)?;
-        let mut streak = 0usize;
-        for event in events.iter().rev() {
-            match event.kind.as_str() {
-                "spawn_failed" => streak += 1,
-                "spawned" | "released" | "ready" | "created" => break,
-                _ => {}
-            }
+    /// Record a non-success outcome and maybe trip the circuit breaker
+    /// (hermes `_record_task_failure`, timeout/crash bookkeeping mode:
+    /// the task is already back at `ready` with the claim cleared).
+    /// Returns true when the task was auto-blocked. Threshold
+    /// resolution: per-task `max_retries` wins over `failure_limit`
+    /// (hermes: per-task override > dispatcher config > default 2).
+    pub fn record_task_failure(
+        &self,
+        task_id: &str,
+        error: &str,
+        outcome: &str,
+        failure_limit: i64,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(i64, String, Option<i64>)> = conn
+            .query_row(
+                "SELECT consecutive_failures, status, max_retries FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(db_error("record failure"))?;
+        let Some((consecutive, status, max_retries)) = row else {
+            return Ok(false);
+        };
+        let failures = consecutive + 1;
+        let (effective_limit, limit_source) = match max_retries {
+            Some(n) => (n, "task"),
+            None => (failure_limit, "dispatcher"),
+        };
+        let err_capped: String = error.chars().take(500).collect();
+        if failures >= effective_limit && (status == "ready" || status == "running") {
+            // Trip the breaker: ready/running → blocked + gave_up event.
+            conn.execute(
+                "UPDATE tasks SET status = 'blocked', consecutive_failures = ?2, \
+                 last_failure_error = ?3 WHERE id = ?1 AND status IN ('ready', 'running')",
+                params![task_id, failures, err_capped],
+            )
+            .map_err(db_error("record failure trip"))?;
+            drop(conn);
+            self.append_event(
+                task_id,
+                "gave_up",
+                serde_json::json!({
+                    "failures": failures,
+                    "effective_limit": effective_limit,
+                    "limit_source": limit_source,
+                    "error": err_capped,
+                    "trigger_outcome": outcome,
+                }),
+            )?;
+            Ok(true)
+        } else {
+            conn.execute(
+                "UPDATE tasks SET consecutive_failures = ?2, last_failure_error = ?3 \
+                 WHERE id = ?1",
+                params![task_id, failures, err_capped],
+            )
+            .map_err(db_error("record failure count"))?;
+            Ok(false)
         }
-        Ok(streak)
     }
 
     /// Record the pid of a dispatcher-spawned worker.
@@ -3757,12 +3850,13 @@ impl KanbanStore {
                         serde_json::json!({ "error": err }),
                     )?;
                     self.synthesize_closed_run(&id, "spawn_failed", None, Some(&err))?;
-                    let streak = self.spawn_failure_streak(&id)?;
-                    if streak >= failure_limit {
-                        self.block_task(
-                            &id,
-                            &format!("dispatcher: spawn failed {streak}x — {err}"),
-                        )?;
+                    let gave_up = self.record_task_failure(
+                        &id,
+                        &err,
+                        "spawn_failed",
+                        failure_limit as i64,
+                    )?;
+                    if gave_up {
                         result.auto_blocked.push(id);
                     } else {
                         result.spawn_failed.push(id);
@@ -4313,6 +4407,9 @@ mod tests {
             skills: Some(vec!["test-skill".into()]),
             max_runtime_seconds: None,
             idempotency_key: None,
+            consecutive_failures: 0,
+            last_failure_error: None,
+            max_retries: None,
         };
         let prompt = worker_prompt(home, &task);
         assert!(prompt.contains("kanban worker for task t_1"));
@@ -4982,6 +5079,135 @@ mod tests {
         assert!(ctx.contains("… [truncated,"));
         // No full 8 KB body survived the cap.
         assert!(!ctx.contains(&"x".repeat(CTX_MAX_BODY_BYTES + 1)));
+    }
+
+    #[test]
+    fn failure_breaker_trips_on_repeated_spawn_failures() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "bad spawn");
+        store.ready_task(&task.id).unwrap();
+
+        let tick = || {
+            store
+                .dispatch_once(|_| Err("exec format error".to_string()), Some(4), false, 2)
+                .unwrap()
+        };
+
+        // First failure: counted, task stays ready for retry.
+        let r1 = tick();
+        assert_eq!(r1.spawn_failed, vec![task.id.clone()]);
+        assert!(r1.auto_blocked.is_empty());
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.status, "ready");
+        assert_eq!(t.consecutive_failures, 1);
+        assert_eq!(t.last_failure_error.as_deref(), Some("exec format error"));
+
+        // Second failure trips the breaker: blocked + gave_up event.
+        let r2 = tick();
+        assert_eq!(r2.auto_blocked, vec![task.id.clone()]);
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.status, "blocked");
+        assert_eq!(t.consecutive_failures, 2);
+        let gave_up = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "gave_up")
+            .unwrap();
+        assert_eq!(gave_up.payload["limit_source"], "dispatcher");
+        assert_eq!(gave_up.payload["trigger_outcome"], "spawn_failed");
+    }
+
+    #[test]
+    fn failure_breaker_honors_max_retries_override() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "trip first".into(),
+                created_by: "tester".into(),
+                max_retries: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        let result = store
+            .dispatch_once(|_| Err("boom".to_string()), Some(4), false, 2)
+            .unwrap();
+        assert_eq!(result.auto_blocked, vec![task.id.clone()]);
+        assert!(result.spawn_failed.is_empty());
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.status, "blocked");
+        let gave_up = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "gave_up")
+            .unwrap();
+        assert_eq!(gave_up.payload["limit_source"], "task");
+        assert_eq!(gave_up.payload["effective_limit"], 1);
+    }
+
+    #[test]
+    fn failure_counter_resets_on_complete_and_unblock() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "resilient");
+        store.ready_task(&task.id).unwrap();
+        store
+            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2)
+            .unwrap();
+        assert_eq!(
+            store.get_task(&task.id).unwrap().unwrap().consecutive_failures,
+            1
+        );
+
+        // Successful run clears the budget.
+        store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        store.complete_task(&task.id, Some("ok")).unwrap();
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.consecutive_failures, 0);
+        assert!(t.last_failure_error.is_none());
+
+        // Blocked → unblock also grants a fresh budget (hermes policy).
+        let other = make_task(&store, "blocked cycle");
+        store.ready_task(&other.id).unwrap();
+        store
+            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2)
+            .unwrap();
+        store
+            .dispatch_once(|_| Err("flaky".to_string()), Some(4), false, 2)
+            .unwrap();
+        let t = store.get_task(&other.id).unwrap().unwrap();
+        assert_eq!(t.status, "blocked");
+        store.unblock_task(&other.id).unwrap();
+        let t = store.get_task(&other.id).unwrap().unwrap();
+        assert_eq!(t.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn timed_out_consumes_retry_budget() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "slowpoke".into(),
+                created_by: "tester".into(),
+                max_runtime_seconds: Some(0),
+                max_retries: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS).unwrap();
+        let reaped = store.reap_timed_out().unwrap();
+        assert_eq!(reaped, vec![task.id.clone()]);
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.status, "blocked");
+        let gave_up = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "gave_up")
+            .unwrap();
+        assert_eq!(gave_up.payload["trigger_outcome"], "timed_out");
     }
 
     #[test]

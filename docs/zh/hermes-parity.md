@@ -266,7 +266,15 @@
   崩溃/重试周期中保留，仅当任务真正 done/archived 时移除（去重靠
   游标）。与 hermes 的范围差异：无按 profile 的适配器归属（单一
   共享存储）、无线程路由与死聊天清理（PlatformSender 无失败通
-  道），发送视为已送达。
+  道），发送视为已送达；P136 移植统一失败记账与熔断器（hermes
+  `_record_task_failure`）：任务新增 `consecutive_failures` /
+  `last_failure_error` / `max_retries` 列，每次 spawn 失败与超时
+  尝试都消耗重试预算，达到阈值（按任务 `max_retries` > 调度器
+  limit > 默认 2）即 ready→blocked 并发出 `gave_up` 事件（payload
+  含 failures / effective_limit / limit_source / trigger_outcome），
+  计数器在任务完成与主动 unblock 时清零（hermes 重新起步策略）。
+  CLI：`kanban create --max-retries N`（校验 >= 1，与 hermes 一
+  致），网关创建 API 接受同一字段。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

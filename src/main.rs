@@ -534,6 +534,10 @@ enum KanbanAction {
         /// and promotes the task to todo (hermes create --triage)
         #[arg(long)]
         triage: bool,
+        /// Circuit breaker: block the task on the Nth failed attempt
+        /// (hermes create --max-retries; 1 trips on the first failure)
+        #[arg(long)]
+        max_retries: Option<i64>,
         #[arg(long)]
         json: bool,
     },
@@ -4350,11 +4354,19 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             max_runtime,
             idempotency_key,
             triage,
+            max_retries,
             json,
         } => {
             let title = title.join(" ");
             if title.trim().is_empty() {
                 return Err("usage: ulnclaw kanban create <title>".into());
+            }
+            if let Some(max_retries) = max_retries {
+                if max_retries < 1 {
+                    return Err(format!(
+                        "kanban: --max-retries must be >= 1 (got {max_retries}); use 1 to trip on the first failure"
+                    ));
+                }
             }
             let task = store
                 .create_task(&NewTask {
@@ -4369,6 +4381,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     max_runtime_seconds: max_runtime,
                     idempotency_key,
                     triage,
+                    max_retries,
                 })
                 .map_err(|e| e.to_string())?;
             if json {

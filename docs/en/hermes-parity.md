@@ -292,7 +292,18 @@ performance and a single static binary.
   only when the task reaches done/archived (cursor handles dedup).
   Scoped vs hermes: no per-profile adapter ownership (single shared
   store), no thread routing or dead-chat drop (PlatformSender exposes
-  no failure channel), sends assumed delivered.
+  no failure channel), sends assumed delivered; P136 ported the
+  unified failure accounting + circuit breaker (hermes
+  `_record_task_failure`): tasks grow `consecutive_failures` /
+  `last_failure_error` / `max_retries` columns, every spawn failure
+  and timed-out attempt consumes the retry budget, hitting the
+  threshold (per-task `max_retries` > dispatcher limit > default 2)
+  flips ready→blocked with a `gave_up` event (failures /
+  effective_limit / limit_source / trigger_outcome payload), and the
+  counter resets on completion and deliberate unblock (hermes
+  fresh-start policy). CLI: `kanban create --max-retries N` (>= 1
+  validated, matching hermes) and the gateway create API accepts the
+  same field.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

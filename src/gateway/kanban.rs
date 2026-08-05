@@ -178,12 +178,26 @@ pub struct CreateTaskBody {
     /// Park in the triage column for the specifier/decomposer.
     #[serde(default)]
     pub triage: Option<bool>,
+    /// Circuit-breaker threshold: block on the Nth failed attempt
+    /// (hermes max_retries; must be >= 1).
+    #[serde(default)]
+    pub max_retries: Option<i64>,
 }
 
 /// `POST /api/kanban/tasks` — create a task on the current board.
 pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
     if body.title.trim().is_empty() {
         return super::bad_request("title is required", None);
+    }
+    if let Some(max_retries) = body.max_retries {
+        if max_retries < 1 {
+            return super::bad_request(
+                &format!(
+                    "max_retries must be >= 1 (got {max_retries}); use 1 to trip on the first failure"
+                ),
+                None,
+            );
+        }
     }
     let store = match store() {
         Ok(s) => s,
@@ -201,6 +215,7 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         max_runtime_seconds: body.max_runtime_seconds,
         idempotency_key: body.idempotency_key.filter(|k| !k.trim().is_empty()),
         triage: body.triage.unwrap_or(false),
+        max_retries: body.max_retries,
     }) {
         Ok(t) => t,
         Err(e) => return super::bad_request(&e.to_string(), None),
