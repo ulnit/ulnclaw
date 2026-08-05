@@ -2669,6 +2669,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /recap           recap this session
   /title [text]    show or set the session title
   /usage           this session's token usage
+  /insights [N] [--days N] [--source S]   usage analytics across sessions
   /<bundle>        invoke a skill bundle (ulnclaw bundles)";
 
 async fn resolve_gateway_slash(
@@ -2738,6 +2739,33 @@ async fn resolve_gateway_slash(
                 "messages: {}  tokens: {} in / {} out",
                 row.message_count, row.input_tokens, row.output_tokens
             )))
+        }
+        "/insights" => {
+            let mut days: u32 = 30;
+            let mut source: Option<String> = None;
+            let mut tokens = rest.split_whitespace();
+            while let Some(token) = tokens.next() {
+                if token == "--days" {
+                    if let Some(value) = tokens.next() {
+                        if let Ok(parsed) = value.parse::<u32>() {
+                            days = parsed;
+                        }
+                    }
+                } else if token == "--source" {
+                    source = tokens.next().map(String::from);
+                } else if let Ok(parsed) = token.parse::<u32>() {
+                    days = parsed;
+                }
+            }
+            let provider_hint = state.provider_name.as_str();
+            let result = match crate::insights::InsightsEngine::open_default() {
+                Ok(engine) => match engine.generate(days, source.as_deref(), Some(provider_hint)) {
+                    Ok(report) => crate::insights::format_gateway(&report),
+                    Err(e) => format!("insights failed: {e}"),
+                },
+                Err(e) => format!("insights failed: {e}"),
+            };
+            Some(GatewaySlash::Direct(result))
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');

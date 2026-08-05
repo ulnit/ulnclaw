@@ -83,6 +83,53 @@ pub struct ToolUsage {
     pub calls: i64,
 }
 
+/// Per-skill aggregate scanned from assistant `tool_calls` (hermes
+/// `_get_skill_usage` row).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct SkillUsage {
+    pub skill: String,
+    pub view_count: i64,
+    pub manage_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<f64>,
+}
+
+/// Skill usage summary (hermes `skills.summary`).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct SkillSummary {
+    pub total_skill_loads: i64,
+    pub total_skill_edits: i64,
+    pub total_skill_actions: i64,
+    pub distinct_skills_used: usize,
+}
+
+/// Ranked skill entry (hermes `skills.top_skills[]`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TopSkill {
+    pub skill: String,
+    pub view_count: i64,
+    pub manage_count: i64,
+    pub total_count: i64,
+    pub percentage: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<f64>,
+}
+
+/// Skill usage breakdown (hermes `_compute_skill_breakdown`).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct SkillBreakdown {
+    pub summary: SkillSummary,
+    pub top_skills: Vec<TopSkill>,
+}
+
+/// Lightweight tools+skills payload for gateway/dashboard embedding
+/// (hermes `get_usage_breakdown` return shape).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsageBreakdown {
+    pub tools: Vec<ToolUsage>,
+    pub skills: SkillBreakdown,
+}
+
 /// Hour-of-day / weekday session starts (hermes activity patterns).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ActivityPatterns {
@@ -119,6 +166,7 @@ pub struct InsightsReport {
     pub models: Vec<ModelUsage>,
     pub sources: Vec<SourceUsage>,
     pub tools: Vec<ToolUsage>,
+    pub skills: SkillBreakdown,
     pub activity: ActivityPatterns,
     pub top_sessions: Vec<TopSession>,
 }
@@ -251,6 +299,77 @@ impl InsightsEngine {
         Ok(out)
     }
 
+    fn skill_usage_since(&self, cutoff: f64, source: Option<&str>) -> Result<Vec<SkillUsage>> {
+        // instr() prefilter so only assistant rows mentioning the skill tools
+        // are loaded (hermes `_GET_SKILL_CALLS_*`).
+        let (sql, filtered) = match source {
+            Some(_) => (
+                "SELECT m.tool_calls, m.timestamp FROM messages m \
+                 JOIN sessions s ON s.id = m.session_id \
+                 WHERE m.role = 'assistant' AND m.tool_calls IS NOT NULL \
+                 AND m.timestamp >= ?1 AND s.source = ?2 \
+                 AND (instr(m.tool_calls, 'skill_view') > 0 \
+                      OR instr(m.tool_calls, 'skill_manage') > 0)"
+                    .to_string(),
+                true,
+            ),
+            None => (
+                "SELECT tool_calls, timestamp FROM messages \
+                 WHERE role = 'assistant' AND tool_calls IS NOT NULL \
+                 AND timestamp >= ?1 \
+                 AND (instr(tool_calls, 'skill_view') > 0 \
+                      OR instr(tool_calls, 'skill_manage') > 0)"
+                    .to_string(),
+                false,
+            ),
+        };
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| AgentError::Tool(format!("insights: prepare: {e}")))?;
+        let mut acc = std::collections::BTreeMap::<String, SkillUsage>::new();
+        let mut rows: Vec<(String, f64)> = Vec::new();
+        if filtered {
+            let mapped = stmt
+                .query_map(params![cutoff, source.unwrap_or("")], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+                })
+                .map_err(|e| AgentError::Tool(format!("insights: query: {e}")))?;
+            for row in mapped {
+                rows.push(row.map_err(|e| AgentError::Tool(format!("insights: row: {e}")))?);
+            }
+        } else {
+            let mapped = stmt
+                .query_map(params![cutoff], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+                })
+                .map_err(|e| AgentError::Tool(format!("insights: query: {e}")))?;
+            for row in mapped {
+                rows.push(row.map_err(|e| AgentError::Tool(format!("insights: row: {e}")))?);
+            }
+        }
+        for (tool_calls, timestamp) in rows {
+            accumulate_skill_calls(&tool_calls, timestamp, &mut acc);
+        }
+        Ok(acc.into_values().collect())
+    }
+
+    /// Tools + skills usage payload without a full report (hermes
+    /// `get_usage_breakdown`).
+    pub fn get_usage_breakdown(&self, days: u32, source: Option<&str>) -> Result<UsageBreakdown> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let cutoff = now - (days as f64) * 86400.0;
+        let tools = self.tool_usage_since(cutoff, source)?;
+        let skill_usage = self.skill_usage_since(cutoff, source)?;
+        Ok(UsageBreakdown {
+            tools,
+            skills: compute_skill_breakdown(&skill_usage),
+        })
+    }
+
     /// Generate a complete insights report (hermes `generate`).
     ///
     /// `provider_hint` feeds models.dev cost lookup (session rows carry the
@@ -278,6 +397,7 @@ impl InsightsEngine {
                 models: Vec::new(),
                 sources: Vec::new(),
                 tools: Vec::new(),
+                skills: SkillBreakdown::default(),
                 activity: ActivityPatterns {
                     by_hour: vec![0; 24],
                     by_weekday: vec![0; 7],
@@ -289,6 +409,7 @@ impl InsightsEngine {
         }
 
         let tools = self.tool_usage_since(cutoff, source)?;
+        let skill_usage = self.skill_usage_since(cutoff, source)?;
         let overview = compute_overview(&sessions, provider_hint);
         let models = compute_model_breakdown(&sessions, provider_hint);
         let sources = compute_source_breakdown(&sessions);
@@ -304,6 +425,7 @@ impl InsightsEngine {
             models,
             sources,
             tools,
+            skills: compute_skill_breakdown(&skill_usage),
             activity,
             top_sessions,
         })
@@ -544,6 +666,273 @@ pub fn format_tokens(tokens: i64) -> String {
 const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /// Render the report for the terminal (hermes `format_terminal`).
+/// Accumulate `skill_view`/`skill_manage` calls from one assistant
+/// `tool_calls` JSON blob into `acc` (hermes `_get_skill_usage` per-row
+/// loop).
+pub fn accumulate_skill_calls(
+    tool_calls_json: &str,
+    timestamp: f64,
+    acc: &mut std::collections::BTreeMap<String, SkillUsage>,
+) {
+    let Ok(calls) = serde_json::from_str::<Vec<serde_json::Value>>(tool_calls_json) else {
+        return;
+    };
+    for call in &calls {
+        let Some(func) = call.get("function") else {
+            continue;
+        };
+        let tool_name = func.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        if tool_name != "skill_view" && tool_name != "skill_manage" {
+            continue;
+        }
+        let args = match func.get("arguments") {
+            Some(serde_json::Value::String(raw)) => {
+                match serde_json::from_str::<serde_json::Value>(raw) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                }
+            }
+            Some(value) if value.is_object() => value.clone(),
+            _ => continue,
+        };
+        let skill_name = args
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(str::trim)
+            .unwrap_or("");
+        if skill_name.is_empty() {
+            continue;
+        }
+        let entry = acc
+            .entry(skill_name.to_string())
+            .or_insert_with(|| SkillUsage {
+                skill: skill_name.to_string(),
+                ..Default::default()
+            });
+        if tool_name == "skill_view" {
+            entry.view_count += 1;
+        } else {
+            entry.manage_count += 1;
+        }
+        if entry.last_used_at.map_or(true, |seen| timestamp > seen) {
+            entry.last_used_at = Some(timestamp);
+        }
+    }
+}
+
+/// Process per-skill usage into summary + ranked list (hermes
+/// `_compute_skill_breakdown`).
+pub fn compute_skill_breakdown(usage: &[SkillUsage]) -> SkillBreakdown {
+    let total_skill_loads: i64 = usage.iter().map(|s| s.view_count).sum();
+    let total_skill_edits: i64 = usage.iter().map(|s| s.manage_count).sum();
+    let total_skill_actions = total_skill_loads + total_skill_edits;
+
+    let mut top_skills: Vec<TopSkill> = usage
+        .iter()
+        .map(|s| {
+            let total_count = s.view_count + s.manage_count;
+            let percentage = if total_skill_actions > 0 {
+                total_count as f64 / total_skill_actions as f64 * 100.0
+            } else {
+                0.0
+            };
+            TopSkill {
+                skill: s.skill.clone(),
+                view_count: s.view_count,
+                manage_count: s.manage_count,
+                total_count,
+                percentage,
+                last_used_at: s.last_used_at,
+            }
+        })
+        .collect();
+
+    top_skills.sort_by(|a, b| {
+        b.total_count
+            .cmp(&a.total_count)
+            .then(b.view_count.cmp(&a.view_count))
+            .then(b.manage_count.cmp(&a.manage_count))
+            .then(
+                b.last_used_at
+                    .unwrap_or(0.0)
+                    .partial_cmp(&a.last_used_at.unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(b.skill.cmp(&a.skill))
+    });
+
+    SkillBreakdown {
+        summary: SkillSummary {
+            total_skill_loads,
+            total_skill_edits,
+            total_skill_actions,
+            distinct_skills_used: usage.len(),
+        },
+        top_skills,
+    }
+}
+
+/// Group an integer with thousands separators (`1,234,567`) for the
+/// gateway/terminal renderings.
+pub fn format_thousands(value: i64) -> String {
+    let text = value.to_string();
+    let negative = text.starts_with('-');
+    let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
+    let mut grouped_rev = String::with_capacity(digits.len() + digits.len() / 3);
+    for (idx, ch) in digits.chars().rev().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
+            grouped_rev.push(',');
+        }
+        grouped_rev.push(ch);
+    }
+    let grouped: String = grouped_rev.chars().rev().collect();
+    if negative {
+        format!("-{grouped}")
+    } else {
+        grouped
+    }
+}
+
+fn format_last_used(timestamp: f64) -> Option<String> {
+    chrono::DateTime::from_timestamp(timestamp as i64, 0)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%b %d").to_string())
+}
+
+/// Compact markdown rendering for gateway/messaging replies (hermes
+/// `format_gateway`).
+pub fn format_gateway(report: &InsightsReport) -> String {
+    if report.empty {
+        return format!("No sessions found in the last {} days.", report.days);
+    }
+    let o = &report.overview;
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("📊 **ulnclaw Insights** — Last {} days", report.days));
+    lines.push(String::new());
+    lines.push(format!(
+        "**Sessions:** {} | **Messages:** {} | **Tool calls:** {}",
+        o.total_sessions,
+        format_thousands(o.total_messages),
+        format_thousands(o.total_tool_calls)
+    ));
+    lines.push(format!(
+        "**Tokens:** {} (in: {} / out: {})",
+        format_thousands(o.total_tokens),
+        format_thousands(o.input_tokens),
+        format_thousands(o.output_tokens)
+    ));
+    if o.avg_session_seconds > 0.0 {
+        lines.push(format!(
+            "**Avg session:** ~{}",
+            format_duration_compact(o.avg_session_seconds)
+        ));
+    }
+    lines.push(String::new());
+
+    if !report.models.is_empty() {
+        lines.push("**🤖 Models:**".to_string());
+        for m in report.models.iter().take(5) {
+            lines.push(format!(
+                "  {} — {} sessions, {} tokens",
+                truncate_str(&m.model, 25),
+                m.sessions,
+                format_thousands(m.total_tokens)
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if report.sources.len() > 1 {
+        lines.push("**📱 Platforms:**".to_string());
+        for s in &report.sources {
+            lines.push(format!(
+                "  {} — {} sessions, {} tokens",
+                s.source,
+                s.sessions,
+                format_thousands(s.total_tokens)
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if !report.tools.is_empty() {
+        let total_calls: i64 = report.tools.iter().map(|t| t.calls).sum();
+        lines.push("**🔧 Top Tools:**".to_string());
+        for t in report.tools.iter().take(8) {
+            let percentage = if total_calls > 0 {
+                t.calls as f64 / total_calls as f64 * 100.0
+            } else {
+                0.0
+            };
+            lines.push(format!(
+                "  {} — {} calls ({:.1}%)",
+                t.tool,
+                format_thousands(t.calls),
+                percentage
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if !report.skills.top_skills.is_empty() {
+        lines.push("**🧠 Top Skills:**".to_string());
+        for skill in report.skills.top_skills.iter().take(5) {
+            let suffix = skill
+                .last_used_at
+                .and_then(format_last_used)
+                .map(|date| format!(", last used {date}"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {} — {} loads, {} edits{}",
+                skill.skill,
+                format_thousands(skill.view_count),
+                format_thousands(skill.manage_count),
+                suffix
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    const WEEKDAYS: &[&str] = &[
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
+    let activity = &report.activity;
+    if let (Some(day_idx), Some(hour_idx)) = (activity.peak_weekday, activity.peak_hour) {
+        if let (Some(day), Some(&hour_count), Some(&day_count)) = (
+            WEEKDAYS.get(day_idx),
+            activity.by_hour.get(hour_idx),
+            activity.by_weekday.get(day_idx),
+        ) {
+            let (ampm, mut display_hr) = if hour_idx < 12 {
+                ("AM", hour_idx % 12)
+            } else {
+                ("PM", hour_idx % 12)
+            };
+            if display_hr == 0 {
+                display_hr = 12;
+            }
+            lines.push(format!(
+                "**📅 Busiest:** {}s ({} sessions), {}{} ({} sessions)",
+                day, day_count, display_hr, ampm, hour_count
+            ));
+        }
+    }
+    if o.active_days > 0 {
+        lines.push(format!("**Active days:** {}", o.active_days));
+    }
+
+    let mut text = lines.join("\n");
+    while text.ends_with('\n') {
+        text.pop();
+    }
+    text
+}
+
 pub fn format_terminal(report: &InsightsReport) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -632,6 +1021,32 @@ pub fn format_terminal(report: &InsightsReport) -> String {
         }
     }
 
+    if !report.skills.top_skills.is_empty() {
+        out.push_str("\nSkills\n");
+        out.push_str(&format!(
+            "  {:<28} {:>7} {:>7} {:>11}\n",
+            "Skill", "Loads", "Edits", "Last used"
+        ));
+        for skill in report.skills.top_skills.iter().take(10) {
+            let last_used = skill
+                .last_used_at
+                .and_then(format_last_used)
+                .unwrap_or_else(|| "—".to_string());
+            out.push_str(&format!(
+                "  {:<28} {:>7} {:>7} {:>11}\n",
+                truncate_str(&skill.skill, 28),
+                skill.view_count,
+                skill.manage_count,
+                last_used
+            ));
+        }
+        let summary = &report.skills.summary;
+        out.push_str(&format!(
+            "  Distinct skills: {} · Loads: {} · Edits: {}\n",
+            summary.distinct_skills_used, summary.total_skill_loads, summary.total_skill_edits
+        ));
+    }
+
     let activity = &report.activity;
     let any_activity = activity.by_hour.iter().any(|v| *v > 0);
     if any_activity {
@@ -708,7 +1123,7 @@ pub fn default_store_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SqliteSessionStore;
+    use crate::session::{SessionStore, SqliteSessionStore};
 
     fn seeded_store(dir: &Path) -> SqliteSessionStore {
         let store = SqliteSessionStore::open(dir.join("state.db")).unwrap();
@@ -797,6 +1212,162 @@ mod tests {
         let long = truncate_str("a very long session title here", 10);
         assert_eq!(long.chars().count(), 10);
         assert!(long.ends_with('…'));
+    }
+
+    fn skill_call_json(entries: &[(&str, &str, &str)]) -> String {
+        let calls: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(id, tool, args)| {
+                serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": {"name": tool, "arguments": args}
+                })
+            })
+            .collect();
+        serde_json::to_string(&calls).unwrap()
+    }
+
+    #[test]
+    fn accumulate_skill_calls_counts_views_and_edits() {
+        let mut acc = std::collections::BTreeMap::new();
+        let json = skill_call_json(&[
+            ("c1", "skill_view", r#"{"name": "alpha"}"#),
+            ("c2", "skill_manage", r#"{"action": "patch", "name": "alpha"}"#),
+            ("c3", "skill_view", r#"{"name": "beta"}"#),
+            ("c4", "read_file", r#"{"path": "x"}"#),
+        ]);
+        accumulate_skill_calls(&json, 100.0, &mut acc);
+        accumulate_skill_calls(&json, 200.0, &mut acc);
+        let alpha = &acc["alpha"];
+        assert_eq!(alpha.view_count, 2);
+        assert_eq!(alpha.manage_count, 2);
+        assert_eq!(alpha.last_used_at, Some(200.0));
+        assert_eq!(acc["beta"].view_count, 2);
+        assert_eq!(acc.len(), 2);
+    }
+
+    #[test]
+    fn accumulate_skill_calls_rejects_bad_input() {
+        let mut acc = std::collections::BTreeMap::new();
+        accumulate_skill_calls("not json", 1.0, &mut acc);
+        let blank = skill_call_json(&[
+            ("c1", "skill_view", r#"{"name": "   "}"#),
+            ("c2", "skill_view", "not-json-args"),
+            ("c3", "skill_manage", r#"{"action": "create"}"#),
+        ]);
+        accumulate_skill_calls(&blank, 1.0, &mut acc);
+        assert!(acc.is_empty());
+    }
+
+    #[test]
+    fn skill_breakdown_ranks_and_percentages() {
+        let usage = vec![
+            SkillUsage {
+                skill: "alpha".into(),
+                view_count: 3,
+                manage_count: 1,
+                last_used_at: Some(10.0),
+            },
+            SkillUsage {
+                skill: "beta".into(),
+                view_count: 2,
+                manage_count: 2,
+                last_used_at: Some(20.0),
+            },
+            SkillUsage {
+                skill: "gamma".into(),
+                view_count: 0,
+                manage_count: 1,
+                last_used_at: None,
+            },
+        ];
+        let breakdown = compute_skill_breakdown(&usage);
+        assert_eq!(breakdown.summary.total_skill_loads, 5);
+        assert_eq!(breakdown.summary.total_skill_edits, 4);
+        assert_eq!(breakdown.summary.total_skill_actions, 9);
+        assert_eq!(breakdown.summary.distinct_skills_used, 3);
+        let order: Vec<&str> = breakdown
+            .top_skills
+            .iter()
+            .map(|s| s.skill.as_str())
+            .collect();
+        // Ties on total break toward higher view_count (alpha before beta).
+        assert_eq!(order, vec!["alpha", "beta", "gamma"]);
+        let alpha = &breakdown.top_skills[0];
+        assert_eq!(alpha.total_count, 4);
+        assert!((alpha.percentage - 44.4444).abs() < 0.01);
+        assert!(breakdown.top_skills[2].last_used_at.is_none());
+    }
+
+    #[test]
+    fn thousands_grouping() {
+        assert_eq!(format_thousands(0), "0");
+        assert_eq!(format_thousands(999), "999");
+        assert_eq!(format_thousands(12_345), "12,345");
+        assert_eq!(format_thousands(1_234_567), "1,234,567");
+        assert_eq!(format_thousands(-1234), "-1,234");
+    }
+
+    #[test]
+    fn generate_includes_skill_breakdown_from_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = seeded_store(dir.path());
+        let session = store.list_sessions(10).unwrap()[0].id.clone();
+        let message = crate::provider::Message {
+            role: crate::provider::Role::Assistant,
+            content: None,
+            tool_calls: Some(vec![
+                crate::provider::ToolCall {
+                    id: "c1".into(),
+                    call_type: "function".into(),
+                    function: crate::provider::FunctionCall {
+                        name: "skill_view".into(),
+                        arguments: r#"{"name": "deploy"}"#.into(),
+                    },
+                },
+                crate::provider::ToolCall {
+                    id: "c2".into(),
+                    call_type: "function".into(),
+                    function: crate::provider::FunctionCall {
+                        name: "skill_manage".into(),
+                        arguments: r#"{"action": "patch", "name": "deploy"}"#.into(),
+                    },
+                },
+            ]),
+            tool_call_id: None,
+            name: None,
+        };
+        store.append_message(&session, &message).unwrap();
+        drop(store);
+        let engine = InsightsEngine::open(&dir.path().join("state.db")).unwrap();
+        let report = engine.generate(30, None, None).unwrap();
+        assert_eq!(report.skills.summary.total_skill_loads, 1);
+        assert_eq!(report.skills.summary.total_skill_edits, 1);
+        assert_eq!(report.skills.summary.distinct_skills_used, 1);
+        assert_eq!(report.skills.top_skills[0].skill, "deploy");
+        assert!(report.skills.top_skills[0].last_used_at.is_some());
+        let terminal = format_terminal(&report);
+        assert!(terminal.contains("Skills"));
+        assert!(terminal.contains("deploy"));
+        let gateway = format_gateway(&report);
+        assert!(gateway.contains("**🧠 Top Skills:**"));
+        assert!(gateway.contains("deploy — 1 loads, 1 edits"));
+        let breakdown = engine.get_usage_breakdown(30, None).unwrap();
+        assert_eq!(breakdown.skills.summary.total_skill_actions, 2);
+    }
+
+    #[test]
+    fn format_gateway_empty_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteSessionStore::open(dir.path().join("state.db")).unwrap();
+        drop(store);
+        let engine = InsightsEngine::open(&dir.path().join("state.db")).unwrap();
+        let report = engine.generate(7, None, None).unwrap();
+        assert_eq!(
+            format_gateway(&report),
+            "No sessions found in the last 7 days."
+        );
     }
 
     #[test]
