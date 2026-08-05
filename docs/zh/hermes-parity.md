@@ -283,7 +283,13 @@
   `dispatch_stale_timeout_seconds`，默认 14400，0 关闭，网关循环
   实时重读）且心跳缺失或超过 1 小时的任务（worker 先 SIGTERM 后
   SIGKILL，发 `stale` 事件、run 以 `stale` 关闭，按 hermes 策略
-  不计为失败）；两者分别进入 `DispatchResult.stale` / `.crashed`。
+  不计为失败）；两者分别进入 `DispatchResult.stale` / `.crashed`；
+  P138 加固内嵌调度器的运维安全（hermes gateway 循环）：排他
+  `flock` 单例锁（`<home>/kanban/dispatcher.lock`）保证全机只有
+  一个网关进程在调度 —— 第二个网关记录竞争日志、继续提供 HTTP
+  但不调度（防配置漂移与重启竞争的兜底）—— 并新增调度器卡死
+  健康遥测：ready 队列连续 6 拍非空却零 spawn 时告警（300 秒
+  节流）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
