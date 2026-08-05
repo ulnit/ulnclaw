@@ -24,6 +24,7 @@ pub const STATUSES: &[&str] = &[
 /// Status glyphs (hermes `_STATUS_ICONS`).
 pub fn status_icon(status: &str) -> &'static str {
     match status {
+        "triage" => "\u{1FA7A}",   // 🩺
         "todo" => "\u{25FB}",      // ◻
         "ready" => "\u{25B6}",     // ▶
         "running" => "\u{25CF}",   // ●
@@ -435,6 +436,16 @@ pub fn build_kanban_stop_nudge(task_id: &str, attempts: usize) -> Option<String>
 // for the verifier). The dispatcher + parent-aware recompute_ready drive it.
 // ---------------------------------------------------------------------------
 
+/// One child card of a triage decomposition (hermes decompose children
+/// dicts). `parents` are indices into the same children list.
+#[derive(Debug, Clone)]
+pub struct DecomposeChild {
+    pub title: String,
+    pub body: String,
+    pub assignee: Option<String>,
+    pub parents: Vec<usize>,
+}
+
 /// One parallel worker card in a swarm (hermes `SwarmWorkerSpec`).
 #[derive(Debug, Clone)]
 pub struct SwarmWorkerSpec {
@@ -638,6 +649,157 @@ impl KanbanStore {
         })
     }
 
+    /// Fan a triage task out into a graph of children and promote the root
+    /// to `todo` (hermes `decompose_triage_task`). The root stays alive as
+    /// a CHILD of every decomposed child, so it wakes back up (todo→ready
+    /// via `recompute_ready`) once the whole graph completes — its
+    /// assignee (the orchestrator profile) then judges completion.
+    /// Returns `Ok(None)` when the root vanished or moved out of triage.
+    pub fn decompose_triage_task(
+        &self,
+        task_id: &str,
+        root_assignee: Option<&str>,
+        children: &[DecomposeChild],
+        author: &str,
+        auto_promote: bool,
+    ) -> Result<Option<Vec<String>>> {
+        if children.is_empty() {
+            return Ok(None);
+        }
+        // Validate the sibling graph up front (hermes raises ValueError).
+        for (idx, child) in children.iter().enumerate() {
+            if child.title.trim().is_empty() {
+                return Err(AgentError::session(format!(
+                    "kanban decompose: child[{idx}].title is required"
+                )));
+            }
+            for &parent_idx in &child.parents {
+                if parent_idx >= children.len() {
+                    return Err(AgentError::session(format!(
+                        "kanban decompose: child[{idx}].parents index {parent_idx} out of range"
+                    )));
+                }
+                if parent_idx == idx {
+                    return Err(AgentError::session(format!(
+                        "kanban decompose: child[{idx}] cannot list itself as a parent"
+                    )));
+                }
+            }
+        }
+        // Kahn topological sort → cycle detection (a cycle would deadlock
+        // every involved child in todo forever).
+        let mut in_degree = vec![0usize; children.len()];
+        let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); children.len()];
+        for (idx, child) in children.iter().enumerate() {
+            for &parent_idx in &child.parents {
+                adjacency[parent_idx].push(idx);
+                in_degree[idx] += 1;
+            }
+        }
+        let mut queue: Vec<usize> = (0..children.len()).filter(|&i| in_degree[i] == 0).collect();
+        let mut seen = 0usize;
+        while let Some(node) = queue.pop() {
+            seen += 1;
+            for &next in &adjacency[node] {
+                in_degree[next] -= 1;
+                if in_degree[next] == 0 {
+                    queue.push(next);
+                }
+            }
+        }
+        if seen != children.len() {
+            return Err(AgentError::session(
+                "kanban decompose: cyclic dependency in children graph",
+            ));
+        }
+        // Root must still be in triage before we create anything.
+        let root_is_triage = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT 1 FROM tasks WHERE id = ?1 AND status = 'triage'",
+                params![task_id],
+                |_| Ok(()),
+            )
+            .is_ok()
+        };
+        if !root_is_triage {
+            return Ok(None);
+        }
+        let author = if author.trim().is_empty() { "decomposer" } else { author.trim() };
+
+        let mut child_ids = Vec::new();
+        for child in children {
+            let created = self.create_task(&NewTask {
+                title: child.title.trim().chars().take(200).collect(),
+                body: child.body.clone(),
+                assignee: child.assignee.clone(),
+                priority: 0,
+                tenant: None,
+                model: None,
+                created_by: author.to_string(),
+                ..Default::default()
+            })?;
+            self.append_event(
+                &created.id,
+                "decomposed",
+                serde_json::json!({ "root": task_id, "by": author }),
+            )?;
+            child_ids.push(created.id);
+        }
+        // Sibling parent links (within the decomposed graph).
+        for (idx, child) in children.iter().enumerate() {
+            for &parent_idx in &child.parents {
+                self.link_tasks(&child_ids[parent_idx], &child_ids[idx])?;
+            }
+        }
+        // The root waits for the whole graph: root becomes a child of
+        // every decomposed child (cycle-free — root is only ever a child).
+        for child_id in &child_ids {
+            self.link_tasks(child_id, task_id)?;
+        }
+        // Flip the root: triage → todo (+ orchestrator assignee), guarded.
+        let updated = {
+            let conn = self.conn.lock().unwrap();
+            match root_assignee.map(str::trim).filter(|a| !a.is_empty()) {
+                Some(assignee) => conn.execute(
+                    "UPDATE tasks SET status = 'todo', assignee = ?2 \
+                     WHERE id = ?1 AND status = 'triage'",
+                    params![task_id, assignee],
+                ),
+                None => conn.execute(
+                    "UPDATE tasks SET status = 'todo' WHERE id = ?1 AND status = 'triage'",
+                    params![task_id],
+                ),
+            }
+        }
+        .map_err(db_error("decompose root flip"))?;
+        if updated != 1 {
+            // Race: root moved out of triage while we worked. Roll the
+            // orphan children back so no dangling graph is left behind.
+            for child_id in &child_ids {
+                self.archive_task(child_id).ok();
+            }
+            return Ok(None);
+        }
+        self.add_comment(
+            task_id,
+            author,
+            &format!(
+                "Decomposed into {}. Root will wake when all children complete.",
+                child_ids.join(", ")
+            ),
+        )?;
+        self.append_event(
+            task_id,
+            "decomposed",
+            serde_json::json!({ "child_ids": child_ids, "root_assignee": root_assignee }),
+        )?;
+        if auto_promote {
+            self.recompute_ready()?;
+        }
+        Ok(Some(child_ids))
+    }
+
     /// Post a cross-worker note to the swarm blackboard (structured comment
     /// on the root task; hermes `post_blackboard_update`).
     pub fn post_blackboard_update(&self, root_id: &str, author: &str, note: &str) -> Result<()> {
@@ -786,10 +948,13 @@ pub struct NewTask {
     /// Dedup key: creating with the key of an existing non-archived task
     /// returns that task instead of a duplicate (hermes idempotency_key).
     pub idempotency_key: Option<String>,
+    /// Park the task in the triage column (hermes `kanban create --triage`):
+    /// a specifier/decomposer fleshes it out and promotes it to `todo`.
+    pub triage: bool,
 }
 
 pub struct KanbanStore {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
     path: PathBuf,
 }
 
@@ -1140,6 +1305,7 @@ impl KanbanStore {
         let id = Self::new_task_id();
         let board = self.current_board()?;
         let now = Self::now();
+        let initial_status = if task.triage { "triage" } else { "todo" };
         let skills_json = task
             .skills
             .as_ref()
@@ -1150,13 +1316,14 @@ impl KanbanStore {
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
              created_by, created_at, tenant, model, skills, max_runtime_seconds, \
              idempotency_key) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 'todo', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 id,
                 board,
                 task.title.trim(),
                 task.body,
                 task.assignee,
+                initial_status,
                 task.priority,
                 task.created_by,
                 now,
@@ -1172,6 +1339,84 @@ impl KanbanStore {
         self.append_event(&id, "created", serde_json::json!({ "board": board }))?;
         self.get_task(&id)?
             .ok_or_else(|| AgentError::session("kanban: task vanished after create"))
+    }
+
+    /// Flesh out a triage task and promote it to `todo` (hermes
+    /// `specify_triage_task`). Atomically updates title/body/assignee
+    /// (when provided) and flips triage→todo in one write. Returns false
+    /// when the task is missing or not in the triage column — callers
+    /// surface that as "nothing to specify", not an error. Landing on
+    /// `todo` (not `ready`) keeps parent gating intact: `recompute_ready`
+    /// promotes parent-free todos on the next dispatcher tick.
+    pub fn specify_triage_task(
+        &self,
+        task_id: &str,
+        title: Option<&str>,
+        body: Option<&str>,
+        assignee: Option<&str>,
+        author: &str,
+    ) -> Result<bool> {
+        if let Some(candidate) = title {
+            if candidate.trim().is_empty() {
+                return Err(AgentError::session("kanban: title cannot be blank"));
+            }
+        }
+        let conn = self.conn.lock().unwrap();
+        let existing = conn
+            .query_row(
+                "SELECT title, body, assignee FROM tasks WHERE id = ?1 AND status = 'triage'",
+                params![task_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .ok();
+        let Some((old_title, old_body, old_assignee)) = existing else {
+            return Ok(false);
+        };
+        let new_title = title
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(&old_title);
+        let new_body = body.map_or_else(|| old_body.clone(), str::to_string);
+        let new_assignee = assignee
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_string)
+            .or_else(|| old_assignee.clone());
+        let changed = new_title != old_title
+            || new_body != old_body
+            || new_assignee.as_deref() != old_assignee.as_deref();
+        let updated = conn
+            .execute(
+                "UPDATE tasks SET status = 'todo', title = ?2, body = ?3, assignee = ?4 \
+                 WHERE id = ?1 AND status = 'triage'",
+                params![task_id, new_title, new_body, new_assignee],
+            )
+            .map_err(db_error("specify"))?;
+        if updated != 1 {
+            return Ok(false);
+        }
+        if changed && !author.trim().is_empty() {
+            conn.execute(
+                "INSERT INTO task_comments (task_id, author, body, created_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    task_id,
+                    author.trim(),
+                    "Specified: task spec updated, promoted triage → todo.",
+                    Self::now(),
+                ],
+            )
+            .map_err(db_error("specify comment"))?;
+        }
+        drop(conn);
+        self.append_event(task_id, "specified", serde_json::json!({}))?;
+        Ok(true)
     }
 
     fn task_from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
@@ -1284,7 +1529,7 @@ impl KanbanStore {
             .map_err(db_error("list tasks"))
     }
 
-    fn append_event(&self, task_id: &str, kind: &str, payload: Value) -> Result<()> {
+    pub(crate) fn append_event(&self, task_id: &str, kind: &str, payload: Value) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO task_events (task_id, kind, payload, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -2521,5 +2766,153 @@ mod tests {
         let prompt = worker_prompt(home, &task);
         assert!(prompt.contains("kanban worker for task t_1"));
         assert!(prompt.contains("DONE-SKILL"), "skill body must be inlined");
+    }
+
+    #[test]
+    fn create_task_triage_parks_in_triage_column() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "rough idea".into(),
+                created_by: "tester".into(),
+                triage: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.status, "triage");
+        assert_eq!(status_icon("triage"), "\u{1FA7A}");
+    }
+
+    #[test]
+    fn specify_triage_task_promotes_and_updates() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "rough idea".into(),
+                body: "one liner".into(),
+                created_by: "tester".into(),
+                triage: true,
+                ..Default::default()
+            })
+            .unwrap();
+        let ok = store
+            .specify_triage_task(
+                &task.id,
+                Some("Build the widget"),
+                Some("**Goal** — ship it"),
+                Some("alice"),
+                "specifier",
+            )
+            .unwrap();
+        assert!(ok);
+        let specified = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(specified.status, "todo");
+        assert_eq!(specified.title, "Build the widget");
+        assert_eq!(specified.body, "**Goal** — ship it");
+        assert_eq!(specified.assignee.as_deref(), Some("alice"));
+        // A task already out of triage is not re-specified.
+        let again = store
+            .specify_triage_task(&task.id, Some("X"), None, None, "specifier")
+            .unwrap();
+        assert!(!again);
+    }
+
+    fn triage_root(store: &KanbanStore) -> Task {
+        store
+            .create_task(&NewTask {
+                title: "Ship the report pipeline".into(),
+                body: "big vague idea".into(),
+                created_by: "tester".into(),
+                triage: true,
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn decompose_triage_task_fans_out_and_wakes_root() {
+        let (_dir, store) = temp_store();
+        let root = triage_root(&store);
+        let children = vec![
+            DecomposeChild {
+                title: "Research".into(),
+                body: "find facts".into(),
+                assignee: Some("alice".into()),
+                parents: vec![],
+            },
+            DecomposeChild {
+                title: "Draft".into(),
+                body: "write draft".into(),
+                assignee: Some("bob".into()),
+                parents: vec![0],
+            },
+        ];
+        let child_ids = store
+            .decompose_triage_task(&root.id, Some("carol"), &children, "tester", true)
+            .unwrap()
+            .expect("decomposition succeeds");
+        assert_eq!(child_ids.len(), 2);
+
+        // Root flipped to todo under the orchestrator, children created.
+        let root_after = store.get_task(&root.id).unwrap().unwrap();
+        assert_eq!(root_after.status, "todo");
+        assert_eq!(root_after.assignee.as_deref(), Some("carol"));
+        let research = store.get_task(&child_ids[0]).unwrap().unwrap();
+        let draft = store.get_task(&child_ids[1]).unwrap().unwrap();
+        assert_eq!(research.status, "ready"); // parent-free, auto-promoted
+        assert_eq!(draft.status, "todo"); // waits on research
+
+        // Root waits for the whole graph (child-of-every-child).
+        let root_parents = store.parents_of(&root.id).unwrap();
+        assert_eq!(root_parents.len(), 2);
+
+        // Complete the graph: root wakes up to ready.
+        store.ready_task(&research.id).ok();
+        store.claim_task(&research.id, "host:test", 60).unwrap();
+        store.complete_task(&research.id, Some("facts")).unwrap();
+        store.recompute_ready().unwrap();
+        let draft = store.get_task(&child_ids[1]).unwrap().unwrap();
+        assert_eq!(draft.status, "ready");
+        store.claim_task(&draft.id, "host:test", 60).unwrap();
+        store.complete_task(&draft.id, Some("draft")).unwrap();
+        store.recompute_ready().unwrap();
+        let root_final = store.get_task(&root.id).unwrap().unwrap();
+        assert_eq!(root_final.status, "ready");
+    }
+
+    #[test]
+    fn decompose_rejects_cycles_and_non_triage_roots() {
+        let (_dir, store) = temp_store();
+        let root = triage_root(&store);
+        let cyclic = vec![
+            DecomposeChild {
+                title: "A".into(),
+                body: String::new(),
+                assignee: None,
+                parents: vec![1],
+            },
+            DecomposeChild {
+                title: "B".into(),
+                body: String::new(),
+                assignee: None,
+                parents: vec![0],
+            },
+        ];
+        let err = store
+            .decompose_triage_task(&root.id, None, &cyclic, "tester", true)
+            .unwrap_err();
+        assert!(err.to_string().contains("cyclic"));
+
+        let plain = make_task(&store, "not triage");
+        let children = vec![DecomposeChild {
+            title: "A".into(),
+            body: String::new(),
+            assignee: None,
+            parents: vec![],
+        }];
+        let outcome = store
+            .decompose_triage_task(&plain.id, None, &children, "tester", true)
+            .unwrap();
+        assert!(outcome.is_none());
     }
 }

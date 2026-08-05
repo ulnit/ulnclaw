@@ -84,6 +84,8 @@ pub mod binary_ext;
 pub mod browser;
 pub mod bundles;
 pub mod kanban;
+pub mod kanban_diagnostics;
+pub mod kanban_triage;
 pub mod checkpoint;
 pub mod clipboard;
 pub mod clarify_gateway;

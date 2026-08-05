@@ -525,6 +525,10 @@ enum KanbanAction {
         /// Dedup key (hermes idempotency_key)
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Park in triage — the specifier/decomposer fleshes out the spec
+        /// and promotes the task to todo (hermes create --triage)
+        #[arg(long)]
+        triage: bool,
         #[arg(long)]
         json: bool,
     },
@@ -597,6 +601,35 @@ enum KanbanAction {
         #[arg(long)]
         idempotency_key: Option<String>,
         /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Flesh out a triage-column task into a concrete spec via the
+    /// auxiliary LLM and promote it triage→todo (hermes `kanban specify`)
+    Specify {
+        /// Task id (omit with --all)
+        id: Option<String>,
+        /// Specify every task currently in the triage column
+        #[arg(long)]
+        all: bool,
+    },
+    /// Decompose a triage-column task into a graph of child tasks routed
+    /// to profiles via the auxiliary LLM (hermes `kanban decompose`)
+    Decompose {
+        /// Task id (omit with --all)
+        id: Option<String>,
+        /// Decompose every task currently in the triage column
+        #[arg(long)]
+        all: bool,
+    },
+    /// Structured distress signals for tasks (hermes `kanban diagnostics`)
+    Diagnostics {
+        /// Task id (default: every open task on the board)
+        id: Option<String>,
+        /// Only show diagnostics at/above this severity (warning|error|critical)
+        #[arg(long)]
+        min_severity: Option<String>,
+        /// Emit JSON per task
         #[arg(long)]
         json: bool,
     },
@@ -4051,6 +4084,29 @@ async fn pets_cmd(action: PetsAction) -> Result<(), String> {
     }
 }
 
+/// Resolve the task set for `kanban specify`/`decompose` (single id or
+/// the whole triage column with --all).
+fn triage_targets(
+    store: &ulnclaw::kanban::KanbanStore,
+    id: Option<&str>,
+    all: bool,
+    verb: &str,
+) -> Result<Vec<String>, String> {
+    if all {
+        return ulnclaw::kanban_triage::list_triage_ids(store).map_err(|e| e.to_string());
+    }
+    match id {
+        Some(raw) => {
+            let resolved = store
+                .resolve_task_id(raw)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("task '{raw}' not found"))?;
+            Ok(vec![resolved])
+        }
+        None => Err(format!("usage: ulnclaw kanban {verb} <id> | --all")),
+    }
+}
+
 async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
     use ulnclaw::kanban::{KanbanStore, NewTask, DEFAULT_CLAIM_TTL_SECS};
     let store = KanbanStore::open_default().map_err(|e| e.to_string())?;
@@ -4112,6 +4168,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             skills,
             max_runtime,
             idempotency_key,
+            triage,
             json,
         } => {
             let title = title.join(" ");
@@ -4130,6 +4187,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     skills: if skills.is_empty() { None } else { Some(skills) },
                     max_runtime_seconds: max_runtime,
                     idempotency_key,
+                    triage,
                 })
                 .map_err(|e| e.to_string())?;
             if json {
@@ -4381,7 +4439,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 specs.push(ulnclaw::kanban::SwarmWorkerSpec {
                     assignee,
                     title: title.clone(),
-                    body: String::new(),
+                    body: title.clone(),
                     priority: 0,
                     skills,
                 });
@@ -4398,6 +4456,129 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 }
                 println!("  ◇ verifier {} (waits for workers)", created.verifier_id);
                 println!("  ◆ synthesizer {} (waits for verifier)", created.synthesizer_id);
+            }
+        }
+        KanbanAction::Specify { id, all } => {
+            let ids = triage_targets(&store, id.as_deref(), all, "specify")?;
+            let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
+            let provider = build_provider(&config)?;
+            for task_id in ids {
+                let outcome = ulnclaw::kanban_triage::specify_task(
+                    &store,
+                    &config,
+                    provider.clone(),
+                    &task_id,
+                    None,
+                )
+                .await;
+                if outcome.ok {
+                    let title_note = outcome
+                        .new_title
+                        .map(|t| format!(" — {t}"))
+                        .unwrap_or_default();
+                    println!("✓ {task_id} specified{title_note}");
+                } else {
+                    println!("✗ {task_id} — {}", outcome.reason);
+                }
+            }
+        }
+        KanbanAction::Decompose { id, all } => {
+            let ids = triage_targets(&store, id.as_deref(), all, "decompose")?;
+            let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
+            let provider = build_provider(&config)?;
+            for task_id in ids {
+                let outcome = ulnclaw::kanban_triage::decompose_task(
+                    &store,
+                    &config,
+                    provider.clone(),
+                    &task_id,
+                    None,
+                )
+                .await;
+                if outcome.ok {
+                    match &outcome.child_ids {
+                        Some(children) => {
+                            println!("✓ {task_id} decomposed into {} children:", children.len());
+                            for child in children {
+                                println!("  ▶ {child}");
+                            }
+                        }
+                        None => {
+                            let title_note = outcome
+                                .new_title
+                                .map(|t| format!(" — {t}"))
+                                .unwrap_or_default();
+                            println!("✓ {task_id} kept single ({}){title_note}", outcome.reason);
+                        }
+                    }
+                } else {
+                    println!("✗ {task_id} — {}", outcome.reason);
+                }
+            }
+        }
+        KanbanAction::Diagnostics { id, min_severity, json } => {
+            let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
+            let tasks: Vec<ulnclaw::kanban::Task> = match id.as_deref() {
+                Some(raw) => {
+                    let resolved = resolve(raw)?;
+                    vec![store
+                        .get_task(&resolved)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("task '{raw}' not found"))?]
+                }
+                None => store
+                    .list_tasks(None, None, None, 500)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .filter(|t| t.status != "done" && t.status != "archived")
+                    .collect(),
+            };
+            let mut total = 0usize;
+            for task in &tasks {
+                let diagnostics = ulnclaw::kanban_diagnostics::compute_task_diagnostics(
+                    &store, &config, task,
+                );
+                let filtered: Vec<&ulnclaw::kanban_diagnostics::Diagnostic> = diagnostics
+                    .iter()
+                    .filter(|d| {
+                        ulnclaw::kanban_diagnostics::severity_at_or_above(
+                            &d.severity,
+                            min_severity.as_deref(),
+                        )
+                    })
+                    .collect();
+                if filtered.is_empty() {
+                    continue;
+                }
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "task_id": task.id,
+                            "diagnostics": filtered,
+                        })
+                    );
+                } else {
+                    println!(
+                        "{} {} ({})",
+                        ulnclaw::kanban::status_icon(&task.status),
+                        task.id,
+                        task.title
+                    );
+                    for diagnostic in &filtered {
+                        println!(
+                            "  [{}] {}: {}",
+                            diagnostic.severity, diagnostic.kind, diagnostic.title
+                        );
+                        for action in &diagnostic.actions {
+                            println!("      → {} — {}", action.label, action.hint);
+                        }
+                    }
+                }
+                total += filtered.len();
+            }
+            if total == 0 {
+                println!("no diagnostics — the board looks healthy");
             }
         }
         KanbanAction::Gc => {

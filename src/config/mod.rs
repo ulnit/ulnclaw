@@ -742,6 +742,15 @@ pub struct KanbanConfig {
     /// Spawn each worker in its own git worktree when dispatching from a
     /// repo (hermes worktree workspaces; falls back to in-place otherwise).
     pub worktrees: bool,
+    /// Profile that owns the root/orchestration task after a decompose
+    /// fan-out (hermes `kanban.orchestrator_profile`).
+    pub orchestrator_profile: Option<String>,
+    /// Profile that catches child tasks the decomposer cannot route
+    /// (hermes `kanban.default_assignee`).
+    pub default_assignee: Option<String>,
+    /// Promote parent-free decomposed children to ready automatically
+    /// (hermes `kanban.auto_promote_children`, default on).
+    pub auto_promote_children: bool,
 }
 
 impl Default for KanbanConfig {
@@ -751,6 +760,9 @@ impl Default for KanbanConfig {
             dispatch_interval_secs: 60,
             max_spawn: 2,
             worktrees: true,
+            orchestrator_profile: None,
+            default_assignee: None,
+            auto_promote_children: true,
         }
     }
 }

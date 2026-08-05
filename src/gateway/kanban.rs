@@ -175,6 +175,9 @@ pub struct CreateTaskBody {
     /// Dedup key — an existing non-archived task with the key is returned.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Park in the triage column for the specifier/decomposer.
+    #[serde(default)]
+    pub triage: Option<bool>,
 }
 
 /// `POST /api/kanban/tasks` — create a task on the current board.
@@ -197,6 +200,7 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         skills: body.skills.filter(|s| !s.is_empty()),
         max_runtime_seconds: body.max_runtime_seconds,
         idempotency_key: body.idempotency_key.filter(|k| !k.trim().is_empty()),
+        triage: body.triage.unwrap_or(false),
     }) {
         Ok(t) => t,
         Err(e) => return super::bad_request(&e.to_string(), None),
