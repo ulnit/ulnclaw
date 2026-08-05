@@ -8,6 +8,7 @@ pub mod filters;
 pub mod recap;
 pub mod repair;
 pub mod recovery;
+pub mod retitle;
 pub mod sqlite;
 
 pub use sqlite::SqliteSessionStore;

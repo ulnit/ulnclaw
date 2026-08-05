@@ -417,6 +417,16 @@ enum SessionAction {
         #[arg(long, default_value = "500")]
         limit: usize,
     },
+    /// Re-title sessions whose title leaked a /skill scaffold
+    /// (hermes sessions retitle-skills)
+    RetitleSkills {
+        /// Max sessions to scan
+        #[arg(long, default_value = "200")]
+        limit: usize,
+        /// Write the new titles (default: dry run)
+        #[arg(long)]
+        apply: bool,
+    },
     /// Repair a malformed state.db schema so hidden sessions reappear
     /// (hermes sessions repair)
     Repair {
@@ -1000,7 +1010,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             }
             one_shot(&config, &prompt, cli.resume.clone(), cli.continue_last).await
         }
-        Commands::Sessions { action } => sessions_cmd(action).await,
+        Commands::Sessions { action } => sessions_cmd(action, &config).await,
         Commands::Tools => tools_cmd(&config),
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
         Commands::Bundles { action } => bundles_cmd(action.unwrap_or(BundlesAction::List)),
@@ -2213,7 +2223,10 @@ async fn handle_slash(
                                 note.push_str(&format!("; missing: {}", missing.join(", ")));
                             }
                             println!("{note}");
-                            match agent.run(&message, Some(history.clone())).await {
+                            match agent
+                                .run_with_session(&message, Some(history.clone()), Some(session_key))
+                                .await
+                            {
                                 Ok(result) => {
                                     println!("\n{}", result.content);
                                     *history = result
@@ -2276,7 +2289,7 @@ fn print_diff_result(result: &serde_json::Value) {
     }
 }
 
-async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
+async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(), String> {
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
     if let SessionAction::Repair { check_only, no_backup } = &action {
         // Repair must run BEFORE opening the store: a malformed schema is
@@ -2497,6 +2510,75 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
                 return Ok(());
             }
             run_session_browse(&rows)?;
+        }
+        SessionAction::RetitleSkills { limit, apply } => {
+            let rows = store
+                .list_skill_scaffolded_sessions(limit.max(1))
+                .map_err(|e| e.to_string())?;
+            if rows.is_empty() {
+                println!("No sessions were titled from a /skill invocation.");
+                return Ok(());
+            }
+            println!(
+                "{} session(s) opened with a /skill{}:",
+                rows.len(),
+                if apply { "" } else { " (dry run — pass --apply to write)" }
+            );
+            let provider = build_provider(config)?;
+            let mut changed = 0usize;
+            for row in &rows {
+                let typed = ulnclaw::session::retitle::describe_skill_invocation(&row.content)
+                    .unwrap_or_default();
+                let first_reply = store
+                    .get_first_assistant_text(&row.id)
+                    .map_err(|e| e.to_string())?;
+                let Some(new_title) = ulnclaw::title_generator::generate_title_forced(
+                    config,
+                    provider.clone(),
+                    &typed,
+                    &first_reply,
+                )
+                .await
+                else {
+                    continue;
+                };
+                let old_title = row.title.as_deref().unwrap_or("");
+                if new_title == old_title {
+                    continue;
+                }
+                if !ulnclaw::session::retitle::is_titlelike(&new_title) {
+                    println!(
+                        "  {}\n    kept {:?} — got {:?}",
+                        row.id, old_title, new_title
+                    );
+                    continue;
+                }
+                println!("  {}\n    {:?}\n    → {:?}", row.id, old_title, new_title);
+                changed += 1;
+                if !apply {
+                    continue;
+                }
+                match store.set_session_title(&row.id, &new_title) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        // Unique-title collision: dedupe the same way the
+                        // live auto-titler would (base #2, base #3, ...).
+                        let deduped = store
+                            .get_next_title_in_lineage(&new_title)
+                            .map_err(|e| e.to_string())?;
+                        match store.set_session_title(&row.id, &deduped) {
+                            Ok(()) => println!("    (renamed to {:?} — title was taken)", deduped),
+                            Err(e) => {
+                                println!("    skipped: {}", e);
+                                changed -= 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if changed == 0 {
+                println!("Nothing to retitle.");
+            }
         }
         SessionAction::Delete { id, yes } => {
             let resolved = store

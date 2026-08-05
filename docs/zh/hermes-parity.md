@@ -70,6 +70,7 @@
 | 调试分享包（`hermes_cli/debug.py`） | ✅ 核心 | `ulnclaw debug report [--lines N] [--no-redact] [--output DIR]`：以本地文件方式收集 hermes 风格分享包（不上传 pastebin）——`report.txt`（强制脱敏的 `ulnclaw dump` + agent/errors/gateway 日志尾部）加每份存在的完整日志，均带 dump 头部与脱敏横幅；每个文件一次快照同时派生摘要/全文（防轮转竞态），机密经脱敏引擎 + 邮箱掩码处理，支持 `.1` 轮转回退，绝不改动磁盘日志 |
 | 技能束（`agent/skill_bundles.py`、`hermes_cli/bundles.py`） | ✅ 核心 | `ulnclaw bundles list|show|create|delete|reload`：`<home>/skill-bundles/` 下的 YAML 技能束，把一组技能合并加载（`name/description/skills/instruction`，缺省以文件名兜底、slug 归一化与技能一致、重名 slug 先到先得、坏 YAML 跳过不影响发现）；REPL `/<bundle> [指令]` 一次把全部成员技能的 SKILL.md 注入同一轮，带 hermes 风格头部（已载/缺失清单、束指令、用户指令），束优先于同名未知命令，连字符/下划线互通；缺失技能跳过并提示（与 `-s` 预载同样宽容） |
 | 导入其他 Agent 配置（`hermes_cli/agent_import.py`） | ✅ 核心 | `ulnclaw import-agent [claude-code|codex] [--source DIR] [--dry-run] [--overwrite]`：detect→parse→map→apply，逐项记录 imported/skipped/conflict/error；claude-code：`CLAUDE.md` → `memory/MEMORY.md` 条目（标题成为上下文前缀、跳过代码块/表格、去重），`.claude.json` + `settings.json` 的 `mcpServers` → config.toml `[[mcp.servers]]`（同名冲突保留原配置、机密风格 env 变量剥离并报告），`skills/` → `skills/claude-code-imports/`，权限规则以转换后的命令模式报告（ulnclaw 无 allowlist 配置面）；codex：`AGENTS.md` + `memories/*.md` → 记忆条目，`config.toml [mcp_servers.*]` → `[[mcp.servers]]`，`skills/` → `skills/codex-imports/`；记忆合并前先备份（`.bak.<ts>`）、迁移预算 2 万字符；凭据文件绝不读取，dry-run 不写任何文件 |
+| 会话技能标题修复（`hermes_cli/sessions_cmd.py retitle-skills`） | ✅ 核心 | `ulnclaw sessions retitle-skills [--limit N] [--apply]`（默认干跑）：`list_skill_scaffolded_sessions`（首个用户回合匹配 `[IMPORTANT: The user has invoked the` 脚手架且已有标题的会话）、`describe_skill_invocation` 从捆绑与单技能格式还原用户键入的调用（引号名称、`User instruction:` / `alongside the skill invocation:` 提取、摘录接缝切分、空白折叠）、`generate_title_forced` 绕过自动标题开关、`_is_titlelike` 拒绝命令输出型候选、唯一标题冲突经 `get_next_title_in_lineage` 去重（`base #2`、`#3`……） |
 | 会话浏览（`hermes_cli/sessions_cmd.py browse` + curses 挑选器） | ✅ 核心 | `ulnclaw sessions browse [--source S] [--limit N]`：以无依赖 stdin 挑选器替代 curses TUI —— 按最近活动排序的列表（标题 → 首条用户消息预览回退、相对时间、来源、截断 id）、对标题/预览/id/来源的实时子串过滤、未指定 `--source` 时排除 `tool` 源会话（hermes 语义）、按编号恢复会话时以 `--resume <id>` 重新启动当前二进制（hermes `relaunch`）；存储查询 `list_sessions_for_browse` 单条 SQL 返回挑选器行 |
 | 会话恢复与单会话连续性（`cli.py --resume/--continue`） | ✅ 核心 | 全局 `-r/--resume <id或前缀>` 与 `-c/--continue` 标志，适用于 `chat` 与 `run`：整个 REPL 会话存于同一条会话记录（此前每轮都会新建记录）；恢复时用 `load_messages` 回填 REPL 历史（丢弃 system 行），打印 `Resuming session: <id> (标题)`，每轮经 `run_with_session` 写入同一 id；`/new` 轮换到新会话键并重置按会话的目标管理器；`latest_session_id` 按最近活动挑选 `--continue` 目标（跳过已归档）；所有带 id 的 `sessions` 动作（`show`/`export`/`recap`/`delete`/`rename`）均经 `resolve_session_id` 接受唯一前缀；hermes 的 `-c <会话名>` 标题查找不移植（`-c` 不带值） |
 | 会话库修复（`hermes_state.py repair_state_db_schema`） | ✅ 核心 | `ulnclaw sessions repair [--check-only] [--no-backup]`：健康探测（`db_opens_cleanly` —— `PRAGMA journal_mode` 首语句触发、`integrity_check`、sessions 读取、FTS MATCH 读探测、回滚式 FTS 写探测）后按破坏程度逐级升级 —— FTS5 `'rebuild'` 原地重建、`REINDEX` 修复过期 B 树索引、经 `writable_schema` 去重 `sqlite_master`（保留 FTS 索引）、删除 FTS 结构 + `VACUUM` 并在下次打开时重建（`initialize_schema` 回填滞后的外联内容索引）；先做带时间戳的原始备份 + WAL/SHM 附属文件；失败时指向离线 `sessions recover`；在打开存储之前执行，因为库结构损坏正是无法打开的情形 |
@@ -102,7 +103,7 @@
 | 记忆系统 | ✅ | MEMORY.md/USER.md，注入提示词 |
 | Cron 调度器 | ✅ | 任务存储 + 计划解析 + 轮询循环（`cron::run_scheduler`） |
 | MCP 客户端（`mcp_tool.py`） | ✅ 核心 | stdio JSON-RPC：initialize/tools/list/tools/call；`[[mcp.servers]]` 配置；工具注册为 `mcp__<server>__<tool>`；npx/uvx/pipx 启动前的 OSV 恶意软件检查（`osv_check.py` 移植：MAL-* 通告阻止启动、fail-open、1 小时结论缓存、`OSV_ENDPOINT`/`OSV_CHECK_CACHE_TTL` 覆盖） |
-| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`）、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
+| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`）、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
 | Git 工作区 diff（`working_diff.py`） | ✅ | `ulnclaw diff [--staged|--all] [--dir PATH] [paths...]` + REPL `/gitdiff [staged|all]`：working/staged/all 三模式，未跟踪文件经 `git diff --no-index` 折入（上限 50 个），带超时；基于检查点的 REPL `/diff` 保持独立 |
 | 委派（delegation） | ✅ | SubAgentRunner trait、深度限制、子会话 |
 | 混合智能体 MoA（`moa_loop.py`、`moa_config.py`） | ✅ 核心 | `[moa.presets.<name>]` 参考模型并行扇出 + 聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa <prompt>`）；loud/silent 降级策略、全部失败提前返回、聚合失败回退拼接结果；持久 `provider: moa` 门面、trace 与隐私过滤未移植 |
@@ -169,9 +170,7 @@ rename/optimize/repair/browse`）、启动恢复（`--resume`/`--continue`，
 网关（含 `/v1/browser/*` 实时端点控制与 profile 多路复用）、技能/捆绑/
 记忆/目标/检查点/定时任务/用量分析/doctor 及其余 CLI 均已移植。`sessions`
 面仅有意省略：`optimize-storage`（ulnclaw 自始即采用紧凑的外联内容 FTS
-布局，无旧布局可迁移）与 `retitle-skills`（技能脚手架会话的 LLM 重命名，
-需要技能脚手架会话跟踪），以及 `-c <会话名>` 标题查找（`--continue`
-不带值）。
+布局，无旧布局可迁移）与 `-c <会话名>` 标题查找（`--continue` 不带值）。
 
 有意不移植（超出本地 agent 范围的 hermes 面）：消息平台网关
 （Telegram/Discord/Slack/WhatsApp-Cloud/XAI/… 等 gateway 平台）、Electron

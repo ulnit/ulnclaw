@@ -117,6 +117,15 @@ pub struct SqliteSessionStore {
     has_fts: bool,
 }
 
+/// One skill-scaffolded session row (hermes
+/// `list_skill_scaffolded_sessions` output shape).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillScaffoldedRow {
+    pub id: String,
+    pub title: Option<String>,
+    pub content: String,
+}
+
 /// One row of the interactive session browser (the hermes
 /// `list_sessions_rich` fields the browse picker renders).
 #[derive(Debug, Clone, PartialEq)]
@@ -1232,6 +1241,107 @@ impl SqliteSessionStore {
             .map_err(|e| AgentError::session(e.to_string()))
     }
 
+    /// Titled sessions whose first user turn was a `/skill` invocation
+    /// (hermes `list_skill_scaffolded_sessions`), newest first. Those
+    /// titles were generated from the expanded scaffold, so they describe
+    /// the skill rather than the request.
+    pub fn list_skill_scaffolded_sessions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<SkillScaffoldedRow>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.id, s.title, m.content
+                 FROM sessions s
+                 JOIN messages m ON m.id = (
+                     SELECT m2.id FROM messages m2
+                     WHERE m2.session_id = s.id AND m2.role = 'user'
+                       AND m2.content IS NOT NULL
+                     ORDER BY m2.timestamp, m2.id LIMIT 1
+                 )
+                 WHERE s.title IS NOT NULL
+                   AND m.content LIKE ?1
+                 ORDER BY s.started_at DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(
+                params![crate::session::retitle::SKILL_SCAFFOLD_SQL_LIKE, limit as i64],
+                |row| {
+                    Ok(SkillScaffoldedRow {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        content: row.get(2)?,
+                    })
+                },
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))
+    }
+
+    /// The session's first assistant reply as plain text, empty when none
+    /// (hermes `get_first_assistant_text`).
+    pub fn get_first_assistant_text(&self, session_id: &str) -> Result<String> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.query_row(
+            "SELECT content FROM messages
+             WHERE session_id = ?1 AND role = 'assistant' AND content IS NOT NULL
+             ORDER BY timestamp, id LIMIT 1",
+            params![session_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map(|v| v.unwrap_or_default())
+        .map_err(|e| AgentError::session(e.to_string()))
+    }
+
+    /// Next free title in a lineage: `"my session"` → `"my session #2"`
+    /// when the base is taken (hermes `get_next_title_in_lineage`).
+    pub fn get_next_title_in_lineage(&self, base_title: &str) -> Result<String> {
+        // Strip an existing " #N" suffix to find the true base.
+        let base = match base_title.rfind(" #") {
+            Some(idx) if base_title[idx + 2..].chars().all(|c| c.is_ascii_digit())
+                && !base_title[idx + 2..].is_empty() =>
+            {
+                &base_title[..idx]
+            }
+            _ => base_title,
+        };
+        let escaped = base
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT title FROM sessions WHERE title = ?1 OR title LIKE ?2 ESCAPE '\\'",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let titles: Vec<String> = stmt
+            .query_map(params![base, format!("{escaped} #%")], |r| {
+                r.get::<_, String>(0)
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        if titles.is_empty() {
+            return Ok(base.to_string());
+        }
+        // The unnumbered original counts as #1.
+        let mut max_num: u64 = 1;
+        for title in &titles {
+            if let Some(idx) = title.rfind(" #") {
+                if let Ok(n) = title[idx + 2..].parse::<u64>() {
+                    max_num = max_num.max(n);
+                }
+            }
+        }
+        Ok(format!("{base} #{}", max_num + 1))
+    }
+
     /// Most recent non-archived session id by last activity (hermes
     /// `--continue` target selection). `None` when the store is empty.
     pub fn latest_session_id(&self) -> Result<Option<String>> {
@@ -1937,6 +2047,86 @@ mod tests {
         let counts = store.session_count_by_source().unwrap();
         assert_eq!(counts[0], ("cli".to_string(), 2));
         assert_eq!(counts[1], ("cron".to_string(), 1));
+    }
+
+    #[test]
+    fn skill_scaffolded_listing_and_retitle_helpers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+
+        // Session opened via a /skill scaffold, already (mis)titled.
+        let scaffolded = store.create_session("cli", None, None).unwrap();
+        store
+            .append_message(
+                &scaffolded,
+                &user_msg(&format!(
+                    "{}\"work\" skill bundle, loading 1 skills together.\nUser instruction: fix the leak\n\n[Loaded as part of the \"work\" skill bundle.]",
+                    crate::session::retitle::SKILL_INVOCATION_PREFIX
+                )),
+            )
+            .unwrap();
+        store
+            .append_message(
+                &scaffolded,
+                &Message {
+                    role: Role::Assistant,
+                    content: Some("done, leak fixed".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        store.set_session_title(&scaffolded, "Work skill bundle helper").unwrap();
+
+        // Plain session — must not be listed.
+        let plain = store.create_session("cli", None, None).unwrap();
+        store.append_message(&plain, &user_msg("ordinary question")).unwrap();
+        store.set_session_title(&plain, "Ordinary").unwrap();
+        // Scaffolded but untitled — skipped (nothing to repair).
+        let untitled = store.create_session("cli", None, None).unwrap();
+        store
+            .append_message(
+                &untitled,
+                &user_msg(&format!(
+                    "{}\"x\" skill bundle,",
+                    crate::session::retitle::SKILL_INVOCATION_PREFIX
+                )),
+            )
+            .unwrap();
+
+        let rows = store.list_skill_scaffolded_sessions(200).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, scaffolded);
+        assert_eq!(rows[0].title.as_deref(), Some("Work skill bundle helper"));
+
+        assert_eq!(
+            store.get_first_assistant_text(&scaffolded).unwrap(),
+            "done, leak fixed"
+        );
+        assert_eq!(store.get_first_assistant_text(&plain).unwrap(), "");
+
+        // Title lineage dedup.
+        assert_eq!(
+            store.get_next_title_in_lineage("Fresh name").unwrap(),
+            "Fresh name",
+            "free base returns itself"
+        );
+        assert_eq!(
+            store.get_next_title_in_lineage("Ordinary").unwrap(),
+            "Ordinary #2"
+        );
+        // Take #2 via the untitled session, then ask again.
+        store.set_session_title(&untitled, "Ordinary #2").unwrap();
+        assert_eq!(
+            store.get_next_title_in_lineage("Ordinary").unwrap(),
+            "Ordinary #3"
+        );
+        assert_eq!(
+            store.get_next_title_in_lineage("Ordinary #2").unwrap(),
+            "Ordinary #3",
+            "existing suffix stripped before numbering"
+        );
     }
 
     #[test]

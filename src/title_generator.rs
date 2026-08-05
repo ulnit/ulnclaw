@@ -119,6 +119,18 @@ pub async fn generate_title(
     if !auto_title_enabled(config) {
         return None;
     }
+    generate_title_forced(config, main_provider, user_message, assistant_response).await
+}
+
+/// Title generation ignoring the `auxiliary.title_generation.enabled` gate
+/// — used by `sessions retitle-skills`, an explicit repair command that
+/// must work even when live auto-titling is switched off.
+pub async fn generate_title_forced(
+    config: &UlncLawConfig,
+    main_provider: Arc<dyn Provider>,
+    user_message: &str,
+    assistant_response: &str,
+) -> Option<String> {
 
     // Truncate long messages to keep the request small.
     let user_snippet = truncate_chars(user_message, SNIPPET_CHARS);
