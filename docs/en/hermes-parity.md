@@ -353,7 +353,19 @@ performance and a single static binary.
   without a deliberate re-queue) and `active_pr` (GitHub PR URL in a
   24 h comment window); guarded tasks stay ready, each deferral emits
   a `respawn_guarded` event, and the gateway dispatch API reports
-  them.
+  them; P141 ported wake routing: tasks gain a `session_id` column
+  stamped by the agent `kanban_create` tool (and accepted by the
+  gateway create API), and when a subscribed task reaches a
+  wake-eligible terminal event (`completed` / `gave_up` / `crashed` /
+  `timed_out` / `blocked` — hermes `_WAKE_KINDS`) the notifier
+  resumes the creator session by self-POSTing the hermes-format wake
+  message (`[kanban] Task <id> <status>. …`) to the gateway's own
+  `/v1/chat/completions` with `X-Ulnclaw-Session-Id` (hermes
+  `_self_post_chat_completion`: loopback for wildcard binds, bearer
+  key when configured, 600 s turn ceiling, 2/5/10 s backoff on 429 /
+  transient errors, fail-fast on other HTTP errors); the wake runs
+  best-effort and detached after the text ping so it cannot stall
+  other subscriptions.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

@@ -24,6 +24,51 @@ pub const STATUSES: &[&str] = &[
 /// Valid task workspace kinds (hermes `VALID_WORKSPACE_KINDS`).
 pub const VALID_WORKSPACE_KINDS: &[&str] = &["scratch", "worktree", "dir"];
 
+/// Terminal event kinds that wake the creator session (hermes
+/// `_WAKE_KINDS`). `archived` / `unblocked` are claimed by the
+/// notifier's terminal set but stay silent.
+pub const WAKE_KINDS: &[&str] = &[
+    "completed",
+    "gave_up",
+    "crashed",
+    "timed_out",
+    "blocked",
+];
+
+/// Human status fragment per wake kind (hermes
+/// `gateway.kanban.wake.*`).
+pub fn wake_status_text(kind: &str) -> &'static str {
+    match kind {
+        "completed" => "completed",
+        "gave_up" => "gave up (retries exhausted)",
+        "crashed" => "crashed (worker exited); dispatcher will retry",
+        "timed_out" => "timed out; dispatcher will retry",
+        "blocked" => "blocked; needs attention",
+        _ => "status changed",
+    }
+}
+
+/// Synthetic wake message injected into the creator session (hermes
+/// `gateway.kanban.wake.message`).
+pub fn wake_message(task: &Task, wake_kinds: &[String], board: &str) -> String {
+    let status = if wake_kinds.is_empty() {
+        "status changed".to_string()
+    } else {
+        wake_kinds
+            .iter()
+            .map(|kind| wake_status_text(kind))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let title: String = task.title.chars().take(120).collect();
+    let assignee = task.assignee.as_deref().unwrap_or("");
+    format!(
+        "[kanban] Task {} {}.\nTitle: {}\nAssignee: @{}\nBoard: {}\n\n\
+         Check the result or decide the next step.",
+        task.id, status, title, assignee, board
+    )
+}
+
 /// Status glyphs (hermes `_STATUS_ICONS`).
 pub fn status_icon(status: &str) -> &'static str {
     match status {
@@ -93,6 +138,10 @@ pub struct Task {
     /// Worktree branch (hermes `branch_name`); defaults to `wt/<id>`
     /// at dispatch time when empty.
     pub branch_name: Option<String>,
+    /// Creator session for wake routing (hermes `session_id`): the
+    /// gateway notifier wakes this session when the task reaches a
+    /// wake-eligible terminal event.
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1559,6 +1608,9 @@ pub struct NewTask {
     /// Worktree branch name (hermes `create --branch`; only valid
     /// with the worktree kind).
     pub branch_name: Option<String>,
+    /// Creator session id for wake routing (hermes `session_id`),
+    /// stamped by the agent `kanban_create` tool.
+    pub session_id: Option<String>,
 }
 
 pub struct KanbanStore {
@@ -1608,9 +1660,11 @@ impl KanbanStore {
                 last_heartbeat_at INTEGER,
                 workspace_kind  TEXT NOT NULL DEFAULT 'scratch',
                 workspace_path  TEXT,
-                branch_name     TEXT
+                branch_name     TEXT,
+                session_id      TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_board_status ON tasks (board, status);
+            CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks (session_id);
             CREATE TABLE IF NOT EXISTS task_comments (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id     TEXT NOT NULL,
@@ -1749,6 +1803,16 @@ impl KanbanStore {
         if !columns.contains("branch_name") {
             conn.execute_batch("ALTER TABLE tasks ADD COLUMN branch_name TEXT;")
                 .map_err(db_error("migrate branch_name"))?;
+        }
+        // Pre-P141 stores lack the wake-routing column (hermes
+        // tasks.session_id).
+        if !columns.contains("session_id") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN session_id TEXT;")
+                .map_err(db_error("migrate session_id"))?;
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id);",
+            )
+            .map_err(db_error("migrate session_id index"))?;
         }
         let store = Self {
             conn: Mutex::new(conn),
@@ -2230,9 +2294,10 @@ impl KanbanStore {
         conn.execute(
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
              created_by, created_at, tenant, model, skills, max_runtime_seconds, \
-             idempotency_key, max_retries, workspace_kind, workspace_path, branch_name) \
+             idempotency_key, max_retries, workspace_kind, workspace_path, branch_name, \
+             session_id) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                     ?16, ?17, ?18)",
+                     ?16, ?17, ?18, ?19)",
             params![
                 id,
                 board,
@@ -2252,6 +2317,7 @@ impl KanbanStore {
                 workspace_kind,
                 workspace_path,
                 branch_name,
+                task.session_id,
             ],
         )
         .map_err(db_error("create task"))?;
@@ -2699,6 +2765,7 @@ impl KanbanStore {
             workspace_kind: row.get("workspace_kind")?,
             workspace_path: row.get("workspace_path")?,
             branch_name: row.get("branch_name")?,
+            session_id: row.get("session_id")?,
         })
     }
 
@@ -2706,7 +2773,8 @@ impl KanbanStore {
         created_by, created_at, started_at, completed_at, tenant, model, result, \
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
-        last_failure_error, max_retries, workspace_kind, workspace_path, branch_name";
+        last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, \
+        session_id";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -5270,7 +5338,8 @@ mod tests {
         
             workspace_kind: "scratch".into(),
             workspace_path: None,
-            branch_name: None,};
+            branch_name: None,
+            session_id: None,};
         let prompt = worker_prompt(home, &task);
         assert!(prompt.contains("kanban worker for task t_1"));
         assert!(prompt.contains("DONE-SKILL"), "skill body must be inlined");
@@ -6660,5 +6729,49 @@ mod tests {
             .find(|e| e.kind == "respawn_guarded")
             .unwrap();
         assert_eq!(event.payload["reason"], "blocker_auth");
+    }
+
+    // ------------------------------------------------------------------
+    // P141 — wake routing (creator session_id + wake message)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn create_task_stores_session_id_and_wake_message() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "wake me".into(),
+                created_by: "tester".into(),
+                assignee: Some("alice".into()),
+                session_id: Some("sess_abc".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.session_id.as_deref(), Some("sess_abc"));
+        let got = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(got.session_id.as_deref(), Some("sess_abc"));
+
+        let message = wake_message(&task, &["completed".to_string()], "default");
+        assert!(message.starts_with(&format!(
+            "[kanban] Task {} completed.",
+            task.id
+        )));
+        assert!(message.contains("Title: wake me"));
+        assert!(message.contains("Assignee: @alice"));
+        assert!(message.contains("Board: default"));
+        assert!(message.contains("Check the result or decide the next step."));
+
+        let multi = wake_message(
+            &task,
+            &["crashed".to_string(), "timed_out".to_string()],
+            "default",
+        );
+        assert!(multi.contains(
+            "crashed (worker exited); dispatcher will retry, \
+             timed out; dispatcher will retry"
+        ));
+        assert_eq!(wake_status_text("gave_up"), "gave up (retries exhausted)");
+        assert_eq!(wake_status_text("blocked"), "blocked; needs attention");
+        assert_eq!(wake_status_text("whatever"), "status changed");
     }
 }

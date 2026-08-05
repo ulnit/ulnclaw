@@ -190,6 +190,10 @@ pub struct CreateTaskBody {
     /// worktree workspace).
     #[serde(default)]
     pub branch: Option<String>,
+    /// Creator session id for wake routing (hermes create_task
+    /// session_id); the notifier wakes this session on terminal events.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 /// `POST /api/kanban/tasks` — create a task on the current board.
@@ -256,6 +260,7 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         workspace_kind: Some(workspace_kind),
         workspace_path,
         branch_name,
+        session_id: body.session_id.filter(|id| !id.trim().is_empty()),
     }) {
         Ok(t) => t,
         Err(e) => return super::bad_request(&e.to_string(), None),

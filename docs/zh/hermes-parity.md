@@ -317,7 +317,17 @@
   （1 小时内有已完成 run 且其后无主动重新入队）、`active_pr`
   （24 小时内评论中出现 GitHub PR 链接）；被守卫的任务保持
   ready，每次延后都会记录 `respawn_guarded` 事件，网关 dispatch
-  API 一并返回。
+  API 一并返回；P141 移植唤醒路由：任务新增 `session_id` 列，由
+  agent `kanban_create` 工具写入（网关创建 API 亦接受该字段）；
+  订阅任务进入可唤醒终态事件（`completed` / `gave_up` /
+  `crashed` / `timed_out` / `blocked` —— hermes `_WAKE_KINDS`）
+  时，通知器以 hermes 格式的唤醒文案（`[kanban] Task <id>
+  <status>. …`）自 POST 网关自身的 `/v1/chat/completions` 并携带
+  `X-Ulnclaw-Session-Id`，恢复创建者会话（hermes
+  `_self_post_chat_completion`：通配绑定走回环、配置了密钥则带
+  bearer、单轮上限 600 秒、429/瞬时错误按 2/5/10 秒退避重试、
+  其余 HTTP 错误快速失败）；唤醒在文本通知之后尽力异步执行，
+  不阻塞其他订阅。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

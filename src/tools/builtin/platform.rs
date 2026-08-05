@@ -330,6 +330,11 @@ fn register_kanban(registry: &mut ToolRegistry) {
                     tenant: None,
                     model: None,
                     created_by: "agent".to_string(),
+                    // Wake routing: remember the creator session so the
+                    // notifier can resume it on terminal events (hermes
+                    // session_id).
+                    session_id: Some(ctx.session_id.clone())
+                        .filter(|id| !id.trim().is_empty()),
                     ..Default::default()
                 }) {
                     Ok(t) => t,

@@ -3763,7 +3763,119 @@ const NOTIFY_TERMINAL_KINDS: &[&str] = &[
 /// to each subscribed chat via the registered platform sender, advance
 /// the subscription cursor after delivery, and drop the subscription
 /// once the task reaches a truly final status (done / archived).
-pub fn spawn_kanban_notifier() -> tokio::task::JoinHandle<()> {
+/// Gateway chat entry point targeted by the kanban wake self-post
+/// (hermes wake routing needs the in-process API server's bind + key).
+#[derive(Debug, Clone)]
+pub struct WakeEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub key: Option<String>,
+}
+
+/// A wake self-post runs an entire agent turn synchronously
+/// (stream=false); generous ceiling so long tool-using turns are not
+/// killed mid-flight (hermes `WAKE_TURN_TIMEOUT_SECONDS`).
+const WAKE_TURN_TIMEOUT_SECONDS: u64 = 600;
+
+/// Backoff between retries on transient failures (429 concurrency cap,
+/// connection errors) — hermes `_RETRY_DELAYS_SECONDS`.
+const WAKE_RETRY_DELAYS_SECONDS: [u64; 3] = [2, 5, 10];
+
+/// Wake the creator session by self-POSTing the wake text to the
+/// gateway's own `/v1/chat/completions` with the raw session id in
+/// `X-Ulnclaw-Session-Id` — the exact entry point real turns use, so
+/// the wake resumes the REAL session with full history (hermes
+/// `_self_post_chat_completion`). Errors are returned so the caller
+/// logs instead of silently losing the event.
+pub async fn deliver_session_wake(
+    endpoint: &WakeEndpoint,
+    session_id: &str,
+    text: &str,
+) -> std::result::Result<(), String> {
+    let mut host = endpoint.host.clone();
+    if host == "0.0.0.0" || host == "::" || host == "*" {
+        // Wildcard bind — connect over loopback.
+        host = "127.0.0.1".to_string();
+    }
+    if host.contains(':') && !host.starts_with('[') {
+        host = format!("[{host}]"); // bare IPv6 literal
+    }
+    let url = format!("http://{host}:{}/v1/chat/completions", endpoint.port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(WAKE_TURN_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|e| format!("wake http client: {e}"))?;
+    let mut last_err = String::new();
+    let attempts = 1 + WAKE_RETRY_DELAYS_SECONDS.len();
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(
+                WAKE_RETRY_DELAYS_SECONDS[attempt - 1],
+            ))
+            .await;
+        }
+        let mut request = client
+            .post(&url)
+            .header("X-Ulnclaw-Session-Id", session_id)
+            .json(&serde_json::json!({
+                "model": "ulnclaw",
+                "messages": [{ "role": "user", "content": text }],
+                "stream": false
+            }));
+        if let Some(key) = endpoint.key.as_deref().filter(|k| !k.is_empty()) {
+            request = request.bearer_auth(key);
+        }
+        match request.send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    last_err = format!(
+                        "wake self-post got HTTP 429 (concurrency cap) \
+                         for session {session_id}"
+                    );
+                    tracing::warn!(
+                        "{last_err}; attempt {}/{}",
+                        attempt + 1,
+                        attempts
+                    );
+                    continue;
+                }
+                if status.is_client_error() || status.is_server_error() {
+                    let body = response.text().await.unwrap_or_default();
+                    let body: String = body.chars().take(300).collect();
+                    return Err(format!(
+                        "wake self-post failed for session {session_id}: \
+                         HTTP {status}: {body}"
+                    ));
+                }
+                tracing::info!(
+                    "kanban notifier: wake delivered for session {session_id} \
+                     (attempt {})",
+                    attempt + 1
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                last_err = format!(
+                    "wake self-post transient failure for session {session_id}: {e}"
+                );
+                tracing::warn!(
+                    "{last_err} (attempt {}/{})",
+                    attempt + 1,
+                    attempts
+                );
+            }
+        }
+    }
+    Err(format!(
+        "wake self-post gave up for session {session_id} after \
+         {attempts} attempts: {last_err}"
+    ))
+}
+
+pub fn spawn_kanban_notifier(
+    wake: Option<WakeEndpoint>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Initial delay so the gateway can finish wiring platform
         // adapters (hermes does the same 5 s wait).
@@ -3772,13 +3884,13 @@ pub fn spawn_kanban_notifier() -> tokio::task::JoinHandle<()> {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            notifier_tick().await;
+            notifier_tick(wake.as_ref()).await;
         }
     })
 }
 
 /// One notifier pass over every subscription.
-async fn notifier_tick() {
+async fn notifier_tick(wake: Option<&WakeEndpoint>) {
     let Ok(store) = crate::kanban::KanbanStore::open_default() else {
         return;
     };
@@ -3842,6 +3954,53 @@ async fn notifier_tick() {
             cursor,
         ) {
             tracing::debug!("kanban notifier: cursor advance failed ({e})");
+        }
+        // Wake routing (hermes): terminal events ALSO resume the
+        // creator session recorded on the task. The text ping above was
+        // the delivery, so the wake is best-effort and runs detached —
+        // a slow agent turn must not stall other subscriptions.
+        if let Some(endpoint) = wake {
+            if let Some(task) = task.as_ref() {
+                if let Some(session_id) = task
+                    .session_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                {
+                    let present: std::collections::HashSet<&str> = events
+                        .iter()
+                        .map(|e| e.kind.as_str())
+                        .filter(|kind| crate::kanban::WAKE_KINDS.contains(kind))
+                        .collect();
+                    // Fixed hermes order: completed, gave_up, crashed,
+                    // timed_out, blocked.
+                    let wake_kinds: Vec<String> = crate::kanban::WAKE_KINDS
+                        .iter()
+                        .filter(|kind| present.contains(*kind))
+                        .map(|kind| kind.to_string())
+                        .collect();
+                    if !wake_kinds.is_empty() {
+                        let text = crate::kanban::wake_message(
+                            task,
+                            &wake_kinds,
+                            &task.board,
+                        );
+                        let session_id = session_id.to_string();
+                        let endpoint = endpoint.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) =
+                                deliver_session_wake(&endpoint, &session_id, &text)
+                                    .await
+                            {
+                                tracing::warn!(
+                                    "kanban notifier: wakeup failed for \
+                                     {session_id}: {e}"
+                                );
+                            }
+                        });
+                    }
+                }
+            }
         }
         // Subscriptions are removed only when the task reaches a truly
         // final status (done / archived) — crash/retry cycles must keep
@@ -5988,6 +6147,7 @@ mod tests {
             workspace_kind: "scratch".into(),
             workspace_path: None,
             branch_name: None,
+            session_id: None,
             id: "t_abc".into(),
             board: "default".into(),
             title: "Ship the widget".into(),
@@ -6073,5 +6233,98 @@ mod tests {
             format_notify_message(Some(&task), &notifier_event("completed", serde_json::json!({})))
                 .unwrap();
         assert!(msg.ends_with("legacy result"));
+    }
+
+    #[tokio::test]
+    async fn wake_self_posts_to_chat_completions() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut chunk = vec![0u8; 8192];
+            let mut data = Vec::new();
+            loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&data);
+                if let Some(header_end) = text.find("\r\n\r\n") {
+                    let length: usize = text[..header_end]
+                        .lines()
+                        .find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.trim()
+                                .eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if data.len() >= header_end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                      Content-Length: 2\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&data).to_string()
+        });
+
+        // Wildcard host must connect over loopback (hermes behavior).
+        let endpoint = WakeEndpoint {
+            host: "0.0.0.0".into(),
+            port,
+            key: Some("wake-key".into()),
+        };
+        deliver_session_wake(&endpoint, "sess_123", "[kanban] wake up")
+            .await
+            .unwrap();
+        let request = server.await.unwrap();
+        let lower = request.to_ascii_lowercase();
+        assert!(request.contains("POST /v1/chat/completions"));
+        // reqwest lowercases header names on the wire.
+        assert!(lower.contains("x-ulnclaw-session-id: sess_123"));
+        assert!(lower.contains("authorization: bearer wake-key"));
+        assert!(request.contains("[kanban] wake up"));
+    }
+
+    #[tokio::test]
+    async fn wake_fails_fast_on_client_error() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut chunk = vec![0u8; 8192];
+                socket.read(&mut chunk).await.ok();
+                let body = b"{\"error\":\"nope\"}";
+                let response = format!(
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.ok();
+                socket.write_all(body).await.ok();
+            }
+        });
+        let endpoint = WakeEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+            key: None,
+        };
+        let err = deliver_session_wake(&endpoint, "sess_x", "hi")
+            .await
+            .unwrap_err();
+        assert!(err.contains("HTTP 403"), "{err}");
     }
 }

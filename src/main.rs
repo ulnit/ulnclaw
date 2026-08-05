@@ -1594,7 +1594,13 @@ async fn gateway_cmd(
     // One kanban notification delivery loop per gateway process (the
     // kanban store is shared; multiplex profile stacks must not spawn
     // their own notifiers or deliveries would duplicate).
-    ulnclaw::gateway::spawn_kanban_notifier();
+    ulnclaw::gateway::spawn_kanban_notifier(Some(
+        ulnclaw::gateway::WakeEndpoint {
+            host: gateway.host.clone(),
+            port: gateway.port,
+            key: gateway.key.clone(),
+        },
+    ));
 
     // `/p/<profile>` multiplexing (hermes api_server parity): every route
     // is mirrored under `/p/<profile>/...`. With `[gateway]
@@ -4427,6 +4433,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     workspace_kind: Some(workspace_kind),
                     workspace_path,
                     branch_name,
+                    session_id: None,
                 })
                 .map_err(|e| e.to_string())?;
             if json {
