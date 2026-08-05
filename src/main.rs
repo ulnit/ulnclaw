@@ -55,6 +55,11 @@ enum Commands {
         #[command(subcommand)]
         action: KanbanAction,
     },
+    /// Petdex mascot pets — browse/install/animate (hermes pets)
+    Pets {
+        #[command(subcommand)]
+        action: PetsAction,
+    },
     /// List registered tools and toolsets
     Tools,
     /// Skill management
@@ -404,6 +409,71 @@ enum KanbanBoardsAction {
     Switch { slug: String },
     /// Show the current board
     Show,
+}
+
+#[derive(Subcommand)]
+enum PetsAction {
+    /// Browse the petdex gallery
+    List {
+        /// Filter by slug/name substring
+        query: Vec<String>,
+        /// Only show installed pets
+        #[arg(long)]
+        installed: bool,
+        /// Max rows (0 = all)
+        #[arg(long, default_value = "40")]
+        limit: usize,
+    },
+    /// Install a pet from the gallery
+    Install {
+        /// Pet slug (e.g. boba)
+        slug: String,
+        /// Re-download even if present
+        #[arg(long)]
+        force: bool,
+        /// Make it the active pet
+        #[arg(long)]
+        select: bool,
+    },
+    /// Set the active pet (writes display.pet.*)
+    Select {
+        /// Pet slug (omit for interactive picker)
+        slug: Option<String>,
+    },
+    /// Animate the active pet in the terminal
+    Show {
+        /// Pet slug (default: active)
+        slug: Option<String>,
+        /// Single state: idle/run/review/failed/wave/jump/waiting
+        #[arg(long)]
+        state: Option<String>,
+        /// Cycle through all states
+        #[arg(long)]
+        cycle: bool,
+        /// Play once instead of looping
+        #[arg(long)]
+        once: bool,
+        /// Override render mode (kitty/iterm/sixel/unicode/auto)
+        #[arg(long)]
+        mode: Option<String>,
+        /// Override scale (0 = config)
+        #[arg(long, default_value = "0")]
+        scale: f64,
+    },
+    /// Disable the pet display
+    Off,
+    /// Resize the pet everywhere (display.pet.scale)
+    Scale {
+        /// Scale factor, e.g. 0.5 (clamped 0.1-3.0)
+        factor: String,
+    },
+    /// Delete an installed pet
+    Remove {
+        /// Pet slug
+        slug: String,
+    },
+    /// Check pet setup + terminal graphics support
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -1392,6 +1462,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         }
         Commands::Sessions { action } => sessions_cmd(action, &config).await,
         Commands::Kanban { action } => kanban_cmd(action).await,
+        Commands::Pets { action } => pets_cmd(action).await,
         Commands::Tools => tools_cmd(&config),
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
         Commands::Bundles { action } => bundles_cmd(action.unwrap_or(BundlesAction::List)),
@@ -3745,6 +3816,49 @@ async fn weixin_cmd(action: WeixinAction) -> Result<(), String> {
                 Err(e) => Err(e),
             }
         }
+    }
+}
+
+async fn pets_cmd(action: PetsAction) -> Result<(), String> {
+    // Network downloads (reqwest blocking) and the animation loop must run
+    // off the async main context.
+    let code = tokio::task::spawn_blocking(move || {
+        let home = ulnclaw::config::ulnclaw_home();
+        match action {
+            PetsAction::List { query, installed, limit } => {
+                ulnclaw::pets::cmd_list(&home, &query.join(" "), installed, limit)
+            }
+            PetsAction::Install { slug, force, select } => {
+                ulnclaw::pets::cmd_install(&home, &slug, force, select)
+            }
+            PetsAction::Select { slug } => {
+                ulnclaw::pets::cmd_select(&home, slug.as_deref().unwrap_or(""))
+            }
+            PetsAction::Show { slug, state, cycle, once, mode, scale } => {
+                ulnclaw::pets::cmd_show(
+                    &home,
+                    &ulnclaw::pets::ShowOptions {
+                        slug: slug.unwrap_or_default(),
+                        state: state.unwrap_or_default(),
+                        cycle,
+                        once,
+                        mode,
+                        scale,
+                    },
+                )
+            }
+            PetsAction::Off => ulnclaw::pets::cmd_off(),
+            PetsAction::Scale { factor } => ulnclaw::pets::cmd_scale(&factor),
+            PetsAction::Remove { slug } => ulnclaw::pets::cmd_remove(&home, &slug),
+            PetsAction::Doctor => ulnclaw::pets::cmd_doctor(&home),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if code == 0 {
+        Ok(())
+    } else {
+        std::process::exit(code)
     }
 }
 

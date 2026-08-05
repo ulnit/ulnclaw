@@ -787,6 +787,42 @@ pub struct DisplayConfig {
     /// blank/unset = `default` (hermes `display.skin`).
     #[serde(default)]
     pub skin: Option<String>,
+    /// Petdex mascot display settings (hermes `display.pet.*`).
+    #[serde(default)]
+    pub pet: PetDisplayConfig,
+}
+
+/// `[display.pet]` — petdex mascot display (hermes `display.pet.*`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PetDisplayConfig {
+    /// Whether the pet display is on (`display.pet.enabled`).
+    pub enabled: bool,
+    /// Active pet slug under `<home>/pets/` (`display.pet.slug`).
+    #[serde(default)]
+    pub slug: Option<String>,
+    /// Master scale 0.1–3.0 shared by every surface (`display.pet.scale`).
+    #[serde(default)]
+    pub scale: Option<f64>,
+    /// Render mode override: auto/kitty/iterm/sixel/unicode/off
+    /// (`display.pet.render_mode`).
+    #[serde(default)]
+    pub render_mode: Option<String>,
+    /// Explicit half-block column width override (`display.pet.unicode_cols`).
+    #[serde(default)]
+    pub unicode_cols: Option<u32>,
+}
+
+impl Default for PetDisplayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            slug: None,
+            scale: None,
+            render_mode: None,
+            unicode_cols: None,
+        }
+    }
 }
 
 /// `[security]` — URL safety toggles (port of hermes `security.*`).

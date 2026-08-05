@@ -114,6 +114,7 @@ pub mod media_cache;
 pub mod messaging;
 pub mod oauth;
 pub mod pairing;
+pub mod pets;
 pub mod skills_sync;
 pub mod memory_cmd;
 pub mod moa;
