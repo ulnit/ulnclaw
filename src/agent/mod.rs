@@ -1091,8 +1091,31 @@ impl Agent {
                 arguments: tool_call.function.arguments.clone(),
             });
 
+            // Plugin pre_tool_call hook — a block decision vetoes the call
+            // before approval (hermes model_tools.py invoke_hook site).
+            let hook_block = {
+                let payload = crate::plugins::hook_payload(
+                    "pre_tool_call",
+                    &self.context.session_id,
+                    &self.context.cwd(),
+                    vec![
+                        ("tool_name", serde_json::json!(tool_call.function.name)),
+                        ("tool_input", args.clone()),
+                    ],
+                    serde_json::json!({"tool_call_id": tool_call.id}),
+                );
+                let responses = crate::plugins::invoke_hook("pre_tool_call", payload).await;
+                crate::plugins::block_decision(&responses)
+            };
+
             // Approval gate before dispatch.
-            let result_value = if let Some(blocked) = self
+            let result_value = if let Some(reason) = hook_block {
+                serde_json::json!({
+                    "success": false,
+                    "blocked": true,
+                    "error": format!("blocked by plugin hook: {reason}"),
+                })
+            } else if let Some(blocked) = self
                 .approval_check(&tool_call.function.name, &args)
                 .await
             {
@@ -1110,6 +1133,27 @@ impl Agent {
                     }
                 }
             };
+
+            // Plugin post_tool_call hook (observer; hermes emits result +
+            // status for side effects like webhooks/notifications).
+            {
+                let payload = crate::plugins::hook_payload(
+                    "post_tool_call",
+                    &self.context.session_id,
+                    &self.context.cwd(),
+                    vec![
+                        ("tool_name", serde_json::json!(tool_call.function.name)),
+                        ("tool_input", args.clone()),
+                    ],
+                    serde_json::json!({
+                        "tool_call_id": tool_call.id,
+                        "result": result_value,
+                        "status": if result_value.get("success").and_then(|v| v.as_bool()).unwrap_or(true)
+                            && result_value.get("error").is_none() { "ok" } else { "error" },
+                    }),
+                );
+                let _ = crate::plugins::invoke_hook("post_tool_call", payload).await;
+            }
 
             {
                 let callbacks = self.callbacks.lock().await;

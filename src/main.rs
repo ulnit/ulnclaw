@@ -143,6 +143,11 @@ enum Commands {
         #[command(subcommand)]
         action: ComputerUseAction,
     },
+    /// Plugin management: list/enable/disable/accept-hooks (hermes plugins)
+    Plugins {
+        #[command(subcommand)]
+        action: Option<PluginsAction>,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -669,6 +674,18 @@ enum SecretsAction {
 }
 
 #[derive(Subcommand)]
+enum PluginsAction {
+    /// List discovered plugins, their hooks and tools
+    List,
+    /// Enable a disabled plugin
+    Enable { name: String },
+    /// Disable a plugin
+    Disable { name: String },
+    /// Add every pending [hooks] command to the consent allowlist
+    AcceptHooks,
+}
+
+#[derive(Subcommand)]
 enum ComputerUseAction {
     /// Print whether cua-driver is installed, its version, and the config
     Status,
@@ -873,6 +890,13 @@ async fn main() {
         ulnclaw::secrets::apply_all(&config.secrets, &ulnclaw::config::ulnclaw_home());
     for err in &secrets_report.errors {
         eprintln!("[secrets] warning: {err}");
+    }
+
+    // Discover plugins + consented shell hooks (hermes plugin manager +
+    // shell_hooks registration at startup).
+    let plugin_warnings = ulnclaw::plugins::init(&ulnclaw::config::ulnclaw_home(), &config).await;
+    for warning in &plugin_warnings {
+        eprintln!("[plugins] {warning}");
     }
 
     let result = dispatch(cli, config).await;
@@ -1094,6 +1118,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         }
         Commands::Secrets { action } => secrets_cmd(&config, action),
         Commands::ComputerUse { action } => computer_use_cmd(&config, action).await,
+        Commands::Plugins { action } => plugins_cmd(&config, action.unwrap_or(PluginsAction::List)).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
@@ -1467,6 +1492,12 @@ async fn make_agent_in(
         }
     }
 
+    // Directory plugins: register their tools (hermes register_tool).
+    let plugin_tool_count = ulnclaw::plugins::register_plugin_tools(&mut registry);
+    if plugin_tool_count > 0 {
+        eprintln!("[plugins] {plugin_tool_count} plugin tool(s) registered");
+    }
+
     toolsets::apply_toolset_policy(&mut registry, &config.enabled_toolsets, &config.disabled_toolsets);
 
     std::fs::create_dir_all(home).ok();
@@ -1573,11 +1604,32 @@ async fn one_shot(
 ) -> Result<(), String> {
     let target = resolve_resume_target(resume.as_deref(), continue_last)?;
     let agent = make_agent(config, false, None, target.clone()).await?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    ulnclaw::plugins::fire_session_event(
+        "on_session_start",
+        &agent.context().session_id,
+        &cwd,
+        serde_json::json!({"source": "cli", "mode": "one_shot"}),
+    )
+    .await;
     let result = agent
         .run_with_session(prompt, None, target.as_deref())
         .await
         .map_err(|e| e.to_string())?;
-    println!("{}", result.content);
+    let content = ulnclaw::plugins::transform_llm_output(
+        &agent.context().session_id,
+        &cwd,
+        &result.content,
+    )
+    .await;
+    println!("{}", content);
+    ulnclaw::plugins::fire_session_event(
+        "on_session_end",
+        &agent.context().session_id,
+        &cwd,
+        serde_json::json!({"source": "cli", "mode": "one_shot"}),
+    )
+    .await;
     Ok(())
 }
 
@@ -1724,6 +1776,14 @@ async fn chat_repl(
     // Random feature tip (hermes startup tip), tinted with the active
     // skin's banner_dim.
     print_tip();
+    let repl_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    ulnclaw::plugins::fire_session_event(
+        "on_session_start",
+        &agent.context().session_id,
+        &repl_cwd,
+        serde_json::json!({"source": "cli", "mode": "repl"}),
+    )
+    .await;
 
     if let Some(label) = &resumed_from {
         println!("Resuming session: {}", label);
@@ -1784,7 +1844,13 @@ async fn chat_repl(
 
         match agent.run_with_session(&input, Some(history.clone()), Some(&session_key)).await {
             Ok(result) => {
-                println!("\n{}", result.content);
+                let content = ulnclaw::plugins::transform_llm_output(
+                    &session_key,
+                    &repl_cwd,
+                    &result.content,
+                )
+                .await;
+                println!("\n{}", content);
                 // Keep the conversation going (drop system prompt from history).
                 history = result
                     .conversation
@@ -1814,6 +1880,13 @@ async fn chat_repl(
             Err(e) => println!("error: {}", e),
         }
     }
+    ulnclaw::plugins::fire_session_event(
+        "on_session_end",
+        &session_key,
+        &repl_cwd,
+        serde_json::json!({"source": "cli", "mode": "repl"}),
+    )
+    .await;
     Ok(())
 }
 
@@ -2342,6 +2415,65 @@ fn print_diff_result(result: &serde_json::Value) {
             println!("{}", diff);
         }
     }
+}
+
+async fn plugins_cmd(config: &UlncLawConfig, action: PluginsAction) -> Result<(), String> {
+    use ulnclaw::plugins;
+    let home = ulnclaw::config::ulnclaw_home();
+    match action {
+        PluginsAction::List => {
+            // Ensure the runtime is populated (plugins init happens in main).
+            let _ = plugins::init(&home, config).await;
+            let loaded = plugins::loaded_plugins();
+            if loaded.is_empty() {
+                println!("No plugins found in {}.", home.join("plugins").display());
+                println!("Install a plugin directory with a plugin.toml manifest there.");
+            } else {
+                println!("{:<20} {:<8} {:<6} {:<6} {}", "NAME", "VERSION", "HOOKS", "TOOLS", "DESCRIPTION");
+                for plugin in &loaded {
+                    let disabled = plugin.disabled;
+                    let name = if disabled {
+                        format!("{} (disabled)", plugin.manifest.name)
+                    } else {
+                        plugin.manifest.name.clone()
+                    };
+                    println!(
+                        "{:<20} {:<8} {:<6} {:<6} {}",
+                        name,
+                        plugin.manifest.version,
+                        plugin.manifest.hooks.len(),
+                        plugin.manifest.tools.len(),
+                        plugin.manifest.description
+                    );
+                }
+            }
+            if !config.hooks.events.is_empty() {
+                println!("\nConfig shell hooks ([hooks]):");
+                let mut events: Vec<(&String, &Vec<String>)> = config.hooks.events.iter().collect();
+                events.sort_by(|a, b| a.0.cmp(b.0));
+                for (event, commands) in events {
+                    for command in commands {
+                        println!("  {event}: {command}");
+                    }
+                }
+            }
+        }
+        PluginsAction::Enable { name } => {
+            println!("{}", plugins::enable_plugin(&home, &name)?);
+        }
+        PluginsAction::Disable { name } => {
+            println!("{}", plugins::disable_plugin(&home, &name)?);
+        }
+        PluginsAction::AcceptHooks => {
+            let added = plugins::accept_all_hooks(&home, config);
+            if added == 0 {
+                println!("No pending hooks to accept.");
+            } else {
+                println!("✓ Accepted {added} hook command(s) into {}.", home.join("shell-hooks-allowlist.json").display());
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn computer_use_cmd(config: &UlncLawConfig, action: ComputerUseAction) -> Result<(), String> {
@@ -3453,6 +3585,7 @@ async fn moa_cmd(
 fn tools_cmd(config: &UlncLawConfig) -> Result<(), String> {
     let mut registry = ToolRegistry::new();
     register_builtin_tools(&mut registry);
+    ulnclaw::plugins::register_plugin_tools(&mut registry);
     toolsets::apply_toolset_policy(&mut registry, &config.enabled_toolsets, &config.disabled_toolsets);
     println!("Toolsets:");
     for name in toolsets::toolsets().keys() {

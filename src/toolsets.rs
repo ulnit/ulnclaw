@@ -267,8 +267,23 @@ pub fn apply_toolset_policy(
     };
     let removed: HashSet<String> = resolve_toolsets(disabled).into_iter().collect();
 
-    // Disable whole toolsets whose tools are all excluded.
+    // Disable whole toolsets whose tools are all excluded. Dynamically
+    // registered toolsets (mcp:*, plugin:*) are enabled by default and
+    // only disabled through an explicit disabled_toolsets entry (hermes
+    // MCP/plugin semantics — the "coding" default must not swallow them).
     for toolset in registry.toolset_names() {
+        let dynamic = toolset.starts_with("mcp:") || toolset.starts_with("plugin:");
+        if dynamic {
+            let explicitly_removed = registry
+                .toolset_tools(&toolset)
+                .iter()
+                .all(|t| removed.contains(&t.definition.name))
+                && !registry.toolset_tools(&toolset).is_empty();
+            if explicitly_removed {
+                registry.disable_toolset(&toolset);
+            }
+            continue;
+        }
         let tools = registry
             .toolset_tools(&toolset)
             .iter()

@@ -701,6 +701,12 @@ pub struct UlncLawConfig {
     /// Computer-use / cua-driver settings (hermes `computer_use:`).
     #[serde(default)]
     pub computer_use: crate::computer_use::ComputerUseConfig,
+    /// Plugin system settings (hermes `plugins` deny-list).
+    #[serde(default)]
+    pub plugins: crate::plugins::PluginsConfig,
+    /// Shell-hook commands per lifecycle event (hermes `hooks:` block).
+    #[serde(default)]
+    pub hooks: crate::plugins::HooksConfig,
 }
 
 /// `[video_gen]` — video generation backend selection (hermes config.yaml

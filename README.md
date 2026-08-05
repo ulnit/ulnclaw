@@ -92,6 +92,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw config           # show/get/set/unset config (env-style keys go to .env)
 ./ulnclaw secrets status   # external secret sources (secrets sync [--apply] fetches now)
 ./ulnclaw computer-use status # background desktop control via cua-driver (doctor/install)
+./ulnclaw plugins list      # plugins + shell hooks (enable/disable/accept-hooks)
 ./ulnclaw completion bash  # shell completions (bash/zsh/fish/elvish/powershell)
 ./ulnclaw dump             # copy-pasteable setup summary for support (--show-keys)
 ./ulnclaw version          # version + install info + update status
@@ -234,7 +235,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 685 tests
+cargo test                     # 694 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -328,6 +329,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw config           # 配置 show/get/set/unset（env 风格键写入 .env）
 ./ulnclaw secrets status   # 外部秘密源（secrets sync [--apply] 立即拉取）
 ./ulnclaw computer-use status # cua-driver 后台桌面控制（doctor/install）
+./ulnclaw plugins list      # 插件与 shell 钩子（enable/disable/accept-hooks）
 ./ulnclaw completion bash  # shell 补全脚本（bash/zsh/fish/elvish/powershell）
 ./ulnclaw dump             # 可粘贴的装机摘要，用于求助排查（--show-keys）
 ./ulnclaw version          # 版本 + 安装信息 + 升级状态
@@ -389,7 +391,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 685 个测试
+cargo test                     # 694 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 
