@@ -351,6 +351,7 @@ export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # 或 ws://.../devtools/bro
 
 # HTTP 网关（OpenAI 兼容 API 服务器，默认 127.0.0.1:8642）
 ./ulnclaw gateway --host 127.0.0.1 --port 8642
+# 消息平台随网关运行（[messaging.telegram|discord|slack]）
 curl -H "Authorization: Bearer $ULNCLAW_GATEWAY_KEY" \\
      -H "Content-Type: application/json" \\
      -d '{"messages":[{"role":"user","content":"你好！"}]}' \\
