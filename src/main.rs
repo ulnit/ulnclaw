@@ -50,6 +50,11 @@ enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
+    /// Kanban task board (hermes kanban engine)
+    Kanban {
+        #[command(subcommand)]
+        action: KanbanAction,
+    },
     /// List registered tools and toolsets
     Tools,
     /// Skill management
@@ -372,6 +377,102 @@ enum Commands {
         #[arg(long)]
         component: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum KanbanBoardsAction {
+    /// List boards with task counts
+    List,
+    /// Create a board
+    Create {
+        slug: String,
+        /// Display name (defaults to the slug)
+        #[arg(long)]
+        name: Option<String>,
+        /// Default working directory for tasks on this board
+        #[arg(long)]
+        workdir: Option<String>,
+    },
+    /// Remove an empty board
+    Rm { slug: String },
+    /// Switch the current board
+    Switch { slug: String },
+    /// Show the current board
+    Show,
+}
+
+#[derive(Subcommand)]
+enum KanbanAction {
+    /// Initialize the board store (idempotent)
+    Init,
+    /// Manage boards
+    Boards {
+        #[command(subcommand)]
+        action: KanbanBoardsAction,
+    },
+    /// Create a task on the current board
+    Create {
+        title: Vec<String>,
+        /// Task body / description
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long, default_value = "0")]
+        priority: i64,
+        #[arg(long)]
+        tenant: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List tasks
+    List {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long)]
+        board: Option<String>,
+        #[arg(long, default_value = "200")]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a task with comments and events
+    Show { id: String, #[arg(long)] json: bool },
+    /// Move a task to ready
+    Ready { id: String },
+    /// Assign a task
+    Assign { id: String, assignee: String },
+    /// Claim a ready task (ready → running)
+    Claim {
+        id: String,
+        /// Claim TTL in seconds (default 1800)
+        #[arg(long)]
+        ttl: Option<i64>,
+        /// Claimer identity (default host:pid)
+        #[arg(long)]
+        claimer: Option<String>,
+    },
+    /// Extend a live claim
+    Heartbeat { id: String },
+    /// Mark a task done
+    Done {
+        id: String,
+        /// Result summary
+        #[arg(long)]
+        result: Option<String>,
+    },
+    /// Block a task with a reason
+    Block { id: String, reason: Vec<String> },
+    /// Unblock a task (blocked → ready)
+    Unblock { id: String },
+    /// Archive a task
+    Archive { id: String },
+    /// Comment on a task
+    Comment { id: String, text: Vec<String> },
 }
 
 #[derive(Subcommand)]
@@ -1285,6 +1386,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             one_shot(&config, &prompt, cli.resume.clone(), cli.continue_last).await
         }
         Commands::Sessions { action } => sessions_cmd(action, &config).await,
+        Commands::Kanban { action } => kanban_cmd(action).await,
         Commands::Tools => tools_cmd(&config),
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
         Commands::Bundles { action } => bundles_cmd(action.unwrap_or(BundlesAction::List)),
@@ -3560,6 +3662,327 @@ fn secrets_cmd(config: &UlncLawConfig, action: SecretsAction) -> Result<(), Stri
                 OnePasswordSecretsAction::Disable => ulnclaw::secrets_cmd::OnePasswordCmd::Disable,
             };
             ulnclaw::secrets_cmd::onepassword_cmd(cmd)?;
+        }
+    }
+    Ok(())
+}
+
+/// Hermes `_fmt_task_line`.
+fn kanban_task_line(task: &ulnclaw::kanban::Task) -> String {
+    let assignee = task
+        .assignee
+        .clone()
+        .unwrap_or_else(|| "(unassigned)".into());
+    let tenant = task
+        .tenant
+        .as_ref()
+        .map(|t| format!(" [{t}]"))
+        .unwrap_or_default();
+    format!(
+        "{} {}  {:8}  {:20}{}  {}",
+        ulnclaw::kanban::status_icon(&task.status),
+        task.id,
+        task.status,
+        assignee,
+        tenant,
+        task.title
+    )
+}
+
+fn kanban_epoch_label(ts: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let secs = now - ts;
+    if secs < 60 {
+        "just now".into()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86400)
+    }
+}
+
+async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
+    use ulnclaw::kanban::{KanbanStore, NewTask, DEFAULT_CLAIM_TTL_SECS};
+    let store = KanbanStore::open_default().map_err(|e| e.to_string())?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let resolve = |id: &str| -> Result<String, String> {
+        store
+            .resolve_task_id(id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("task '{id}' not found"))
+    };
+    match action {
+        KanbanAction::Init => {
+            println!("kanban store: {}", store.path().display());
+            println!(
+                "current board: {}",
+                store.current_board().map_err(|e| e.to_string())?
+            );
+        }
+        KanbanAction::Boards { action } => match action {
+            KanbanBoardsAction::List => {
+                let counts = store.board_task_counts().map_err(|e| e.to_string())?;
+                let current = store.current_board().map_err(|e| e.to_string())?;
+                for (slug, total, active) in counts {
+                    let marker = if slug == current { "*" } else { " " };
+                    println!("{marker} {slug:16}  {active} active / {total} tasks");
+                }
+            }
+            KanbanBoardsAction::Create { slug, name, workdir } => {
+                store
+                    .create_board(&slug, name.as_deref(), workdir.as_deref())
+                    .map_err(|e| e.to_string())?;
+                println!("created board '{slug}'");
+            }
+            KanbanBoardsAction::Rm { slug } => {
+                store.remove_board(&slug).map_err(|e| e.to_string())?;
+                println!("removed board '{slug}'");
+            }
+            KanbanBoardsAction::Switch { slug } => {
+                store.switch_board(&slug).map_err(|e| e.to_string())?;
+                println!("switched to board '{slug}'");
+            }
+            KanbanBoardsAction::Show => {
+                let current = store.current_board().map_err(|e| e.to_string())?;
+                println!("current board: {current}");
+                for (slug, total, active) in
+                    store.board_task_counts().map_err(|e| e.to_string())?
+                {
+                    println!("  {slug:16}  {active} active / {total} tasks");
+                }
+            }
+        },
+        KanbanAction::Create {
+            title,
+            body,
+            assignee,
+            priority,
+            tenant,
+            model,
+            json,
+        } => {
+            let title = title.join(" ");
+            if title.trim().is_empty() {
+                return Err("usage: ulnclaw kanban create <title>".into());
+            }
+            let task = store
+                .create_task(&NewTask {
+                    title,
+                    body: body.unwrap_or_default(),
+                    assignee,
+                    priority,
+                    tenant,
+                    model,
+                    created_by: KanbanStore::claimer_id(),
+                })
+                .map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&task).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("{} (todo, board '{}')", task.id, task.board);
+                println!("  {}", task.title);
+            }
+        }
+        KanbanAction::List {
+            status,
+            assignee,
+            board,
+            limit,
+            json,
+        } => {
+            let tasks = store
+                .list_tasks(
+                    board.as_deref(),
+                    status.as_deref(),
+                    assignee.as_deref(),
+                    limit,
+                )
+                .map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?
+                );
+            } else if tasks.is_empty() {
+                println!(
+                    "no tasks on board '{}'.",
+                    store.current_board().map_err(|e| e.to_string())?
+                );
+            } else {
+                for task in &tasks {
+                    println!("{}", kanban_task_line(task));
+                }
+            }
+        }
+        KanbanAction::Show { id, json } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .get_task(&resolved)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("task '{id}' not found"))?;
+            let comments = store.comments(&resolved).map_err(|e| e.to_string())?;
+            let events = store.events(&resolved).map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "task": task,
+                        "comments": comments,
+                        "events": events,
+                    }))
+                    .map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+            println!("{}", kanban_task_line(&task));
+            if !task.body.is_empty() {
+                println!("\n{}", task.body);
+            }
+            println!(
+                "\ncreated {} by {}",
+                kanban_epoch_label(task.created_at),
+                task.created_by
+            );
+            if let Some(result) = &task.result {
+                println!("result: {result}");
+            }
+            if !comments.is_empty() {
+                println!("\ncomments:");
+                for comment in &comments {
+                    println!(
+                        "  {} — {}: {}",
+                        kanban_epoch_label(comment.created_at),
+                        comment.author,
+                        comment.body
+                    );
+                }
+            }
+            if !events.is_empty() {
+                println!("\nevents:");
+                for event in &events {
+                    let detail = if event
+                        .payload
+                        .as_object()
+                        .map(|o| o.is_empty())
+                        .unwrap_or(true)
+                    {
+                        String::new()
+                    } else {
+                        format!(" {}", event.payload)
+                    };
+                    println!("  {} {}{detail}", kanban_epoch_label(event.created_at), event.kind);
+                }
+            }
+        }
+        KanbanAction::Ready { id } => {
+            let resolved = resolve(&id)?;
+            let task = store.ready_task(&resolved).map_err(|e| e.to_string())?;
+            println!("{}", kanban_task_line(&task));
+        }
+        KanbanAction::Assign { id, assignee } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .assign_task(&resolved, &assignee)
+                .map_err(|e| e.to_string())?;
+            println!("{}", kanban_task_line(&task));
+        }
+        KanbanAction::Claim { id, ttl, claimer } => {
+            let resolved = resolve(&id)?;
+            let claimer = claimer.unwrap_or_else(KanbanStore::claimer_id);
+            let task = store
+                .claim_task(&resolved, &claimer, ttl.unwrap_or(DEFAULT_CLAIM_TTL_SECS))
+                .map_err(|e| e.to_string())?;
+            ulnclaw::plugins::fire_session_event(
+                "kanban_task_claimed",
+                &task.id,
+                &cwd,
+                serde_json::json!({
+                    "task_id": task.id,
+                    "board": task.board,
+                    "assignee": task.assignee,
+                }),
+            )
+            .await;
+            println!("{}", kanban_task_line(&task));
+        }
+        KanbanAction::Heartbeat { id } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .heartbeat_task(
+                    &resolved,
+                    &KanbanStore::claimer_id(),
+                    DEFAULT_CLAIM_TTL_SECS,
+                )
+                .map_err(|e| e.to_string())?;
+            println!("heartbeat recorded for {}", task.id);
+        }
+        KanbanAction::Done { id, result } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .complete_task(&resolved, result.as_deref())
+                .map_err(|e| e.to_string())?;
+            ulnclaw::plugins::fire_session_event(
+                "kanban_task_completed",
+                &task.id,
+                &cwd,
+                serde_json::json!({
+                    "task_id": task.id,
+                    "board": task.board,
+                    "assignee": task.assignee,
+                    "result": task.result,
+                }),
+            )
+            .await;
+            println!("{}", kanban_task_line(&task));
+        }
+        KanbanAction::Block { id, reason } => {
+            let resolved = resolve(&id)?;
+            let reason = reason.join(" ");
+            let task = store
+                .block_task(&resolved, &reason)
+                .map_err(|e| e.to_string())?;
+            ulnclaw::plugins::fire_session_event(
+                "kanban_task_blocked",
+                &task.id,
+                &cwd,
+                serde_json::json!({
+                    "task_id": task.id,
+                    "board": task.board,
+                    "assignee": task.assignee,
+                    "reason": reason,
+                }),
+            )
+            .await;
+            println!("{}", kanban_task_line(&task));
+        }
+        KanbanAction::Unblock { id } => {
+            let resolved = resolve(&id)?;
+            let task = store.unblock_task(&resolved).map_err(|e| e.to_string())?;
+            println!("{}", kanban_task_line(&task));
+        }
+        KanbanAction::Archive { id } => {
+            let resolved = resolve(&id)?;
+            let task = store.archive_task(&resolved).map_err(|e| e.to_string())?;
+            println!("archived {}", task.id);
+        }
+        KanbanAction::Comment { id, text } => {
+            let resolved = resolve(&id)?;
+            let text = text.join(" ");
+            if text.trim().is_empty() {
+                return Err("usage: ulnclaw kanban comment <id> <text>".into());
+            }
+            store
+                .add_comment(&resolved, &KanbanStore::claimer_id(), &text)
+                .map_err(|e| e.to_string())?;
+            println!("comment added to {resolved}");
         }
     }
     Ok(())

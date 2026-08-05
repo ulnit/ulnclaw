@@ -33,7 +33,7 @@
 | `image_generate` | ✅ 完整 | OpenAI images API，PNG 存于 `<home>/images` |
 | `text_to_speech` | ✅ 完整 | OpenAI TTS 或自定义 `ULNCLAW_TTS_ENDPOINT` |
 | `ha_*`（4 个 Home Assistant 工具） | ✅ 完整 | Home Assistant REST API，依赖 `HASS_URL` + `HASS_TOKEN` |
-| `kanban_*`（12 个工具） | ✅ 完整 | 本地 SQLite 协作看板：create/list/show/complete/block/unblock/comment/heartbeat/link/attach/attach_url/attachments |
+| `kanban_*`（12 个工具） | ✅ 完整 | 本地 SQLite 协作看板：create/list/show/complete/block/unblock/comment/heartbeat/link/attach/attach_url/attachments；`ulnclaw kanban` CLI 引擎（见 CLI 行）共享同一 `kanban.db` |
 | `browser_*`（12 个工具） | ✅ 完整 | CDP WebSocket 客户端（`browser` 模块）：端点发现、页面会话、带元素引用的可访问性快照、点击/输入/滚动/按键/截图/执行 JS/对话框；`ULNCLAW_BROWSER_CDP` 支持 ws://、http://host:port 或 `auto`（监督器启动托管的无头 Chrome/Chromium）；已移植 hermes SSRF 防护（`browser/guard.rs`）：敏感查询参数 + 云元数据底线无条件拦截，非本地端点或容器化终端启用私网地址防护，重定向落地复检，console/eval 表达式内 URL 字面量预筛，私有页面下原始 CDP 方法白名单；浏览器输出强制脱敏；REPL `/browser connect` 与网关 `/v1/browser/connect|disconnect|status` 实时切换端点；`CAMOFOX_URL` 接入 Camofox REST 后端（其他云浏览器 provider 仍未移植） |
 | `close_terminal`、`read_terminal`、`focus_pane`、`open_preview` | ✅ 核心 | 桌面 GUI 工具（hermes `close_terminal_tool.py` / `read_terminal_tool.py` / `focus_pane_tool.py` / `open_preview_tool.py`）：仅在 `ULNCLAW_DESKTOP=1` 下注册，经 `desktop` 桥接层路由——宿主应用安装事件发射器（`ulnclaw::desktop::set_emitter`）接收 `(ui_session_id, event, payload)` 事件（`terminal.close`、`pane.reveal`、`preview.open`）及阻塞式 `read_terminal` 回调；未接入宿主时返回 "desktop only"，从不杀进程，并规范化裸域名（`www.cnn.com` → https、`localhost:3000` → http）；`react_to_message`（hermes `react_to_message_tool.py` 移植）：代理表情回应——每作者一个、重发相同表情即撤回，默认最新用户消息（`messages_back` 回溯、`message_row_id` 精确指定），持久于 `messages.display_metadata` 并经 `message.reaction` 桥接事件实时渲染；门控于 `ULNCLAW_DESKTOP=1` **与** `[display] message_reactions` |
 | `computer_use` | ✅ 核心 | cua-driver MCP 后端（`src/computer_use.rs`）—— 完整 hermes 工具 schema + 审批语义，见下方 Computer Use 行；驱动可达即注册（`ulnclaw computer-use doctor`） |
@@ -112,7 +112,7 @@
 | 记忆系统 | ✅ | MEMORY.md/USER.md，注入提示词 |
 | Cron 调度器 | ✅ | 任务存储 + 计划解析 + 轮询循环（`cron::run_scheduler`） |
 | MCP 客户端（`mcp_tool.py`） | ✅ 核心 | stdio JSON-RPC：initialize/tools/list/tools/call；`[[mcp.servers]]` 配置；工具注册为 `mcp__<server>__<tool>`；npx/uvx/pipx 启动前的 OSV 恶意软件检查（`osv_check.py` 移植：MAL-* 通告阻止启动、fail-open、1 小时结论缓存、`OSV_ENDPOINT`/`OSV_CHECK_CACHE_TTL` 覆盖） |
-| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`、`secrets status/sync/bitwarden setup|install|status|disable/onepassword setup|status|set|remove|disable`、`computer-use status/doctor/install`、`plugins list/enable/disable/accept-hooks`、`hooks list/test/revoke/doctor`、`pairing list/approve/revoke/clear-pending`、`auth login/status/refresh/logout`、`sync status/pull/push/now/enable/disable/device`、`uninstall --full/--dry-run/--yes`（代码检出 + shell PATH 条目 + 包装符号链接 + 可选清除主目录；hermes `uninstall.py` 移植 —— Windows 注册表/环境变量步骤未移植））、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
+| CLI（`hermes_cli/`） | ✅ 核心 | 带斜杠命令的聊天 REPL（含 `/rollback [N|hash] [file]`、`/rollback diff <N>`、`/diff` 检查点命令、`/recap`、`/goal` + `/subgoal` 既定目标循环）、一次性 `run`、sessions/tools/skills/cron/checkpoints 子命令（含 `sessions export --format md\|html` —— SHA256 校验的 Markdown 或独立 HTML + manifest ——、`sessions recap`、`sessions recover`、`sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`、`kanban init`/`boards list|create|rm|switch|show`/`create`/`list`/`show`/`ready`/`assign`/`claim`/`heartbeat`/`done`/`block`/`unblock`/`archive`/`comment`（kanban 任务引擎：boards、带 TTL 的认领锁 + 过期接管、带图标的 hermes 状态生命周期、评论与事件轨迹、`kanban_task_*` 插件钩子）、`secrets status/sync/bitwarden setup|install|status|disable/onepassword setup|status|set|remove|disable`、`computer-use status/doctor/install`、`plugins list/enable/disable/accept-hooks`、`hooks list/test/revoke/doctor`、`pairing list/approve/revoke/clear-pending`、`auth login/status/refresh/logout`、`sync status/pull/push/now/enable/disable/device`、`uninstall --full/--dry-run/--yes`（代码检出 + shell PATH 条目 + 包装符号链接 + 可选清除主目录；hermes `uninstall.py` 移植 —— Windows 注册表/环境变量步骤未移植））、`moa run/list/delete`、`models providers/list/info/refresh`（models.dev 目录）、`skills blueprints/schedule/unschedule`、`diff`、`init` |
 | Git 工作区 diff（`working_diff.py`） | ✅ | `ulnclaw diff [--staged|--all] [--dir PATH] [paths...]` + REPL `/gitdiff [staged|all]`：working/staged/all 三模式，未跟踪文件经 `git diff --no-index` 折入（上限 50 个），带超时；基于检查点的 REPL `/diff` 保持独立 |
 | 委派（delegation） | ✅ | SubAgentRunner trait、深度限制、子会话 |
 | 混合智能体 MoA（`moa_loop.py`、`moa_config.py`） | ✅ 核心 | `[moa.presets.<name>]` 参考模型并行扇出 + 聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa <prompt>`）；loud/silent 降级策略、全部失败提前返回、聚合失败回退拼接结果；持久 `provider: moa` 门面、trace 与隐私过滤未移植 |
@@ -179,8 +179,10 @@
 - 插件：ulnclaw 插件是讲 hermes shell-hook JSON 协议的子进程（目录插件 +
   `[hooks]` 配置），不是 Python 导入；核心触发 hermes v2026.8.3 运行期
   实际发出的全部钩子（23 个中的 13 个 —— 其余 10 个在 hermes 中也仅存于
-  目录）；pre_verify 无 ulnclaw verify 循环可挂载，kanban_task_* 暂无
-  kanban 引擎。
+  目录）；pre_verify 无 ulnclaw verify 循环可挂载；`ulnclaw kanban` 引擎
+  现已在 claim/done/block 时触发 kanban_task_claimed/completed/blocked
+  钩子，但 agent 侧 kanban_* 工具仍写入同一 kanban.db 中独立的轻量表
+  （两者尚未统一），hermes 的 swarm/worktree-dispatcher 层未移植。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
