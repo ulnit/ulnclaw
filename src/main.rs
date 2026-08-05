@@ -382,6 +382,25 @@ enum SessionAction {
     /// Session stats: totals, per-source counts, database size
     /// (hermes sessions stats)
     Stats,
+    /// Delete a specific session and all its messages (hermes sessions delete)
+    Delete {
+        /// Session ID (or unique prefix) to delete
+        id: String,
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Set or change a session's title (hermes sessions rename)
+    Rename {
+        /// Session ID (or unique prefix) to rename
+        id: String,
+        /// New title for the session
+        #[arg(required = true)]
+        title: Vec<String>,
+    },
+    /// Reclaim disk space: merge FTS5 segments + VACUUM, no data change
+    /// (hermes sessions optimize)
+    Optimize,
 }
 
 /// Shared time/filter flags for `sessions prune` / `sessions archive`
@@ -2304,6 +2323,70 @@ async fn sessions_cmd(action: SessionAction) -> Result<(), String> {
             if let Ok(metadata) = std::fs::metadata(&db_path) {
                 println!("Database size: {:.1} MB", metadata.len() as f64 / (1024.0 * 1024.0));
             }
+        }
+        SessionAction::Delete { id, yes } => {
+            let resolved = store
+                .resolve_session_id(&id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Session '{}' not found.", id))?;
+            if !yes {
+                print!(
+                    "Delete session '{}' and all its messages? [y/N] ",
+                    resolved
+                );
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer).ok();
+                if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+            store.delete_session(&resolved).map_err(|e| e.to_string())?;
+            println!("Deleted session '{}'.", resolved);
+        }
+        SessionAction::Rename { id, title } => {
+            let resolved = store
+                .resolve_session_id(&id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Session '{}' not found.", id))?;
+            let title = title.join(" ");
+            store
+                .set_session_title(&resolved, &title)
+                .map_err(|e| e.to_string())?;
+            match store.get_session_title(&resolved).map_err(|e| e.to_string())? {
+                Some(new_title) => println!("Session '{}' renamed to: {}", resolved, new_title),
+                None => println!("Session '{}' title cleared.", resolved),
+            }
+        }
+        SessionAction::Optimize => {
+            let db_path = home.join("state.db");
+            let before_mb = std::fs::metadata(&db_path)
+                .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+                .unwrap_or(0.0);
+            println!("Optimizing session store (FTS merge + VACUUM)…");
+            let merged = store
+                .optimize_storage()
+                .map_err(|e| format!("optimization failed: {}", e))?;
+            let mut after_mb = std::fs::metadata(&db_path)
+                .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+                .unwrap_or(0.0);
+            // In WAL mode the main file lags until checkpointed back;
+            // SQLite's page accounting is correct immediately.
+            if let Some(logical) = store.logical_size_bytes() {
+                after_mb = logical as f64 / (1024.0 * 1024.0);
+            }
+            let saved = before_mb - after_mb;
+            let delta = if saved >= 0.0 {
+                format!("saved {:.1} MB", saved)
+            } else {
+                format!("grew {:.1} MB", -saved)
+            };
+            println!("Optimized {} FTS index(es).", merged);
+            println!(
+                "Database size: {:.1} MB -> {:.1} MB ({})",
+                before_mb, after_mb, delta
+            );
         }
     }
     Ok(())

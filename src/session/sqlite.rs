@@ -117,6 +117,59 @@ pub struct SqliteSessionStore {
     has_fts: bool,
 }
 
+/// Maximum session title length in characters (hermes `MAX_TITLE_LENGTH`).
+pub const MAX_TITLE_LENGTH: usize = 100;
+
+/// Clean a user-supplied session title (hermes `sanitize_title`): strip
+/// ASCII/Unicode control characters, collapse whitespace runs, trim, and
+/// normalize empty input to `None`. Errors when the cleaned title exceeds
+/// [`MAX_TITLE_LENGTH`] characters.
+pub fn sanitize_title(title: &str) -> std::result::Result<Option<String>, String> {
+    let cleaned: String = title
+        .chars()
+        .filter(|c| {
+            // Keep \t \n \r (whitespace collapsing handles them); drop the
+            // remaining ASCII control chars and DEL.
+            if c.is_ascii_control() && !matches!(c, '\t' | '\n' | '\r') {
+                return false;
+            }
+            !matches!(c,
+                '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{FEFF}'
+                | '\u{FFFC}'
+                | '\u{FFF9}'..='\u{FFFB}'
+            )
+        })
+        .collect();
+    let mut collapsed = String::with_capacity(cleaned.len());
+    let mut in_ws = false;
+    for ch in cleaned.chars() {
+        if ch.is_whitespace() {
+            if !in_ws {
+                collapsed.push(' ');
+                in_ws = true;
+            }
+        } else {
+            collapsed.push(ch);
+            in_ws = false;
+        }
+    }
+    let collapsed = collapsed.trim().to_string();
+    if collapsed.is_empty() {
+        return Ok(None);
+    }
+    if collapsed.chars().count() > MAX_TITLE_LENGTH {
+        return Err(format!(
+            "Title too long ({} chars, max {})",
+            collapsed.chars().count(),
+            MAX_TITLE_LENGTH
+        ));
+    }
+    Ok(Some(collapsed))
+}
+
 fn now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1066,17 +1119,103 @@ impl SqliteSessionStore {
 
     /// Set (or clear, with an empty string) a session title. Titles must not
     /// contain newlines or NUL bytes.
+    /// Set or change a session's title (hermes `set_session_title`).
+    /// Titles are sanitized and must be unique across sessions; an
+    /// empty/whitespace-only title clears it. Errors when the session
+    /// does not exist.
     pub fn set_session_title(&self, session_id: &str, title: &str) -> Result<()> {
-        if title.contains(['\r', '\n', '\0']) {
-            return Err(AgentError::session("invalid session title"));
-        }
+        let cleaned = sanitize_title(title).map_err(AgentError::session)?;
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
-        conn.execute(
-            "UPDATE sessions SET title = ?2 WHERE id = ?1",
-            params![session_id, title],
-        )
-        .map_err(|e| AgentError::session(e.to_string()))?;
+        if let Some(cleaned) = &cleaned {
+            let conflict: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM sessions WHERE title = ?1 AND id != ?2",
+                    params![cleaned, session_id],
+                    |r| r.get(0),
+                )
+                .ok();
+            if let Some(conflict_id) = conflict {
+                return Err(AgentError::session(format!(
+                    "Title '{cleaned}' is already in use by session {conflict_id}"
+                )));
+            }
+        }
+        let changed = conn
+            .execute(
+                "UPDATE sessions SET title = ?2 WHERE id = ?1",
+                params![session_id, cleaned],
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        if changed == 0 {
+            return Err(AgentError::session(format!(
+                "session '{session_id}' not found"
+            )));
+        }
         Ok(())
+    }
+
+    /// Resolve an exact session id or a uniquely prefixed prefix to the
+    /// full id (hermes `resolve_session_id`). Returns `None` for no
+    /// match or an ambiguous prefix.
+    pub fn resolve_session_id(&self, id_or_prefix: &str) -> Result<Option<String>> {
+        if self.get_session_row(id_or_prefix)?.is_some() {
+            return Ok(Some(id_or_prefix.to_string()));
+        }
+        let escaped = id_or_prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM sessions WHERE id LIKE ?1 ESCAPE '\\'
+                 ORDER BY started_at DESC LIMIT 2",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![format!("{escaped}%")], |row| row.get::<_, String>(0))
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let matches: Vec<String> = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        match matches.len() {
+            1 => Ok(Some(matches.into_iter().next().unwrap())),
+            _ => Ok(None),
+        }
+    }
+
+    /// Reclaim disk space: FTS5 segment merge + VACUUM, no data change
+    /// (hermes `sessions optimize`). Returns the number of FTS indexes
+    /// merged.
+    pub fn optimize_storage(&self) -> Result<usize> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut optimized = 0usize;
+        if self.has_fts
+            && conn
+                .execute("INSERT INTO messages_fts(messages_fts) VALUES('optimize')", [])
+                .is_ok()
+        {
+            optimized = 1;
+        }
+        // Best-effort WAL checkpoint first so VACUUM rewrites a folded DB.
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", []).ok();
+        conn.execute("VACUUM", [])
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        Ok(optimized)
+    }
+
+    /// Database size in bytes as SQLite itself accounts for it
+    /// (`page_count * page_size`) — the size the main file will have once
+    /// the WAL is checkpointed back. Prefer this over the on-disk file
+    /// size when reporting VACUUM wins (hermes `logical_size_bytes`).
+    pub fn logical_size_bytes(&self) -> Option<u64> {
+        let conn = self.conn.lock().ok()?;
+        let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0)).ok()?;
+        let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0)).ok()?;
+        if page_count < 0 || page_size < 0 {
+            return None;
+        }
+        Some(page_count as u64 * page_size as u64)
     }
 
     /// Current title of a session (`None` when the session exists but has
@@ -1706,5 +1845,131 @@ mod tests {
         let counts = store.session_count_by_source().unwrap();
         assert_eq!(counts[0], ("cli".to_string(), 2));
         assert_eq!(counts[1], ("cron".to_string(), 1));
+    }
+
+    #[test]
+    fn sanitize_title_cleans_collapses_and_validates() {
+        // Control chars dropped, whitespace collapsed, trimmed.
+        assert_eq!(
+            sanitize_title("  hello\u{0007} \t  world  ").unwrap(),
+            Some("hello world".to_string())
+        );
+        // Zero-width and bidi overrides dropped.
+        assert_eq!(
+            sanitize_title("ab\u{200B}cd\u{202E}e\u{FEFF}").unwrap(),
+            Some("abcde".to_string())
+        );
+        // Newlines collapse to a single space.
+        assert_eq!(
+            sanitize_title("line1\n\n  line2").unwrap(),
+            Some("line1 line2".to_string())
+        );
+        // Empty / whitespace-only / invisible-only all normalize to None.
+        assert_eq!(sanitize_title("").unwrap(), None);
+        assert_eq!(sanitize_title("   \t  ").unwrap(), None);
+        assert_eq!(sanitize_title("\u{200B}\u{FEFF}").unwrap(), None);
+        // Length limit enforced on cleaned char count.
+        let long = "x".repeat(MAX_TITLE_LENGTH + 1);
+        let err = sanitize_title(&long).unwrap_err();
+        assert!(err.contains("Title too long"), "got: {err}");
+        assert_eq!(
+            sanitize_title(&"x".repeat(MAX_TITLE_LENGTH)).unwrap().unwrap().len(),
+            MAX_TITLE_LENGTH
+        );
+    }
+
+    #[test]
+    fn set_session_title_rename_uniqueness_and_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let first = store.create_session("cli", None, None).unwrap();
+        let second = store.create_session("cli", None, None).unwrap();
+
+        // Basic rename round-trip (sanitization applied).
+        store
+            .set_session_title(&first, "  Fix   the\tparser ")
+            .unwrap();
+        assert_eq!(
+            store.get_session_title(&first).unwrap().as_deref(),
+            Some("Fix the parser")
+        );
+
+        // Same session may keep its own title.
+        store.set_session_title(&first, "Fix the parser").unwrap();
+
+        // A different session cannot take the same title.
+        let err = store.set_session_title(&second, "Fix the parser").unwrap_err();
+        assert!(err.to_string().contains("already in use"), "got: {err}");
+
+        // Whitespace-only clears the title.
+        store.set_session_title(&first, "   ").unwrap();
+        assert_eq!(store.get_session_title(&first).unwrap(), None);
+
+        // Unknown session id errors instead of silently succeeding.
+        assert!(store.set_session_title("missing", "t").is_err());
+    }
+
+    #[test]
+    fn resolve_session_id_exact_prefix_and_ambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        {
+            let conn = store.conn.lock().unwrap();
+            for (id, started) in [("aaa111", 1.0), ("aaa222", 2.0), ("bbb111", 3.0)] {
+                conn.execute(
+                    "INSERT INTO sessions (id, source, started_at) VALUES (?1, 'cli', ?2)",
+                    params![id, started],
+                )
+                .unwrap();
+            }
+        }
+        // Exact id wins.
+        assert_eq!(
+            store.resolve_session_id("aaa111").unwrap().as_deref(),
+            Some("aaa111")
+        );
+        // Unique prefix resolves (LIKE wildcards in input are escaped).
+        assert_eq!(
+            store.resolve_session_id("bbb").unwrap().as_deref(),
+            Some("bbb111")
+        );
+        // Ambiguous prefix -> None.
+        assert_eq!(store.resolve_session_id("aaa").unwrap(), None);
+        // No match -> None.
+        assert_eq!(store.resolve_session_id("zzz").unwrap(), None);
+        assert_eq!(store.resolve_session_id("a%1").unwrap(), None);
+    }
+
+    #[test]
+    fn delete_session_removes_session_and_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let sid = store.create_session("cli", None, None).unwrap();
+        store.append_message(&sid, &user_msg("to be deleted")).unwrap();
+        assert_eq!(store.count_messages().unwrap(), 1);
+
+        store.delete_session(&sid).unwrap();
+        assert!(store.get_session_row(&sid).unwrap().is_none());
+        assert_eq!(store.count_messages().unwrap(), 0);
+        // Deleting again is a no-op, not an error.
+        store.delete_session(&sid).unwrap();
+    }
+
+    #[test]
+    fn optimize_storage_and_logical_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(dir.path());
+        let sid = store.create_session("cli", None, None).unwrap();
+        for i in 0..50 {
+            store
+                .append_message(&sid, &user_msg(&format!("message {i}")))
+                .unwrap();
+        }
+        let merged = store.optimize_storage().unwrap();
+        assert_eq!(merged, usize::from(store.has_fts));
+        let logical = store.logical_size_bytes().expect("pragmas readable");
+        assert!(logical > 0);
+        // Store remains fully usable after VACUUM.
+        assert_eq!(store.count_messages().unwrap(), 50);
     }
 }

@@ -67,6 +67,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions search "auth refactor"
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # offline db recovery
+./ulnclaw sessions delete|rename|optimize # per-session delete / rename / FTS-merge + VACUUM
 ./ulnclaw skills list
 ./ulnclaw skills blueprints    # schedulable skills (skills schedule <name>)
 ./ulnclaw skills scan <name>   # security scan before trusting a skill (--json, --source, --force)
@@ -224,7 +225,7 @@ async fn main() -> Result<()> {
 ### Building & Testing
 
 ```bash
-cargo test                     # 643 tests
+cargo test                     # 648 tests
 cargo build --release --target x86_64-unknown-linux-musl   # static binary
 ```
 
@@ -294,6 +295,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions search "认证重构"
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # 离线数据库恢复
+./ulnclaw sessions delete|rename|optimize # 单会话删除/重命名；FTS 合并 + VACUUM 回收空间
 ./ulnclaw skills list
 ./ulnclaw skills blueprints    # 可排程技能（skills schedule <name>）
 ./ulnclaw skills scan <name>   # 信任技能前的安全扫描（--json、--source、--force）
@@ -370,7 +372,7 @@ async fn main() -> Result<()> {
 ### 构建与测试
 
 ```bash
-cargo test                     # 643 个测试
+cargo test                     # 648 个测试
 cargo build --release --target x86_64-unknown-linux-musl   # 静态二进制
 ```
 

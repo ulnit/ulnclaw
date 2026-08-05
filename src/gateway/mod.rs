@@ -3952,10 +3952,18 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "unsupported_session_field");
 
-        // Invalid title (newline) → 400.
+        // Newlines collapse to a space (hermes sanitize_title semantics).
         let (status, body) = send_json(
             app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
             json!({"title": "bad\ntitle"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["session"]["title"], "bad title");
+
+        // Overlong title (> 100 chars) → 400.
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"title": "x".repeat(101)}),
         ).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "invalid_title");
