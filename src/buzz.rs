@@ -57,6 +57,9 @@ const WS_MEMBERSHIP_KIND: u64 = 44100;
 const WS_MEMBERSHIP_SUB_ID: &str = "hermes-buzz-membership";
 /// hermes reconnect backoff ceiling (30 s).
 const WS_MAX_BACKOFF_SECS: f64 = 30.0;
+/// Post-dispatch "seen" tapback (hermes 👀 reaction after
+/// `handle_message`).
+const SEEN_EMOJI: &str = "👀";
 
 /// `[messaging.buzz]` — Buzz adapter (hermes `platforms.buzz` plugin
 /// config + `BUZZ_*` env vars).
@@ -911,7 +914,7 @@ async fn handle_event(
         sender_id: pubkey.clone(),
         sender_name: pubkey[..pubkey.len().min(8)].to_string(),
         text: dispatch_text,
-        message_id: event_id,
+        message_id: event_id.clone(),
         attachments: Vec::new(),
     };
     if !crate::messaging::pre_gateway_dispatch_gate_public(&mut gate_event).await {
@@ -937,6 +940,9 @@ async fn handle_event(
             eprintln!("[buzz] reply to {channel_id} failed: {e}");
         }
     }
+    // Post-dispatch "seen" tapback (hermes adds 👀 after
+    // `handle_message`) — signals receipt + processing.
+    let _ = send_reaction(cfg, &event_id, SEEN_EMOJI).await;
 }
 
 /// hermes send — `buzz messages send --channel <id> --content -`.
@@ -952,6 +958,37 @@ pub async fn send_via_cli(cfg: &ResolvedBuzz, channel_id: &str, content: &str) -
         return Err(format!("buzz send exit {code}: {}", out.trim()));
     }
     Ok(())
+}
+
+/// hermes `send_reaction` — tapback via buzz-cli
+/// (`buzz reactions add --event <64-hex event id> --emoji <e>`; the
+/// channel is not a parameter of this subcommand). Best-effort:
+/// failures log and return false, never blocking the message flow.
+pub async fn send_reaction(cfg: &ResolvedBuzz, event_id: &str, emoji: &str) -> bool {
+    if cfg.cli_path.is_empty() || event_id.is_empty() || emoji.is_empty() {
+        return false;
+    }
+    match run_cli(
+        &cfg.cli_path,
+        &["reactions", "add", "--event", event_id, "--emoji", emoji],
+        None,
+    )
+    .await
+    {
+        Ok((0, _)) => true,
+        Ok((code, out)) => {
+            eprintln!(
+                "[buzz] reaction add failed for message {} — exit {code}: {}",
+                &event_id[..event_id.len().min(12)],
+                out.trim()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("[buzz] reaction add failed for message {}: {e}", &event_id[..event_id.len().min(12)]);
+            false
+        }
+    }
 }
 
 struct BuzzSender {
@@ -1110,5 +1147,24 @@ mod tests {
             "ab12"
         );
         assert_eq!(event.get("created_at").and_then(|v| v.as_i64()), Some(1700000000));
+    }
+
+    #[tokio::test]
+    async fn reaction_guards_skip_cli() {
+        let _guard = crate::models_dev::test_env_lock();
+        std::env::remove_var("BUZZ_CLI");
+        let cfg = BuzzConfig::default().resolve();
+        // Empty event id / emoji never shell out.
+        assert!(!send_reaction(&cfg, "", SEEN_EMOJI).await);
+        assert!(!send_reaction(&cfg, "deadbeef", "").await);
+        // Empty CLI path never shells out.
+        let mut no_cli = BuzzConfig::default().resolve();
+        no_cli.cli_path = String::new();
+        assert!(!send_reaction(&no_cli, "deadbeef", SEEN_EMOJI).await);
+    }
+
+    #[test]
+    fn seen_emoji_matches_hermes() {
+        assert_eq!(SEEN_EMOJI, "👀");
     }
 }
