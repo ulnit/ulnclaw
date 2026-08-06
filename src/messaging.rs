@@ -1264,6 +1264,24 @@ pub mod telegram {
             .unwrap_or_else(|| API.to_string())
     }
 
+    /// Monotonic approval-id counter (hermes `_approval_counter`).
+    static APPROVAL_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// approval-id → session_key registry (hermes `_approval_state`):
+    /// `callback_data` only carries the short id; a tap looks the session
+    /// up here and pops it, so one prompt resolves exactly once.
+    fn approval_state() -> &'static std::sync::Mutex<std::collections::HashMap<u64, String>> {
+        static STATE: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<u64, String>>,
+        > = std::sync::OnceLock::new();
+        STATE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    }
+
+    #[cfg(test)]
+    fn reset_approval_state_for_tests() {
+        approval_state().lock().unwrap().clear();
+    }
+
     struct Sender {
         client: reqwest::Client,
         token: String,
@@ -1287,6 +1305,33 @@ pub mod telegram {
         ) -> bool {
             send_clarify_message(&self.client, &self.token, chat_id, clarify_id, question, choices)
                 .await
+        }
+
+        /// Inline-keyboard exec-approval prompt (hermes Telegram
+        /// `send_exec_approval`). Returns false on API failure so the
+        /// `/approve` text fallback still goes out.
+        async fn send_exec_approval(
+            &self,
+            chat_id: &str,
+            command: &str,
+            session_key: &str,
+            description: &str,
+            allow_permanent: bool,
+            allow_session: bool,
+            smart_denied: bool,
+        ) -> bool {
+            send_approval_message(
+                &self.client,
+                &self.token,
+                chat_id,
+                session_key,
+                command,
+                description,
+                allow_permanent,
+                allow_session,
+                smart_denied,
+            )
+            .await
         }
     }
 
@@ -1518,6 +1563,85 @@ pub mod telegram {
         }
     }
 
+    /// HTML exec-approval prompt (hermes `_EA_HEADER` / `_EA_CODE_OPEN` /
+    /// `_EA_SMART_DENY_LINE` template attrs + `_format_exec_approval`
+    /// core, HTML mode).
+    const EA_CMD_BUDGET: usize = 3800;
+
+    fn format_exec_approval_html(command: &str, description: &str, smart_denied: bool) -> String {
+        let mut text = String::from("\u{26A0}\u{FE0F} <b>Command Approval Required</b>\n\n<pre>");
+        text.push_str(&html_escape(&truncate_chars(command, EA_CMD_BUDGET)));
+        text.push_str("</pre>\n\n");
+        let description = description.trim();
+        if !description.is_empty() {
+            text.push_str(&html_escape(description));
+        }
+        if smart_denied {
+            text.push_str(
+                "\n\n<b>Smart DENY:</b> owner override applies to this one operation only.",
+            );
+        }
+        text
+    }
+
+    /// Inline-keyboard approval prompt (hermes Telegram
+    /// `send_exec_approval`): ✅ Allow Once / Session / Always / ❌ Deny
+    /// buttons paired into 2-per-row rows (a single 4-button row
+    /// truncates on mobile), `callback_data` carries a short approval id
+    /// mapped to the session key in [`approval_state`].
+    async fn send_approval_message(
+        client: &reqwest::Client,
+        token: &str,
+        chat_id: &str,
+        session_key: &str,
+        command: &str,
+        description: &str,
+        allow_permanent: bool,
+        allow_session: bool,
+        smart_denied: bool,
+    ) -> bool {
+        let text = format_exec_approval_html(command, description, smart_denied);
+        let approval_id = APPROVAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        approval_state()
+            .lock()
+            .unwrap()
+            .insert(approval_id, session_key.to_string());
+        let mut buttons: Vec<Value> = vec![json!({
+            "text": "\u{2705} Allow Once",
+            "callback_data": format!("ea:once:{approval_id}"),
+        })];
+        if !smart_denied && allow_session {
+            buttons.push(json!({
+                "text": "\u{2705} Session",
+                "callback_data": format!("ea:session:{approval_id}"),
+            }));
+            if allow_permanent {
+                buttons.push(json!({
+                    "text": "\u{2705} Always",
+                    "callback_data": format!("ea:always:{approval_id}"),
+                }));
+            }
+        }
+        buttons.push(json!({
+            "text": "\u{274C} Deny",
+            "callback_data": format!("ea:deny:{approval_id}"),
+        }));
+        let rows: Vec<Value> = buttons.chunks(2).map(|pair| json!(pair)).collect();
+        let params = json!({
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": {"inline_keyboard": rows},
+        });
+        match api(client, token, "sendMessage", params).await {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("[telegram] send_exec_approval failed: {e}");
+                false
+            }
+        }
+    }
+
     /// Route a clarify button tap (hermes Telegram `cl:` callback branch).
     /// Every path answers the callback so the Telegram client stops the
     /// loading spinner. Unauthorized taps get ⛔; taps on resolved prompts
@@ -1531,6 +1655,10 @@ pub mod telegram {
         query: &Value,
     ) {
         let Some(data) = query.get("data").and_then(|v| v.as_str()) else { return };
+        if data.starts_with("ea:") {
+            handle_approval_callback(client, token, cfg, pairing, query).await;
+            return;
+        }
         if !data.starts_with("cl:") {
             return;
         }
@@ -1634,6 +1762,107 @@ pub mod telegram {
             notify_clarify_expired(client, token, query_id, &chat_id, message_id, &original_text)
                 .await;
         }
+    }
+
+    /// Route an exec-approval button tap (hermes Telegram `ea:` callback
+    /// branch). Resolves FIRST and renders after — a tap that lands after
+    /// the approval wait timed out must not claim "Approved" (hermes
+    /// #63501): the command was already denied and will not run.
+    async fn handle_approval_callback(
+        client: &reqwest::Client,
+        token: &str,
+        cfg: &TelegramConfig,
+        pairing: Option<&crate::pairing::PairingStore>,
+        query: &Value,
+    ) {
+        let Some(data) = query.get("data").and_then(|v| v.as_str()) else { return };
+        let parts: Vec<&str> = data.splitn(3, ':').collect();
+        if parts.len() != 3 {
+            return;
+        }
+        let choice = parts[1];
+        let Some(query_id) = query.get("id").and_then(|v| v.as_str()) else { return };
+        let Ok(approval_id) = parts[2].parse::<u64>() else {
+            answer_callback(client, token, query_id, "Invalid approval data.").await;
+            return;
+        };
+        let from = query.get("from").cloned().unwrap_or(json!({}));
+        let caller_id = from.get("id").map(|v| v.to_string()).unwrap_or_default();
+        let user_display = from
+            .get("first_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("User")
+            .to_string();
+        let message = query.get("message").cloned().unwrap_or(json!({}));
+        let chat_id = message
+            .get("chat")
+            .and_then(|c| c.get("id"))
+            .map(|v| match v {
+                Value::Number(n) => n.to_string(),
+                other => other.as_str().unwrap_or("").to_string(),
+            })
+            .unwrap_or_default();
+        let message_id = message.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
+
+        // Auth union: configured allowlist OR an approved pairing code
+        // (hermes `_is_callback_user_authorized`).
+        let authorized = allowlisted(&cfg.allowed_chat_ids, &chat_id)
+            || pairing
+                .map(|store| store.is_approved("telegram", &caller_id))
+                .unwrap_or(false);
+        if !authorized {
+            answer_callback(
+                client,
+                token,
+                query_id,
+                "\u{26D4} You are not authorized to approve commands.",
+            )
+            .await;
+            return;
+        }
+
+        let Some(session_key) = approval_state().lock().unwrap().remove(&approval_id) else {
+            answer_callback(
+                client,
+                token,
+                query_id,
+                "This approval has already been resolved.",
+            )
+            .await;
+            return;
+        };
+
+        let choice_const = match choice {
+            "once" => crate::approval_gateway::CHOICE_ONCE,
+            "session" => crate::approval_gateway::CHOICE_SESSION,
+            "always" => crate::approval_gateway::CHOICE_ALWAYS,
+            "deny" => crate::approval_gateway::CHOICE_DENY,
+            _ => {
+                answer_callback(client, token, query_id, "Invalid approval data.").await;
+                return;
+            }
+        };
+        // Resolve FIRST, render after (hermes #63501): stale taps must not
+        // claim success.
+        let resolved = crate::approval_gateway::resolve(&session_key, choice_const);
+        let (label, edit_text) = if resolved {
+            let label = match choice {
+                "once" => "\u{2705} Approved once",
+                "session" => "\u{2705} Approved for session",
+                "always" => "\u{2705} Approved permanently",
+                _ => "\u{274C} Denied",
+            };
+            (label.to_string(), format!("{label} by {user_display}"))
+        } else {
+            (
+                "\u{231B} Approval expired".to_string(),
+                "\u{231B} Approval expired \u{2014} no command was waiting. It already timed                  out (and was denied) or was resolved elsewhere."
+                    .to_string(),
+            )
+        };
+        answer_callback(client, token, query_id, &label).await;
+        edit_clarify_message(client, token, &chat_id, message_id, &html_escape(&edit_text))
+            .await;
     }
 
     /// answerCallbackQuery wrapper — always fire-and-forget; a failed
@@ -2059,6 +2288,200 @@ pub mod telegram {
                 .as_str()
                 .unwrap()
                 .contains("This question expired or the session reset"));
+        }
+
+        // ------------------------------------------------------------------
+        // Exec-approval inline keyboards (hermes send_exec_approval, P225)
+        // ------------------------------------------------------------------
+
+        fn approval_query(approval_id: u64, choice: &str) -> Value {
+            json!({
+                "id": "cb-ea",
+                "from": {"id": 7, "first_name": "Ann"},
+                "data": format!("ea:{choice}:{approval_id}"),
+                "message": {
+                    "message_id": 77,
+                    "text": "approval",
+                    "chat": {"id": 42},
+                },
+            })
+        }
+
+        #[test]
+        fn telegram_approval_format_escapes_and_smart_deny() {
+            let text = format_exec_approval_html("cat <secret> && rm -rf /", "dangerous <b>cmd</b>", false);
+            assert!(text.starts_with("\u{26A0}\u{FE0F} <b>Command Approval Required</b>"));
+            assert!(text.contains("<pre>cat &lt;secret&gt; &amp;&amp; rm -rf /</pre>"));
+            assert!(text.contains("dangerous &lt;b&gt;cmd&lt;/b&gt;"));
+            assert!(!text.contains("Smart DENY"));
+
+            let denied = format_exec_approval_html("rm -rf /", "", true);
+            assert!(denied.contains("<b>Smart DENY:</b> owner override"));
+        }
+
+        #[test]
+        fn telegram_approval_format_caps_command_budget() {
+            let long = "x".repeat(5000);
+            let text = format_exec_approval_html(&long, "", false);
+            // 3800-char budget + "..." ellipsis inside the <pre> block.
+            assert!(text.contains(&"x".repeat(3800)));
+            assert!(!text.contains(&"x".repeat(3801)));
+        }
+
+        #[tokio::test]
+        async fn telegram_approval_keyboard_layout() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            reset_approval_state_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            let ok = send_approval_message(
+                &reqwest::Client::new(),
+                "TEST",
+                "42",
+                "platform-telegram-42",
+                "rm -rf /tmp/x",
+                "dangerous command",
+                true,
+                true,
+                false,
+            )
+            .await;
+            // Smart-denied variant: only Allow Once + Deny.
+            let ok_denied = send_approval_message(
+                &reqwest::Client::new(),
+                "TEST",
+                "42",
+                "platform-telegram-42",
+                "rm -rf /tmp/y",
+                "smart denied",
+                true,
+                true,
+                true,
+            )
+            .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            assert!(ok && ok_denied);
+            let reqs = log.lock().unwrap();
+            // Full set: 4 buttons paired into 2 rows of 2 (hermes mobile
+            // layout — a single 4-button row truncates).
+            let body = &reqs[0].1;
+            let rows = body["reply_markup"]["inline_keyboard"].as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0].as_array().unwrap().len(), 2);
+            let datas: Vec<&str> = rows
+                .iter()
+                .flat_map(|r| r.as_array().unwrap())
+                .map(|b| b["callback_data"].as_str().unwrap())
+                .collect();
+            assert_eq!(datas.len(), 4);
+            assert!(datas[0].starts_with("ea:once:"));
+            assert!(datas[1].starts_with("ea:session:"));
+            assert!(datas[2].starts_with("ea:always:"));
+            assert!(datas[3].starts_with("ea:deny:"));
+            // Smart-denied: Allow Once + Deny only, one row.
+            let denied_body = &reqs[1].1;
+            let denied_rows = denied_body["reply_markup"]["inline_keyboard"].as_array().unwrap();
+            let denied_datas: Vec<&str> = denied_rows
+                .iter()
+                .flat_map(|r| r.as_array().unwrap())
+                .map(|b| b["callback_data"].as_str().unwrap())
+                .collect();
+            assert_eq!(denied_datas.len(), 2);
+            assert!(denied_datas[0].starts_with("ea:once:"));
+            assert!(denied_datas[1].starts_with("ea:deny:"));
+            // Both prompts registered their session in the approval state.
+            assert_eq!(approval_state().lock().unwrap().len(), 2);
+            reset_approval_state_for_tests();
+        }
+
+        #[tokio::test]
+        async fn telegram_approval_button_resolves_pending() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            reset_approval_state_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            let session_key = "platform-telegram-ea-resolve";
+            let handle = crate::approval_gateway::register(
+                session_key,
+                "rm -rf /tmp/x",
+                "dangerous command",
+                false,
+                true,
+                true,
+            );
+            approval_state()
+                .lock()
+                .unwrap()
+                .insert(4242, session_key.to_string());
+            let query = approval_query(4242, "once");
+            handle_callback_query(&reqwest::Client::new(), "TEST", &authorized_cfg(), None, &query)
+                .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            // The agent waiter received the tapped choice.
+            assert_eq!(handle.rx.await.unwrap(), "once");
+            // The state entry was popped (one tap resolves one prompt).
+            assert!(!approval_state().lock().unwrap().contains_key(&4242));
+            let reqs = log.lock().unwrap();
+            let methods: Vec<&str> = reqs.iter().map(|(m, _)| m.as_str()).collect();
+            assert_eq!(methods, vec!["answerCallbackQuery", "editMessageText"]);
+            assert!(reqs[0].1["text"].as_str().unwrap().contains("Approved once"));
+            assert!(reqs[1].1["text"].as_str().unwrap().contains("Approved once by Ann"));
+        }
+
+        #[tokio::test]
+        async fn telegram_approval_button_expired_when_nothing_pending() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            reset_approval_state_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            // State maps to a session with NO pending approval (the wait
+            // timed out and was denied) — the tap must not claim success
+            // (hermes #63501).
+            approval_state()
+                .lock()
+                .unwrap()
+                .insert(4343, "platform-telegram-ea-expired".to_string());
+            let query = approval_query(4343, "once");
+            handle_callback_query(&reqwest::Client::new(), "TEST", &authorized_cfg(), None, &query)
+                .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            let reqs = log.lock().unwrap();
+            assert!(reqs[0].1["text"].as_str().unwrap().contains("Approval expired"));
+            assert!(reqs[1].1["text"]
+                .as_str()
+                .unwrap()
+                .contains("no command was waiting"));
+        }
+
+        #[tokio::test]
+        async fn telegram_approval_button_unauthorized() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            reset_approval_state_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            approval_state()
+                .lock()
+                .unwrap()
+                .insert(4444, "platform-telegram-ea-auth".to_string());
+            let query = approval_query(4444, "once");
+            let empty_cfg = TelegramConfig::default();
+            handle_callback_query(&reqwest::Client::new(), "TEST", &empty_cfg, None, &query).await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            // Rejected — and the state entry stays intact for an
+            // authorized tap.
+            assert!(approval_state().lock().unwrap().contains_key(&4444));
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "answerCallbackQuery");
+            assert!(reqs[0].1["text"]
+                .as_str()
+                .unwrap()
+                .contains("not authorized"));
+            reset_approval_state_for_tests();
         }
     }
 }
