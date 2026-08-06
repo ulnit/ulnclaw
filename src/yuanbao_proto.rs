@@ -353,6 +353,22 @@ pub struct MsgContent {
     pub url: String,
     pub file_name: String,
     pub file_size: u64,
+    /// TIM `image_format` (field 3) — hermes `_MIME_TO_IMAGE_FORMAT`.
+    pub image_format: u32,
+    /// TIM `image_info_array` (field 8) — hermes
+    /// `build_image_msg_body` entries.
+    pub image_info_array: Vec<ImageInfo>,
+}
+
+/// One `image_info_array` entry (hermes `build_image_msg_body`: type
+/// 1 = original).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ImageInfo {
+    pub info_type: u64,
+    pub size: u64,
+    pub width: u64,
+    pub height: u64,
+    pub url: String,
 }
 
 fn encode_msg_content(content: &MsgContent) -> Vec<u8> {
@@ -363,6 +379,9 @@ fn encode_msg_content(content: &MsgContent) -> Vec<u8> {
     if !content.uuid.is_empty() {
         buf.extend(encode_string_field(2, &content.uuid));
     }
+    if content.image_format != 0 {
+        buf.extend(encode_varint_field(3, content.image_format as u64));
+    }
     if !content.data.is_empty() {
         buf.extend(encode_string_field(4, &content.data));
     }
@@ -371,6 +390,25 @@ fn encode_msg_content(content: &MsgContent) -> Vec<u8> {
     }
     if !content.ext.is_empty() {
         buf.extend(encode_string_field(6, &content.ext));
+    }
+    for info in &content.image_info_array {
+        let mut img_buf = Vec::new();
+        if info.info_type != 0 {
+            img_buf.extend(encode_varint_field(1, info.info_type));
+        }
+        if info.size != 0 {
+            img_buf.extend(encode_varint_field(2, info.size));
+        }
+        if info.width != 0 {
+            img_buf.extend(encode_varint_field(3, info.width));
+        }
+        if info.height != 0 {
+            img_buf.extend(encode_varint_field(4, info.height));
+        }
+        if !info.url.is_empty() {
+            img_buf.extend(encode_string_field(5, &info.url));
+        }
+        buf.extend(encode_message_field(8, &img_buf));
     }
     if !content.url.is_empty() {
         buf.extend(encode_string_field(10, &content.url));
@@ -386,6 +424,19 @@ fn encode_msg_content(content: &MsgContent) -> Vec<u8> {
 
 pub fn decode_msg_content(data: &[u8]) -> MsgContent {
     let map = fields_to_dict(parse_fields(data));
+    let image_info_array = get_repeated_bytes(&map, 8)
+        .into_iter()
+        .map(|bytes| {
+            let img = fields_to_dict(parse_fields(&bytes));
+            ImageInfo {
+                info_type: get_varint(&img, 1),
+                size: get_varint(&img, 2),
+                width: get_varint(&img, 3),
+                height: get_varint(&img, 4),
+                url: get_string(&img, 5),
+            }
+        })
+        .collect();
     MsgContent {
         text: get_string(&map, 1),
         uuid: get_string(&map, 2),
@@ -395,6 +446,8 @@ pub fn decode_msg_content(data: &[u8]) -> MsgContent {
         url: get_string(&map, 10),
         file_size: get_varint(&map, 11),
         file_name: get_string(&map, 12),
+        image_format: get_varint(&map, 3) as u32,
+        image_info_array,
     }
 }
 
@@ -405,7 +458,7 @@ pub struct MsgBodyElement {
     pub msg_content: MsgContent,
 }
 
-fn encode_msg_body_element(element: &MsgBodyElement) -> Vec<u8> {
+pub fn encode_msg_body_element(element: &MsgBodyElement) -> Vec<u8> {
     let mut buf = Vec::new();
     if !element.msg_type.is_empty() {
         buf.extend(encode_string_field(1, &element.msg_type));

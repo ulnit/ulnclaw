@@ -8,13 +8,19 @@
 //! decode → ulnclaw dispatch, and `send_c2c_message` /
 //! `send_group_message` text replies with 4000-char chunking.
 //!
+//! Outbound media is ported (hermes `yuanbao_media.py` +
+//! MediaSendHandler): `MEDIA:` reply paths upload through
+//! `genUploadInfo` temporary COS credentials + a signed
+//! global-accelerate PUT, then dispatch as TIMImageElem (parsed
+//! PNG/JPEG/GIF/WebP dimensions, md5 uuid, TIM `image_format`) or
+//! TIMFileElem, caption appended as a TIMTextElem.
+//!
 //! Known differences: the inbound middleware pipeline collapses into a
 //! direct decode→gate→dispatch path (recall guard, owner commands,
-//! forwarded chat-history parsing, anchor patching not ported); media
-//! resolution/upload and the sticker module ride private Yuanbao APIs
-//! and are not ported (text-only replies; inbound media surfaces as
-//! `[media: <type>]` notes); the slow-response notifier and reply
-//! heartbeats are not ported.
+//! forwarded chat-history parsing, anchor patching not ported); inbound
+//! media resolution/download and the sticker module are not ported
+//! (inbound media surfaces as `[media: <type>]` notes); the
+//! slow-response notifier and reply heartbeats are not ported.
 
 use crate::messaging::{Dispatcher, MessageEvent};
 use crate::pairing::PairingStore;
@@ -48,6 +54,13 @@ const MAX_TEXT_CHUNK: usize = 4000;
 const DEBOUNCE_WINDOW_SECS: f64 = 1.5;
 /// hermes NO_RECONNECT_CLOSE_CODES.
 const NO_RECONNECT_CLOSE_CODES: &[u16] = &[4012, 4013, 4014, 4018, 4019, 4021];
+
+/// hermes `yuanbao_media.UPLOAD_INFO_PATH` (COS upload credentials).
+const UPLOAD_INFO_PATH: &str = "/api/resource/genUploadInfo";
+/// hermes `MEDIA_MAX_SIZE_MB`.
+const MEDIA_MAX_SIZE_MB: u64 = 50;
+const COS_CREDS_TIMEOUT_SECS: u64 = 15;
+const COS_UPLOAD_TIMEOUT_SECS: u64 = 120;
 
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
@@ -783,9 +796,18 @@ async fn handle_inbound_frames(runner: &Arc<Runner>, frames: &[Vec<u8>], out_tx:
     for echo in &outcome.transcript_echoes {
         send_text_via(runner, out_tx, &chat_id, &push.group_code, echo).await;
     }
-    let (reply_text, _media_paths) = crate::messaging::extract_media_tags(&outcome.reply);
-    if !reply_text.trim().is_empty() {
-        send_text_via(runner, out_tx, &chat_id, &push.group_code, &reply_text).await;
+    let (reply_text, media_paths) = crate::messaging::extract_media_tags(&outcome.reply);
+    if media_paths.is_empty() {
+        if !reply_text.trim().is_empty() {
+            send_text_via(runner, out_tx, &chat_id, &push.group_code, &reply_text).await;
+        }
+    } else {
+        // hermes: the caption rides the media message body (appended
+        // TIMTextElem); extra media paths send without caption.
+        for (index, path) in media_paths.iter().enumerate() {
+            let caption = if index == 0 { reply_text.as_str() } else { "" };
+            send_media_via(runner, out_tx, &chat_id, &push.group_code, path, caption).await;
+        }
     }
 }
 
@@ -799,6 +821,259 @@ fn open_opted_in() -> bool {
         }
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// Outbound media (hermes `yuanbao_media.py` + MediaSendHandler)
+// ---------------------------------------------------------------------------
+
+/// hermes `_MIME_TO_IMAGE_FORMAT` — TIM `image_format` codes.
+pub fn tim_image_format(mime_type: &str) -> u32 {
+    match mime_type.to_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => 1,
+        "image/gif" => 2,
+        "image/png" => 3,
+        "image/bmp" => 4,
+        _ => 255,
+    }
+}
+
+/// hermes `parse_image_size` — PNG/JPEG/GIF/WebP header walk, no deps.
+pub fn parse_image_size(data: &[u8]) -> Option<(u32, u32)> {
+    parse_png_size(data)
+        .or_else(|| parse_jpeg_size(data))
+        .or_else(|| parse_gif_size(data))
+        .or_else(|| parse_webp_size(data))
+}
+
+fn parse_png_size(buf: &[u8]) -> Option<(u32, u32)> {
+    if buf.len() < 24 || buf[..4] != [0x89, b'P', b'N', b'G'] {
+        return None;
+    }
+    let w = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
+    let h = u32::from_be_bytes([buf[20], buf[21], buf[22], buf[23]]);
+    Some((w, h))
+}
+
+fn parse_jpeg_size(buf: &[u8]) -> Option<(u32, u32)> {
+    if buf.len() < 4 || buf[0] != 0xFF || buf[1] != 0xD8 {
+        return None;
+    }
+    let mut i = 2usize;
+    while i + 9 < buf.len() {
+        if buf[i] != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = buf[i + 1];
+        if marker == 0xC0 || marker == 0xC2 {
+            let h = u16::from_be_bytes([buf[i + 5], buf[i + 6]]) as u32;
+            let w = u16::from_be_bytes([buf[i + 7], buf[i + 8]]) as u32;
+            return Some((w, h));
+        }
+        if i + 3 < buf.len() {
+            i += 2 + u16::from_be_bytes([buf[i + 2], buf[i + 3]]) as usize;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn parse_gif_size(buf: &[u8]) -> Option<(u32, u32)> {
+    if buf.len() < 10 {
+        return None;
+    }
+    if buf[..6] != *b"GIF87a" && buf[..6] != *b"GIF89a" {
+        return None;
+    }
+    let w = u16::from_le_bytes([buf[6], buf[7]]) as u32;
+    let h = u16::from_le_bytes([buf[8], buf[9]]) as u32;
+    Some((w, h))
+}
+
+fn parse_webp_size(buf: &[u8]) -> Option<(u32, u32)> {
+    if buf.len() < 16 || buf[..4] != *b"RIFF" || buf[8..12] != *b"WEBP" {
+        return None;
+    }
+    match &buf[12..16] {
+        b"VP8 " => {
+            if buf.len() >= 30 && buf[23] == 0x9D && buf[24] == 0x01 && buf[25] == 0x2A {
+                let w = (u16::from_le_bytes([buf[26], buf[27]]) & 0x3FFF) as u32;
+                let h = (u16::from_le_bytes([buf[28], buf[29]]) & 0x3FFF) as u32;
+                return Some((w, h));
+            }
+        }
+        b"VP8L" => {
+            if buf.len() >= 25 && buf[20] == 0x2F {
+                let bits = u32::from_le_bytes([buf[21], buf[22], buf[23], buf[24]]);
+                return Some(((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1));
+            }
+        }
+        b"VP8X" => {
+            if buf.len() >= 30 {
+                let w = (buf[24] as u32) | ((buf[25] as u32) << 8) | ((buf[26] as u32) << 16);
+                let h = (buf[27] as u32) | ((buf[28] as u32) << 8) | ((buf[29] as u32) << 16);
+                return Some((w + 1, h + 1));
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// hermes `md5_hex` — file content digest doubles as the TIM uuid.
+fn media_md5_hex(data: &[u8]) -> String {
+    use md5::Digest;
+    format!("{:x}", md5::Md5::digest(data))
+}
+
+/// hermes `generate_file_id` — 32 hex chars.
+fn generate_file_id() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom_fill(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// hermes `is_image` (filename/mime gate).
+fn is_image_filename(filename: &str) -> bool {
+    let lower = filename.to_lowercase();
+    [
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".tiff", ".ico",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
+}
+
+/// Percent-encode like Python `urllib.parse.quote` — unreserved
+/// ALPHA/DIGIT/`-._~` stay; `keep_slash` mirrors `safe="/"`.
+fn cos_percent_encode(value: &str, keep_slash: bool) -> String {
+    use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+    const BASE: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+    if keep_slash {
+        const SLASH: &AsciiSet = &BASE.remove(b'/');
+        utf8_percent_encode(value, SLASH).to_string()
+    } else {
+        utf8_percent_encode(value, BASE).to_string()
+    }
+}
+
+fn hmac_sha1_hex(key: &str, data: &str) -> String {
+    let mut mac = Hmac::<sha1::Sha1>::new_from_slice(key.as_bytes()).expect("hmac key");
+    mac.update(data.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn sha1_hex(data: &str) -> String {
+    use sha1::Digest;
+    format!("{:x}", sha1::Sha1::digest(data.as_bytes()))
+}
+
+/// hermes `_cos_sign` — COS `q-sign-algorithm=sha1` Authorization value
+/// (params/headers sorted by lowercased key, values percent-encoded).
+pub fn cos_sign(
+    method: &str,
+    path: &str,
+    params: &[(String, String)],
+    headers: &[(String, String)],
+    secret_id: &str,
+    secret_key: &str,
+    start_time: u64,
+    expire_seconds: u64,
+) -> String {
+    let q_sign_time = format!("{start_time};{}", start_time + expire_seconds);
+    let sign_key = hmac_sha1_hex(secret_key, &q_sign_time);
+
+    let mut sorted_params: Vec<(String, String)> = params
+        .iter()
+        .map(|(k, v)| (k.to_lowercase(), cos_percent_encode(v, false)))
+        .collect();
+    sorted_params.sort();
+    let mut sorted_headers: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_lowercase(), cos_percent_encode(v, false)))
+        .collect();
+    sorted_headers.sort();
+
+    let url_param_list: Vec<&str> = sorted_params.iter().map(|(k, _)| k.as_str()).collect();
+    let url_params: Vec<String> = sorted_params
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    let header_list: Vec<&str> = sorted_headers.iter().map(|(k, _)| k.as_str()).collect();
+    let header_str: Vec<String> = sorted_headers
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+
+    let http_string = format!(
+        "{}\n{}\n{}\n{}\n",
+        method.to_lowercase(),
+        path,
+        url_params.join("&"),
+        header_str.join("&"),
+    );
+    let string_to_sign = format!("sha1\n{}\n{}\n", q_sign_time, sha1_hex(&http_string));
+    let signature = hmac_sha1_hex(&sign_key, &string_to_sign);
+
+    format!(
+        "q-sign-algorithm=sha1&q-ak={secret_id}&q-sign-time={q_sign_time}&q-key-time={q_sign_time}&q-header-list={}&q-url-param-list={}&q-signature={signature}",
+        header_list.join(";"),
+        url_param_list.join(";"),
+    )
+}
+
+/// hermes `build_image_msg_body` → TIMImageElem proto element.
+pub fn image_msg_body_element(
+    url: &str,
+    uuid: &str,
+    size: u64,
+    width: u32,
+    height: u32,
+    mime_type: &str,
+) -> proto::MsgBodyElement {
+    proto::MsgBodyElement {
+        msg_type: "TIMImageElem".into(),
+        msg_content: proto::MsgContent {
+            uuid: uuid.to_string(),
+            image_format: tim_image_format(mime_type),
+            image_info_array: vec![proto::ImageInfo {
+                info_type: 1,
+                size,
+                width: width as u64,
+                height: height as u64,
+                url: url.to_string(),
+            }],
+            ..Default::default()
+        },
+    }
+}
+
+/// hermes `build_file_msg_body` → TIMFileElem proto element.
+pub fn file_msg_body_element(
+    url: &str,
+    filename: &str,
+    uuid: &str,
+    size: u64,
+) -> proto::MsgBodyElement {
+    proto::MsgBodyElement {
+        msg_type: "TIMFileElem".into(),
+        msg_content: proto::MsgContent {
+            uuid: uuid.to_string(),
+            url: url.to_string(),
+            file_name: filename.to_string(),
+            file_size: size,
+            ..Default::default()
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -857,27 +1132,21 @@ pub fn chunk_markdown_text(content: &str, max: usize) -> Vec<String> {
     chunks
 }
 
-/// Encode + send one text chunk over the WS, wait for the RPC response.
-async fn send_text_chunk_ws(
+/// Encode + send one msg_body over the WS, wait for the RPC response
+/// (hermes `MessageSender.dispatch_msg_body`).
+async fn send_msg_body_ws(
     runner: &Arc<Runner>,
     out_tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
     chat_id: &str,
     group_code: &str,
-    chunk: &str,
+    elements: &[proto::MsgBodyElement],
 ) -> std::result::Result<(), String> {
     let msg_id = new_uuid();
     let from_account = runner.bot_id.lock().unwrap().clone();
-    let element = proto::MsgBodyElement {
-        msg_type: "TIMTextElem".into(),
-        msg_content: proto::MsgContent {
-            text: chunk.to_string(),
-            ..Default::default()
-        },
-    };
     let bytes = if group_code.is_empty() {
-        proto::encode_send_c2c_message(chat_id, &[element], &from_account, &msg_id, 0, None, "", "")
+        proto::encode_send_c2c_message(chat_id, elements, &from_account, &msg_id, 0, None, "", "")
     } else {
-        proto::encode_send_group_message(group_code, &[element], &from_account, &msg_id, "", "", None, "", "")
+        proto::encode_send_group_message(group_code, elements, &from_account, &msg_id, "", "", None, "", "")
     };
     out_tx.send(bytes).await.map_err(|e| format!("send channel closed: {e}"))?;
 
@@ -896,6 +1165,24 @@ async fn send_text_chunk_ws(
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// Encode + send one text chunk over the WS, wait for the RPC response.
+async fn send_text_chunk_ws(
+    runner: &Arc<Runner>,
+    out_tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    chat_id: &str,
+    group_code: &str,
+    chunk: &str,
+) -> std::result::Result<(), String> {
+    let element = proto::MsgBodyElement {
+        msg_type: "TIMTextElem".into(),
+        msg_content: proto::MsgContent {
+            text: chunk.to_string(),
+            ..Default::default()
+        },
+    };
+    send_msg_body_ws(runner, out_tx, chat_id, group_code, &[element]).await
 }
 
 /// Send text with chunking + retries (hermes send_text semantics).
@@ -921,6 +1208,243 @@ async fn send_text_via(runner: &Arc<Runner>, out_tx: &tokio::sync::mpsc::Sender<
             eprintln!("[yuanbao] send failed to {chat_id}: {last_error}");
             return;
         }
+    }
+}
+
+/// hermes `get_cos_credentials` — `genUploadInfo` temporary COS keys.
+async fn get_cos_credentials(runner: &Arc<Runner>, filename: &str) -> std::result::Result<Value, String> {
+    let entry = runner.sign.get_token().await?;
+    let bot_id = runner.bot_id.lock().unwrap().clone();
+    let id = if bot_id.is_empty() {
+        resolve_app_id(&runner.cfg)
+    } else {
+        bot_id
+    };
+    let route_env = resolve_route_env(&runner.cfg);
+    let url = format!("{}{}", resolve_api_domain(&runner.cfg), UPLOAD_INFO_PATH);
+    let mut request = reqwest::Client::new()
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("X-Token", &entry.token)
+        .header("X-ID", &id)
+        .header("X-Source", "web")
+        .json(&json!({
+            "fileName": filename,
+            "fileId": generate_file_id(),
+            "docFrom": "localDoc",
+            "docOpenId": "",
+        }))
+        .timeout(Duration::from_secs(COS_CREDS_TIMEOUT_SECS));
+    if !route_env.is_empty() {
+        request = request.header("X-Route-Env", &route_env);
+    }
+    let resp = request.send().await.map_err(|e| format!("genUploadInfo: {e}"))?;
+    let status = resp.status().as_u16();
+    if status >= 400 {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("genUploadInfo HTTP {status}: {body}"));
+    }
+    let result: Value = resp.json().await.map_err(|e| format!("genUploadInfo JSON: {e}"))?;
+    let code = result.get("code").and_then(|v| v.as_i64());
+    if let Some(code) = code {
+        if code != 0 {
+            let msg = result.get("msg").and_then(|v| v.as_str()).unwrap_or("");
+            return Err(format!("genUploadInfo code={code}: {msg}"));
+        }
+    }
+    let data = result
+        .get("data")
+        .filter(|v| v.is_object() && !v.as_object().unwrap().is_empty())
+        .cloned()
+        .unwrap_or(result);
+    for field in ["bucketName", "location"] {
+        if data.get(field).and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            return Err(format!("genUploadInfo missing field {field}"));
+        }
+    }
+    Ok(data)
+}
+
+/// hermes `upload_to_cos` — signed PUT with the temporary credentials
+/// (global-accelerate host, `x-cos-security-token` session token).
+async fn upload_to_cos(
+    file_bytes: &[u8],
+    filename: &str,
+    content_type: &str,
+    credentials: &Value,
+) -> std::result::Result<String, String> {
+    let secret_id = credentials
+        .get("encryptTmpSecretId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let secret_key = credentials
+        .get("encryptTmpSecretKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let session_token = credentials
+        .get("encryptToken")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let cos_key = credentials
+        .get("location")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let resource_url = credentials
+        .get("resourceUrl")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let start_time = credentials.get("startTime").and_then(|v| v.as_u64());
+    let expired_time = credentials.get("expiredTime").and_then(|v| v.as_u64());
+    let bucket = credentials
+        .get("bucketName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if secret_id.is_empty() || secret_key.is_empty() || cos_key.is_empty() {
+        return Err("COS credentials incomplete (secretId/secretKey/location)".into());
+    }
+
+    // hermes COS_USE_ACCELERATE = true.
+    let cos_host = format!("{bucket}.cos.accelerate.myqcloud.com");
+    let encoded_key = cos_percent_encode(&cos_key, true);
+    let trimmed_key = encoded_key.trim_start_matches('/');
+    let cos_url = format!("https://{cos_host}/{trimmed_key}");
+
+    let resolved_content_type: String =
+        if content_type.is_empty() || content_type == "application/octet-stream" {
+            if is_image_filename(filename) {
+                crate::media_cache::mime_for_ext(std::path::Path::new(filename))
+            } else {
+                "application/octet-stream".to_string()
+            }
+        } else {
+            content_type.to_string()
+        };
+    let content_type = resolved_content_type.as_str();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let sign_start = start_time.unwrap_or(now);
+    let sign_expire = if expired_time.unwrap_or(0) > now {
+        expired_time.unwrap_or(0) - now
+    } else {
+        3600
+    };
+    let sign_headers = [
+        ("host".to_string(), cos_host.clone()),
+        ("content-type".to_string(), content_type.to_string()),
+        ("x-cos-security-token".to_string(), session_token.clone()),
+    ];
+    let authorization = cos_sign(
+        "put",
+        &format!("/{trimmed_key}"),
+        &[],
+        &sign_headers,
+        &secret_id,
+        &secret_key,
+        sign_start,
+        sign_expire,
+    );
+
+    let resp = reqwest::Client::new()
+        .put(&cos_url)
+        .header("Authorization", &authorization)
+        .header("Content-Type", content_type)
+        .header("x-cos-security-token", &session_token)
+        .body(file_bytes.to_vec())
+        .timeout(Duration::from_secs(COS_UPLOAD_TIMEOUT_SECS))
+        .send()
+        .await
+        .map_err(|e| format!("COS PUT: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("COS PUT HTTP {status}: {body}"));
+    }
+    Ok(if resource_url.is_empty() { cos_url } else { resource_url })
+}
+
+/// hermes MediaSendHandler.handle (local file): read → validate (≤50 MB)
+/// → genUploadInfo → COS PUT → TIMImageElem/TIMFileElem (+caption
+/// TIMTextElem) → WS dispatch.
+async fn send_media_via(
+    runner: &Arc<Runner>,
+    out_tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    chat_id: &str,
+    group_code: &str,
+    path: &std::path::Path,
+    caption: &str,
+) {
+    let file_path = path;
+    let file_bytes = match std::fs::read(file_path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("[yuanbao] media read failed for {}: {e}", path.display());
+            return;
+        }
+    };
+    if file_bytes.is_empty() {
+        eprintln!("[yuanbao] empty media file: {}", path.display());
+        return;
+    }
+    if file_bytes.len() as u64 > MEDIA_MAX_SIZE_MB * 1024 * 1024 {
+        eprintln!(
+            "[yuanbao] media too large ({} MB > {MEDIA_MAX_SIZE_MB} MB): {}",
+            file_bytes.len() / (1024 * 1024),
+            path.display()
+        );
+        return;
+    }
+    let filename = file_path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".to_string());
+    let mime_type = crate::media_cache::mime_for_ext(file_path);
+    let credentials = match get_cos_credentials(runner, &filename).await {
+        Ok(credentials) => credentials,
+        Err(e) => {
+            eprintln!("[yuanbao] COS credentials failed: {e}");
+            return;
+        }
+    };
+    let is_image = mime_type.starts_with("image/");
+    let (width, height) = if is_image {
+        parse_image_size(&file_bytes).unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+    let url = match upload_to_cos(&file_bytes, &filename, &mime_type, &credentials).await {
+        Ok(url) => url,
+        Err(e) => {
+            eprintln!("[yuanbao] COS upload failed: {e}");
+            return;
+        }
+    };
+    let uuid = media_md5_hex(&file_bytes);
+    let element = if is_image {
+        image_msg_body_element(&url, &uuid, file_bytes.len() as u64, width, height, &mime_type)
+    } else {
+        file_msg_body_element(&url, &filename, &uuid, file_bytes.len() as u64)
+    };
+    let mut elements = vec![element];
+    if !caption.trim().is_empty() {
+        elements.push(proto::MsgBodyElement {
+            msg_type: "TIMTextElem".into(),
+            msg_content: proto::MsgContent {
+                text: caption.to_string(),
+                ..Default::default()
+            },
+        });
+    }
+    if let Err(e) = send_msg_body_ws(runner, out_tx, chat_id, group_code, &elements).await {
+        eprintln!("[yuanbao] media send failed to {chat_id}: {e}");
     }
 }
 
@@ -1097,5 +1621,115 @@ mod tests {
         // Expired entries pass again.
         seen.insert("k3".into(), Instant::now() - Duration::from_secs(301));
         assert!(!dedup_check(&mut seen, "k3"));
+    }
+
+    #[test]
+    fn tim_image_format_mapping_matches_hermes() {
+        assert_eq!(tim_image_format("image/jpeg"), 1);
+        assert_eq!(tim_image_format("image/jpg"), 1);
+        assert_eq!(tim_image_format("image/gif"), 2);
+        assert_eq!(tim_image_format("image/png"), 3);
+        assert_eq!(tim_image_format("image/bmp"), 4);
+        assert_eq!(tim_image_format("image/webp"), 255);
+        assert_eq!(tim_image_format("application/pdf"), 255);
+    }
+
+    #[test]
+    fn parse_image_size_recognizes_formats() {
+        // PNG: signature + IHDR, width 300 / height 200 big-endian.
+        let mut png = vec![0x89, b'P', b'N', b'G', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        png.extend_from_slice(&300u32.to_be_bytes());
+        png.extend_from_slice(&200u32.to_be_bytes());
+        assert_eq!(parse_image_size(&png), Some((300, 200)));
+
+        // GIF89a: little-endian u16 pair.
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&300u16.to_le_bytes());
+        gif.extend_from_slice(&200u16.to_le_bytes());
+        assert_eq!(parse_image_size(&gif), Some((300, 200)));
+
+        // JPEG: SOF0 marker, height then width big-endian.
+        let jpeg = [
+            0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0xF0, 0x01, 0x40, 0x00,
+        ];
+        assert_eq!(parse_image_size(&jpeg), Some((320, 240)));
+
+        // WebP VP8L: 14-bit width/height minus one.
+        let mut webp = b"RIFF".to_vec();
+        webp.extend_from_slice(&[0, 0, 0, 0]);
+        webp.extend_from_slice(b"WEBPVP8L");
+        webp.extend_from_slice(&[0, 0, 0, 0]);
+        webp.push(0x2F);
+        let bits: u32 = 100 | (200 << 14); // w=101, h=201
+        webp.extend_from_slice(&bits.to_le_bytes());
+        assert_eq!(parse_image_size(&webp), Some((101, 201)));
+
+        assert_eq!(parse_image_size(&[0u8; 8]), None);
+    }
+
+    #[test]
+    fn cos_sign_matches_python_reference_vector() {
+        // Computed with hermes `_cos_sign` (Python hmac/hashlib/quote).
+        let auth = cos_sign(
+            "put",
+            "/chatbot-upload/test.png",
+            &[],
+            &[
+                ("host".to_string(), "chatbot-123.cos.accelerate.myqcloud.com".to_string()),
+                ("content-type".to_string(), "image/png".to_string()),
+                ("x-cos-security-token".to_string(), "tok123".to_string()),
+            ],
+            "AKIDtest",
+            "secrettest",
+            1700000000,
+            3600,
+        );
+        assert_eq!(
+            auth,
+            "q-sign-algorithm=sha1&q-ak=AKIDtest&q-sign-time=1700000000;1700003600&q-key-time=1700000000;1700003600&q-header-list=content-type;host;x-cos-security-token&q-url-param-list=&q-signature=f174a0b22b925e88759e910c5bb9364c77071e62"
+        );
+    }
+
+    #[test]
+    fn media_msg_body_elements_match_hermes_layout() {
+        let image = image_msg_body_element(
+            "https://cos.example/img.png",
+            "md5uuid",
+            1234,
+            300,
+            200,
+            "image/png",
+        );
+        assert_eq!(image.msg_type, "TIMImageElem");
+        assert_eq!(image.msg_content.uuid, "md5uuid");
+        assert_eq!(image.msg_content.image_format, 3);
+        assert_eq!(image.msg_content.image_info_array.len(), 1);
+        let info = &image.msg_content.image_info_array[0];
+        assert_eq!(info.info_type, 1);
+        assert_eq!(info.size, 1234);
+        assert_eq!(info.width, 300);
+        assert_eq!(info.height, 200);
+        assert_eq!(info.url, "https://cos.example/img.png");
+
+        let file = file_msg_body_element("https://cos.example/a.pdf", "a.pdf", "md5uuid", 999);
+        assert_eq!(file.msg_type, "TIMFileElem");
+        assert_eq!(file.msg_content.file_name, "a.pdf");
+        assert_eq!(file.msg_content.file_size, 999);
+        assert_eq!(file.msg_content.url, "https://cos.example/a.pdf");
+
+        // Proto round-trip keeps the image array intact.
+        let element = proto::encode_msg_body_element(&image);
+        let decoded = proto::decode_msg_body_element(&element);
+        assert_eq!(decoded.msg_content.image_info_array.len(), 1);
+        assert_eq!(decoded.msg_content.image_info_array[0].url, "https://cos.example/img.png");
+        assert_eq!(decoded.msg_content.image_format, 3);
+    }
+
+    #[test]
+    fn generate_file_id_is_32_hex_chars() {
+        let id = generate_file_id();
+        assert_eq!(id.len(), 32);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(id, generate_file_id());
     }
 }
