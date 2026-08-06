@@ -589,6 +589,7 @@ pub fn provider_to_models_dev(provider: &str) -> Option<&'static str> {
         "minimax-cn" => Some("minimax-cn"),
         "deepseek" => Some("deepseek"),
         "alibaba" => Some("alibaba"),
+        "dashscope" => Some("alibaba"),
         "qwen-oauth" => Some("alibaba"),
         "copilot" => Some("github-copilot"),
         "ai-gateway" => Some("vercel"),

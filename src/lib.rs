@@ -127,6 +127,7 @@ pub mod learning_graph;
 pub mod learning_graph_render;
 pub mod learning_mutations;
 pub mod logs;
+pub mod model_inventory;
 pub mod models_dev;
 pub mod projects_db;
 pub mod projects_scan;

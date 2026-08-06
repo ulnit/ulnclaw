@@ -1273,17 +1273,8 @@ async fn models(State(state): State<Arc<GatewayState>>) -> Json<Value> {
 #[derive(serde::Deserialize)]
 struct ModelOptionsQuery {
     refresh: Option<String>,
-}
-
-/// Catalog enrichment for the configured provider row (models.dev).
-#[derive(Default)]
-struct CatalogEnrichment {
-    provider_name: Option<String>,
-    api: Option<String>,
-    doc: Option<String>,
-    models: Vec<String>,
-    capabilities: Vec<(String, Value)>,
-    cache: Option<crate::models_dev::CacheInfo>,
+    include_unconfigured: Option<String>,
+    explicit_only: Option<String>,
 }
 
 fn query_flag(value: Option<&String>) -> bool {
@@ -1292,106 +1283,34 @@ fn query_flag(value: Option<&String>) -> bool {
         .unwrap_or(false)
 }
 
-/// Resolve the configured provider against the models.dev registry.
-/// Runs on the blocking pool: cache hits are memory-only, but a cold
-/// start may touch disk/network (hermes keeps picker work off the loop).
-fn models_dev_enrichment(provider: &str, refresh: bool) -> CatalogEnrichment {
-    let mut out = CatalogEnrichment::default();
-    let registry = crate::models_dev::fetch_models_dev_opts(refresh, true);
-    out.cache = Some(crate::models_dev::cache_info());
-    let mdev_id = crate::models_dev::provider_to_models_dev(provider)
-        .map(str::to_string)
-        .unwrap_or_else(|| provider.to_string());
-    let Some(pdata) = registry.get(&mdev_id).filter(|v| v.is_object()) else {
-        return out;
-    };
-    out.provider_name = pdata
-        .get("name")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    out.api = pdata.get("api").and_then(|v| v.as_str()).map(str::to_string);
-    out.doc = pdata.get("doc").and_then(|v| v.as_str()).map(str::to_string);
-    // Shared catalog filters (hide lists + agentic noise) live in
-    // models_dev; these re-hit the fresh in-memory cache, not the network.
-    out.models = crate::models_dev::list_provider_models(provider);
-    for model_id in &out.models {
-        if let Some(info) = crate::models_dev::get_model_info(provider, model_id) {
-            let mut caps = json!({
-                "reasoning": info.reasoning,
-                "tools": info.tool_call,
-                "vision": info.supports_vision(),
-                "context_window": info.context_window,
-                "max_output_tokens": info.max_output,
-            });
-            if !info.family.is_empty() {
-                caps["family"] = json!(info.family);
-            }
-            if info.has_cost_data() {
-                caps["cost"] = json!({
-                    "input_per_mtok": info.cost_input,
-                    "output_per_mtok": info.cost_output,
-                });
-            }
-            out.capabilities.push((model_id.clone(), caps));
-        }
-    }
-    out
-}
-
 /// `GET /api/model/options` — provider/model inventory for pickers
-/// (hermes `_handle_model_options`). The configured provider row is
-/// enriched from the models.dev catalog when the provider is known there
-/// (model list + per-model capabilities/costs). `?refresh=true` forces a
-/// catalog refresh, mirroring hermes' inventory endpoint.
+/// (hermes `_handle_model_options` via `build_model_options_payload`).
+/// Rows: the configured current provider (models.dev catalog enrichment),
+/// `[providers.<slug>]` config entries, env-authenticated canonical
+/// providers, and — with `include_unconfigured` — skeleton rows with
+/// setup hints. `?refresh=true` busts the catalog cache and probes every
+/// configured OpenAI-compatible endpoint; `?explicit_only=true` keeps
+/// only explicitly-configured rows (hermes query params).
 async fn model_options(
     State(state): State<Arc<GatewayState>>,
     Query(query): Query<ModelOptionsQuery>,
 ) -> Json<Value> {
-    let refresh = query_flag(query.refresh.as_ref());
+    let opts = crate::model_inventory::InventoryOptions {
+        refresh: query_flag(query.refresh.as_ref()),
+        include_unconfigured: query_flag(query.include_unconfigured.as_ref()),
+        explicit_only: query_flag(query.explicit_only.as_ref()),
+    };
     let provider = state.provider_name.clone();
-    let enrichment = tokio::task::spawn_blocking(move || models_dev_enrichment(&provider, refresh))
-        .await
-        .unwrap_or_default();
-
-    let mut row = json!({
-        "slug": state.provider_name,
-        "models": [state.model_name],
-        "total_models": 1,
-        "is_user_defined": true,
-        "authenticated": true,
-        "current": true,
-    });
-    if let Some(name) = &enrichment.provider_name {
-        row["name"] = json!(name);
-    }
-    if !enrichment.models.is_empty() {
-        row["models"] = json!(enrichment.models);
-        row["total_models"] = json!(enrichment.models.len());
-        row["catalog"] = json!("models.dev");
-        row["catalog_stale"] = json!(enrichment.cache.as_ref().map_or(true, |c| !c.fresh));
-        row["capabilities"] =
-            Value::Object(enrichment.capabilities.into_iter().collect());
-        if let Some(api) = &enrichment.api {
-            row["api"] = json!(api);
-        }
-        if let Some(doc) = &enrichment.doc {
-            row["doc"] = json!(doc);
-        }
-    }
-
-    let mut payload = json!({
-        "providers": [row],
-        "model": state.model_name,
-        "provider": state.provider_name,
-    });
-    if let Some(cache) = &enrichment.cache {
-        payload["catalog_cache"] = json!({
-            "providers": cache.providers,
-            "age_secs": cache.age_secs.round() as u64,
-            "fresh": cache.fresh,
-        });
-    }
+    let model = state.model_name.clone();
+    let payload = tokio::task::spawn_blocking(move || {
+        let cfg = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let mut input = crate::model_inventory::InventoryInput::from_config(&cfg);
+        input.current_provider = provider;
+        input.current_model = model;
+        crate::model_inventory::build_model_options_payload(&input, &opts)
+    })
+    .await
+    .unwrap_or_else(|_| json!({"providers": [], "model": "", "provider": ""}));
     Json(payload)
 }
 
@@ -5614,11 +5533,40 @@ mod tests {
         }
     }
 
+    /// Save/remove/restore canonical provider key env vars so inventory
+    /// tests never see ambient credentials.
+    struct ProviderEnvScrub {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+    impl ProviderEnvScrub {
+        fn new() -> Self {
+            let saved = crate::model_inventory::canonical_key_envs()
+                .into_iter()
+                .map(|name| (name, std::env::var(name).ok()))
+                .collect::<Vec<_>>();
+            for (name, _) in &saved {
+                std::env::remove_var(name);
+            }
+            Self { saved }
+        }
+    }
+    impl Drop for ProviderEnvScrub {
+        fn drop(&mut self) {
+            for (name, value) in self.saved.drain(..) {
+                match value {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_model_options_inventory() {
         // models.dev enrichment is deterministic: pin a file:// registry
         // mirror + cache path under the shared env lock.
         let _guard = crate::models_dev::test_env_lock();
+        let _scrub = ProviderEnvScrub::new();
         let dir = tempfile::tempdir().unwrap();
         let fixture = dir.path().join("models-dev.json");
         std::fs::write(
@@ -5683,9 +5631,85 @@ mod tests {
         assert_eq!(body["providers"][0]["catalog"], "models.dev");
         assert_eq!(body["providers"][0]["catalog_stale"], false);
 
+        // include_unconfigured appends canonical skeleton rows with
+        // picker setup hints.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/model/options?include_unconfigured=true",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let providers = body["providers"].as_array().unwrap();
+        assert!(providers.len() > 1);
+        let skeleton = providers
+            .iter()
+            .find(|r| r["slug"] == "anthropic")
+            .expect("anthropic skeleton row");
+        assert_eq!(skeleton["authenticated"], false);
+        assert_eq!(skeleton["auth_type"], "api_key");
+        assert_eq!(skeleton["key_env"], "ANTHROPIC_API_KEY");
+
+        // explicit_only keeps only explicitly-configured rows.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/model/options?include_unconfigured=true&explicit_only=true",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let providers = body["providers"].as_array().unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0]["slug"], "test");
+
         std::env::remove_var(crate::models_dev::MODELS_DEV_URL_ENV);
         std::env::remove_var(crate::models_dev::MODELS_DEV_CACHE_ENV);
         crate::models_dev::reset_cache_for_tests();
+    }
+
+    #[tokio::test]
+    async fn test_model_options_config_providers() {
+        // `[providers.<slug>]` config entries surface as picker rows.
+        let _guard = crate::models_dev::test_env_lock();
+        let _scrub = ProviderEnvScrub::new();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[providers.localbox]\nbase_url = \"http://127.0.0.1:9/v1\"\nmodel = \"lm-1\"\n\n[model_catalog]\nexcluded_providers = []\n",
+        )
+        .unwrap();
+        std::env::set_var(
+            crate::models_dev::MODELS_DEV_URL_ENV,
+            "file:///nonexistent/models-dev.json",
+        );
+        std::env::set_var(
+            crate::models_dev::MODELS_DEV_CACHE_ENV,
+            dir.path().join("cache.json").display().to_string(),
+        );
+        crate::models_dev::reset_cache_for_tests();
+
+        let app = router(test_state());
+        let (status, body) = get_json(app.clone(), "/api/model/options", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let providers = body["providers"].as_array().unwrap();
+        let local = providers
+            .iter()
+            .find(|r| r["slug"] == "localbox")
+            .expect("localbox row");
+        assert_eq!(local["is_user_defined"], true);
+        assert_eq!(local["authenticated"], true);
+        assert_eq!(local["base_url"], "http://127.0.0.1:9/v1");
+        assert_eq!(local["models"], json!(["lm-1"]));
+
+        std::env::remove_var(crate::models_dev::MODELS_DEV_URL_ENV);
+        std::env::remove_var(crate::models_dev::MODELS_DEV_CACHE_ENV);
+        crate::models_dev::reset_cache_for_tests();
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

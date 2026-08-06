@@ -149,6 +149,76 @@ impl Default for ModelConfig {
     }
 }
 
+/// `[providers.<slug>]` — user-defined provider entry (port of hermes'
+/// v12+ keyed `providers:` config form). Rows surface in the
+/// `/api/model/options` picker inventory; the runtime keeps using the
+/// `[model]` section for the active provider.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CustomProviderConfig {
+    /// Endpoint base URL (OpenAI-compatible `/v1` root or Anthropic root).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Literal API key (takes priority over `key_env`).
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Environment variable holding the API key.
+    #[serde(default)]
+    pub key_env: Option<String>,
+    /// Default model for this provider in pickers.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Wire dialect: `openai` (default, OpenAI-compatible) or `anthropic`.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+impl CustomProviderConfig {
+    fn nonblank(value: Option<&String>) -> Option<String> {
+        value
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
+    pub fn base_url(&self) -> Option<String> {
+        Self::nonblank(self.base_url.as_ref())
+    }
+
+    pub fn api_key(&self) -> Option<String> {
+        Self::nonblank(self.api_key.as_ref())
+    }
+
+    pub fn model(&self) -> Option<String> {
+        Self::nonblank(self.model.as_ref())
+    }
+
+    /// Wire dialect, normalized (`anthropic` or `openai`).
+    pub fn mode(&self) -> String {
+        match Self::nonblank(self.mode.as_ref())
+            .map(|v| v.to_lowercase())
+            .as_deref()
+        {
+            Some("anthropic") => "anthropic".to_string(),
+            _ => "openai".to_string(),
+        }
+    }
+
+    /// Resolve the API key: literal `api_key`, else `key_env` lookup.
+    pub fn resolved_api_key(&self) -> Option<String> {
+        if let Some(key) = self.api_key() {
+            return Some(key);
+        }
+        Self::nonblank(self.key_env.as_ref()).and_then(|name| get_env_value(&name))
+    }
+}
+
+/// `[model_catalog]` — picker catalog knobs (hermes `model_catalog:`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelCatalogConfig {
+    /// Provider slugs hidden from the model-options picker inventory.
+    #[serde(default)]
+    pub excluded_providers: Vec<String>,
+}
+
 /// Agent behavior settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSettings {
@@ -677,6 +747,13 @@ pub struct UlncLawConfig {
     /// `[auxiliary.compression]`, `[auxiliary.vision]`, ...
     #[serde(default)]
     pub auxiliary: HashMap<String, AuxiliaryTaskConfig>,
+    /// Keyed user-defined providers (`[providers.<slug>]`, hermes v12+
+    /// keyed `providers:` form) — surfaced by `/api/model/options`.
+    #[serde(default)]
+    pub providers: HashMap<String, CustomProviderConfig>,
+    /// Picker catalog knobs (hermes `model_catalog:`).
+    #[serde(default)]
+    pub model_catalog: ModelCatalogConfig,
     /// Mixture-of-Agents presets (`[moa]`, hermes `moa:`).
     #[serde(default)]
     pub moa: MoaConfig,
