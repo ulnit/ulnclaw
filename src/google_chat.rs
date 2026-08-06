@@ -42,6 +42,11 @@ const DEDUP_MAX_SIZE: usize = 1000;
 const API_TIMEOUT: Duration = Duration::from_secs(30);
 const CHAT_SCOPE: &str = "https://www.googleapis.com/auth/chat.bot";
 const TOKENINFO_URL: &str = "https://oauth2.googleapis.com/tokeninfo";
+
+/// hermes `_TYPING_CONSUMED_SENTINEL` — slot value kept after send()
+/// patches the typing marker into the real reply, so late marker
+/// attempts no-op until the next turn clears it.
+const TYPING_CONSUMED_SENTINEL: &str = "<consumed>";
 /// Pub/Sub pull transport (hermes streaming_pull replacement — REST
 /// pull speaks the same subscription without gRPC).
 const PUBSUB_SCOPE: &str = "https://www.googleapis.com/auth/pubsub";
@@ -90,6 +95,10 @@ pub struct GoogleChatConfig {
     /// Pub/Sub subscription (`projects/<p>/subscriptions/<s>`) for the
     /// pull transport (fallback `GOOGLE_CHAT_PUBSUB_SUBSCRIPTION`).
     pub pubsub_subscription: String,
+    /// Typing-marker text override (fallback
+    /// `GOOGLE_CHAT_TYPING_STATUS_TEXT`; hermes `typing_status_text`).
+    /// Default marker is "ulnclaw is thinking…".
+    pub typing_status_text: Option<String>,
 }
 
 impl Default for GoogleChatConfig {
@@ -102,6 +111,7 @@ impl Default for GoogleChatConfig {
             allowed_users: Vec::new(),
             home_channel: String::new(),
             pubsub_subscription: String::new(),
+            typing_status_text: None,
         }
     }
 }
@@ -122,6 +132,13 @@ fn env_list(name: &str) -> Option<Vec<String>> {
     })
 }
 
+/// Chat API base — normally `https://chat.googleapis.com/v1`; the
+/// `GOOGLE_CHAT_API_BASE` override exists for tests and corporate
+/// proxies (mirrors the other adapters' *_API_BASE pattern).
+fn google_chat_api_base() -> String {
+    env_trim("GOOGLE_CHAT_API_BASE").unwrap_or_else(|| CHAT_API_BASE.to_string())
+}
+
 /// Resolved runtime settings (env > config, hermes precedence).
 #[derive(Debug, Clone)]
 pub struct ResolvedGoogleChat {
@@ -131,6 +148,7 @@ pub struct ResolvedGoogleChat {
     pub allowed_users: Vec<String>,
     pub home_channel: String,
     pub pubsub_subscription: String,
+    pub typing_status_text: Option<String>,
 }
 
 impl GoogleChatConfig {
@@ -148,6 +166,8 @@ impl GoogleChatConfig {
                 .unwrap_or_else(|| self.home_channel.clone()),
             pubsub_subscription: env_trim("GOOGLE_CHAT_PUBSUB_SUBSCRIPTION")
                 .unwrap_or_else(|| self.pubsub_subscription.trim().to_string()),
+            typing_status_text: env_trim("GOOGLE_CHAT_TYPING_STATUS_TEXT")
+                .or_else(|| self.typing_status_text.clone()),
         }
     }
 }
@@ -231,6 +251,9 @@ struct Runtime {
     /// `__legacy__` slot (hermes `_user_creds_by_email` +
     /// `_user_credentials`).
     user_tokens: Mutex<HashMap<String, Option<crate::google_chat_oauth::UserToken>>>,
+    /// chat_id -> typing-card message name or the consumed sentinel
+    /// (hermes `_typing_messages`).
+    typing_slots: Mutex<HashMap<String, String>>,
 }
 
 impl Runtime {
@@ -305,8 +328,22 @@ impl Runtime {
 
     /// hermes `_create_message` — POST /v1/{space}/messages.
     async fn create_message(&self, space_name: &str, text: &str, thread_name: Option<&str>) -> Result<(), String> {
+        self.create_message_returning_name(space_name, text, thread_name)
+            .await
+            .map(|_| ())
+    }
+
+    /// hermes `_create_message` returning the created message's resource
+    /// name — the typing-card flow needs it to patch the marker in-place
+    /// once the reply is ready.
+    async fn create_message_returning_name(
+        &self,
+        space_name: &str,
+        text: &str,
+        thread_name: Option<&str>,
+    ) -> Result<String, String> {
         let token = self.access_token().await?;
-        let url = format!("https://chat.googleapis.com/v1/{space_name}/messages");
+        let url = format!("{}/{space_name}/messages", google_chat_api_base());
         let mut body = json!({ "text": text });
         if let Some(thread) = thread_name {
             body["thread"] = json!({ "name": thread });
@@ -324,7 +361,135 @@ impl Runtime {
             let err = resp.text().await.unwrap_or_default();
             return Err(format!("message create failed ({status}): {}", &err[..err.len().min(300)]));
         }
+        let payload: Value = resp.json().await.unwrap_or(json!({}));
+        Ok(payload
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string())
+    }
+
+    /// Chat API `messages.patch` — rewrite a message's text in-place
+    /// (hermes `_patch_message`); avoids the "Message deleted by its
+    /// author" tombstone a delete+create would leave.
+    async fn patch_message_text(&self, message_name: &str, text: &str) -> Result<(), String> {
+        let token = self.access_token().await?;
+        let url = format!("{}/{message_name}?updateMask=text", google_chat_api_base());
+        let resp = self
+            .client
+            .patch(&url)
+            .bearer_auth(token)
+            .json(&json!({ "text": text }))
+            .send()
+            .await
+            .map_err(|e| format!("message patch: {e}"))?;
+        if resp.status().as_u16() >= 400 {
+            let status = resp.status();
+            let err = resp.text().await.unwrap_or_default();
+            return Err(format!("message patch failed ({status}): {}", &err[..err.len().min(300)]));
+        }
         Ok(())
+    }
+
+    /// Typing-marker text — configured override wins (hermes
+    /// `typing_status_text`).
+    fn typing_marker_text(&self) -> String {
+        self.cfg
+            .typing_status_text
+            .clone()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| "ulnclaw is thinking…".to_string())
+    }
+
+    /// Post the visible "…is thinking" marker card (hermes `send_typing`).
+    /// ulnclaw awaits the create before dispatching the turn — hermes
+    /// runs it as a shielded background task against its `_keep_typing`
+    /// timer and needs in-flight/orphan bookkeeping for cancellation
+    /// races; the awaited create has no such race, so the slot is always
+    /// claimed by the time the reply starts.
+    async fn send_typing_marker(&self, chat_id: &str, thread_name: Option<&str>) {
+        {
+            let mut slots = self.typing_slots.lock().await;
+            match slots.get(chat_id) {
+                // Previous turn's consumed sentinel — clear it so this
+                // turn gets a fresh marker.
+                Some(existing) if existing == TYPING_CONSUMED_SENTINEL => {
+                    slots.remove(chat_id);
+                }
+                // Live marker already up — bail (hermes slot check).
+                Some(_) => return,
+                None => {}
+            }
+        }
+        match self
+            .create_message_returning_name(chat_id, &self.typing_marker_text(), thread_name)
+            .await
+        {
+            Ok(name) if !name.is_empty() => {
+                let mut slots = self.typing_slots.lock().await;
+                slots.entry(chat_id.to_string()).or_insert(name);
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("[google_chat] typing marker failed: {e}"),
+        }
+    }
+
+    /// Pop the typing slot (hermes send() `_typing_messages.pop`): a
+    /// live marker name comes back for patching; the consumed sentinel
+    /// maps to None.
+    async fn take_typing_slot(&self, chat_id: &str) -> Option<String> {
+        let slot = self.typing_slots.lock().await.remove(chat_id)?;
+        if slot == TYPING_CONSUMED_SENTINEL {
+            None
+        } else {
+            Some(slot)
+        }
+    }
+
+    /// Mark the slot consumed (hermes `_TYPING_CONSUMED_SENTINEL`) after
+    /// patching the marker into the reply, so late marker attempts no-op
+    /// until the next turn.
+    async fn mark_typing_consumed(&self, chat_id: &str) {
+        self.typing_slots
+            .lock()
+            .await
+            .insert(chat_id.to_string(), TYPING_CONSUMED_SENTINEL.to_string());
+    }
+}
+
+/// Reply delivery with hermes `send()` typing-card semantics: the first
+/// chunk PATCHes the pending "…is thinking" marker in-place (no delete
+/// tombstone), remaining chunks create new messages; a patch failure
+/// degrades to creating a fresh message (hermes 404 fallback).
+async fn send_patching_typing(
+    runtime: &Runtime,
+    chat_id: &str,
+    text: &str,
+    thread_name: Option<&str>,
+) {
+    let typing_card = runtime.take_typing_slot(chat_id).await;
+    let mut patched = false;
+    let chunks = crate::messaging::chunk_text(text, MAX_MESSAGE_LENGTH);
+    for (idx, chunk) in chunks.iter().enumerate() {
+        if idx == 0 {
+            if let Some(name) = typing_card.as_deref() {
+                match runtime.patch_message_text(name, chunk).await {
+                    Ok(()) => {
+                        patched = true;
+                        continue;
+                    }
+                    Err(e) => eprintln!(
+                        "[google_chat] typing-card patch failed, creating new message: {e}"
+                    ),
+                }
+            }
+        }
+        if let Err(e) = runtime.create_message(chat_id, chunk, thread_name).await {
+            eprintln!("[google_chat] send failed: {e}");
+        }
+    }
+    if patched {
+        runtime.mark_typing_consumed(chat_id).await;
     }
 }
 
@@ -369,6 +534,7 @@ pub fn register(cfg: &GoogleChatConfig) {
         threads: Mutex::new(HashMap::new()),
         last_sender: Mutex::new(HashMap::new()),
         user_tokens: Mutex::new(HashMap::new()),
+        typing_slots: Mutex::new(HashMap::new()),
     });
     let _ = RUNTIME.set(runtime.clone());
     crate::messaging::register_platform_sender(
@@ -645,6 +811,12 @@ async fn process_envelope(
     if !crate::messaging::pre_gateway_dispatch_gate_public(&mut gate_check).await {
         return ack();
     }
+    // Typing marker card — posted before the turn starts so the reply
+    // can patch it in-place (hermes send_typing before processing).
+    {
+        let thread = runtime.threads.lock().await.get(&space_name).cloned();
+        runtime.send_typing_marker(&space_name, thread.as_deref()).await;
+    }
     let outcome = match dispatcher.handle_event(event).await {
         Ok(o) => o,
         Err(e) => crate::messaging::DispatchOutcome {
@@ -662,13 +834,13 @@ async fn process_envelope(
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
         let thread = runtime.threads.lock().await.get(&space_name).cloned();
-        for chunk in crate::messaging::chunk_text(&reply_text, MAX_MESSAGE_LENGTH) {
-            if let Err(e) = runtime
-                .create_message(&space_name, &chunk, thread.as_deref())
-                .await
-            {
-                eprintln!("[google_chat] reply failed: {e}");
-            }
+        send_patching_typing(runtime, &space_name, &reply_text, thread.as_deref()).await;
+    } else if let Some(name) = runtime.take_typing_slot(&space_name).await {
+        // No reply text — finalize the marker instead of stranding a
+        // "thinking" card (hermes on_processing_complete "(interrupted)"
+        // patch on the failure/cancellation path).
+        if let Err(e) = runtime.patch_message_text(&name, "(interrupted)").await {
+            eprintln!("[google_chat] typing-card cleanup failed: {e}");
         }
     }
     // MEDIA: tags — native attachment delivery via per-user OAuth
@@ -690,15 +862,7 @@ struct GoogleChatSender {
 impl crate::messaging::PlatformSender for GoogleChatSender {
     async fn send_text(&self, chat_id: &str, text: &str) {
         let thread = self.runtime.threads.lock().await.get(chat_id).cloned();
-        for chunk in crate::messaging::chunk_text(text, MAX_MESSAGE_LENGTH) {
-            if let Err(e) = self
-                .runtime
-                .create_message(chat_id, &chunk, thread.as_deref())
-                .await
-            {
-                eprintln!("[google_chat] send_text to {chat_id} failed: {e}");
-            }
-        }
+        send_patching_typing(&self.runtime, chat_id, text, thread.as_deref()).await;
     }
 }
 
@@ -1559,6 +1723,7 @@ mod tests {
             threads: Mutex::new(HashMap::new()),
             last_sender: Mutex::new(HashMap::new()),
             user_tokens: Mutex::new(HashMap::new()),
+            typing_slots: Mutex::new(HashMap::new()),
         };
         assert!(!runtime.is_duplicate("spaces/a/messages/1").await);
         assert!(runtime.is_duplicate("spaces/a/messages/1").await);
@@ -1786,5 +1951,162 @@ mod tests {
         assert_eq!(guess_mime(Path::new("a.pdf")), "application/pdf");
         assert_eq!(guess_mime(Path::new("a.unknown")), "application/octet-stream");
         assert_eq!(guess_mime(Path::new("noext")), "application/octet-stream");
+    }
+
+    // -- Typing-card (messages.patch) parity ------------------------------
+
+    /// Runtime with a pre-seeded access token so the tests skip the JWT
+    /// service-account flow entirely.
+    fn typing_runtime() -> Runtime {
+        Runtime {
+            client: reqwest::Client::new(),
+            cfg: GoogleChatConfig::default().resolve(),
+            key: None,
+            token: Mutex::new(Some((
+                "TOK".to_string(),
+                Instant::now() + Duration::from_secs(3600),
+            ))),
+            pubsub_token: Mutex::new(None),
+            dedup: Mutex::new(HashMap::new()),
+            threads: Mutex::new(HashMap::new()),
+            last_sender: Mutex::new(HashMap::new()),
+            user_tokens: Mutex::new(HashMap::new()),
+            typing_slots: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// axum mock of the Chat API — logs (method, path, body); POST
+    /// returns a deterministic message name for the typing-card patch.
+    async fn spawn_chat_api(
+        log: Arc<std::sync::Mutex<Vec<(String, String, Value)>>>,
+    ) -> String {
+        use axum::extract::State;
+        use axum::routing::{patch, post};
+        type Log = Arc<std::sync::Mutex<Vec<(String, String, Value)>>>;
+        let app = axum::Router::new()
+            .route(
+                "/v1/*rest",
+                post(
+                    move |State(log): State<Log>,
+                     axum::extract::Path(rest): axum::extract::Path<String>,
+                     axum::Json(body): axum::Json<Value>| async move {
+                        log.lock().unwrap().push(("POST".into(), rest.clone(), body));
+                        axum::Json(json!({"name": "spaces/x/messages/m-1"}))
+                    },
+                )
+                .patch(
+                    move |State(log): State<Log>,
+                     axum::extract::Path(rest): axum::extract::Path<String>,
+                     axum::Json(body): axum::Json<Value>| async move {
+                        log.lock().unwrap().push(("PATCH".into(), rest.clone(), body));
+                        axum::Json(json!({}))
+                    },
+                ),
+            )
+            .with_state(log);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        // CHAT_API_BASE semantics: the base already carries the /v1
+        // prefix.
+        format!("http://{addr}/v1")
+    }
+
+    #[tokio::test]
+    async fn typing_marker_created_then_reply_patches_in_place() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+        let base = spawn_chat_api(log.clone()).await;
+        std::env::set_var("GOOGLE_CHAT_API_BASE", &base);
+        let runtime = typing_runtime();
+        // Turn start → marker card posted into the thread.
+        runtime
+            .send_typing_marker("spaces/x", Some("spaces/x/threads/t1"))
+            .await;
+        {
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "POST");
+            assert_eq!(reqs[0].2["text"], "ulnclaw is thinking…");
+            assert_eq!(reqs[0].2["thread"]["name"], "spaces/x/threads/t1");
+        }
+        // Reply arrives → the marker is patched in-place, no new message.
+        send_patching_typing(&runtime, "spaces/x", "The answer.", None).await;
+        {
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 2);
+            assert_eq!(reqs[1].0, "PATCH");
+            assert_eq!(reqs[1].1, "spaces/x/messages/m-1");
+            assert_eq!(reqs[1].2["text"], "The answer.");
+        }
+        // Slot consumed — a fresh marker for the next turn posts again.
+        runtime.send_typing_marker("spaces/x", None).await;
+        {
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 3);
+            assert_eq!(reqs[2].0, "POST");
+        }
+        std::env::remove_var("GOOGLE_CHAT_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn typing_marker_not_duplicated_when_live() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+        let base = spawn_chat_api(log.clone()).await;
+        std::env::set_var("GOOGLE_CHAT_API_BASE", &base);
+        let runtime = typing_runtime();
+        runtime.send_typing_marker("spaces/x", None).await;
+        // Second call while the card is live is a no-op (hermes slot
+        // check) — no duplicate "thinking…" card.
+        runtime.send_typing_marker("spaces/x", None).await;
+        assert_eq!(log.lock().unwrap().len(), 1);
+        std::env::remove_var("GOOGLE_CHAT_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn multi_chunk_reply_patches_first_creates_rest() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+        let base = spawn_chat_api(log.clone()).await;
+        std::env::set_var("GOOGLE_CHAT_API_BASE", &base);
+        let runtime = typing_runtime();
+        runtime.send_typing_marker("spaces/x", None).await;
+        // > MAX_MESSAGE_LENGTH forces two chunks: the first patches the
+        // marker, the second creates a new message (hermes send()).
+        let long = "a".repeat(MAX_MESSAGE_LENGTH + 10);
+        send_patching_typing(&runtime, "spaces/x", &long, None).await;
+        let reqs = log.lock().unwrap();
+        let methods: Vec<String> = reqs.iter().map(|(m, _, _)| m.clone()).collect();
+        assert_eq!(methods, vec!["POST", "PATCH", "POST"]);
+    }
+
+    #[tokio::test]
+    async fn no_typing_card_falls_back_to_create() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+        let base = spawn_chat_api(log.clone()).await;
+        std::env::set_var("GOOGLE_CHAT_API_BASE", &base);
+        let runtime = typing_runtime();
+        // No marker posted → reply just creates a message.
+        send_patching_typing(&runtime, "spaces/x", "plain reply", None).await;
+        let reqs = log.lock().unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].0, "POST");
+        assert_eq!(reqs[0].2["text"], "plain reply");
+        std::env::remove_var("GOOGLE_CHAT_API_BASE");
+    }
+
+    #[test]
+    fn typing_marker_text_override_and_default() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        std::env::set_var("GOOGLE_CHAT_TYPING_STATUS_TEXT", "Cooking…");
+        let runtime = typing_runtime();
+        assert_eq!(runtime.typing_marker_text(), "Cooking…");
+        std::env::remove_var("GOOGLE_CHAT_TYPING_STATUS_TEXT");
+        let runtime = typing_runtime();
+        assert_eq!(runtime.typing_marker_text(), "ulnclaw is thinking…");
     }
 }
