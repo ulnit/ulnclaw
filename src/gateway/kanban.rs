@@ -337,6 +337,18 @@ pub async fn get_task(Path(id): Path<String>) -> Response {
 pub struct CompleteBody {
     #[serde(default)]
     pub result: Option<String>,
+    /// Structured handoff summary for downstream tasks (hermes
+    /// complete summary=).
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// JSON object of structured facts stored on the closing run
+    /// (hermes complete metadata=).
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+    /// Deliverable file paths; scratch-workspace files are staged into
+    /// the attachments dir (hermes kanban_complete artifacts=).
+    #[serde(default)]
+    pub artifacts: Option<Vec<String>>,
 }
 
 /// `POST /api/kanban/tasks/:id/complete` — mark done.
@@ -349,7 +361,30 @@ pub async fn complete_task(Path(id): Path<String>, Json(body): Json<CompleteBody
         Ok(id) => id,
         Err(e) => return e,
     };
-    match store.complete_task(&id, body.result.as_deref().filter(|s| !s.trim().is_empty())) {
+    let metadata = match body.metadata.as_ref() {
+        Some(value) if !value.is_object() => {
+            return super::bad_request("metadata must be a JSON object", None)
+        }
+        other => other,
+    };
+    let artifacts: Vec<String> = body
+        .artifacts
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|raw| {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        })
+        .collect();
+    let home = crate::config::ulnclaw_home();
+    match store.complete_task_with_artifacts(
+        &home,
+        &id,
+        body.result.as_deref().filter(|s| !s.trim().is_empty()),
+        body.summary.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        metadata,
+        &artifacts,
+    ) {
         Ok(task) => Json(json!({"object": "ulnclaw.kanban.task", "task": task_json(&store, &task)})).into_response(),
         Err(e) => super::bad_request(&e.to_string(), None),
     }

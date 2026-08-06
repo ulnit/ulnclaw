@@ -598,6 +598,12 @@ enum KanbanAction {
         /// (hermes complete --metadata)
         #[arg(long)]
         metadata: Option<String>,
+        /// Completion artifact path (repeatable). Files inside a
+        /// managed scratch workspace are staged into
+        /// <home>/kanban/attachments/<task>/ so workspace cleanup
+        /// cannot erase them (hermes complete artifacts=[...])
+        #[arg(long = "artifact", value_name = "PATH")]
+        artifact: Vec<String>,
     },
     /// Block a task with a reason
     Block {
@@ -4666,7 +4672,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!("heartbeat recorded for {}", task.id);
         }
-        KanbanAction::Done { id, result, summary, metadata } => {
+        KanbanAction::Done { id, result, summary, metadata, artifact } => {
             if id.is_empty() {
                 return Err("usage: ulnclaw kanban done <task-id> [more ids]".into());
             }
@@ -4682,6 +4688,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 }
                 None => None,
             };
+            let home = ulnclaw::config::ulnclaw_home();
             let mut failed: Vec<String> = Vec::new();
             for raw in &id {
                 let resolved = match resolve(raw) {
@@ -4692,11 +4699,13 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                         continue;
                     }
                 };
-                match store.complete_task_with(
+                match store.complete_task_with_artifacts(
+                    &home,
                     &resolved,
                     result.as_deref(),
                     summary.as_deref(),
                     metadata_value.as_ref(),
+                    &artifact,
                 ) {
                     Ok(task) => {
                         ulnclaw::plugins::fire_session_event(

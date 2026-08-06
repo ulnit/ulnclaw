@@ -413,7 +413,18 @@ performance and a single static binary.
   #kanban-dispatcher-crash-loop), and the gateway dispatcher's stuck
   warning now consults `has_spawnable_ready` so a ready queue full of
   lanes reads as "correctly idle", firing only when spawnable work
-  (unassigned or known-profile tasks) actually waits.
+  (unassigned or known-profile tasks) actually waits. P147 ported
+  completion artifacts: `kanban done --artifact <path>` (repeatable),
+  the agent `kanban_done` tool (`artifacts` array) and the gateway
+  complete API stage files living inside a managed scratch workspace
+  into `<home>/kanban/attachments/<task>/` before any cleanup can
+  erase them (25 MiB cap, missing/oversized declarations fail the
+  completion with rollback), record them as `artifact` attachments
+  with `attached` events, merge absolute deliverable paths mentioned
+  in summary/result prose, and carry the final paths on the
+  `completed` event + run metadata (hermes `kanban_complete(
+  artifacts=[...])`, `_persist_scratch_completion_artifacts`,
+  `_merge_completion_prose_artifacts`).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

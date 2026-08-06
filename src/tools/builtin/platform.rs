@@ -561,7 +561,8 @@ fn register_kanban(registry: &mut ToolRegistry) {
                     "comment": {"type": "string", "description": "Optional extra comment"},
                     "kind": {"type": "string", "enum": ["dependency", "needs_input", "capability", "transient"], "description": "Block only: typed reason. dependency waits in todo until parents finish; needs_input/capability wait on a human; transient may clear on its own"},
                     "summary": {"type": "string", "description": "Complete only: structured handoff summary for downstream tasks (falls back to result)"},
-                    "metadata": {"type": "object", "description": "Complete only: structured facts for the handoff, e.g. {\"changed_files\": [...], \"tests_run\": 12}"}
+                    "metadata": {"type": "object", "description": "Complete only: structured facts for the handoff, e.g. {\"changed_files\": [...], \"tests_run\": 12}"},
+                    "artifacts": {"type": "array", "items": {"type": "string"}, "description": "Complete only: deliverable file paths. Files inside the scratch workspace are staged into the board's attachments dir so cleanup cannot erase them"}
                 },
                 "required": []
             }))
@@ -590,11 +591,26 @@ fn register_kanban(registry: &mut ToolRegistry) {
                         let metadata = args
                             .get("metadata")
                             .filter(|v| v.is_object());
-                        store.complete_task_with(
+                        let artifacts: Vec<String> = args
+                            .get("artifacts")
+                            .and_then(|v| v.as_array())
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(|item| {
+                                        item.as_str().map(str::trim).filter(|s| !s.is_empty())
+                                    })
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        store.complete_task_with_artifacts(
+                            &ctx.home,
                             &id,
                             result.filter(|s| !s.is_empty()),
                             summary,
                             metadata,
+                            &artifacts,
                         )
                     } else {
                         match result.filter(|s| !s.is_empty()) {

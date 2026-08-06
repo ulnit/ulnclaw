@@ -41,6 +41,10 @@ pub const BLOCK_RECURRENCE_LIMIT: i64 = 2;
 /// (hermes `DEFAULT_FAILURE_LIMIT`).
 pub const DEFAULT_FAILURE_LIMIT: i64 = 2;
 
+/// Size cap for a single completion artifact staged out of a scratch
+/// workspace (hermes `KANBAN_ATTACHMENT_MAX_BYTES`).
+pub const KANBAN_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
+
 /// Terminal event kinds that wake the creator session (hermes
 /// `_WAKE_KINDS`). `archived` / `unblocked` are claimed by the
 /// notifier's terminal set but stay silent.
@@ -1428,6 +1432,116 @@ fn expand_tilde(raw: &str) -> PathBuf {
 /// handoff between workers reuses the same directory.
 pub fn workspaces_root(home: &Path) -> PathBuf {
     home.join("kanban").join("workspaces")
+}
+
+/// Per-task directory for completion artifacts staged out of scratch
+/// workspaces (hermes `task_attachments_dir`).
+pub fn task_attachments_dir(home: &Path, task_id: &str) -> PathBuf {
+    home.join("kanban").join("attachments").join(task_id)
+}
+
+/// True when `path` lives under the managed scratch root
+/// `<home>/kanban/workspaces` (hermes `_is_managed_scratch_path`).
+fn is_managed_scratch_path(home: &Path, path: &Path) -> bool {
+    let root = workspaces_root(home);
+    let (Ok(path), Ok(root)) = (path.canonicalize(), root.canonicalize()) else {
+        return false;
+    };
+    path.starts_with(root)
+}
+
+/// Discover absolute files under `workspace` mentioned in completion
+/// prose (hermes `_merge_completion_prose_artifacts`): legacy workers
+/// wrote the deliverable path into summary/result instead of passing
+/// `artifacts=[...]`.
+fn discover_prose_artifacts(workspace: &Path, text: &str) -> Vec<String> {
+    let prefix = workspace.to_string_lossy().to_string();
+    let mut discovered = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(found) = text[cursor..].find(&prefix) {
+        let start = cursor + found;
+        let after = start + prefix.len();
+        let rest = &text[after..];
+        // hermes regex: separator then non-space/backtick/quote/angle
+        // run; trailing punctuation is stripped.
+        let mut end = 0usize;
+        for (idx, ch) in rest.char_indices() {
+            if ch.is_whitespace() || matches!(ch, '`' | '"' | '\'' | '<' | '>') {
+                break;
+            }
+            end = idx + ch.len_utf8();
+        }
+        let raw = rest[..end].trim_end_matches(|c| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}'));
+        if raw.starts_with('/') || raw.starts_with('\\') {
+            let candidate = format!("{prefix}{raw}");
+            if Path::new(&candidate).is_file() && !discovered.contains(&candidate) {
+                discovered.push(candidate);
+            }
+        }
+        cursor = after;
+    }
+    discovered
+}
+
+/// Copy one artifact into `attachment_dir` under a unique name (hermes
+/// `_unique_attachment_path`), streaming with the size cap.
+fn copy_artifact(src: &Path, attachment_dir: &Path, used: &[PathBuf]) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(attachment_dir)?;
+    let name = src
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "artifact".into());
+    let stem = Path::new(&name)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "artifact".into());
+    let suffix = Path::new(&name)
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()));
+    let mut dest = attachment_dir.join(&name);
+    let mut idx = 1u32;
+    while used.contains(&dest) || dest.exists() {
+        let candidate = match &suffix {
+            Some(suffix) => format!("{stem}_{idx}{suffix}"),
+            None => format!("{stem}_{idx}"),
+        };
+        dest = attachment_dir.join(candidate);
+        idx += 1;
+    }
+    let mut source = std::fs::File::open(src)?;
+    let mut target = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&dest)?;
+    let mut copied: u64 = 0;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let read = std::io::Read::read(&mut source, &mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        copied += read as u64;
+        if copied > KANBAN_ATTACHMENT_MAX_BYTES {
+            drop(target);
+            let _ = std::fs::remove_file(&dest);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("artifact grew beyond the {}-byte limit", KANBAN_ATTACHMENT_MAX_BYTES),
+            ));
+        }
+        std::io::Write::write_all(&mut target, &buffer[..read])?;
+    }
+    Ok(dest)
+}
+
+/// Roll back staged artifact copies (hermes `_discard_copies`).
+fn remove_staged_copies(staged: &[PathBuf], attachment_dir: &Path) {
+    for path in staged {
+        let _ = std::fs::remove_file(path);
+    }
+    let _ = std::fs::remove_dir(attachment_dir); // only when empty
 }
 
 /// Errors that will not resolve by retrying immediately — defer the
@@ -3107,17 +3221,34 @@ impl KanbanStore {
                     .collect::<String>()
             })
             .filter(|line| !line.is_empty());
+        // Carry artifact paths on the event so notifiers can upload
+        // them without fetching the run row (hermes completed payload).
+        let event_artifacts: Option<Vec<String>> = metadata
+            .and_then(|md| md.get("artifacts"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::trim).filter(|s| !s.is_empty()))
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|list| !list.is_empty());
         let now = Self::now();
+        let mut payload = serde_json::json!({
+            "result": result,
+            "result_len": result.map(str::len).unwrap_or(0),
+            "summary": event_summary,
+        });
+        if let Some(list) = &event_artifacts {
+            payload["artifacts"] = serde_json::json!(list);
+        }
         let task = self.transition(
             id,
             &["todo", "ready", "running", "scheduled", "blocked"],
             "done",
             "completed",
-            serde_json::json!({
-                "result": result,
-                "result_len": result.map(str::len).unwrap_or(0),
-                "summary": event_summary,
-            }),
+            payload,
             ", completed_at = ?3, result = ?4, claim_lock = NULL, claim_expires = NULL, \
              consecutive_failures = 0, last_failure_error = NULL, \
              block_kind = NULL, block_recurrences = 0",
@@ -3148,6 +3279,181 @@ impl KanbanStore {
             }
         }
         Ok(task)
+    }
+
+    /// Complete a task with completion artifacts (hermes
+    /// `kanban_complete(artifacts=[...])`). Artifacts living inside a
+    /// managed scratch workspace are staged into
+    /// `<home>/kanban/attachments/<task>/` before the workspace can be
+    /// cleaned up; paths outside the workspace pass through unchanged.
+    /// Declared scratch artifacts that are missing, not regular files,
+    /// or larger than [`KANBAN_ATTACHMENT_MAX_BYTES`] fail the
+    /// completion (hermes `ArtifactPreservationError`). Scratch tasks
+    /// also get absolute deliverable paths mentioned in
+    /// `summary`/`result` prose merged in (hermes
+    /// `_merge_completion_prose_artifacts`). Staged files are recorded
+    /// in `task_attachments` (kind `artifact`) with `attached` events,
+    /// and the final paths ride on the `completed` event + run
+    /// metadata.
+    pub fn complete_task_with_artifacts(
+        &self,
+        home: &Path,
+        id: &str,
+        result: Option<&str>,
+        summary: Option<&str>,
+        metadata: Option<&Value>,
+        artifacts: &[String],
+    ) -> Result<Task> {
+        let task = self
+            .get_task(id)?
+            .ok_or_else(|| AgentError::session(format!("kanban: task {id} not found")))?;
+        let workspace = task
+            .workspace_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+        let managed_scratch = task.workspace_kind == "scratch"
+            && workspace
+                .as_ref()
+                .map(|path| is_managed_scratch_path(home, path))
+                .unwrap_or(false);
+
+        // Merge explicit artifacts + prose-discovered ones (hermes).
+        let mut merged: Vec<String> = artifacts
+            .iter()
+            .map(|raw| raw.trim().to_string())
+            .filter(|raw| !raw.is_empty())
+            .collect();
+        if managed_scratch {
+            if let Some(workspace) = &workspace {
+                let mut text = String::new();
+                for part in [summary, result] {
+                    if let Some(part) = part {
+                        text.push_str(part);
+                        text.push('\n');
+                    }
+                }
+                for discovered in discover_prose_artifacts(workspace, &text) {
+                    if !merged.contains(&discovered) {
+                        merged.push(discovered);
+                    }
+                }
+            }
+        }
+
+        // Stage scratch artifacts before cleanup can erase them.
+        let mut staged: Vec<PathBuf> = Vec::new();
+        let persisted: Vec<String> = if managed_scratch {
+            let workspace_root = workspace
+                .as_ref()
+                .and_then(|path| path.canonicalize().ok());
+            let attachment_dir = task_attachments_dir(home, id);
+            let mut out = Vec::new();
+            let mut used: Vec<PathBuf> = Vec::new();
+            for artifact in &merged {
+                let src = PathBuf::from(artifact);
+                // Missing files still need a containment check (they
+                // must fail loudly, not pass through), so fall back to
+                // a CWD-anchored absolute path when canonicalize fails
+                // (hermes Path.resolve(strict=False)).
+                let resolved = src.canonicalize().unwrap_or_else(|_| {
+                    if src.is_absolute() {
+                        src.clone()
+                    } else {
+                        std::env::current_dir().unwrap_or_default().join(&src)
+                    }
+                });
+                let inside = workspace_root
+                    .as_ref()
+                    .map(|root| resolved.starts_with(root))
+                    .unwrap_or(false);
+                if !inside {
+                    out.push(artifact.clone());
+                    continue;
+                }
+                if !resolved.is_file() {
+                    remove_staged_copies(&staged, &attachment_dir);
+                    return Err(AgentError::session(format!(
+                        "kanban: declared scratch artifact is unavailable or not a regular file: {artifact}"
+                    )));
+                }
+                let size = std::fs::metadata(&resolved)
+                    .map(|meta| meta.len())
+                    .unwrap_or(u64::MAX);
+                if size > KANBAN_ATTACHMENT_MAX_BYTES {
+                    remove_staged_copies(&staged, &attachment_dir);
+                    return Err(AgentError::session(format!(
+                        "kanban: declared scratch artifact exceeds the {}-byte limit: {artifact}",
+                        KANBAN_ATTACHMENT_MAX_BYTES
+                    )));
+                }
+                let dest = match copy_artifact(&resolved, &attachment_dir, &used) {
+                    Ok(dest) => dest,
+                    Err(err) => {
+                        remove_staged_copies(&staged, &attachment_dir);
+                        return Err(AgentError::session(format!(
+                            "kanban: could not preserve declared scratch artifact {artifact}: {err}"
+                        )));
+                    }
+                };
+                staged.push(dest.clone());
+                used.push(dest.clone());
+                out.push(dest.to_string_lossy().to_string());
+            }
+            out
+        } else {
+            merged.clone()
+        };
+
+        // Record staged copies in the attachment table (hermes
+        // _insert_completion_attachment).
+        for path in &staged {
+            let filename = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "artifact".into());
+            let size = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+            {
+                let conn = self.conn.lock().unwrap();
+                conn.execute(
+                    "INSERT INTO task_attachments (task_id, kind, value, created_at)                      VALUES (?1, 'artifact', ?2, ?3)",
+                    params![id, path.to_string_lossy().to_string(), Self::now()],
+                )
+                .map_err(db_error("artifact attach"))?;
+            }
+            self.append_event(
+                id,
+                "attached",
+                serde_json::json!({
+                    "filename": filename,
+                    "size": size,
+                    "by": "kanban_complete",
+                }),
+            )?;
+        }
+
+        // Persist the final artifact list on the run metadata.
+        let final_metadata: Option<Value> = if persisted.is_empty() && metadata.is_none() {
+            None
+        } else {
+            let mut md = metadata
+                .filter(|md| md.is_object())
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            if !persisted.is_empty() {
+                md["artifacts"] = serde_json::json!(persisted);
+            }
+            Some(md)
+        };
+        match self.complete_task_with(id, result, summary, final_metadata.as_ref()) {
+            Ok(task) => Ok(task),
+            Err(err) => {
+                // Completion failed after staging — roll the copies back.
+                remove_staged_copies(&staged, &task_attachments_dir(home, id));
+                Err(err)
+            }
+        }
     }
 
     /// Block a task with a reason (hermes `block_task`, untyped).
@@ -5774,6 +6080,150 @@ mod tests {
         // Claimed work no longer counts as spawnable.
         store.claim_task(&real.id, "w", 60).unwrap();
         assert!(!store.has_spawnable_ready(Some(&profiles)).unwrap());
+    }
+
+    fn scratch_workspace(store: &KanbanStore, home: &Path, task_id: &str) -> PathBuf {
+        let workspace = workspaces_root(home).join(task_id);
+        std::fs::create_dir_all(&workspace).unwrap();
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET workspace_kind = 'scratch', workspace_path = ?2 WHERE id = ?1",
+            params![task_id, workspace.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        workspace
+    }
+
+    #[test]
+    fn complete_with_artifacts_stages_scratch_files() {
+        let (dir, store) = temp_store();
+        let task = make_task(&store, "artifact");
+        let workspace = scratch_workspace(&store, dir.path(), &task.id);
+        std::fs::write(workspace.join("report.md"), "# done").unwrap();
+        store.ready_task(&task.id).unwrap();
+
+        let artifact = workspace.join("report.md").to_string_lossy().to_string();
+        let done = store
+            .complete_task_with_artifacts(
+                dir.path(),
+                &task.id,
+                Some("finished"),
+                None,
+                None,
+                &[artifact],
+            )
+            .unwrap();
+        assert_eq!(done.status, "done");
+
+        let staged_path = task_attachments_dir(dir.path(), &task.id).join("report.md");
+        assert_eq!(
+            std::fs::read_to_string(&staged_path).unwrap(),
+            "# done"
+        );
+        let attachments = store.attachments(&task.id).unwrap();
+        assert_eq!(attachments, vec![("artifact".into(), staged_path.to_string_lossy().to_string())]);
+
+        // The completed event + run metadata carry the staged path.
+        let completed = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "completed")
+            .unwrap();
+        assert_eq!(
+            completed.payload["artifacts"][0],
+            staged_path.to_string_lossy().to_string()
+        );
+        let attached = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "attached")
+            .unwrap();
+        assert_eq!(attached.payload["by"], "kanban_complete");
+    }
+
+    #[test]
+    fn complete_with_missing_scratch_artifact_fails_and_rolls_back() {
+        let (dir, store) = temp_store();
+        let task = make_task(&store, "missing");
+        let workspace = scratch_workspace(&store, dir.path(), &task.id);
+        std::fs::write(workspace.join("keep.md"), "ok").unwrap();
+        store.ready_task(&task.id).unwrap();
+
+        let missing = workspace.join("missing.txt").to_string_lossy().to_string();
+        let keep = workspace.join("keep.md").to_string_lossy().to_string();
+        let err = store
+            .complete_task_with_artifacts(dir.path(), &task.id, None, None, None, &[keep, missing])
+            .unwrap_err();
+        assert!(err.to_string().contains("unavailable"), "{err}");
+        assert_eq!(
+            store.get_task(&task.id).unwrap().unwrap().status,
+            "ready"
+        );
+        // Staged copies rolled back.
+        assert!(!task_attachments_dir(dir.path(), &task.id).join("keep.md").exists());
+    }
+
+    #[test]
+    fn complete_artifacts_outside_workspace_pass_through() {
+        let (dir, store) = temp_store();
+        let task = make_task(&store, "outside");
+        let _workspace = scratch_workspace(&store, dir.path(), &task.id);
+        store.ready_task(&task.id).unwrap();
+        let outside = dir.path().join("deliverable.txt");
+        std::fs::write(&outside, "payload").unwrap();
+
+        let done = store
+            .complete_task_with_artifacts(
+                dir.path(),
+                &task.id,
+                None,
+                None,
+                None,
+                &[outside.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        assert_eq!(done.status, "done");
+        // Nothing staged — the path is recorded verbatim.
+        assert!(store.attachments(&task.id).unwrap().is_empty());
+        let completed = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "completed")
+            .unwrap();
+        assert_eq!(
+            completed.payload["artifacts"][0],
+            outside.to_string_lossy().to_string()
+        );
+    }
+
+    #[test]
+    fn completion_prose_artifacts_are_discovered_and_staged() {
+        let (dir, store) = temp_store();
+        let task = make_task(&store, "prose");
+        let workspace = scratch_workspace(&store, dir.path(), &task.id);
+        std::fs::write(workspace.join("out.csv"), "a,b").unwrap();
+        store.ready_task(&task.id).unwrap();
+
+        let summary = format!("Deliverable: {}.", workspace.join("out.csv").display());
+        let done = store
+            .complete_task_with_artifacts(dir.path(), &task.id, None, Some(&summary), None, &[])
+            .unwrap();
+        assert_eq!(done.status, "done");
+        let staged_path = task_attachments_dir(dir.path(), &task.id).join("out.csv");
+        assert!(staged_path.exists());
+        let completed = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "completed")
+            .unwrap();
+        assert_eq!(
+            completed.payload["artifacts"][0],
+            staged_path.to_string_lossy().to_string()
+        );
     }
 
     #[test]

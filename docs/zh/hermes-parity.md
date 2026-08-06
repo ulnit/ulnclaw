@@ -366,7 +366,16 @@
   通道，绝不自动 spawn —— hermes #kanban-dispatcher-crash-loop）；
   网关调度器的 stuck 警告改由 `has_spawnable_ready` 判定，就绪队列里
   只有通道任务时视为"正常空闲"，仅在确有可 spawn 工作（未指派或已配
-  置 profile 的任务）等待时才告警。
+  置 profile 的任务）等待时才告警。P147 移植完成工件：`kanban done
+  --artifact <path>`（可重复）、agent `kanban_done` 工具（`artifacts`
+  数组）与网关 complete API 会把托管 scratch 工作区内的文件先行暂存
+  到 `<home>/kanban/attachments/<task>/`（25 MiB 上限，缺失/超限的声
+  明直接让完成失败并回滚），登记为 `artifact` 附件并发出 `attached`
+  事件，同时合并 summary/result 文本中提到的绝对交付物路径，最终路
+  径随 `completed` 事件与 run metadata 下发（hermes
+  `kanban_complete(artifacts=[...])`、
+  `_persist_scratch_completion_artifacts`、
+  `_merge_completion_prose_artifacts`）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
