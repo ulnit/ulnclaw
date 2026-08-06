@@ -655,6 +655,45 @@ fn register_kanban(registry: &mut ToolRegistry) {
     ));
 
     registry.register(
+        tool("kanban_review")
+            .description("Move your running kanban task to the review column after opening a PR. The dispatcher spawns a review agent that verifies and merges it (or rejects it back to you). Call this instead of kanban_complete when the work needs review before merge.")
+            .parameters(json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"},
+                    "reason": {"type": "string", "description": "Short note, e.g. the PR URL"}
+                },
+                "required": []
+            }))
+            .handler(|args, ctx| async move {
+                let store = match kanban_engine(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                let id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                let id = match kanban_resolve_id(&store, id) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return Ok(kanban_error("task_id is required (no worker task in env)")),
+                    Err(e) => return Ok(kanban_error(e)),
+                };
+                let reason = args
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("ready for review");
+                match store.request_review(&id, reason) {
+                    Ok(task) => Ok(json!({"success": true, "task_id": task.id, "status": task.status})),
+                    Err(e) => Ok(kanban_error(e)),
+                }
+            })
+            .toolset("kanban")
+            .emoji("📋")
+            .build()
+            .expect("kanban_review builds"),
+    );
+
+    registry.register(
         tool("kanban_unblock")
             .description("Unblock a kanban task (moves it back to todo). Orchestrator-only.")
             .parameters(json!({

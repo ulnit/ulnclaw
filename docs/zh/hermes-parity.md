@@ -375,7 +375,15 @@
   径随 `completed` 事件与 run metadata 下发（hermes
   `kanban_complete(artifacts=[...])`、
   `_persist_scratch_completion_artifacts`、
-  `_merge_completion_prose_artifacts`）。
+  `_merge_completion_prose_artifacts`）。P148 移植 review 列：
+  `review` 加入状态集（🔍）；worker 开 PR 后调用 `kanban review <id>
+  [--reason]` / `kanban_review` 工具（running → review，收尾 worker
+  run，发出 `review_requested` 事件）；`dispatch_once` 新增共享
+  max_spawn 上限的 review 循环 —— 未指派的 review 任务归入
+  `skipped_unassigned`，未知 assignee 归入 `skipped_nonspawnable`，
+  认领时开新 run 且不再复查父任务依赖（`claim_review_task`），
+  `<home>/skills/` 装有 `sdlc-review` 技能时强制加载；
+  `has_spawnable_review` 并入网关健康探针。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

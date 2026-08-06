@@ -3651,7 +3651,10 @@ pub fn spawn_kanban_dispatcher(
                         // idle — not stuck).
                         let ready_pending = store
                             .has_spawnable_ready(Some(&known_profiles))
-                            .unwrap_or(false);
+                            .unwrap_or(false)
+                            || store
+                                .has_spawnable_review(Some(&known_profiles))
+                                .unwrap_or(false);
                         Some((result.spawned.len(), ready_pending))
                     }
                     Err(e) => {

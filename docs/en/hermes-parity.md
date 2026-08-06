@@ -424,7 +424,17 @@ performance and a single static binary.
   in summary/result prose, and carry the final paths on the
   `completed` event + run metadata (hermes `kanban_complete(
   artifacts=[...])`, `_persist_scratch_completion_artifacts`,
-  `_merge_completion_prose_artifacts`).
+  `_merge_completion_prose_artifacts`). P148 ported the review
+  column: `review` joins the status set (🔍); workers call `kanban
+  review <id> [--reason]` / the `kanban_review` tool after opening a
+  PR (running → review, worker run closed, `review_requested` event);
+  `dispatch_once` grows a review loop sharing the max_spawn cap —
+  unassigned review tasks land in `skipped_unassigned`, unknown
+  assignees in `skipped_nonspawnable`, claimed review tasks open a
+  fresh run without re-gating parents (`claim_review_task`), and the
+  `sdlc-review` skill is force-loaded when installed under
+  `<home>/skills/`; `has_spawnable_review` joins the gateway health
+  probe.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

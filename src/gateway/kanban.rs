@@ -546,6 +546,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
             "would_spawn": result.would_spawn,
             "respawn_guarded": result.respawn_guarded,
             "skipped_capped": result.skipped_capped,
+            "skipped_unassigned": result.skipped_unassigned,
             "skipped_nonspawnable": result.skipped_nonspawnable,
             "spawn_failed": result.spawn_failed,
             "auto_blocked": result.auto_blocked,

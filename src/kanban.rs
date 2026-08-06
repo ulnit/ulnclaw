@@ -18,7 +18,8 @@ use crate::error::{AgentError, Result};
 
 /// Hermes task statuses (`_STATUS_ICONS` keys).
 pub const STATUSES: &[&str] = &[
-    "todo", "ready", "running", "scheduled", "blocked", "done", "archived",
+    "todo", "ready", "running", "scheduled", "blocked", "review", "done",
+    "archived",
 ];
 
 /// Valid task workspace kinds (hermes `VALID_WORKSPACE_KINDS`).
@@ -99,6 +100,7 @@ pub fn status_icon(status: &str) -> &'static str {
         "running" => "\u{25CF}",   // ●
         "scheduled" => "\u{23F1}", // ⏱
         "blocked" => "\u{2298}",   // ⊘
+        "review" => "\u{1F50D}",   // 🔍
         "done" => "\u{2713}",      // ✓
         "archived" => "\u{2014}",  // —
         _ => "?",
@@ -307,6 +309,10 @@ pub struct DispatchResult {
     pub would_spawn: Vec<String>,
     /// Ready tasks skipped because the concurrency cap was reached.
     pub skipped_capped: Vec<String>,
+    /// Review-column tasks with no assignee — a review agent runs
+    /// under the task's profile, so these cannot spawn (hermes
+    /// `DispatchResult.skipped_unassigned`).
+    pub skipped_unassigned: Vec<String>,
     /// Tasks whose spawn failed (still under the failure limit).
     pub spawn_failed: Vec<String>,
     /// Tasks auto-blocked after `failure_limit` consecutive spawn failures.
@@ -3157,6 +3163,70 @@ impl KanbanStore {
         self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
     }
 
+    /// Worker parks a running task in the review column after opening
+    /// a PR (hermes review lifecycle): the worker's claim and run end,
+    /// and the dispatcher spawns a review agent on a fresh claim.
+    pub fn request_review(&self, id: &str, reason: &str) -> Result<Task> {
+        let task = self.transition(
+            id,
+            &["running"],
+            "review",
+            "review_requested",
+            serde_json::json!({ "reason": reason }),
+            ", claim_lock = NULL, claim_expires = NULL, worker_pid = NULL",
+            vec![],
+        )?;
+        self.close_active_run(id, "review", "review", Some(reason), None)?;
+        Ok(task)
+    }
+
+    /// Claim a review-column task (hermes `claim_review_task`):
+    /// review → running WITHOUT the parent-dependency gate (already
+    /// passed on the original claim); opens a fresh run row so the
+    /// review agent's attempt is tracked separately.
+    pub fn claim_review_task(&self, id: &str, claimer: &str, ttl_secs: i64) -> Result<Task> {
+        let now = Self::now();
+        let expires = now + ttl_secs;
+        let lock = uuid::Uuid::new_v4().to_string();
+        let conn = self.conn.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE tasks SET status = 'running', claim_lock = ?2, claim_expires = ?3,                  started_at = COALESCE(started_at, ?4)                  WHERE id = ?1 AND status = 'review' AND claim_lock IS NULL",
+                params![id, lock, expires, now],
+            )
+            .map_err(db_error("claim review"))?;
+        if updated == 0 {
+            drop(conn);
+            let task = self.get_task(id)?;
+            return match task {
+                Some(task)
+                    if task.status == "running"
+                        && task.claim_expires.map(|e| e >= now).unwrap_or(false) =>
+                {
+                    Err(AgentError::session(format!(
+                        "kanban: task {id} already claimed by {} (expires in {}s)",
+                        task.assignee.unwrap_or_else(|| "?".into()),
+                        task.claim_expires.unwrap_or(now) - now
+                    )))
+                }
+                Some(task) => Err(AgentError::session(format!(
+                    "kanban: task {id} is '{}' — only review tasks are claimable here",
+                    task.status
+                ))),
+                None => Err(AgentError::session(format!("kanban: task {id} not found"))),
+            };
+        }
+        Self::recover_stale_run_conn(&conn, id, "invariant recovery on review claim", now)?;
+        let run_id = Self::start_run_conn(&conn, id, &lock, expires, now)?;
+        drop(conn);
+        self.append_event(
+            id,
+            "claimed",
+            serde_json::json!({ "lock": lock, "expires": expires, "claimer": claimer, "run_id": run_id, "review": true }),
+        )?;
+        self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
+    }
+
     /// Extend a live claim (hermes `heartbeat_task`); only the lock
     /// holder may heartbeat.
     pub fn heartbeat_task(&self, id: &str, claimer: &str, ttl_secs: i64) -> Result<Task> {
@@ -5469,6 +5539,34 @@ impl KanbanStore {
         }))
     }
 
+    /// Health-telemetry probe for the review column (hermes
+    /// `has_spawnable_review`): true iff an unclaimed review task is
+    /// assigned to a configured profile (review agents run under the
+    /// task's profile; unassigned review tasks never spawn).
+    pub fn has_spawnable_review(
+        &self,
+        known_profiles: Option<&std::collections::HashSet<String>>,
+    ) -> Result<bool> {
+        let assignees: Vec<String> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT DISTINCT COALESCE(assignee, '') FROM tasks                      WHERE status = 'review' AND claim_lock IS NULL",
+                )
+                .map_err(db_error("review probe"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(db_error("review probe"))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error("review probe"))?
+        };
+        Ok(assignees.into_iter().any(|raw| {
+            let assignee = raw.trim();
+            !assignee.is_empty()
+                && known_profiles.map_or(true, |profiles| profiles.contains(assignee))
+        }))
+    }
+
     /// Run one dispatcher tick (hermes `dispatch_once`, scoped port):
     /// 1. reclaim stale claims, 2. promote parent-done todos (and
     ///    auto-recover non-sticky blocked tasks under the failure
@@ -5619,6 +5717,118 @@ impl KanbanStore {
                         &id,
                         "spawned",
                         serde_json::json!({ "pid": pid, "assignee": claimed.assignee }),
+                    )?;
+                    running_count += 1;
+                    result.spawned.push((id, pid));
+                }
+                Err(err) => {
+                    self.append_event(
+                        &id,
+                        "spawn_failed",
+                        serde_json::json!({ "error": err }),
+                    )?;
+                    self.synthesize_closed_run(&id, "spawn_failed", None, Some(&err))?;
+                    let gave_up = self.record_task_failure(
+                        &id,
+                        &err,
+                        "spawn_failed",
+                        failure_limit as i64,
+                    )?;
+                    if gave_up {
+                        result.auto_blocked.push(id);
+                    } else {
+                        result.spawn_failed.push(id);
+                    }
+                }
+            }
+        }
+
+        // ---- review column dispatch (hermes) ----
+        // Workers park tasks in `review` after opening a PR; the
+        // dispatcher spawns a review agent that verifies and merges —
+        // or rejects back to the worker. Review spawns share the
+        // max_spawn cap with ready spawns. The review skill
+        // (`sdlc-review`) is force-loaded when installed under
+        // `<home>/skills/`; the kanban lifecycle guidance is already
+        // part of every worker prompt.
+        let review: Vec<String> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM tasks WHERE status = 'review' AND claim_lock IS NULL                      ORDER BY priority DESC, created_at ASC",
+                )
+                .map_err(db_error("dispatch review"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(db_error("dispatch review"))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error("dispatch review"))?
+        };
+        for id in review {
+            if let Some(cap) = max_spawn {
+                if running_count >= cap {
+                    result.skipped_capped.push(id);
+                    continue;
+                }
+            }
+            let Some(task) = self.get_task(&id)? else {
+                continue;
+            };
+            let Some(assignee) = task
+                .assignee
+                .as_deref()
+                .map(str::trim)
+                .filter(|assignee| !assignee.is_empty())
+            else {
+                // Review agents run under the task's profile — an
+                // unassigned review task cannot spawn (hermes).
+                result.skipped_unassigned.push(id);
+                continue;
+            };
+            if let Some(profiles) = known_profiles {
+                if !profiles.contains(assignee) {
+                    result.skipped_nonspawnable.push(id);
+                    continue;
+                }
+            }
+            if dry_run {
+                result.would_spawn.push(id);
+                continue;
+            }
+            let claimed = match self.claim_review_task(
+                &id,
+                &KanbanStore::claimer_id(),
+                DEFAULT_CLAIM_TTL_SECS,
+            ) {
+                Ok(claimed) => claimed,
+                Err(_) => continue,
+            };
+            let spawn_outcome = match self.resolve_workspace(home, &claimed) {
+                Ok((workspace, branch)) => {
+                    let _ = self.set_workspace_path(&id, &workspace);
+                    if let Some(branch) = &branch {
+                        let _ = self.set_branch_name(&id, branch);
+                    }
+                    let mut review_task = claimed.clone();
+                    if home
+                        .join("skills")
+                        .join("sdlc-review")
+                        .join("SKILL.md")
+                        .exists()
+                    {
+                        review_task.skills = Some(vec!["sdlc-review".to_string()]);
+                    }
+                    spawn(&review_task, Some(workspace.as_path()))
+                }
+                Err(err) => Err(format!("workspace: {err}")),
+            };
+            match spawn_outcome {
+                Ok(pid) => {
+                    self.set_worker_pid(&id, pid)?;
+                    self.append_event(
+                        &id,
+                        "spawned",
+                        serde_json::json!({ "pid": pid, "assignee": claimed.assignee, "review": true }),
                     )?;
                     running_count += 1;
                     result.spawned.push((id, pid));
@@ -6224,6 +6434,191 @@ mod tests {
             completed.payload["artifacts"][0],
             staged_path.to_string_lossy().to_string()
         );
+    }
+
+    #[test]
+    fn review_lifecycle_request_claim_bypasses_parent_gate() {
+        let (dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "feature".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "alice", 60).unwrap();
+
+        let review = store.request_review(&task.id, "PR #12 opened").unwrap();
+        assert_eq!(review.status, "review");
+        assert!(review.claim_lock.is_none());
+        let requested = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "review_requested")
+            .unwrap();
+        assert_eq!(requested.payload["reason"], "PR #12 opened");
+
+        // A late parent link must not stop the review claim — the
+        // dependency gate was passed on the original claim (hermes).
+        let parent = make_task(&store, "late parent");
+        store.link_tasks(&parent.id, &task.id).unwrap();
+        let claimed = store.claim_review_task(&task.id, "reviewer", 60).unwrap();
+        assert_eq!(claimed.status, "running");
+        let claim_event = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.kind == "claimed")
+            .last()
+            .unwrap();
+        assert_eq!(claim_event.payload["review"], true);
+
+        // Second review claim fails while the first is live.
+        assert!(store.claim_review_task(&task.id, "other", 60).is_err());
+        let _ = dir;
+    }
+
+    #[test]
+    fn review_dispatch_spawns_agent_and_counts_cap() {
+        let (dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "feature".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "alice", 60).unwrap();
+        store.request_review(&task.id, "PR #1").unwrap();
+
+        let profiles: std::collections::HashSet<String> =
+            ["alice".to_string()].into_iter().collect();
+        let seen_skills = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let capture = seen_skills.clone();
+        let result = store
+            .dispatch_once(
+                dir.path(),
+                false,
+                move |task, _| {
+                    *capture.borrow_mut() = Some(task.skills.clone());
+                    Ok(Some(55))
+                },
+                None,
+                false,
+                2,
+                0,
+                Some(&profiles),
+            )
+            .unwrap();
+        assert_eq!(result.spawned, vec![(task.id.clone(), Some(55))]);
+        // No sdlc-review skill installed in this home — task skills
+        // stay untouched.
+        assert_eq!(seen_skills.borrow().clone(), Some(None));
+        let running = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(running.status, "running");
+        let spawned = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "spawned")
+            .unwrap();
+        assert_eq!(spawned.payload["review"], true);
+        // Probe: the review column is empty again after the claim.
+        assert!(!store.has_spawnable_review(Some(&profiles)).unwrap());
+    }
+
+    #[test]
+    fn review_dispatch_force_loads_installed_sdlc_review_skill() {
+        let (dir, store) = temp_store();
+        let skill_dir = dir.path().join("skills").join("sdlc-review");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "# review skill").unwrap();
+
+        let task = store
+            .create_task(&NewTask {
+                title: "feature".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "alice", 60).unwrap();
+        store.request_review(&task.id, "PR #2").unwrap();
+
+        let seen_skills = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let capture = seen_skills.clone();
+        store
+            .dispatch_once(
+                dir.path(),
+                false,
+                move |task, _| {
+                    *capture.borrow_mut() = Some(task.skills.clone());
+                    Ok(Some(56))
+                },
+                None,
+                false,
+                2,
+                0,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            seen_skills.borrow().clone(),
+            Some(Some(vec!["sdlc-review".to_string()]))
+        );
+    }
+
+    #[test]
+    fn review_dispatch_skips_unassigned_and_unknown_lanes() {
+        let (dir, store) = temp_store();
+        // Unassigned review task.
+        let unassigned = store
+            .create_task(&NewTask {
+                title: "no owner".into(),
+                assignee: Some("placeholder".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&unassigned.id).unwrap();
+        store.claim_task(&unassigned.id, "placeholder", 60).unwrap();
+        store.request_review(&unassigned.id, "PR #3").unwrap();
+        store.conn.lock().unwrap()
+            .execute(
+                "UPDATE tasks SET assignee = NULL WHERE id = ?1",
+                params![unassigned.id],
+            )
+            .unwrap();
+        // Review task assigned to an unknown lane.
+        let lane = store
+            .create_task(&NewTask {
+                title: "lane review".into(),
+                assignee: Some("orion-cc".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&lane.id).unwrap();
+        store.claim_task(&lane.id, "orion-cc", 60).unwrap();
+        store.request_review(&lane.id, "PR #4").unwrap();
+
+        let profiles: std::collections::HashSet<String> =
+            ["alice".to_string()].into_iter().collect();
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, Some(&profiles))
+            .unwrap();
+        assert_eq!(result.spawned.len(), 0);
+        assert_eq!(result.skipped_unassigned, vec![unassigned.id.clone()]);
+        assert_eq!(result.skipped_nonspawnable, vec![lane.id.clone()]);
+        assert!(!store.has_spawnable_review(Some(&profiles)).unwrap());
+        // Legacy ungated probe still sees review tasks.
+        assert!(store.has_spawnable_review(None).unwrap());
     }
 
     #[test]

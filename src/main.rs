@@ -605,6 +605,16 @@ enum KanbanAction {
         #[arg(long = "artifact", value_name = "PATH")]
         artifact: Vec<String>,
     },
+    /// Park running task(s) in the review column after opening a PR;
+    /// the dispatcher spawns a review agent to verify and merge
+    /// (hermes review lifecycle)
+    Review {
+        /// One or more task ids
+        id: Vec<String>,
+        /// Short note, e.g. the PR URL
+        #[arg(long)]
+        reason: Option<String>,
+    },
     /// Block a task with a reason
     Block {
         id: String,
@@ -4732,6 +4742,33 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 return Err(format!("kanban: could not complete: {}", failed.join(", ")));
             }
         }
+        KanbanAction::Review { id, reason } => {
+            if id.is_empty() {
+                return Err("usage: ulnclaw kanban review <task-id> [more ids] [--reason TEXT]".into());
+            }
+            let reason = reason.unwrap_or_else(|| "ready for review".into());
+            let mut failed: Vec<String> = Vec::new();
+            for raw in &id {
+                let resolved = match resolve(raw) {
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                        continue;
+                    }
+                };
+                match store.request_review(&resolved, &reason) {
+                    Ok(task) => println!("{}", kanban_task_line(&task)),
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                    }
+                }
+            }
+            if !failed.is_empty() {
+                return Err(format!("kanban: could not request review: {}", failed.join(", ")));
+            }
+        }
         KanbanAction::Block { id, reason, kind, extra_ids } => {
             let reason = reason.join(" ");
             let mut ids = vec![id];
@@ -5777,6 +5814,9 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             }
             for id in &result.skipped_nonspawnable {
                 println!("  ⏭ {id} skipped (assignee is not a configured profile — claim-pulled lane)");
+            }
+            for id in &result.skipped_unassigned {
+                println!("  ⏭ {id} skipped (review task has no assignee)");
             }
             for id in &result.auto_blocked {
                 println!("  ⊘ {id} auto-blocked (spawn failures)");
