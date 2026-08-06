@@ -169,6 +169,11 @@ pub struct DiscordConfig {
     /// Channel ids allowed to talk to the bot (empty = refuse all).
     #[serde(default)]
     pub allowed_channel_ids: Vec<String>,
+    /// Seconds before clarify button prompts visually expire (hermes
+    /// `approvals.discord_prompt_timeout`; 0 = 300 s default, clamped to
+    /// 30–900 s like hermes).
+    #[serde(default)]
+    pub prompt_timeout_secs: u64,
 }
 
 /// `[messaging.slack]`.
@@ -2033,14 +2038,47 @@ pub mod discord {
     const INTENT_DIRECT_MESSAGES: u64 = 1 << 12;
     const INTENT_MESSAGE_CONTENT: u64 = 1 << 15;
 
+    /// Discord REST base URL — normally `https://discord.com/api/v10`;
+    /// the `DISCORD_API_BASE` override exists for tests and corporate
+    /// proxies (mirrors the slack/telegram pattern).
+    pub(crate) fn discord_api_base() -> String {
+        std::env::var("DISCORD_API_BASE")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| REST.to_string())
+    }
+
     struct Sender {
         token: String,
+        prompt_timeout_secs: u64,
     }
 
     #[async_trait::async_trait]
     impl PlatformSender for Sender {
         async fn send_text(&self, chat_id: &str, text: &str) {
             send_channel_message(&self.token, chat_id, text).await;
+        }
+
+        /// Embed + button clarify prompt (hermes Discord `send_clarify`).
+        /// Returns false on API failure so the numbered-text fallback still
+        /// goes out.
+        async fn send_clarify(
+            &self,
+            chat_id: &str,
+            clarify_id: &str,
+            question: &str,
+            choices: &[String],
+        ) -> bool {
+            send_clarify_message(
+                &self.token,
+                chat_id,
+                clarify_id,
+                question,
+                choices,
+                self.prompt_timeout_secs,
+            )
+            .await
         }
     }
 
@@ -2053,6 +2091,7 @@ pub mod discord {
             "discord",
             Arc::new(Sender {
                 token: token.clone(),
+                prompt_timeout_secs: cfg.prompt_timeout_secs,
             }),
         );
         loop {
@@ -2124,6 +2163,11 @@ pub mod discord {
                             }
                             if event_name == "MESSAGE_CREATE" {
                                 handle_message_create(cfg, token, &dispatcher, payload.get("d").cloned().unwrap_or(json!({})), pairing.as_deref()).await;
+                            }
+                            // Clarify button taps arrive as MESSAGE_COMPONENT
+                            // interactions (hermes ClarifyChoiceView routing).
+                            if event_name == "INTERACTION_CREATE" {
+                                handle_interaction_create(cfg, token, payload.get("d").cloned().unwrap_or(json!({})), pairing.as_deref()).await;
                             }
                         }
                         7 | 9 => {
@@ -2243,7 +2287,7 @@ pub mod discord {
             .unwrap_or_else(|| "media".to_string());
         let form = reqwest::multipart::Form::new()
             .part("files[0]", reqwest::multipart::Part::bytes(data).file_name(file_name));
-        let url = format!("https://discord.com/api/v10/channels/{channel_id}/messages");
+        let url = format!("{}/channels/{channel_id}/messages", discord_api_base());
         let response = reqwest::Client::new()
             .post(&url)
             .header("Authorization", format!("Bot {token}"))
@@ -2260,7 +2304,7 @@ pub mod discord {
         let client = reqwest::Client::new();
         for chunk in chunk_text(text, 1900) {
             let result = client
-                .post(format!("{REST}/channels/{channel_id}/messages"))
+                .post(format!("{}/channels/{channel_id}/messages", discord_api_base()))
                 .header("Authorization", format!("Bot {token}"))
                 .json(&json!({"content": chunk}))
                 .send()
@@ -2268,6 +2312,890 @@ pub mod discord {
             if let Err(e) = result {
                 eprintln!("[discord] send failed: {e}");
             }
+        }
+    }
+
+    // -- Clarify buttons — hermes ClarifyChoiceView parity -----------------
+
+    const BUTTON_LABEL_LIMIT: usize = 80; // Discord button-label UTF-16 cap
+    const MAX_CHOICES: usize = 24; // 25 buttons per message − the Other slot
+
+    /// hermes `approvals.discord_prompt_timeout` semantics: default 300 s,
+    /// clamped to 30–900 s so prompts never outlive Discord's 15-minute
+    /// interaction-token expiry.
+    fn prompt_timeout(cfg_timeout_secs: u64) -> std::time::Duration {
+        let secs = if cfg_timeout_secs == 0 {
+            300
+        } else {
+            cfg_timeout_secs.clamp(30, 900)
+        };
+        std::time::Duration::from_secs(secs)
+    }
+
+    fn utf16_len(text: &str) -> usize {
+        text.chars().map(|c| c.len_utf16()).sum()
+    }
+
+    fn prefix_within_utf16_limit(text: &str, limit: usize) -> String {
+        let mut out = String::new();
+        let mut used = 0;
+        for ch in text.chars() {
+            let width = ch.len_utf16();
+            if used + width > limit {
+                break;
+            }
+            out.push(ch);
+            used += width;
+        }
+        out
+    }
+
+    fn truncate_chars(text: &str, max_chars: usize) -> String {
+        text.chars().take(max_chars).collect()
+    }
+
+    /// Discord button labels cap at 80 UTF-16 units and mobile width is
+    /// much narrower, so hermes cuts long labels at a word boundary when
+    /// possible: last space in the trailing half, then the latest soft
+    /// punctuation, then a hard cut — always ending with an ellipsis.
+    fn clarify_button_label(idx: usize, choice: &str) -> String {
+        let prefix = format!("{}. ", idx + 1);
+        let budget = BUTTON_LABEL_LIMIT.saturating_sub(utf16_len(&prefix));
+        if utf16_len(choice) <= budget {
+            return format!("{prefix}{choice}");
+        }
+        let truncated: Vec<char> = prefix_within_utf16_limit(choice, budget.saturating_sub(1))
+            .trim_end()
+            .chars()
+            .collect();
+        let len = truncated.len();
+        let half = len / 2;
+        let mut cut = len; // hard cut (last resort)
+        if let Some(space) = truncated.iter().rposition(|c| *c == ' ') {
+            if space >= half {
+                cut = space;
+            }
+        }
+        if cut == len {
+            if let Some(pos) = truncated.iter().rposition(|c| matches!(c, '-' | ',' | '.' | ')')) {
+                if pos >= half {
+                    cut = pos + 1; // inclusive: label ends on the soft char
+                }
+            }
+        }
+        let mut body: String = truncated[..cut].iter().collect();
+        body = body.trim_end().to_string();
+        body.push('…');
+        format!("{prefix}{body}")
+    }
+
+    /// One action row per 5 buttons (Discord limits), one button per
+    /// choice plus the ✏️ Other row — `clarify:<id>:<idx|other>` custom
+    /// ids (hermes ClarifyChoiceView).
+    fn clarify_components(clarify_id: &str, choices: &[String], disabled: bool) -> Vec<Value> {
+        let mut buttons: Vec<Value> = choices
+            .iter()
+            .enumerate()
+            .map(|(idx, choice)| {
+                json!({
+                    "type": 2,
+                    "style": 1,
+                    "label": clarify_button_label(idx, choice),
+                    "custom_id": format!("clarify:{clarify_id}:{idx}"),
+                    "disabled": disabled,
+                })
+            })
+            .collect();
+        buttons.push(json!({
+            "type": 2,
+            "style": 2,
+            "label": "✏️ Other (type answer)",
+            "custom_id": format!("clarify:{clarify_id}:other"),
+            "disabled": disabled,
+        }));
+        buttons
+            .chunks(5)
+            .map(|row| json!({"type": 1, "components": row}))
+            .collect()
+    }
+
+    fn clarify_embed(question: &str, with_choices: bool) -> Value {
+        let mut description = question.trim().to_string();
+        if description.chars().count() > 4088 {
+            description = format!("{}...", truncate_chars(&description, 4085));
+        }
+        let field = if with_choices {
+            json!({"name": "Choices", "value": "Pick one below, or click ✏️ Other to type a custom answer.", "inline": false})
+        } else {
+            json!({"name": "Reply", "value": "Reply in this channel with your answer.", "inline": false})
+        };
+        json!({
+            "title": "❓ ulnclaw needs your input",
+            "description": description,
+            "color": 0xE67E22, // discord.Color.orange()
+            "fields": [field],
+        })
+    }
+
+    /// Plain-content mirror of the embed — embeds are invisible on some
+    /// clients (hermes `_self_contained_prompt_content`).
+    fn self_contained_prompt_content(header: &str, body: &str, tail: &str) -> String {
+        let prefix = format!("{header}\n\n");
+        let truncated_suffix = "\n... [truncated]";
+        let budget = 2000usize.saturating_sub(prefix.chars().count() + tail.chars().count());
+        let mut body = body.to_string();
+        if body.chars().count() > budget {
+            let cut = budget.saturating_sub(truncated_suffix.chars().count());
+            body = format!("{}{truncated_suffix}", truncate_chars(&body, cut));
+        }
+        format!("{prefix}{body}{tail}")
+    }
+
+    /// Send a clarify prompt as embed + one button per choice (hermes
+    /// Discord `send_clarify`). Returns false on failure (or with no
+    /// choices — open-ended prompts ride the numbered-text path) so the
+    /// caller falls back to numbered text.
+    pub async fn send_clarify_message(
+        token: &str,
+        channel_id: &str,
+        clarify_id: &str,
+        question: &str,
+        choices: &[String],
+        prompt_timeout_secs: u64,
+    ) -> bool {
+        if choices.is_empty() {
+            return false;
+        }
+        let choices = &choices[..choices.len().min(MAX_CHOICES)];
+        let content = self_contained_prompt_content(
+            "❓ **ulnclaw needs your input**",
+            question.trim(),
+            "\n\nPick one below, or click ✏️ Other to type a custom answer.",
+        );
+        let body = json!({
+            "content": content,
+            "embeds": [clarify_embed(question, true)],
+            "components": clarify_components(clarify_id, choices, false),
+        });
+        let client = reqwest::Client::new();
+        let response = client
+            .post(format!("{}/channels/{channel_id}/messages", discord_api_base()))
+            .header("Authorization", format!("Bot {token}"))
+            .json(&body)
+            .send()
+            .await;
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                let sent: Value = resp.json().await.unwrap_or(json!({}));
+                if let Some(message_id) = sent.get("id").and_then(|v| v.as_str()) {
+                    spawn_prompt_expiry(
+                        token,
+                        channel_id,
+                        message_id,
+                        clarify_id,
+                        question,
+                        choices.to_vec(),
+                        prompt_timeout(prompt_timeout_secs),
+                    );
+                }
+                true
+            }
+            Ok(resp) => {
+                eprintln!("[discord] send_clarify failed: HTTP {}", resp.status());
+                false
+            }
+            Err(e) => {
+                eprintln!("[discord] send_clarify failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Visual expiration after the prompt window (hermes ClarifyChoiceView
+    /// `on_timeout`): grey the embed, disable the buttons. ulnclaw skips
+    /// prompts already resolved or still capturing a typed answer — hermes
+    /// overwrites the "Awaiting typed response" footer regardless, which
+    /// would hide an active text capture (documented divergence).
+    fn spawn_prompt_expiry(
+        token: &str,
+        channel_id: &str,
+        message_id: &str,
+        clarify_id: &str,
+        question: &str,
+        choices: Vec<String>,
+        timeout: std::time::Duration,
+    ) {
+        let token = token.to_string();
+        let channel_id = channel_id.to_string();
+        let message_id = message_id.to_string();
+        let clarify_id = clarify_id.to_string();
+        let question = question.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(timeout).await;
+            if !crate::clarify_gateway::contains(&clarify_id)
+                || crate::clarify_gateway::is_awaiting_text(&clarify_id)
+            {
+                return;
+            }
+            let mut embed = clarify_embed(&question, true);
+            embed["color"] = json!(0x99AAB5); // discord.Color.greyple()
+            embed["footer"] = json!({"text": "⏱ Prompt expired — no action taken"});
+            let body = json!({
+                "embeds": [embed],
+                "components": clarify_components(&clarify_id, &choices, true),
+            });
+            let client = reqwest::Client::new();
+            let url = format!(
+                "{}/channels/{channel_id}/messages/{message_id}",
+                discord_api_base()
+            );
+            let result = client
+                .patch(&url)
+                .header("Authorization", format!("Bot {token}"))
+                .json(&body)
+                .send()
+                .await;
+            if let Err(e) = result.and_then(|r| r.error_for_status()) {
+                eprintln!("[discord] prompt expiry edit failed: {e}");
+            }
+        });
+    }
+
+    /// Route INTERACTION_CREATE button taps (hermes ClarifyChoiceView
+    /// callbacks). Only `clarify:<id>:<idx|other>` custom_ids are handled;
+    /// every handled path answers via the interaction callback endpoint.
+    async fn handle_interaction_create(
+        cfg: &DiscordConfig,
+        token: &str,
+        data: Value,
+        pairing: Option<&crate::pairing::PairingStore>,
+    ) {
+        let interaction_type = data.get("type").and_then(|v| v.as_u64()).unwrap_or(0);
+        if interaction_type != 3 {
+            return; // MESSAGE_COMPONENT only
+        }
+        let custom_id = data
+            .pointer("/data/custom_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !custom_id.starts_with("clarify:") {
+            return;
+        }
+        let parts: Vec<&str> = custom_id.splitn(3, ':').collect();
+        if parts.len() != 3 {
+            return;
+        }
+        let clarify_id = parts[1];
+        let choice_token = parts[2];
+        let interaction_id = data.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let interaction_token = data.get("token").and_then(|v| v.as_str()).unwrap_or("");
+        if interaction_id.is_empty() || interaction_token.is_empty() {
+            return;
+        }
+        let user = data
+            .get("user")
+            .or_else(|| data.pointer("/member/user"))
+            .cloned()
+            .unwrap_or(json!({}));
+        let user_id = user.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let display_name = user
+            .get("global_name")
+            .or_else(|| user.get("username"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("user")
+            .to_string();
+        let channel_id = data
+            .get("channel_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let client = reqwest::Client::new();
+
+        // Same union as MESSAGE_CREATE: channel allowlist OR an approved
+        // pairing (ulnclaw's analogue of hermes `_component_check_auth`).
+        let authorized = allowlisted(&cfg.allowed_channel_ids, &channel_id)
+            || pairing
+                .map(|store| store.is_approved("discord", &user_id))
+                .unwrap_or(false);
+
+        // Resolved prompts first (hermes `self.resolved` check).
+        if !crate::clarify_gateway::contains(clarify_id) {
+            ephemeral_notice(
+                &client,
+                token,
+                interaction_id,
+                interaction_token,
+                "This prompt has already been answered~",
+            )
+            .await;
+            return;
+        }
+        if !authorized {
+            ephemeral_notice(
+                &client,
+                token,
+                interaction_id,
+                interaction_token,
+                "You're not authorized to answer this prompt~",
+            )
+            .await;
+            return;
+        }
+
+        let message = data.get("message").cloned().unwrap_or(json!({}));
+        if choice_token == "other" {
+            if crate::clarify_gateway::mark_awaiting_text(clarify_id) {
+                let embed = restyle_embed(
+                    &message,
+                    0x3498DB, // discord.Color.blue()
+                    &format!("Awaiting typed response from {display_name}…"),
+                );
+                update_message_response(
+                    &client,
+                    token,
+                    interaction_id,
+                    interaction_token,
+                    &message,
+                    embed,
+                )
+                .await;
+            } else {
+                ephemeral_notice(
+                    &client,
+                    token,
+                    interaction_id,
+                    interaction_token,
+                    "⚠️ This prompt expired — please retry.",
+                )
+                .await;
+            }
+            return;
+        }
+
+        let Ok(idx) = choice_token.parse::<usize>() else {
+            ephemeral_notice(&client, token, interaction_id, interaction_token, "Invalid choice.")
+                .await;
+            return;
+        };
+        // Canonical choice text from the registry (hermes `_entries`
+        // lookup); fall back to the index if the entry was cleaned up.
+        let resolved_text = crate::clarify_gateway::peek_choice(clarify_id, choice_token)
+            .unwrap_or_else(|| format!("choice {}", idx + 1));
+        if crate::clarify_gateway::resolve(clarify_id, &resolved_text) {
+            let embed = restyle_embed(
+                &message,
+                0x2ECC71, // discord.Color.green()
+                &format!("Answered by {display_name}: {resolved_text}"),
+            );
+            update_message_response(
+                &client,
+                token,
+                interaction_id,
+                interaction_token,
+                &message,
+                embed,
+            )
+            .await;
+        } else {
+            // Entry evicted between ask and click — say so instead of
+            // leaving a live-looking prompt (hermes logs only).
+            ephemeral_notice(
+                &client,
+                token,
+                interaction_id,
+                interaction_token,
+                "⚠️ This prompt expired — please retry.",
+            )
+            .await;
+        }
+    }
+
+    /// Restyle the prompt's embed with the resolution footer (hermes edits
+    /// `interaction.message.embeds[0]` color + footer).
+    fn restyle_embed(message: &Value, color: u32, footer_text: &str) -> Value {
+        let mut embed = message
+            .get("embeds")
+            .and_then(|v| v.as_array())
+            .and_then(|rows| rows.first())
+            .cloned()
+            .unwrap_or(json!({}));
+        embed["color"] = json!(color);
+        embed["footer"] = json!({"text": footer_text});
+        embed
+    }
+
+    /// Clone the message's component rows with every button disabled
+    /// (hermes `child.disabled = True` before the edit).
+    fn disable_components(components: Option<&Value>) -> Option<Value> {
+        let rows = components?.as_array()?;
+        let disabled_rows: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                let mut row = row.clone();
+                if let Some(items) = row.get_mut("components").and_then(|v| v.as_array_mut()) {
+                    for item in items {
+                        if let Some(object) = item.as_object_mut() {
+                            object.insert("disabled".to_string(), Value::Bool(true));
+                        }
+                    }
+                }
+                row
+            })
+            .collect();
+        Some(Value::Array(disabled_rows))
+    }
+
+    /// POST /interactions/{id}/{token}/callback.
+    async fn interaction_callback(
+        client: &reqwest::Client,
+        token: &str,
+        interaction_id: &str,
+        interaction_token: &str,
+        body: Value,
+    ) {
+        let url = format!(
+            "{}/interactions/{interaction_id}/{interaction_token}/callback",
+            discord_api_base()
+        );
+        let result = client
+            .post(&url)
+            .header("Authorization", format!("Bot {token}"))
+            .json(&body)
+            .send()
+            .await;
+        if let Err(e) = result.and_then(|r| r.error_for_status()) {
+            eprintln!("[discord] interaction callback failed: {e}");
+        }
+    }
+
+    /// Ephemeral notice — callback type 4 + EPHEMERAL flag (hermes
+    /// `interaction.response.send_message(..., ephemeral=True)`).
+    async fn ephemeral_notice(
+        client: &reqwest::Client,
+        token: &str,
+        interaction_id: &str,
+        interaction_token: &str,
+        text: &str,
+    ) {
+        interaction_callback(
+            client,
+            token,
+            interaction_id,
+            interaction_token,
+            json!({"type": 4, "data": {"content": text, "flags": 64}}),
+        )
+        .await;
+    }
+
+    /// UPDATE_MESSAGE response (callback type 7) — restyles the embed and
+    /// disables the buttons in place.
+    async fn update_message_response(
+        client: &reqwest::Client,
+        token: &str,
+        interaction_id: &str,
+        interaction_token: &str,
+        message: &Value,
+        embed: Value,
+    ) {
+        let mut payload = json!({"type": 7, "message": {"embeds": [embed]}});
+        if let Some(components) = disable_components(message.get("components")) {
+            payload["message"]["components"] = components;
+        }
+        interaction_callback(client, token, interaction_id, interaction_token, payload).await;
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// axum mock of Discord REST — logs (method, path, body) per call.
+        async fn spawn_discord_api(
+            log: Arc<std::sync::Mutex<Vec<(String, String, Value)>>>,
+        ) -> String {
+            use axum::extract::State;
+            use axum::routing::{patch, post};
+            type Log = Arc<std::sync::Mutex<Vec<(String, String, Value)>>>;
+            let app = axum::Router::new()
+                .route(
+                    "/channels/:channel/messages",
+                    post(
+                        move |State(log): State<Log>,
+                         axum::extract::Path(channel): axum::extract::Path<String>,
+                         axum::Json(body): axum::Json<Value>| async move {
+                            log.lock().unwrap().push((
+                                "POST".into(),
+                                format!("/channels/{channel}/messages"),
+                                body,
+                            ));
+                            axum::Json(json!({"id": "777"}))
+                        },
+                    ),
+                )
+                .route(
+                    "/channels/:channel/messages/:message",
+                    patch(
+                        move |State(log): State<Log>,
+                         axum::extract::Path((channel, message)): axum::extract::Path<(
+                            String,
+                            String,
+                        )>,
+                         axum::Json(body): axum::Json<Value>| async move {
+                            log.lock().unwrap().push((
+                                "PATCH".into(),
+                                format!("/channels/{channel}/messages/{message}"),
+                                body,
+                            ));
+                            axum::Json(json!({}))
+                        },
+                    ),
+                )
+                .route(
+                    "/interactions/:id/:token/callback",
+                    post(
+                        move |State(log): State<Log>,
+                         axum::extract::Path((id, _token)): axum::extract::Path<(String, String)>,
+                         axum::Json(body): axum::Json<Value>| async move {
+                            log.lock().unwrap().push((
+                                "POST".into(),
+                                format!("/interactions/{id}/callback"),
+                                body,
+                            ));
+                            axum::Json(json!({}))
+                        },
+                    ),
+                )
+                .with_state(log);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            format!("http://{addr}")
+        }
+
+        fn interaction_payload(clarify_id: &str, token: &str) -> Value {
+            json!({
+                "type": 3,
+                "id": "int-1",
+                "token": "int-token",
+                "channel_id": "42",
+                "data": {"custom_id": format!("clarify:{clarify_id}:{token}")},
+                "user": {"id": "7", "username": "ann", "global_name": "Ann"},
+                "message": {
+                    "embeds": [{
+                        "title": "❓ ulnclaw needs your input",
+                        "description": "Pick",
+                        "color": 0xE67E22,
+                    }],
+                    "components": [{
+                        "type": 1,
+                        "components": [
+                            {"type": 2, "style": 1, "label": "1. Alpha", "custom_id": format!("clarify:{clarify_id}:0")},
+                            {"type": 2, "style": 1, "label": "2. Beta", "custom_id": format!("clarify:{clarify_id}:1")},
+                        ],
+                    }],
+                },
+            })
+        }
+
+        fn authorized_cfg() -> DiscordConfig {
+            DiscordConfig {
+                allowed_channel_ids: vec!["42".into()],
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn discord_button_label_smart_truncation() {
+            // Short labels pass through with the numeric prefix.
+            assert_eq!(clarify_button_label(0, "Yes"), "1. Yes");
+            // Long labels cut at a word boundary in the trailing half and
+            // end with an ellipsis, within the 80 UTF-16 unit cap.
+            let long = "The quick brown fox jumps over the lazy dog and keeps on running through the forest forever";
+            let label = clarify_button_label(1, long);
+            assert!(label.starts_with("2. "));
+            assert!(label.ends_with('…'));
+            assert!(utf16_len(&label) <= BUTTON_LABEL_LIMIT);
+            let body = label.trim_start_matches("2. ");
+            let kept = body.trim_end_matches('…');
+            // Kept text is a clean prefix of the choice cut at a word
+            // boundary (next char is a space or the end).
+            assert!(long.starts_with(kept));
+            let rest = &long[kept.len()..];
+            assert!(rest.starts_with(' ') || rest.is_empty());
+        }
+
+        #[test]
+        fn discord_prompt_timeout_clamps_like_hermes() {
+            assert_eq!(prompt_timeout(0), std::time::Duration::from_secs(300));
+            assert_eq!(prompt_timeout(5), std::time::Duration::from_secs(30));
+            assert_eq!(prompt_timeout(4000), std::time::Duration::from_secs(900));
+            assert_eq!(prompt_timeout(300), std::time::Duration::from_secs(300));
+        }
+
+        #[tokio::test]
+        async fn discord_send_clarify_posts_embed_and_buttons() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+            let base = spawn_discord_api(log.clone()).await;
+            std::env::set_var("DISCORD_API_BASE", &base);
+            let ok = send_clarify_message(
+                "TOKEN",
+                "42",
+                "cid000000001",
+                "Pick one",
+                &["Alpha".into(), "Beta".into()],
+                300,
+            )
+            .await;
+            std::env::remove_var("DISCORD_API_BASE");
+            assert!(ok);
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            let (method, path, body) = &reqs[0];
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/channels/42/messages");
+            // Self-contained content mirrors the embed (some clients hide
+            // embeds); the embed carries the question; buttons the choices.
+            let content = body["content"].as_str().unwrap();
+            assert!(content.starts_with("❓ **ulnclaw needs your input**\n\nPick one"));
+            assert!(content.contains("Pick one below, or click ✏️ Other to type a custom answer."));
+            assert_eq!(body["embeds"][0]["title"], "❓ ulnclaw needs your input");
+            assert_eq!(body["embeds"][0]["description"], "Pick one");
+            assert_eq!(body["embeds"][0]["color"], 0xE67E22);
+            let rows = body["components"].as_array().unwrap();
+            assert_eq!(rows.len(), 1);
+            let buttons = rows[0]["components"].as_array().unwrap();
+            assert_eq!(buttons.len(), 3);
+            assert_eq!(buttons[0]["label"], "1. Alpha");
+            assert_eq!(buttons[0]["style"], 1);
+            assert_eq!(buttons[0]["custom_id"], "clarify:cid000000001:0");
+            assert_eq!(buttons[1]["custom_id"], "clarify:cid000000001:1");
+            assert_eq!(buttons[2]["label"], "✏️ Other (type answer)");
+            assert_eq!(buttons[2]["style"], 2);
+            assert_eq!(buttons[2]["custom_id"], "clarify:cid000000001:other");
+        }
+
+        #[tokio::test]
+        async fn discord_send_clarify_caps_choices_at_24() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+            let base = spawn_discord_api(log.clone()).await;
+            std::env::set_var("DISCORD_API_BASE", &base);
+            let choices: Vec<String> = (0..30).map(|i| format!("Choice {i}")).collect();
+            let ok = send_clarify_message("TOKEN", "42", "cid000000002", "Pick", &choices, 300)
+                .await;
+            std::env::remove_var("DISCORD_API_BASE");
+            assert!(ok);
+            let reqs = log.lock().unwrap();
+            let rows = reqs[0].2["components"].as_array().unwrap();
+            // 24 choices + Other = 25 buttons = 5 rows of 5 (Discord max).
+            assert_eq!(rows.len(), 5);
+            let flat: Vec<&Value> = rows
+                .iter()
+                .flat_map(|row| row["components"].as_array().unwrap())
+                .collect();
+            assert_eq!(flat.len(), 25);
+            assert_eq!(flat[23]["custom_id"], "clarify:cid000000002:23");
+            assert_eq!(flat[24]["custom_id"], "clarify:cid000000002:other");
+        }
+
+        #[tokio::test]
+        async fn discord_interaction_numeric_choice_resolves() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+            let base = spawn_discord_api(log.clone()).await;
+            std::env::set_var("DISCORD_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-discord-42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let payload = interaction_payload(&clarify_id, "1");
+            handle_interaction_create(&authorized_cfg(), "TOKEN", payload, None).await;
+            std::env::remove_var("DISCORD_API_BASE");
+            assert_eq!(handle.rx.await.unwrap(), "Beta");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            let (method, path, body) = &reqs[0];
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/interactions/int-1/callback");
+            // UPDATE_MESSAGE with green embed + resolution footer and
+            // disabled buttons.
+            assert_eq!(body["type"], 7);
+            let embed = &body["message"]["embeds"][0];
+            assert_eq!(embed["color"], 0x2ECC71);
+            assert_eq!(embed["footer"]["text"], "Answered by Ann: Beta");
+            let rows = body["message"]["components"].as_array().unwrap();
+            assert!(rows.iter().all(|row| row["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|b| b["disabled"].as_bool() == Some(true))));
+        }
+
+        #[tokio::test]
+        async fn discord_interaction_other_flips_text_capture() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+            let base = spawn_discord_api(log.clone()).await;
+            std::env::set_var("DISCORD_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-discord-42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let payload = interaction_payload(&clarify_id, "other");
+            handle_interaction_create(&authorized_cfg(), "TOKEN", payload, None).await;
+            std::env::remove_var("DISCORD_API_BASE");
+            // Entry survives in text-capture mode; a typed message resolves
+            // it through the session intercept.
+            let pending = crate::clarify_gateway::pending_for_session("platform-discord-42")
+                .expect("entry must survive the Other click");
+            assert!(pending.awaiting_text);
+            assert!(crate::clarify_gateway::resolve(&clarify_id, "typed answer"));
+            assert_eq!(handle.rx.await.unwrap(), "typed answer");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            let body = &reqs[0].2;
+            assert_eq!(body["type"], 7);
+            let embed = &body["message"]["embeds"][0];
+            assert_eq!(embed["color"], 0x3498DB);
+            assert_eq!(embed["footer"]["text"], "Awaiting typed response from Ann…");
+        }
+
+        #[tokio::test]
+        async fn discord_interaction_stale_prompt_notice() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+            let base = spawn_discord_api(log.clone()).await;
+            std::env::set_var("DISCORD_API_BASE", &base);
+            // No entry registered — a click on an answered/unknown prompt.
+            let payload = interaction_payload("zzzzzzzzzzzz", "0");
+            handle_interaction_create(&authorized_cfg(), "TOKEN", payload, None).await;
+            std::env::remove_var("DISCORD_API_BASE");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            let body = &reqs[0].2;
+            assert_eq!(body["type"], 4);
+            assert_eq!(body["data"]["flags"], 64);
+            assert_eq!(body["data"]["content"], "This prompt has already been answered~");
+        }
+
+        #[tokio::test]
+        async fn discord_interaction_unauthorized_notice() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+            let base = spawn_discord_api(log.clone()).await;
+            std::env::set_var("DISCORD_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-discord-42",
+                "Pick",
+                &["Alpha".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let payload = interaction_payload(&clarify_id, "0");
+            // Channel 42 is not allowlisted and no pairing store exists.
+            let cfg = DiscordConfig {
+                allowed_channel_ids: vec!["999".into()],
+                ..Default::default()
+            };
+            handle_interaction_create(&cfg, "TOKEN", payload, None).await;
+            std::env::remove_var("DISCORD_API_BASE");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(
+                reqs[0].2["data"]["content"],
+                "You're not authorized to answer this prompt~"
+            );
+            // The waiter is untouched — the legitimate user can still answer.
+            assert!(crate::clarify_gateway::contains(&clarify_id));
+            assert!(crate::clarify_gateway::resolve(&clarify_id, "Alpha"));
+        }
+
+        #[tokio::test]
+        async fn discord_prompt_expiry_disables_unanswered_prompt() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+            let base = spawn_discord_api(log.clone()).await;
+            std::env::set_var("DISCORD_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-discord-42",
+                "Pick",
+                &["Alpha".into()],
+                false,
+            );
+            spawn_prompt_expiry(
+                "TOKEN",
+                "42",
+                "777",
+                &handle.clarify_id,
+                "Pick",
+                vec!["Alpha".into()],
+                std::time::Duration::from_millis(200),
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            std::env::remove_var("DISCORD_API_BASE");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            let (method, path, body) = &reqs[0];
+            assert_eq!(method, "PATCH");
+            assert_eq!(path, "/channels/42/messages/777");
+            assert_eq!(body["embeds"][0]["color"], 0x99AAB5);
+            assert_eq!(body["embeds"][0]["footer"]["text"], "⏱ Prompt expired — no action taken");
+            let rows = body["components"].as_array().unwrap();
+            assert!(rows.iter().all(|row| row["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|b| b["disabled"].as_bool() == Some(true))));
+        }
+
+        #[tokio::test]
+        async fn discord_prompt_expiry_skips_text_capture() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+            let base = spawn_discord_api(log.clone()).await;
+            std::env::set_var("DISCORD_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-discord-42",
+                "Pick",
+                &["Alpha".into()],
+                false,
+            );
+            assert!(crate::clarify_gateway::mark_awaiting_text(&handle.clarify_id));
+            spawn_prompt_expiry(
+                "TOKEN",
+                "42",
+                "777",
+                &handle.clarify_id,
+                "Pick",
+                vec!["Alpha".into()],
+                std::time::Duration::from_millis(200),
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            std::env::remove_var("DISCORD_API_BASE");
+            // No PATCH — the "Awaiting typed response" footer stays and the
+            // typed answer can still arrive (documented hermes divergence).
+            assert!(log.lock().unwrap().is_empty());
+            assert!(crate::clarify_gateway::resolve(&handle.clarify_id, "late answer"));
         }
     }
 }

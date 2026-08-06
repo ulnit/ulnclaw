@@ -150,6 +150,18 @@ pub fn contains(clarify_id: &str) -> bool {
     entries().lock().unwrap().contains_key(clarify_id)
 }
 
+/// True when the entry is in text-capture mode (tapped "Other"). The
+/// Discord prompt-expiry timer skips such prompts — a typed answer can
+/// still arrive (see the discord `spawn_prompt_expiry` note).
+pub fn is_awaiting_text(clarify_id: &str) -> bool {
+    entries()
+        .lock()
+        .unwrap()
+        .get(clarify_id)
+        .map(|e| e.awaiting_text)
+        .unwrap_or(false)
+}
+
 /// Look up a stored choice text without resolving the entry (hermes
 /// Telegram callback handler reads `_entries` to map the tapped index
 /// to the choice text before calling `resolve_gateway_clarify`).
@@ -230,13 +242,18 @@ mod tests {
             false,
         );
         assert!(contains(&handle.clarify_id));
+        assert!(!is_awaiting_text(&handle.clarify_id));
         assert_eq!(peek_choice(&handle.clarify_id, "1").as_deref(), Some("Beta"));
         // Out-of-range and non-numeric lookups miss.
         assert_eq!(peek_choice(&handle.clarify_id, "9"), None);
         assert_eq!(peek_choice(&handle.clarify_id, "other"), None);
+        // Other-tap flips text capture on.
+        assert!(mark_awaiting_text(&handle.clarify_id));
+        assert!(is_awaiting_text(&handle.clarify_id));
         assert!(resolve(&handle.clarify_id, "Beta"));
         // Resolved entry is gone: taps now report "already resolved".
         assert!(!contains(&handle.clarify_id));
+        assert!(!is_awaiting_text(&handle.clarify_id));
         assert_eq!(peek_choice(&handle.clarify_id, "0"), None);
     }
 
