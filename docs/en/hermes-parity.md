@@ -391,7 +391,13 @@ performance and a single static binary.
   archive now closes an in-flight run as reclaimed + immediately
   promotes children whose archived parent was the last gate
   (`recompute_ready` treats archived parents as done, hermes
-  semantics).
+  semantics). P144 added completion recovery: `kanban edit
+  --result/--summary/--metadata` rewrites a done task's handoff
+  (result text + latest completed run's summary/metadata,
+  synthesizing a run row when none exists; emits `edited`), the
+  terminal kanban tool gained `summary` + `metadata` so workers hand
+  off structured facts, and blocking now writes a `BLOCKED: <reason>`
+  comment before the state change (hermes `_cmd_block` parity).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

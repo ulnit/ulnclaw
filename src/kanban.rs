@@ -3512,6 +3512,109 @@ impl KanbanStore {
         Ok(task)
     }
 
+    /// Backfill the user-visible result + handoff on an
+    /// already-completed task (hermes `edit_completed_task_result`,
+    /// `kanban edit --result`). The latest `completed` run receives the
+    /// summary (falls back to `result`) and metadata; when no completed
+    /// run exists one is synthesized so the handoff survives. Emits an
+    /// `edited` event listing the touched fields. Returns false when
+    /// the task is missing or not `done`.
+    pub fn edit_completed_task_result(
+        &self,
+        id: &str,
+        result: &str,
+        summary: Option<&str>,
+        metadata: Option<&Value>,
+    ) -> Result<bool> {
+        let handoff = summary.unwrap_or(result);
+        {
+            let conn = self.conn.lock().unwrap();
+            let status: Option<String> = conn
+                .query_row(
+                    "SELECT status FROM tasks WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_error("edit"))?;
+            if status.as_deref() != Some("done") {
+                return Ok(false);
+            }
+            conn.execute(
+                "UPDATE tasks SET result = ?2 WHERE id = ?1",
+                params![id, result],
+            )
+            .map_err(db_error("edit result"))?;
+        }
+        let latest_completed_run: Option<i64> = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT id FROM task_runs WHERE task_id = ?1 AND outcome = 'completed' \
+                 ORDER BY COALESCE(ended_at, started_at, 0) DESC, id DESC LIMIT 1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error("edit run lookup"))?
+        };
+        let metadata_json = metadata
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| AgentError::session(format!("kanban: metadata: {e}")))?;
+        match latest_completed_run {
+            Some(run_id) => {
+                let conn = self.conn.lock().unwrap();
+                conn.execute(
+                    "UPDATE task_runs SET summary = ?2 WHERE id = ?1",
+                    params![run_id, handoff],
+                )
+                .map_err(db_error("edit run summary"))?;
+                if let Some(metadata_json) = &metadata_json {
+                    conn.execute(
+                        "UPDATE task_runs SET metadata = ?2 WHERE id = ?1",
+                        params![run_id, metadata_json],
+                    )
+                    .map_err(db_error("edit run metadata"))?;
+                }
+            }
+            None => {
+                self.synthesize_closed_run_full(
+                    id,
+                    "completed",
+                    Some(handoff),
+                    None,
+                    metadata_json.as_deref(),
+                )?;
+            }
+        }
+        let event_summary: String = handoff
+            .trim()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(400)
+            .collect();
+        let mut fields: Vec<&str> = vec!["result", "summary"];
+        if metadata.is_some() {
+            fields.push("metadata");
+        }
+        self.append_event(
+            id,
+            "edited",
+            serde_json::json!({
+                "fields": fields,
+                "result_len": result.len(),
+                "summary": if event_summary.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(event_summary)
+                },
+            }),
+        )?;
+        Ok(true)
+    }
+
     /// Permanently remove an already-archived task and every related
     /// row (hermes `delete_archived_task`, `kanban archive --rm`).
     /// Safety guard: only `archived` tasks can be deleted — anything
@@ -7329,5 +7432,88 @@ mod tests {
 
         // ...and immediately promotes the orphaned child.
         assert_eq!(store.get_task(&child.id).unwrap().unwrap().status, "ready");
+    }
+
+    // ------------------------------------------------------------------
+    // P144 — recovery edits on completed tasks
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn edit_completed_task_backfills_handoff() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "editable");
+        store.ready_task(&task.id).unwrap();
+        store.complete_task(&task.id, Some("first pass")).unwrap();
+
+        let metadata = serde_json::json!({ "tests_run": 5 });
+        assert!(store
+            .edit_completed_task_result(
+                &task.id,
+                "fixed result",
+                Some("better summary"),
+                Some(&metadata),
+            )
+            .unwrap());
+
+        let t = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(t.result.as_deref(), Some("fixed result"));
+        let runs = store.list_runs(&task.id, true, None, None).unwrap();
+        let closed = runs
+            .iter()
+            .find(|r| r.outcome.as_deref() == Some("completed"))
+            .unwrap();
+        assert_eq!(closed.summary.as_deref(), Some("better summary"));
+        assert_eq!(
+            closed.metadata.as_ref().and_then(|m| m.get("tests_run")),
+            Some(&serde_json::json!(5))
+        );
+        let event = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "edited")
+            .unwrap();
+        assert_eq!(
+            event.payload["fields"],
+            serde_json::json!(["result", "summary", "metadata"])
+        );
+        assert_eq!(event.payload["summary"], "better summary");
+    }
+
+    #[test]
+    fn edit_requires_done_task() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "not done");
+        store.ready_task(&task.id).unwrap();
+        assert!(!store
+            .edit_completed_task_result(&task.id, "x", None, None)
+            .unwrap());
+        assert!(!store
+            .edit_completed_task_result("t_missing", "x", None, None)
+            .unwrap());
+    }
+
+    #[test]
+    fn edit_without_completed_run_synthesizes_one() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "no run");
+        store.ready_task(&task.id).unwrap();
+        store.complete_task(&task.id, Some("done")).unwrap();
+        // Wipe runs to simulate a legacy board without attempt history.
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM task_runs WHERE task_id = ?1",
+                params![task.id],
+            )
+            .unwrap();
+        assert!(store
+            .edit_completed_task_result(&task.id, "res", Some("sum"), None)
+            .unwrap());
+        let runs = store.list_runs(&task.id, true, None, None).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].summary.as_deref(), Some("sum"));
     }
 }

@@ -733,6 +733,18 @@ enum KanbanAction {
         title: Option<String>,
         #[arg(long)]
         body: Option<String>,
+        /// Recovery edit on a DONE task: backfill the result text
+        /// (hermes edit --result)
+        #[arg(long)]
+        result: Option<String>,
+        /// Structured handoff summary, falls back to --result (hermes
+        /// edit --summary)
+        #[arg(long)]
+        summary: Option<String>,
+        /// JSON dict of structured facts for the latest completed run
+        /// (hermes edit --metadata)
+        #[arg(long)]
+        metadata: Option<String>,
     },
     /// Set a per-task model override; omit the model to clear it
     /// (hermes `kanban set-model`)
@@ -4725,6 +4737,15 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                         continue;
                     }
                 };
+                if !reason.trim().is_empty() {
+                    store
+                        .add_comment(
+                            &resolved,
+                            &KanbanStore::claimer_id(),
+                            &format!("BLOCKED: {reason}"),
+                        )
+                        .ok();
+                }
                 match store.block_task_kind(&resolved, &reason, kind.as_deref()) {
                     Ok(task) => {
                         ulnclaw::plugins::fire_session_event(
@@ -5132,12 +5153,43 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 None => println!("{} unassigned", task.id),
             }
         }
-        KanbanAction::Edit { id, title, body } => {
+        KanbanAction::Edit { id, title, body, result, summary, metadata } => {
             let resolved = resolve(&id)?;
-            let task = store
-                .edit_task(&resolved, title.as_deref(), body.as_deref())
-                .map_err(|e| e.to_string())?;
-            println!("{} edited — {}", task.id, task.title);
+            if let Some(result) = result {
+                // Recovery edit on a completed task (hermes kanban edit).
+                let metadata_value = match metadata.as_deref() {
+                    Some(raw) => {
+                        let value: serde_json::Value =
+                            serde_json::from_str(raw).map_err(|e| {
+                                format!("kanban: --metadata must be a JSON object: {e}")
+                            })?;
+                        if !value.is_object() {
+                            return Err("kanban: --metadata must be a JSON object".into());
+                        }
+                        Some(value)
+                    }
+                    None => None,
+                };
+                let edited = store
+                    .edit_completed_task_result(
+                        &resolved,
+                        &result,
+                        summary.as_deref(),
+                        metadata_value.as_ref(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                if !edited {
+                    return Err(format!(
+                        "kanban: cannot edit {resolved} (unknown id or task is not done)"
+                    ));
+                }
+                println!("edited {resolved}");
+            } else {
+                let task = store
+                    .edit_task(&resolved, title.as_deref(), body.as_deref())
+                    .map_err(|e| e.to_string())?;
+                println!("{} edited — {}", task.id, task.title);
+            }
         }
         KanbanAction::SetModel { id, model } => {
             let resolved = resolve(&id)?;

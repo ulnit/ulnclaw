@@ -349,6 +349,12 @@
   watch --tenant`；archive 现在同时把进行中的 run 以 reclaimed 收
   尾，并立即晋升那些仅被已归档父任务挡住的子任务
   （`recompute_ready` 按 hermes 语义把 archived 父任务视同完成）。
+  P144 补齐完成态恢复：`kanban edit --result/--summary/--metadata`
+  可改写已 done 任务的交接（result 文本 + 最近一次 completed run 的
+  summary/metadata，缺少 run 行时自动合成；发出 `edited` 事件），
+  terminal kanban 工具新增 `summary` + `metadata` 参数供 worker 交付
+  结构化事实，block 操作先写 `BLOCKED: <reason>` 评论再落锁
+  （hermes `_cmd_block` 对齐）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

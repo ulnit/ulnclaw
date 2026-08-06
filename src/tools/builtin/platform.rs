@@ -559,7 +559,9 @@ fn register_kanban(registry: &mut ToolRegistry) {
                     "task_id": {"type": "string", "description": "Task id (or unique prefix); defaults to the worker's own task"},
                     "result": {"type": "string", "description": if done { "Summary of what was accomplished" } else { "Why the task is blocked (required)" }},
                     "comment": {"type": "string", "description": "Optional extra comment"},
-                    "kind": {"type": "string", "enum": ["dependency", "needs_input", "capability", "transient"], "description": "Block only: typed reason. dependency waits in todo until parents finish; needs_input/capability wait on a human; transient may clear on its own"}
+                    "kind": {"type": "string", "enum": ["dependency", "needs_input", "capability", "transient"], "description": "Block only: typed reason. dependency waits in todo until parents finish; needs_input/capability wait on a human; transient may clear on its own"},
+                    "summary": {"type": "string", "description": "Complete only: structured handoff summary for downstream tasks (falls back to result)"},
+                    "metadata": {"type": "object", "description": "Complete only: structured facts for the handoff, e.g. {\"changed_files\": [...], \"tests_run\": 12}"}
                 },
                 "required": []
             }))
@@ -577,7 +579,23 @@ fn register_kanban(registry: &mut ToolRegistry) {
                     };
                     let result = args.get("result").and_then(|v| v.as_str()).map(str::trim);
                     let outcome = if done {
-                        store.complete_task(&id, result.filter(|s| !s.is_empty()))
+                        // Structured handoff (hermes kanban_complete
+                        // summary=/metadata=): summary falls back to
+                        // result inside the engine.
+                        let summary = args
+                            .get("summary")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
+                        let metadata = args
+                            .get("metadata")
+                            .filter(|v| v.is_object());
+                        store.complete_task_with(
+                            &id,
+                            result.filter(|s| !s.is_empty()),
+                            summary,
+                            metadata,
+                        )
                     } else {
                         match result.filter(|s| !s.is_empty()) {
                             Some(reason) => {
