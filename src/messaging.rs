@@ -1114,11 +1114,23 @@ pub async fn run_messaging(
             crate::photon::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.feishu.enabled
+        && crate::feishu::is_websocket_mode(&msg.feishu.resolve().connection_mode)
+    {
+        // WebSocket long connection (hermes default); webhook mode
+        // rides the gateway /webhooks/feishu route instead.
+        let cfg = msg.feishu.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::feishu_ws::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if msg.a2a.enabled {
         crate::a2a::register(&msg.a2a);
     }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex|buzz|photon] enabled = true (sms/teams/line/google_chat/raft/a2a ride gateway webhook routes))");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex|buzz|photon|feishu] enabled = true (sms/teams/line/google_chat/raft/a2a ride gateway webhook routes))");
         return;
     }
     for task in tasks {

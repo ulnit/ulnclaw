@@ -3,8 +3,12 @@
 //!
 //! Hermes ships two transports: the lark_oapi WebSocket long connection
 //! (protobuf-framed, SDK-bound) and an HTTP webhook receiver. ulnclaw
-//! ports the **webhook transport**, mounted on the gateway at
-//! `/webhooks/feishu`:
+//! ports **both**: the webhook transport, mounted on the gateway at
+//! `/webhooks/feishu`, and the WebSocket long connection
+//! (`connection_mode = "websocket"`, the hermes default — see
+//! `src/feishu_ws.rs` for the protobuf frame codec, endpoint
+//! handshake, ping loop, split-packet reassembly, and reconnect
+//! policy). Webhook mode:
 //!
 //! - `url_verification` challenges answered after verification-token
 //!   validation (hermes order: token first, then challenge echo)
@@ -22,11 +26,16 @@
 //!   or `open_id` for `ou_…` DM targets), image/file uploads for
 //!   `MEDIA:` tags
 //!
-//! Known differences: the WS long-connection transport, post/card
-//! deep-normalization, reactions/card-action routing, read receipts,
-//! per-chat serial queues, and the webhook anomaly tracker are not
-//! ported — text/image/file/audio messages flow through the same
-//! allowlist∪pairing gate as the other adapters.
+//! WS mode receives the same schema-2.0 event envelopes and dispatches
+//! them without verification-token/signature checks (lark_oapi
+//! `_do_without_validation`), acknowledging each frame with a
+//! `{"code":200}` payload + `biz_rt` header.
+//!
+//! Known differences: post/card deep-normalization, reactions/card-
+//! action routing, read receipts, per-chat serial queues, and the
+//! webhook anomaly tracker are not ported — text/image/file/audio
+//! messages flow through the same allowlist∪pairing gate as the other
+//! adapters.
 
 use crate::messaging::{Dispatcher, MediaAttachment, MessageEvent};
 use serde::{Deserialize, Serialize};
@@ -64,6 +73,12 @@ pub struct FeishuConfig {
     pub allowed_users: Vec<String>,
     /// Require @mention in group chats (hermes default true).
     pub require_mention: bool,
+    /// Transport: `"websocket"` (hermes default) or `"webhook"`
+    /// (fallback `FEISHU_CONNECTION_MODE`).
+    pub connection_mode: String,
+    /// Open API domain: `"feishu"` or `"lark"` (fallback
+    /// `FEISHU_DOMAIN`).
+    pub domain: String,
 }
 
 impl Default for FeishuConfig {
@@ -76,6 +91,8 @@ impl Default for FeishuConfig {
             encrypt_key: String::new(),
             allowed_users: Vec::new(),
             require_mention: true,
+            connection_mode: "websocket".into(),
+            domain: "feishu".into(),
         }
     }
 }
@@ -99,6 +116,22 @@ pub struct ResolvedFeishu {
     pub encrypt_key: String,
     pub allowed_users: Vec<String>,
     pub require_mention: bool,
+    pub connection_mode: String,
+    pub domain: String,
+}
+
+/// True when `connection_mode` selects the WebSocket long connection
+/// (hermes accepts exactly `websocket`/`webhook`; anything else is
+/// treated as webhook-only with a warning).
+pub fn is_websocket_mode(mode: &str) -> bool {
+    let normalized = mode.trim().to_lowercase();
+    if normalized != "websocket" && normalized != "webhook" {
+        eprintln!(
+            "[feishu] unsupported connection_mode {mode:?} (expected websocket|webhook); using webhook"
+        );
+        return false;
+    }
+    normalized == "websocket"
 }
 
 impl FeishuConfig {
@@ -121,6 +154,10 @@ impl FeishuConfig {
             encrypt_key: env_trim("FEISHU_ENCRYPT_KEY")
                 .unwrap_or_else(|| self.encrypt_key.trim().to_string()),
             allowed_users,
+            connection_mode: env_trim("FEISHU_CONNECTION_MODE")
+                .unwrap_or_else(|| self.connection_mode.trim().to_string()),
+            domain: env_trim("FEISHU_DOMAIN")
+                .unwrap_or_else(|| self.domain.trim().to_string()),
             require_mention: env_bool_default_true("FEISHU_REQUIRE_MENTION")
                 .unwrap_or(self.require_mention),
         }
@@ -492,6 +529,34 @@ fn feishu_api(cfg: &FeishuConfig) -> Arc<FeishuApi> {
     api
 }
 
+/// Register the process-wide Feishu sender (webhook handlers do this
+/// lazily on first event; the WS transport does it at startup).
+pub(crate) fn register_sender(cfg: &FeishuConfig) {
+    let api = feishu_api(cfg);
+    crate::messaging::register_platform_sender(
+        "feishu",
+        Arc::new(FeishuSender {
+            api: api.clone(),
+        }),
+    );
+}
+
+/// Fill `bytes` with randomness from /dev/urandom (no rand crate).
+pub(crate) fn fill_random_bytes(bytes: &mut [u8]) {
+    use std::io::Read;
+    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
+        let _ = file.read_exact(bytes);
+    } else {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        for (i, slot) in bytes.iter_mut().enumerate() {
+            *slot = ((seed >> (i % 4 * 8)) & 0xFF) as u8;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Webhook entry point (mounted at /webhooks/feishu by the gateway)
 // ---------------------------------------------------------------------------
@@ -504,7 +569,7 @@ pub struct FeishuWebhookResponse {
 
 static SEEN_EVENT_IDS: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
 
-fn remember_event_id(event_id: &str) -> bool {
+pub(crate) fn remember_event_id(event_id: &str) -> bool {
     let lock = SEEN_EVENT_IDS.get_or_init(|| Mutex::new(HashSet::new()));
     let mut guard = lock.blocking_lock();
     if guard.contains(event_id) {
@@ -633,7 +698,7 @@ pub async fn feishu_handle_webhook(
     }
 }
 
-async fn handle_message_event(
+pub(crate) async fn handle_message_event(
     cfg: &FeishuConfig,
     dispatcher: &Arc<Dispatcher>,
     pairing: Option<&crate::pairing::PairingStore>,
