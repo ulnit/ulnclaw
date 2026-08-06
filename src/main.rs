@@ -85,6 +85,14 @@ enum Commands {
         /// Bind port (overrides [gateway] port / ULNCLAW_GATEWAY_PORT)
         #[arg(long)]
         port: Option<u16>,
+        /// Terminate the gateway instance recorded in gateway.pid and
+        /// take over (hermes `gateway run --replace`).
+        #[arg(long)]
+        replace: bool,
+        /// Start even if another gateway instance is already running
+        /// (not recommended: two dispatchers race for the same board).
+        #[arg(long)]
+        force: bool,
     },
     /// Weixin (WeChat iLink bot) account management
     Weixin {
@@ -1668,6 +1676,8 @@ async fn gateway_cmd(
     config: &UlncLawConfig,
     host: Option<String>,
     port: Option<u16>,
+    replace: bool,
+    force: bool,
 ) -> Result<(), String> {
     let mut gateway = config.gateway.resolved();
     if let Some(host) = host {
@@ -1677,6 +1687,22 @@ async fn gateway_cmd(
         gateway.port = port;
     }
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    // Single-instance guard (hermes `gateway run [--replace]` contract):
+    // the pidfile carries pid + start token, so a recycled pid never
+    // blocks a fresh start.
+    if let Some(pid) = ulnclaw::gateway_pidfile::running_gateway_pid(&home) {
+        if replace {
+            println!("gateway: replacing running instance (pid {pid})...");
+            ulnclaw::gateway_pidfile::replace_running(
+                pid,
+                std::time::Duration::from_secs(10),
+            )?;
+        } else if !force {
+            return Err(format!(
+                "Another gateway instance is already running (PID {pid}).\n                   Use 'ulnclaw gateway --replace' to take over,\n                   or '--force' to run alongside it (two dispatchers will race)."
+            ));
+        }
+    }
     let state = build_gateway_stack(config, &home, gateway.key.clone()).await?;
     // One kanban notification delivery loop per gateway process (the
     // kanban store is shared; multiplex profile stacks must not spawn
@@ -1749,9 +1775,22 @@ async fn gateway_cmd(
         });
     }
 
-    ulnclaw::gateway::serve_multiplex(state, Some(hub), &gateway.host, gateway.port)
-        .await
-        .map_err(|e| e.to_string())
+    // Register this instance in the pidfile; a startup failure or a
+    // clean shutdown removes it (best-effort — a stale file only
+    // weakens the guard, and the liveness check self-heals it).
+    let pidfile = ulnclaw::gateway_pidfile::pidfile_path(&home);
+    let pidfile_written = ulnclaw::gateway_pidfile::write_pidfile(&home).is_ok();
+    let result = ulnclaw::gateway::serve_multiplex(
+        state,
+        Some(hub),
+        &gateway.host,
+        gateway.port,
+    )
+    .await;
+    if pidfile_written {
+        let _ = std::fs::remove_file(&pidfile);
+    }
+    result.map_err(|e| e.to_string())
 }
 
 async fn checkpoints_cmd(config: &UlncLawConfig, action: CheckpointAction) -> Result<(), String> {
@@ -1879,7 +1918,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Auth { action } => auth_cmd(&config, action.unwrap_or(AuthAction::Status)).await,
         Commands::Sync { action } => sync_cmd(&config, action.unwrap_or(SyncAction::Status)).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
-        Commands::Gateway { host, port } => gateway_cmd(&config, host, port).await,
+        Commands::Gateway { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
         Commands::Weixin { action } => weixin_cmd(action).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
         Commands::Diff { staged, all, dir, paths } => {

@@ -106,6 +106,7 @@ pub mod error;
 pub mod fallback;
 pub mod focus_view;
 pub mod gateway;
+pub mod gateway_pidfile;
 pub mod git_diff;
 pub mod goals;
 pub mod hermes_time;
