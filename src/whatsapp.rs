@@ -19,6 +19,15 @@
 //! Inbound media (bridge-cached local paths or URLs) download into the
 //! content-addressed media cache; outbound `MEDIA:` tags ride
 //! `/send-media` with an extension-derived `mediaType`.
+//!
+//! Bridge lifecycle mirrors hermes: the Baileys bridge
+//! (`scripts/whatsapp-bridge/bridge.js`) is bundled into the binary and
+//! supervised by `whatsapp_bridge` — npm dependency install with a
+//! package-hash stamp, pidfile/port stale cleanup, spawn with
+//! `bridge.log` capture, two-phase readiness wait, and the `scriptHash`
+//! staleness handshake for reuse. Auto-spawn applies only when
+//! `bridge_url` targets `127.0.0.1:<bridge_port>`; any other URL keeps
+//! the external-bridge behavior.
 
 use crate::messaging::{Dispatcher, MediaAttachment, MessageEvent};
 use serde::{Deserialize, Serialize};
@@ -32,6 +41,8 @@ const DEFAULT_POLL_INTERVAL_MS: u64 = 1000;
 /// replies — keep the conservative 4000 used by other adapters).
 const MAX_MESSAGE_LENGTH: usize = 4000;
 const API_TIMEOUT: Duration = Duration::from_secs(30);
+/// hermes `_OWNER_REPLY_PREFIX` — owner-typed self-chat marker.
+const OWNER_REPLY_PREFIX: &str = "[owner reply] ";
 
 /// `[messaging.whatsapp]` — Baileys-bridge adapter (hermes
 /// `platforms.whatsapp` plugin config + `WHATSAPP_*` env vars).
@@ -58,6 +69,23 @@ pub struct WhatsappConfig {
     /// Send read receipts for accepted messages (hermes
     /// `send_read_receipts`).
     pub read_receipts: bool,
+    /// Spawn and supervise the bundled Node Baileys bridge (hermes
+    /// adapter lifecycle). Only effective when `bridge_url` targets
+    /// `127.0.0.1:<bridge_port>`; other URLs stay external bridges
+    /// (fallback `WHATSAPP_AUTO_SPAWN`).
+    pub auto_spawn: bool,
+    /// Bundled bridge port (hermes `bridge_port`; fallback
+    /// `WHATSAPP_BRIDGE_PORT`, default 3000).
+    pub bridge_port: u16,
+    /// Bundled bridge session directory (hermes `session_path`, default
+    /// `<home>/platforms/whatsapp/session`; fallback
+    /// `WHATSAPP_SESSION_PATH`).
+    pub session_path: String,
+    /// Override path to `bridge.js` (hermes `bridge_script`; default is
+    /// the bundled script synced under `<home>/scripts/whatsapp-bridge`).
+    pub bridge_script: String,
+    /// Bridge mode (hermes `WHATSAPP_MODE`, default `self-chat`).
+    pub mode: String,
 }
 
 impl Default for WhatsappConfig {
@@ -72,6 +100,11 @@ impl Default for WhatsappConfig {
             home_channel: String::new(),
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
             read_receipts: true,
+            auto_spawn: true,
+            bridge_port: 3000,
+            session_path: String::new(),
+            bridge_script: String::new(),
+            mode: "self-chat".to_string(),
         }
     }
 }
@@ -103,6 +136,11 @@ pub struct ResolvedWhatsapp {
     pub home_channel: String,
     pub poll_interval_ms: u64,
     pub read_receipts: bool,
+    pub auto_spawn: bool,
+    pub bridge_port: u16,
+    pub session_path: String,
+    pub bridge_script: String,
+    pub mode: String,
 }
 
 impl WhatsappConfig {
@@ -130,6 +168,19 @@ impl WhatsappConfig {
             read_receipts: env_trim("WHATSAPP_READ_RECEIPTS")
                 .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no"))
                 .unwrap_or(self.read_receipts),
+            auto_spawn: env_trim("WHATSAPP_AUTO_SPAWN")
+                .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
+                .unwrap_or(self.auto_spawn),
+            bridge_port: env_trim("WHATSAPP_BRIDGE_PORT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(self.bridge_port),
+            session_path: env_trim("WHATSAPP_SESSION_PATH")
+                .unwrap_or_else(|| self.session_path.clone()),
+            bridge_script: env_trim("WHATSAPP_BRIDGE_SCRIPT")
+                .unwrap_or_else(|| self.bridge_script.clone()),
+            mode: env_trim("WHATSAPP_MODE")
+                .unwrap_or_else(|| self.mode.clone())
+                .to_lowercase(),
         }
     }
 }
@@ -140,19 +191,31 @@ struct Runtime {
     /// Bot JID reported by `/health` (e.g. `12345@s.whatsapp.net`),
     /// used for group mention detection.
     bot_jid: tokio::sync::Mutex<String>,
+    /// Supervised bundled bridge child, when auto-spawned (hermes
+    /// `_bridge_process`).
+    bridge: tokio::sync::Mutex<Option<crate::whatsapp_bridge::BridgeProcess>>,
 }
 
-/// hermes `_should_process_message` — drop from-self and status
-/// broadcasts.
+/// hermes `_should_process_message` — drop broadcast pseudo-chats and
+/// from-self echoes. In self-chat mode the bridge flags owner-typed
+/// fromMe messages with `fromOwner` (linked-device sends that are not
+/// echoes of our own `/send`); those pass intake and get the `[owner
+/// reply]` prefix downstream (hermes `_OWNER_REPLY_PREFIX`).
 pub fn should_process(data: &Value) -> bool {
-    if data.get("fromMe").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return false;
-    }
     let chat_id = data.get("chatId").and_then(|v| v.as_str()).unwrap_or("");
     if chat_id.is_empty()
         || chat_id == "status@broadcast"
+        || chat_id.ends_with("@broadcast")
         || chat_id.ends_with("@newsletter")
     {
+        return false;
+    }
+    let from_me = data.get("fromMe").and_then(|v| v.as_bool()).unwrap_or(false);
+    let from_owner = data
+        .get("fromOwner")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if from_me && !from_owner {
         return false;
     }
     true
@@ -209,8 +272,19 @@ pub async fn run(
 ) {
     let mut resolved = cfg.resolve();
     if resolved.bridge_url.is_empty() {
-        resolved.bridge_url = "http://127.0.0.1:3000".to_string();
+        resolved.bridge_url = format!("http://127.0.0.1:{}", resolved.bridge_port);
     }
+    let home = crate::config::ulnclaw_home();
+    let session_path = if resolved.session_path.is_empty() {
+        home.join("platforms").join("whatsapp").join("session")
+    } else {
+        std::path::PathBuf::from(&resolved.session_path)
+    };
+    let spawn_enabled = resolved.auto_spawn
+        && crate::whatsapp_bridge::is_local_bridge_target(
+            &resolved.bridge_url,
+            resolved.bridge_port,
+        );
     let runtime = Arc::new(Runtime {
         client: reqwest::Client::builder()
             .timeout(API_TIMEOUT)
@@ -218,6 +292,7 @@ pub async fn run(
             .unwrap_or_else(|_| reqwest::Client::new()),
         cfg: resolved,
         bot_jid: tokio::sync::Mutex::new(String::new()),
+        bridge: tokio::sync::Mutex::new(None),
     });
     crate::messaging::register_platform_sender(
         "whatsapp",
@@ -228,6 +303,29 @@ pub async fn run(
 
     let mut delay = 5u64;
     loop {
+        // hermes connect(): (re)spawn the bundled bridge when we manage
+        // it and it is absent or has exited since the last session.
+        if spawn_enabled {
+            let mut guard = runtime.bridge.lock().await;
+            let needs_spawn = match guard.as_mut() {
+                Some(bridge) => bridge.exited(),
+                None => true,
+            };
+            if needs_spawn {
+                if let Some(dead) = guard.take() {
+                    eprintln!("[whatsapp] bridge pid {} exited; respawning", dead.pid);
+                }
+                *guard = crate::whatsapp_bridge::ensure_and_spawn(
+                    &home,
+                    runtime.cfg.bridge_port,
+                    &session_path,
+                    &runtime.cfg.mode,
+                    runtime.cfg.read_receipts,
+                    &runtime.cfg.bridge_script,
+                )
+                .await;
+            }
+        }
         match run_session(&runtime, &dispatcher, &pairing).await {
             Ok(()) => delay = 5,
             Err(msg) => eprintln!("[whatsapp] session error: {msg}"),
@@ -267,7 +365,7 @@ async fn run_session(
                 }
                 if status == "qr" || status.contains("pairing") {
                     eprintln!(
-                        "[whatsapp] bridge waiting for QR pairing — complete pairing in the bridge console"
+                        "[whatsapp] bridge waiting for QR pairing — scan the QR code in bridge.log (next to the session directory) or the bridge console"
                     );
                 } else {
                     eprintln!("[whatsapp] bridge status: {status} — waiting for connection");
@@ -346,6 +444,15 @@ async fn handle_bridge_message(
         .unwrap_or("")
         .trim()
         .to_string();
+    // hermes `_OWNER_REPLY_PREFIX`: owner-typed fromMe messages (self-chat
+    // mode, linked-device sends) carry the marker into transcripts.
+    let from_owner = data
+        .get("fromOwner")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if from_owner && !text.starts_with(OWNER_REPLY_PREFIX) {
+        text = format!("{OWNER_REPLY_PREFIX}{text}");
+    }
 
     if is_group {
         if !runtime.cfg.allowed_channels.is_empty()
@@ -647,9 +754,25 @@ mod tests {
         assert!(!should_process(&msg(r#"{"chatId":"123@s.whatsapp.net","fromMe":true}"#)));
         assert!(!should_process(&msg(r#"{"chatId":"status@broadcast"}"#)));
         assert!(!should_process(&msg(r#"{"chatId":"abc@newsletter"}"#)));
+        assert!(!should_process(&msg(r#"{"chatId":"xyz@broadcast"}"#)));
         assert!(!should_process(&msg(r#"{"chatId":""}"#)));
         assert!(should_process(&msg(r#"{"chatId":"123@s.whatsapp.net"}"#)));
         assert!(should_process(&msg(r#"{"chatId":"456@g.us","isGroup":true}"#)));
+    }
+
+    #[test]
+    fn owner_flagged_from_me_passes_intake() {
+        // hermes self-chat: bridge flags owner-typed fromMe messages
+        // (not echoes of our own /send) with fromOwner.
+        assert!(should_process(
+            &msg(r#"{"chatId":"123@s.whatsapp.net","fromMe":true,"fromOwner":true}"#)
+        ));
+        assert!(!should_process(
+            &msg(r#"{"chatId":"123@s.whatsapp.net","fromMe":true,"fromOwner":false}"#)
+        ));
+        assert!(!should_process(
+            &msg(r#"{"chatId":"status@broadcast","fromMe":true,"fromOwner":true}"#)
+        ));
     }
 
     #[test]
@@ -696,6 +819,11 @@ mod tests {
         assert_eq!(resolved.bridge_url, "");
         assert!(resolved.require_mention);
         assert_eq!(resolved.poll_interval_ms, DEFAULT_POLL_INTERVAL_MS);
+        assert!(resolved.auto_spawn);
+        assert_eq!(resolved.bridge_port, 3000);
+        assert_eq!(resolved.mode, "self-chat");
+        assert!(resolved.session_path.is_empty());
+        assert!(resolved.bridge_script.is_empty());
 
         std::env::set_var("WHATSAPP_BRIDGE_URL", "http://10.0.0.5:3000/");
         std::env::set_var("WHATSAPP_REQUIRE_MENTION", "false");

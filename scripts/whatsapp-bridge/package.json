@@ -1,0 +1,17 @@
+{
+  "name": "ulnclaw-whatsapp-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Baileys WhatsApp Web bridge for the ulnclaw gateway (hermes parity wire protocol)",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

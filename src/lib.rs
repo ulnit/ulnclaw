@@ -185,6 +185,7 @@ pub mod yuanbao;
 pub mod yuanbao_proto;
 pub mod wecom;
 pub mod whatsapp;
+pub mod whatsapp_bridge;
 pub mod weixin;
 pub mod video_gen_backends;
 pub mod video_gen_xai;
