@@ -52,6 +52,8 @@ child process.
   The chat-header model badge opens a per-session model picker overlay
   (`GET /api/model/options` → `POST /api/sessions/:id/model` lock; the
   gateway-default row resets the lock) — hermes model-picker parity.
+  Ctrl/Cmd+F opens a find-in-chat bar (DOM highlighting, n/m counter,
+  Enter/Shift+Enter stepping, Esc clears) — hermes find-bar parity.
 - **Kanban** (tab in the sidebar) — four-column card wall over
   `/api/kanban/*` (same engine + `kanban.db` as the CLI and agent tools):
   quick-add, complete/block/unblock actions, task detail with comments,
@@ -153,6 +155,8 @@ Rust 侧负责托管 `ulnclaw gateway` 子进程。
   聊天头部模型徽章打开按会话模型挑选弹层（`GET /api/model/options` →
   `POST /api/sessions/:id/model` 锁定；网关默认行重置锁定）—— hermes
   model-picker 对位。
+  Ctrl/Cmd+F 打开聊天内查找栏（DOM 高亮、n/m 计数、Enter/Shift+Enter 步进、
+  Esc 清除）—— hermes find-bar 对位。
 - **看板**（侧栏标签页）—— 基于 `/api/kanban/*` 的四列卡片墙（与 CLI、
   agent 工具共用同一引擎和 `kanban.db`）：快速添加、完成/阻塞/解除阻塞、
   带评论的任务详情、看板切换、5 秒轮询。

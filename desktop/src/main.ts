@@ -10,6 +10,7 @@ import { JobsWidget } from "./jobs";
 import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
 import { ModelPickerOverlay } from "./model-picker";
+import { FindBar } from "./find-bar";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -50,6 +51,7 @@ const state = {
   pet: null as PetOverlay | null,
   hatch: null as HatchOverlay | null,
   picker: null as ModelPickerOverlay | null,
+  findBar: null as FindBar | null,
   view: "chat" as "chat" | "kanban" | "projects" | "jobs",
 };
 
@@ -180,6 +182,7 @@ async function openSession(session: SessionRow): Promise<void> {
   } catch (error) {
     addMessage("system", `Could not load messages: ${error}`);
   }
+  state.findBar?.refresh();
 }
 
 async function refreshSessions(): Promise<void> {
@@ -305,6 +308,7 @@ async function sendTurn(): Promise<void> {
     el.send.disabled = false;
     el.toolProgress.hidden = true;
     el.toolProgress.textContent = "";
+    state.findBar?.refresh();
     el.input.focus();
   }
 }
@@ -570,6 +574,7 @@ async function start(): Promise<void> {
   state.jobs = new JobsWidget(jobsMain, () => state.client);
   state.jobs.mount();
   const switchView = (view: "chat" | "kanban" | "projects" | "jobs") => {
+    if (view !== "chat") state.findBar?.close();
     state.view = view;
     chatMain.hidden = view !== "chat";
     kanbanMain.hidden = view !== "kanban";
@@ -635,6 +640,10 @@ async function start(): Promise<void> {
     if (!state.current || !state.picker) return;
     void state.picker.open();
   });
+
+  // Find-in-chat bar (hermes find-bar parity, DOM-based for the Tauri
+  // webview): Ctrl/Cmd+F opens over the chat view, Enter steps.
+  state.findBar = new FindBar(chatMain, el.messages, () => state.view === "chat");
 
   await pollHealth();
   await refreshSessions();

@@ -397,3 +397,21 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
 .model-picker-option.disabled { opacity: 0.45; cursor: default; }
 .model-picker-option-name { font-family: ui-monospace, monospace; }
 .model-picker-option-meta { color: var(--dim); font-size: 12px; }
+
+/* ---- Find-in-chat bar (hermes find-bar parity) ---- */
+#chat { position: relative; }
+.find-bar {
+  position: absolute; top: 46px; right: 14px; z-index: 30;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel-2); border: 1px solid #2a3442; border-radius: 10px;
+  padding: 6px 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.find-bar input {
+  background: var(--bg); color: var(--text); border: 1px solid #2a3442;
+  border-radius: 7px; padding: 5px 9px; font: inherit; font-size: 13px; width: 210px;
+}
+.find-step { border-radius: 7px; padding: 3px 8px; border: 1px solid #2a3442; background: transparent; color: var(--text); cursor: pointer; }
+.find-step:hover { background: var(--bg); }
+.find-count { font-size: 12px; color: var(--dim); min-width: 34px; text-align: center; }
+mark.find-hit { background: #b58900; color: #111; border-radius: 2px; }
+mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
