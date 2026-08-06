@@ -87,6 +87,18 @@ pub struct MessagingConfig {
     /// plugin, webhook transport).
     #[serde(default)]
     pub feishu: crate::feishu::FeishuConfig,
+    /// Home Assistant state-change events via the WS API (hermes
+    /// `platforms.homeassistant` plugin).
+    #[serde(default)]
+    pub homeassistant: crate::homeassistant::HomeassistantConfig,
+    /// Twilio SMS via REST + gateway webhook (hermes `platforms.sms`
+    /// plugin).
+    #[serde(default)]
+    pub sms: crate::sms::SmsConfig,
+    /// WhatsApp via an external Baileys HTTP bridge (hermes
+    /// `platforms.whatsapp` plugin, bridge-client transport).
+    #[serde(default)]
+    pub whatsapp: crate::whatsapp::WhatsappConfig,
 }
 
 fn default_pairing() -> bool {
@@ -805,8 +817,24 @@ pub async fn run_messaging(
             crate::wecom::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.homeassistant.enabled {
+        let cfg = msg.homeassistant.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::homeassistant::run(cfg, dispatcher, pairing).await;
+        }));
+    }
+    if msg.whatsapp.enabled {
+        let cfg = msg.whatsapp.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::whatsapp::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom] enabled = true)");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp] enabled = true (sms rides the gateway /webhooks/twilio route))");
         return;
     }
     for task in tasks {

@@ -706,6 +706,10 @@ fn attach_webhook_routes(
         router = router.route("/webhooks/feishu", post(feishu_webhook_route));
         tracing::info!("gateway webhook route mounted: /webhooks/feishu");
     }
+    if config.messaging.sms.enabled {
+        router = router.route("/webhooks/twilio", post(twilio_webhook_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/twilio");
+    }
     router
 }
 
@@ -912,6 +916,46 @@ async fn feishu_webhook_route(
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, axum::Json(result.body)).into_response()
+}
+
+async fn twilio_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let cfg = &config.messaging.sms;
+    let header_pairs: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let pairing = if config.messaging.pairing {
+        Some(crate::pairing::PairingStore::open(&crate::config::ulnclaw_home()))
+    } else {
+        None
+    };
+    let result = crate::sms::sms_handle_webhook(
+        cfg,
+        &dispatcher,
+        pairing.as_ref(),
+        &body,
+        &header_pairs,
+    )
+    .await;
+    let status = match result.status {
+        200 => StatusCode::OK,
+        400 => StatusCode::BAD_REQUEST,
+        403 => StatusCode::FORBIDDEN,
+        413 => StatusCode::PAYLOAD_TOO_LARGE,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        [(axum::http::header::CONTENT_TYPE, "application/xml")],
+        result.body,
+    )
+        .into_response()
 }
 
 async fn bluebubbles_webhook_route(
