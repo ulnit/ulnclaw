@@ -562,7 +562,8 @@ fn register_kanban(registry: &mut ToolRegistry) {
                     "kind": {"type": "string", "enum": ["dependency", "needs_input", "capability", "transient"], "description": "Block only: typed reason. dependency waits in todo until parents finish; needs_input/capability wait on a human; transient may clear on its own"},
                     "summary": {"type": "string", "description": "Complete only: structured handoff summary for downstream tasks (falls back to result)"},
                     "metadata": {"type": "object", "description": "Complete only: structured facts for the handoff, e.g. {\"changed_files\": [...], \"tests_run\": 12}"},
-                    "artifacts": {"type": "array", "items": {"type": "string"}, "description": "Complete only: deliverable file paths. Files inside the scratch workspace are staged into the board's attachments dir so cleanup cannot erase them"}
+                    "artifacts": {"type": "array", "items": {"type": "string"}, "description": "Complete only: deliverable file paths. Files inside the scratch workspace are staged into the board's attachments dir so cleanup cannot erase them"},
+                    "created_cards": {"type": "array", "items": {"type": "string"}, "description": "Complete only: ids of tasks you created during this run. Each id is verified before completion; phantom ids block the completion"}
                 },
                 "required": []
             }))
@@ -604,6 +605,19 @@ fn register_kanban(registry: &mut ToolRegistry) {
                                     .collect()
                             })
                             .unwrap_or_default();
+                        let created_cards: Vec<String> = args
+                            .get("created_cards")
+                            .and_then(|v| v.as_array())
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(|item| {
+                                        item.as_str().map(str::trim).filter(|s| !s.is_empty())
+                                    })
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         store.complete_task_with_artifacts(
                             &ctx.home,
                             &id,
@@ -611,6 +625,7 @@ fn register_kanban(registry: &mut ToolRegistry) {
                             summary,
                             metadata,
                             &artifacts,
+                            &created_cards,
                         )
                     } else {
                         match result.filter(|s| !s.is_empty()) {

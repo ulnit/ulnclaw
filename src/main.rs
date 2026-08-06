@@ -604,6 +604,11 @@ enum KanbanAction {
         /// cannot erase them (hermes complete artifacts=[...])
         #[arg(long = "artifact", value_name = "PATH")]
         artifact: Vec<String>,
+        /// Task id this worker created (repeatable). Verified against
+        /// the board before completion; phantom ids block it (hermes
+        /// created_cards anti-hallucination gate)
+        #[arg(long = "created-card", value_name = "TASK_ID")]
+        created_card: Vec<String>,
     },
     /// Park running task(s) in the review column after opening a PR;
     /// the dispatcher spawns a review agent to verify and merge
@@ -4682,7 +4687,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!("heartbeat recorded for {}", task.id);
         }
-        KanbanAction::Done { id, result, summary, metadata, artifact } => {
+        KanbanAction::Done { id, result, summary, metadata, artifact, created_card } => {
             if id.is_empty() {
                 return Err("usage: ulnclaw kanban done <task-id> [more ids]".into());
             }
@@ -4716,6 +4721,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     summary.as_deref(),
                     metadata_value.as_ref(),
                     &artifact,
+                    &created_card,
                 ) {
                     Ok(task) => {
                         ulnclaw::plugins::fire_session_event(
@@ -5588,6 +5594,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     2,
                     stale_timeout,
                     Some(&known_profiles),
+                    boot_config.kanban.max_in_progress_per_profile,
                 ) {
                     Ok(result)
                         if !result.spawned.is_empty() || !result.reclaimed.is_empty() =>
@@ -5783,6 +5790,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     failure_limit.max(1),
                     config.kanban.stale_timeout_seconds,
                     Some(&known_profiles),
+                    config.kanban.max_in_progress_per_profile,
                 )
                 .map_err(|e| e.to_string())?;
             if json {
@@ -5817,6 +5825,9 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             }
             for id in &result.skipped_unassigned {
                 println!("  ⏭ {id} skipped (review task has no assignee)");
+            }
+            for (id, assignee, current) in &result.skipped_per_profile_capped {
+                println!("  ⏭ {id} skipped ({assignee} already running {current} task(s))");
             }
             for id in &result.auto_blocked {
                 println!("  ⊘ {id} auto-blocked (spawn failures)");

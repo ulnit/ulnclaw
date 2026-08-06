@@ -434,7 +434,23 @@ performance and a single static binary.
   fresh run without re-gating parents (`claim_review_task`), and the
   `sdlc-review` skill is force-loaded when installed under
   `<home>/skills/`; `has_spawnable_review` joins the gateway health
-  probe.
+  probe. P149 added the per-profile concurrency cap: `[kanban]
+  max_in_progress_per_profile` (hermes #21582) refuses to spawn for
+  an assignee already at its in-flight limit even with global
+  headroom — counts seed from the running column each tick and count
+  would-be spawns in dry runs; skipped tasks land in
+  `skipped_per_profile_capped` (CLI line + dispatch JSON). P150
+  ported the anti-hallucination completion gate: `kanban done
+  --created-card <id>` (repeatable; also the agent `created_cards`
+  array and the gateway complete API) verifies each claimed card —
+  it must exist AND be created by the worker's profile, created under
+  the worker's task id, or linked as the worker's child. Phantom ids
+  emit `completion_blocked_hallucination` and block the completion
+  without mutating anything (hermes `HallucinatedCardsError`);
+  verified ids ride on the `completed` event, and unresolved
+  `t_<hex>` references in summary/result prose are flagged after a
+  successful completion via `suspected_hallucinated_references`
+  (advisory, hermes `_scan_prose_for_phantom_ids`).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

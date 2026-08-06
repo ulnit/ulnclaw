@@ -349,6 +349,10 @@ pub struct CompleteBody {
     /// the attachments dir (hermes kanban_complete artifacts=).
     #[serde(default)]
     pub artifacts: Option<Vec<String>>,
+    /// Task ids this worker claims to have created; verified before
+    /// completion, phantom ids block it (hermes created_cards).
+    #[serde(default)]
+    pub created_cards: Option<Vec<String>>,
 }
 
 /// `POST /api/kanban/tasks/:id/complete` — mark done.
@@ -376,6 +380,15 @@ pub async fn complete_task(Path(id): Path<String>, Json(body): Json<CompleteBody
             if trimmed.is_empty() { None } else { Some(trimmed) }
         })
         .collect();
+    let created_cards: Vec<String> = body
+        .created_cards
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|raw| {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        })
+        .collect();
     let home = crate::config::ulnclaw_home();
     match store.complete_task_with_artifacts(
         &home,
@@ -384,6 +397,7 @@ pub async fn complete_task(Path(id): Path<String>, Json(body): Json<CompleteBody
         body.summary.as_deref().map(str::trim).filter(|s| !s.is_empty()),
         metadata,
         &artifacts,
+        &created_cards,
     ) {
         Ok(task) => Json(json!({"object": "ulnclaw.kanban.task", "task": task_json(&store, &task)})).into_response(),
         Err(e) => super::bad_request(&e.to_string(), None),
@@ -533,6 +547,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
             2,
             stale_timeout,
             Some(&known_profiles),
+            config.kanban.max_in_progress_per_profile,
         )
     })
     .await;
@@ -548,6 +563,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
             "skipped_capped": result.skipped_capped,
             "skipped_unassigned": result.skipped_unassigned,
             "skipped_nonspawnable": result.skipped_nonspawnable,
+            "skipped_per_profile_capped": result.skipped_per_profile_capped,
             "spawn_failed": result.spawn_failed,
             "auto_blocked": result.auto_blocked,
         }))

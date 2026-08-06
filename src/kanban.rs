@@ -332,6 +332,10 @@ pub struct DispatchResult {
     /// control-plane lane pulled via `kanban claim`, never auto-spawned
     /// (hermes `DispatchResult.skipped_nonspawnable`).
     pub skipped_nonspawnable: Vec<String>,
+    /// Ready tasks skipped because their assignee already had
+    /// `max_in_progress_per_profile` tasks running — (id, assignee,
+    /// in-flight count) (hermes #21582).
+    pub skipped_per_profile_capped: Vec<(String, String, usize)>,
 }
 
 /// Worker brief for a dispatcher-spawned task (hermes spawns
@@ -3264,6 +3268,78 @@ impl KanbanStore {
         self.complete_task_with(id, result, None, None)
     }
 
+    /// Partition claimed `created_cards` into (verified, phantom)
+    /// (hermes `_verify_created_cards`). A card verifies iff it exists
+    /// AND was created by the completing task's assignee profile, or
+    /// with the completing task's id as creator, or is linked as a
+    /// child of the completing task.
+    fn verify_created_cards(
+        &self,
+        completing_id: &str,
+        claimed: &[String],
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let mut ordered: Vec<String> = Vec::new();
+        for raw in claimed {
+            let id = raw.trim();
+            if !id.is_empty() && !ordered.iter().any(|known| known == id) {
+                ordered.push(id.to_string());
+            }
+        }
+        if ordered.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let completing = self.get_task(completing_id)?;
+        let Some(completing) = completing else {
+            return Ok((Vec::new(), ordered));
+        };
+        let children = self.children_of(completing_id)?;
+        let mut verified = Vec::new();
+        let mut phantom = Vec::new();
+        for id in ordered {
+            match self.get_task(&id)? {
+                Some(card)
+                    if completing
+                        .assignee
+                        .as_deref()
+                        .map(|assignee| !assignee.is_empty() && card.created_by == assignee)
+                        .unwrap_or(false)
+                        || card.created_by == completing_id
+                        || children.contains(&id) =>
+                {
+                    verified.push(id);
+                }
+                _ => phantom.push(id),
+            }
+        }
+        Ok((verified, phantom))
+    }
+
+    /// Scan free-form completion prose for `t_<hex>` references that
+    /// do not resolve to a task (hermes `_scan_prose_for_phantom_ids`,
+    /// advisory — never blocks).
+    fn scan_prose_for_phantom_ids(&self, text: &str) -> Result<Vec<String>> {
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let re = regex::Regex::new(r"\bt_[a-f0-9]{8,}\b").map_err(|e| {
+            AgentError::session(format!("kanban: phantom-id regex: {e}"))
+        })?;
+        let mut unique: Vec<String> = Vec::new();
+        for found in re.find_iter(text) {
+            let id = found.as_str().to_string();
+            if !unique.contains(&id) {
+                unique.push(id);
+            }
+        }
+        let mut phantom = Vec::new();
+        for id in unique {
+            if self.get_task(&id)?.is_none() {
+                phantom.push(id);
+            }
+        }
+        Ok(phantom)
+    }
+
     /// Complete a task with optional structured handoff fields (hermes
     /// `complete_task(summary=…, metadata=…)`). `summary` is the
     /// handoff for downstream children (falls back to `result` when
@@ -3305,6 +3381,30 @@ impl KanbanStore {
             })
             .filter(|list| !list.is_empty());
         let now = Self::now();
+        // Verified created_cards ride on the event too (hermes); the
+        // private key is stripped before the metadata hits the run row.
+        let verified_cards: Option<Vec<String>> = metadata
+            .and_then(|md| md.get("_verified_cards"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|list| !list.is_empty());
+        let metadata = metadata.map(|md| {
+            if md.get("_verified_cards").is_some() {
+                let mut cleaned = md.clone();
+                if let Some(object) = cleaned.as_object_mut() {
+                    object.remove("_verified_cards");
+                }
+                std::borrow::Cow::Owned(cleaned)
+            } else {
+                std::borrow::Cow::Borrowed(md)
+            }
+        });
+        let metadata = metadata.as_deref();
         let mut payload = serde_json::json!({
             "result": result,
             "result_len": result.map(str::len).unwrap_or(0),
@@ -3312,6 +3412,9 @@ impl KanbanStore {
         });
         if let Some(list) = &event_artifacts {
             payload["artifacts"] = serde_json::json!(list);
+        }
+        if let Some(list) = &verified_cards {
+            payload["verified_cards"] = serde_json::json!(list);
         }
         let task = self.transition(
             id,
@@ -3364,7 +3467,13 @@ impl KanbanStore {
     /// `_merge_completion_prose_artifacts`). Staged files are recorded
     /// in `task_attachments` (kind `artifact`) with `attached` events,
     /// and the final paths ride on the `completed` event + run
-    /// metadata.
+    /// metadata. `created_cards` are verified before anything mutates:
+    /// phantom ids block the completion with a
+    /// `completion_blocked_hallucination` event (hermes
+    /// `HallucinatedCardsError`); verified ids ride on the `completed`
+    /// event, and unresolved `t_<hex>` prose references are flagged
+    /// after completion via `suspected_hallucinated_references`
+    /// (advisory).
     pub fn complete_task_with_artifacts(
         &self,
         home: &Path,
@@ -3373,10 +3482,46 @@ impl KanbanStore {
         summary: Option<&str>,
         metadata: Option<&Value>,
         artifacts: &[String],
+        created_cards: &[String],
     ) -> Result<Task> {
         let task = self
             .get_task(id)?
             .ok_or_else(|| AgentError::session(format!("kanban: task {id} not found")))?;
+        // Hallucinated-card gate (hermes): verify claimed created_cards
+        // BEFORE mutating anything; a rejection emits an auditable event
+        // and blocks the completion.
+        let verified_cards: Vec<String> = if created_cards.is_empty() {
+            Vec::new()
+        } else {
+            let (verified, phantom) = self.verify_created_cards(id, created_cards)?;
+            if !phantom.is_empty() {
+                let preview = summary
+                    .or(result)
+                    .map(|raw| {
+                        raw.trim()
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .chars()
+                            .take(200)
+                            .collect::<String>()
+                    });
+                self.append_event(
+                    id,
+                    "completion_blocked_hallucination",
+                    serde_json::json!({
+                        "phantom_cards": phantom,
+                        "verified_cards": verified,
+                        "summary_preview": preview,
+                    }),
+                )?;
+                return Err(AgentError::session(format!(
+                    "kanban: completion blocked: claimed created_cards that do not exist                      or were not created by this worker: {}",
+                    phantom.join(", ")
+                )));
+            }
+            verified
+        };
         let workspace = task
             .workspace_path
             .as_deref()
@@ -3504,20 +3649,46 @@ impl KanbanStore {
         }
 
         // Persist the final artifact list on the run metadata.
-        let final_metadata: Option<Value> = if persisted.is_empty() && metadata.is_none() {
-            None
-        } else {
-            let mut md = metadata
-                .filter(|md| md.is_object())
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            if !persisted.is_empty() {
-                md["artifacts"] = serde_json::json!(persisted);
-            }
-            Some(md)
-        };
+        let final_metadata: Option<Value> =
+            if persisted.is_empty() && verified_cards.is_empty() && metadata.is_none() {
+                None
+            } else {
+                let mut md = metadata
+                    .filter(|md| md.is_object())
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                if !persisted.is_empty() {
+                    md["artifacts"] = serde_json::json!(persisted);
+                }
+                if !verified_cards.is_empty() {
+                    // Private key: promoted onto the completed event by
+                    // complete_task_with and stripped from the stored
+                    // metadata.
+                    md["_verified_cards"] = serde_json::json!(verified_cards);
+                }
+                Some(md)
+            };
         match self.complete_task_with(id, result, summary, final_metadata.as_ref()) {
-            Ok(task) => Ok(task),
+            Ok(task) => {
+                // Advisory prose scan (hermes): flag t_<hex> references
+                // in the handoff that resolve to no task — never blocks.
+                let mut scan_text = String::new();
+                for part in [summary, result] {
+                    if let Some(part) = part {
+                        scan_text.push_str(part);
+                        scan_text.push('\n');
+                    }
+                }
+                let phantom_refs = self.scan_prose_for_phantom_ids(&scan_text)?;
+                if !phantom_refs.is_empty() {
+                    self.append_event(
+                        id,
+                        "suspected_hallucinated_references",
+                        serde_json::json!({ "phantom_refs": phantom_refs }),
+                    )?;
+                }
+                Ok(task)
+            }
             Err(err) => {
                 // Completion failed after staging — roll the copies back.
                 remove_staged_copies(&staged, &task_attachments_dir(home, id));
@@ -5586,7 +5757,9 @@ impl KanbanStore {
     /// tasks whose non-empty assignee is not in the set are parked in
     /// `skipped_nonspawnable` — control-plane lanes pulled via
     /// `kanban claim` that must never auto-spawn; `None` keeps the
-    /// legacy spawn-everything behaviour.
+    /// legacy spawn-everything behaviour. `per_profile_cap` limits
+    /// in-flight tasks per assignee (hermes #21582); `None`/0
+    /// disables the cap.
     pub fn dispatch_once<F>(
         &self,
         home: &Path,
@@ -5597,6 +5770,7 @@ impl KanbanStore {
         failure_limit: usize,
         stale_timeout_seconds: i64,
         known_profiles: Option<&std::collections::HashSet<String>>,
+        per_profile_cap: Option<usize>,
     ) -> Result<DispatchResult>
     where
         F: FnMut(&Task, Option<&Path>) -> std::result::Result<Option<i64>, String>,
@@ -5607,6 +5781,32 @@ impl KanbanStore {
         result.stale = self.detect_stale_running(stale_timeout_seconds)?;
         result.crashed = self.detect_crashed_workers()?;
         result.promoted = self.recompute_ready_with_limit(failure_limit as i64)?;
+
+        // Per-profile concurrency cap (hermes #21582): seed in-flight
+        // counts per assignee from the running column.
+        let per_profile_cap = per_profile_cap.filter(|cap| *cap > 0);
+        let mut per_profile_running: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        if per_profile_cap.is_some() {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT assignee, COUNT(*) FROM tasks                      WHERE status = 'running' AND assignee IS NOT NULL                      GROUP BY assignee",
+                )
+                .map_err(db_error("per-profile seed"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+                })
+                .map_err(db_error("per-profile seed"))?;
+            for row in rows {
+                let (assignee, count) = row.map_err(db_error("per-profile seed"))?;
+                let assignee = assignee.trim().to_string();
+                if !assignee.is_empty() {
+                    per_profile_running.insert(assignee, count);
+                }
+            }
+        }
 
         let running = self.list_tasks(None, Some("running"), None, 10_000)?;
         let mut running_count = running.len();
@@ -5633,20 +5833,39 @@ impl KanbanStore {
                     continue;
                 }
             }
+            let Some(task) = self.get_task(&id)? else {
+                continue;
+            };
+            let assignee = task
+                .assignee
+                .as_deref()
+                .map(str::trim)
+                .filter(|assignee| !assignee.is_empty())
+                .map(str::to_string);
             // Non-spawnable assignee gate (hermes): a task assigned to
             // a name that is not a configured profile is a
             // control-plane lane pulled via `kanban claim` — spawning
             // it would crash-loop a worker against the unknown profile
             // (#kanban-dispatcher-crash-loop).
             if let Some(profiles) = known_profiles {
-                let lane = self
-                    .get_task(&id)?
-                    .and_then(|task| task.assignee)
-                    .map(|assignee| assignee.trim().to_string())
-                    .filter(|assignee| !assignee.is_empty());
-                if let Some(assignee) = lane {
-                    if !profiles.contains(&assignee) {
+                if let Some(name) = &assignee {
+                    if !profiles.contains(name) {
                         result.skipped_nonspawnable.push(id);
+                        continue;
+                    }
+                }
+            }
+            // Per-profile concurrency cap (hermes #21582): even with
+            // global headroom, refuse to spawn for an assignee already
+            // at its in-flight cap so a fan-out cannot overwhelm one
+            // profile's model/quota/browser pool.
+            if let Some(cap) = per_profile_cap {
+                if let Some(name) = &assignee {
+                    let current = per_profile_running.get(name).copied().unwrap_or(0);
+                    if current >= cap {
+                        result
+                            .skipped_per_profile_capped
+                            .push((id, name.clone(), current));
                         continue;
                     }
                 }
@@ -5664,10 +5883,14 @@ impl KanbanStore {
                 }
                 continue;
             }
-            let Some(task) = self.get_task(&id)? else {
-                continue;
-            };
             if dry_run {
+                // Count the would-be spawn so the cap check sees it on
+                // subsequent iterations (hermes #21582).
+                if per_profile_cap.is_some() {
+                    if let Some(name) = &assignee {
+                        *per_profile_running.entry(name.clone()).or_insert(0) += 1;
+                    }
+                }
                 result.would_spawn.push(id);
                 continue;
             }
@@ -5718,6 +5941,11 @@ impl KanbanStore {
                         "spawned",
                         serde_json::json!({ "pid": pid, "assignee": claimed.assignee }),
                     )?;
+                    if per_profile_cap.is_some() {
+                        if let Some(name) = &assignee {
+                            *per_profile_running.entry(name.clone()).or_insert(0) += 1;
+                        }
+                    }
                     running_count += 1;
                     result.spawned.push((id, pid));
                 }
@@ -6043,7 +6271,7 @@ mod tests {
         store.ready_task(&second.id).unwrap();
 
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1234)), Some(1), false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1234)), Some(1), false, 2, 0, None, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, first.id);
@@ -6054,7 +6282,7 @@ mod tests {
 
         // Second tick with a higher cap picks up the remaining task.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5678)), Some(2), false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5678)), Some(2), false, 2, 0, None, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, second.id);
@@ -6066,7 +6294,7 @@ mod tests {
         let task = make_task(&store, "probe");
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| panic!("dry run must not spawn"), None, true, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| panic!("dry run must not spawn"), None, true, 2, 0, None, None)
             .unwrap();
         assert_eq!(result.would_spawn, vec![task.id.clone()]);
         assert!(result.spawned.is_empty());
@@ -6081,14 +6309,14 @@ mod tests {
 
         // First failure: recorded, still ready-ish for retry.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom".into()), None, false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom".into()), None, false, 2, 0, None, None)
             .unwrap();
         assert_eq!(result.spawn_failed, vec![task.id.clone()]);
         assert!(result.auto_blocked.is_empty());
 
         // Second consecutive failure trips the limit → blocked.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom again".into()), None, false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom again".into()), None, false, 2, 0, None, None)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         let blocked = store.get_task(&task.id).unwrap().unwrap();
@@ -6222,6 +6450,7 @@ mod tests {
                 2,
                 0,
                 Some(&profiles),
+                None,
             )
             .unwrap();
         assert_eq!(result.skipped_nonspawnable, vec![lane.id.clone()]);
@@ -6252,7 +6481,7 @@ mod tests {
             .unwrap();
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(9)), None, false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(9)), None, false, 2, 0, None, None)
             .unwrap();
         assert!(result.skipped_nonspawnable.is_empty());
         assert_eq!(result.spawned.len(), 1);
@@ -6321,6 +6550,7 @@ mod tests {
                 None,
                 None,
                 &[artifact],
+                &[],
             )
             .unwrap();
         assert_eq!(done.status, "done");
@@ -6364,7 +6594,7 @@ mod tests {
         let missing = workspace.join("missing.txt").to_string_lossy().to_string();
         let keep = workspace.join("keep.md").to_string_lossy().to_string();
         let err = store
-            .complete_task_with_artifacts(dir.path(), &task.id, None, None, None, &[keep, missing])
+            .complete_task_with_artifacts(dir.path(), &task.id, None, None, None, &[keep, missing], &[])
             .unwrap_err();
         assert!(err.to_string().contains("unavailable"), "{err}");
         assert_eq!(
@@ -6392,6 +6622,7 @@ mod tests {
                 None,
                 None,
                 &[outside.to_string_lossy().to_string()],
+                &[],
             )
             .unwrap();
         assert_eq!(done.status, "done");
@@ -6419,7 +6650,7 @@ mod tests {
 
         let summary = format!("Deliverable: {}.", workspace.join("out.csv").display());
         let done = store
-            .complete_task_with_artifacts(dir.path(), &task.id, None, Some(&summary), None, &[])
+            .complete_task_with_artifacts(dir.path(), &task.id, None, Some(&summary), None, &[], &[])
             .unwrap();
         assert_eq!(done.status, "done");
         let staged_path = task_attachments_dir(dir.path(), &task.id).join("out.csv");
@@ -6513,6 +6744,7 @@ mod tests {
                 2,
                 0,
                 Some(&profiles),
+                None,
             )
             .unwrap();
         assert_eq!(result.spawned, vec![(task.id.clone(), Some(55))]);
@@ -6566,6 +6798,7 @@ mod tests {
                 2,
                 0,
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -6611,7 +6844,7 @@ mod tests {
         let profiles: std::collections::HashSet<String> =
             ["alice".to_string()].into_iter().collect();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, Some(&profiles))
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, Some(&profiles), None)
             .unwrap();
         assert_eq!(result.spawned.len(), 0);
         assert_eq!(result.skipped_unassigned, vec![unassigned.id.clone()]);
@@ -6619,6 +6852,200 @@ mod tests {
         assert!(!store.has_spawnable_review(Some(&profiles)).unwrap());
         // Legacy ungated probe still sees review tasks.
         assert!(store.has_spawnable_review(None).unwrap());
+    }
+
+    #[test]
+    fn dispatch_respects_per_profile_cap() {
+        let (dir, store) = temp_store();
+        let first = store
+            .create_task(&NewTask {
+                title: "one".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let second = store
+            .create_task(&NewTask {
+                title: "two".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let other = store
+            .create_task(&NewTask {
+                title: "other profile".into(),
+                assignee: Some("bob".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        for id in [&first.id, &second.id, &other.id] {
+            store.ready_task(id).unwrap();
+        }
+
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, Some(1))
+            .unwrap();
+        // alice: first task spawns, second hits the cap; bob unaffected.
+        let spawned: Vec<String> = result.spawned.iter().map(|(id, _)| id.clone()).collect();
+        assert!(spawned.contains(&first.id));
+        assert!(spawned.contains(&other.id));
+        assert_eq!(
+            result.skipped_per_profile_capped,
+            vec![(second.id.clone(), "alice".into(), 1)]
+        );
+
+        // The seeded running column keeps the cap enforced next tick
+        // (second stayed ready).
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, Some(1))
+            .unwrap();
+        assert_eq!(result.spawned.len(), 0);
+        assert_eq!(
+            result.skipped_per_profile_capped,
+            vec![(second.id.clone(), "alice".into(), 1)]
+        );
+
+        // No cap → the backlog spawns.
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None)
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        assert!(result.skipped_per_profile_capped.is_empty());
+    }
+
+    #[test]
+    fn dispatch_per_profile_cap_counts_dry_run_spawns() {
+        let (dir, store) = temp_store();
+        for title in ["a", "b"] {
+            let task = store
+                .create_task(&NewTask {
+                    title: title.into(),
+                    assignee: Some("alice".into()),
+                    created_by: "tester".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            store.ready_task(&task.id).unwrap();
+        }
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| panic!("dry run"), None, true, 2, 0, None, Some(1))
+            .unwrap();
+        // The would-be spawn counts against the cap for the second task.
+        assert_eq!(result.would_spawn.len(), 1);
+        assert_eq!(result.skipped_per_profile_capped.len(), 1);
+    }
+
+    #[test]
+    fn completion_blocks_phantom_created_cards() {
+        let (dir, store) = temp_store();
+        let worker = store
+            .create_task(&NewTask {
+                title: "worker".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&worker.id).unwrap();
+
+        // Phantom id: nothing mutates, auditable event emitted.
+        let err = store
+            .complete_task_with_artifacts(
+                dir.path(),
+                &worker.id,
+                Some("did things"),
+                None,
+                None,
+                &[],
+                &["t_deadbeef00".to_string()],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("completion blocked"), "{err}");
+        assert_eq!(
+            store.get_task(&worker.id).unwrap().unwrap().status,
+            "ready"
+        );
+        let blocked = store
+            .events(&worker.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "completion_blocked_hallucination")
+            .unwrap();
+        assert_eq!(blocked.payload["phantom_cards"][0], "t_deadbeef00");
+
+        // Card created by ANOTHER profile is also phantom...
+        let foreign = store
+            .create_task(&NewTask {
+                title: "foreign".into(),
+                created_by: "bob".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(store
+            .complete_task_with_artifacts(
+                dir.path(),
+                &worker.id,
+                None,
+                None,
+                None,
+                &[],
+                &[foreign.id.clone()],
+            )
+            .is_err());
+
+        // ...until it is linked as the worker's child.
+        store.link_tasks(&worker.id, &foreign.id).unwrap();
+        let own = store
+            .create_task(&NewTask {
+                title: "own child".into(),
+                created_by: "alice".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let done = store
+            .complete_task_with_artifacts(
+                dir.path(),
+                &worker.id,
+                Some("done"),
+                None,
+                None,
+                &[],
+                &[own.id.clone(), foreign.id.clone()],
+            )
+            .unwrap();
+        assert_eq!(done.status, "done");
+        let completed = store
+            .events(&worker.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "completed")
+            .unwrap();
+        assert_eq!(
+            completed.payload["verified_cards"],
+            serde_json::json!([own.id, foreign.id])
+        );
+    }
+
+    #[test]
+    fn completion_prose_phantom_refs_are_flagged_not_blocking() {
+        let (dir, store) = temp_store();
+        let task = make_task(&store, "prose refs");
+        store.ready_task(&task.id).unwrap();
+        let summary = "Follow-up tracked in t_cafebabe42 (created earlier).";
+        let done = store
+            .complete_task_with_artifacts(dir.path(), &task.id, None, Some(summary), None, &[], &[])
+            .unwrap();
+        assert_eq!(done.status, "done");
+        let flagged = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.kind == "suspected_hallucinated_references")
+            .unwrap();
+        assert_eq!(flagged.payload["phantom_refs"][0], "t_cafebabe42");
     }
 
     #[test]
@@ -7616,7 +8043,7 @@ mod tests {
 
         let tick = || {
             store
-                .dispatch_once(dir.path(), false, |_, _| Err("exec format error".to_string()), Some(4), false, 2, 0, None)
+                .dispatch_once(dir.path(), false, |_, _| Err("exec format error".to_string()), Some(4), false, 2, 0, None, None)
                 .unwrap()
         };
 
@@ -7658,7 +8085,7 @@ mod tests {
             .unwrap();
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom".to_string()), Some(4), false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom".to_string()), Some(4), false, 2, 0, None, None)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         assert!(result.spawn_failed.is_empty());
@@ -7680,7 +8107,7 @@ mod tests {
         let task = make_task(&store, "resilient");
         store.ready_task(&task.id).unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None)
             .unwrap();
         assert_eq!(
             store.get_task(&task.id).unwrap().unwrap().consecutive_failures,
@@ -7698,10 +8125,10 @@ mod tests {
         let other = make_task(&store, "blocked cycle");
         store.ready_task(&other.id).unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None)
             .unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None)
             .unwrap();
         let t = store.get_task(&other.id).unwrap().unwrap();
         assert_eq!(t.status, "blocked");
@@ -8106,6 +8533,7 @@ mod tests {
                 2,
                 0,
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
@@ -8141,6 +8569,7 @@ mod tests {
                 2,
                 0,
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(result.spawn_failed, vec![task.id.clone()]);
@@ -8162,7 +8591,7 @@ mod tests {
         let task = make_task(&store, "legacy worktrees");
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), true, |_, _| Ok(Some(7)), Some(2), false, 2, 0, None)
+            .dispatch_once(dir.path(), true, |_, _| Ok(Some(7)), Some(2), false, 2, 0, None, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         let t = store.get_task(&task.id).unwrap().unwrap();
@@ -8314,6 +8743,7 @@ mod tests {
                 false,
                 2,
                 0,
+                None,
                 None,
             )
             .unwrap();

@@ -3635,6 +3635,7 @@ pub fn spawn_kanban_dispatcher(
                     2,
                     stale_timeout,
                     Some(&known_profiles),
+                    config.kanban.max_in_progress_per_profile,
                 ) {
                     Ok(result) => {
                         if !result.spawned.is_empty() || !result.reclaimed.is_empty() {

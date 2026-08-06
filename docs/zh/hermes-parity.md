@@ -383,7 +383,20 @@
   `skipped_unassigned`，未知 assignee 归入 `skipped_nonspawnable`，
   认领时开新 run 且不再复查父任务依赖（`claim_review_task`），
   `<home>/skills/` 装有 `sdlc-review` 技能时强制加载；
-  `has_spawnable_review` 并入网关健康探针。
+  `has_spawnable_review` 并入网关健康探针。P149 增加按 profile 的
+  并发上限：`[kanban] max_in_progress_per_profile`（hermes #21582）
+  即使全局仍有余量，也拒绝为已达在飞上限的 assignee 再生 worker ——
+  计数每 tick 从 running 列播种、dry-run 的拟 spawn 同样计数；被跳过
+  的任务归入 `skipped_per_profile_capped`（CLI 行 + dispatch JSON）。
+  P150 移植反幻觉完成门：`kanban done --created-card <id>`（可重复；
+  agent `created_cards` 数组与网关 complete API 同步）逐一核验声明的
+  卡片 —— 必须存在，且由该 worker 的 profile 创建、以 worker 任务 id
+  作为 created_by、或已挂为 worker 任务的子任务。幻影 id 发出
+  `completion_blocked_hallucination` 事件并在零改动下阻断完成
+  （hermes `HallucinatedCardsError`）；核验通过的 id 随 `completed`
+  事件下发，summary/result 文本中无法解析的 `t_<hex>` 引用在成功完成
+  后以 `suspected_hallucinated_references` 事件提示（仅告警，hermes
+  `_scan_prose_for_phantom_ids`）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

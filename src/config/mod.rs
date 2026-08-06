@@ -764,6 +764,11 @@ pub struct KanbanConfig {
     /// `kanban.dispatch_stale_timeout_seconds`, default 14400; 0
     /// disables the check).
     pub stale_timeout_seconds: i64,
+    /// Per-profile concurrency cap: even with global headroom, refuse
+    /// to spawn for an assignee already running this many tasks
+    /// (hermes `kanban.max_in_progress_per_profile`, #21582). None or
+    /// 0 disables the cap.
+    pub max_in_progress_per_profile: Option<usize>,
 }
 
 impl Default for KanbanConfig {
@@ -779,6 +784,7 @@ impl Default for KanbanConfig {
             auto_decompose: true,
             auto_decompose_per_tick: 3,
             stale_timeout_seconds: 14400,
+            max_in_progress_per_profile: None,
         }
     }
 }
