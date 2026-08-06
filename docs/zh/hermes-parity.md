@@ -412,7 +412,16 @@
   attempt（CLI Done/Block、`kanban_complete`/`kanban_block` 工具与
   网关 complete/block API 全链路透传）。已认领 attempt 的 spawn/工作
   区失败现在收尾 run、释放认领回 ready 并计入失败（hermes
-  `_record_spawn_failure`）。
+  `_record_spawn_failure`）。P154 增加 `[kanban] max_in_progress`
+  全局并发上限（#33488）：当板上运行中任务已达上限时，本轮调度直接提
+  前返回（积压任务保持 ready，不落任何跳过桶）；否则有效 spawn 上限
+  收紧为 `max_spawn` 与 `max_in_progress` 的较小者，使运行列恰好填满
+  上限 —— 慢 worker（本地模型、资源受限主机）先消化存量，避免堆积任
+  务超时。P154 同时移植了一次性 scratch 工作区提示（hermes
+  `_maybe_emit_scratch_tip`）：整个安装内首次物化 scratch 工作区时，
+  调度器警告 scratch 产物是临时的（任务完成即删除），在任务上记录
+  `tip_scratch_workspace` 事件，并写入 `.scratch_tip_shown` 哨兵文件
+  使提示不再重复；worktree/dir 工作区按设计保留，从不提示。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

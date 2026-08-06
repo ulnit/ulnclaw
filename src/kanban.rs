@@ -153,6 +153,16 @@ pub fn status_icon(status: &str) -> &'static str {
 /// Hermes default claim TTL (30 minutes).
 pub const DEFAULT_CLAIM_TTL_SECS: i64 = 30 * 60;
 
+/// Sentinel file under the kanban home marking that the first-use
+/// scratch-workspace tip was already shown on this install (hermes
+/// `.scratch_tip_shown`).
+pub const SCRATCH_TIP_SENTINEL_NAME: &str = ".scratch_tip_shown";
+
+/// First-use warning text for scratch workspaces (hermes
+/// `_SCRATCH_TIP_MESSAGE`).
+pub const SCRATCH_TIP_MESSAGE: &str = "scratch workspaces are ephemeral \u{2014} they're deleted when the task completes. Use --workspace worktree: (git worktree) or --workspace dir:/abs/path (existing dir) to preserve worker output.";
+
+
 /// The default board seeded on first open (hermes `default`).
 pub const DEFAULT_BOARD: &str = "default";
 
@@ -6010,6 +6020,31 @@ impl KanbanStore {
     /// disables the cap. The whole tick runs under the board's
     /// non-blocking `.dispatch.lock` (#35240); a locked tick returns
     /// `skipped_locked = true` with no DB writes.
+    /// First-use scratch-workspace tip (hermes
+    /// `_maybe_emit_scratch_tip`): exactly once per install, warn that
+    /// scratch workspaces are ephemeral so operators notice before
+    /// worker output is deleted on completion. Appends a
+    /// `tip_scratch_workspace` event on the task and touches the
+    /// `.scratch_tip_shown` sentinel under the kanban home. No-op for
+    /// worktree/dir workspaces (preserved by design). Best-effort:
+    /// never blocks the spawn loop over a help message.
+    fn maybe_emit_scratch_tip(&self, home: &Path, task_id: &str, workspace_kind: &str) {
+        if workspace_kind != "scratch" {
+            return;
+        }
+        let sentinel = home.join(SCRATCH_TIP_SENTINEL_NAME);
+        if sentinel.exists() {
+            return;
+        }
+        eprintln!("kanban: {} (task {})", SCRATCH_TIP_MESSAGE, task_id);
+        let _ = self.append_event(
+            task_id,
+            "tip_scratch_workspace",
+            serde_json::json!({ "message": SCRATCH_TIP_MESSAGE }),
+        );
+        let _ = std::fs::File::create(&sentinel);
+    }
+
     pub fn dispatch_once<F>(
         &self,
         home: &Path,
@@ -6021,6 +6056,7 @@ impl KanbanStore {
         stale_timeout_seconds: i64,
         known_profiles: Option<&std::collections::HashSet<String>>,
         per_profile_cap: Option<usize>,
+        max_in_progress: Option<usize>,
     ) -> Result<DispatchResult>
     where
         F: FnMut(&Task, Option<&Path>) -> std::result::Result<Option<i64>, String>,
@@ -6070,6 +6106,25 @@ impl KanbanStore {
 
         let running = self.list_tasks(None, Some("running"), None, 10_000)?;
         let mut running_count = running.len();
+        // Global in-progress cap (hermes `kanban.max_in_progress`,
+        // #33488): when the board already runs at/above the cap, skip
+        // spawning this tick entirely so slow workers (local LLMs,
+        // resource-constrained hosts) can drain before more tasks pile
+        // up and time out; otherwise clamp the spawn cap to the
+        // remaining headroom.
+        let mut max_spawn = max_spawn;
+        if let Some(cap) = max_in_progress.filter(|cap| *cap > 0) {
+            if running_count >= cap {
+                return Ok(result);
+            }
+            // `max_spawn` is a live concurrency cap, so the effective
+            // cap is simply the tighter of the two — spawning proceeds
+            // until the running column reaches it.
+            max_spawn = Some(match max_spawn {
+                Some(limit) => limit.min(cap),
+                None => cap,
+            });
+        }
         let ready: Vec<String> = {
             let conn = self.conn.lock().unwrap();
             let mut stmt = conn
@@ -6196,6 +6251,7 @@ impl KanbanStore {
                     if let Some(branch) = &branch {
                         let _ = self.set_branch_name(&id, branch);
                     }
+                    self.maybe_emit_scratch_tip(home, &id, &effective.workspace_kind);
                     // Re-read the claimed row so the worker prompt +
                     // env see the fresh run id.
                     let mut spawn_task =
@@ -6309,6 +6365,7 @@ impl KanbanStore {
                     if let Some(branch) = &branch {
                         let _ = self.set_branch_name(&id, branch);
                     }
+                    self.maybe_emit_scratch_tip(home, &id, &claimed.workspace_kind);
                     let mut review_task = claimed.clone();
                     if home
                         .join("skills")
@@ -6541,7 +6598,7 @@ mod tests {
         store.ready_task(&second.id).unwrap();
 
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1234)), Some(1), false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1234)), Some(1), false, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, first.id);
@@ -6552,7 +6609,7 @@ mod tests {
 
         // Second tick with a higher cap picks up the remaining task.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5678)), Some(2), false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5678)), Some(2), false, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, second.id);
@@ -6564,7 +6621,7 @@ mod tests {
         let task = make_task(&store, "probe");
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| panic!("dry run must not spawn"), None, true, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| panic!("dry run must not spawn"), None, true, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(result.would_spawn, vec![task.id.clone()]);
         assert!(result.spawned.is_empty());
@@ -6579,14 +6636,14 @@ mod tests {
 
         // First failure: recorded, still ready-ish for retry.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom".into()), None, false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom".into()), None, false, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(result.spawn_failed, vec![task.id.clone()]);
         assert!(result.auto_blocked.is_empty());
 
         // Second consecutive failure trips the limit → blocked.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom again".into()), None, false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom again".into()), None, false, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         let blocked = store.get_task(&task.id).unwrap().unwrap();
@@ -6721,6 +6778,7 @@ mod tests {
                 0,
                 Some(&profiles),
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(result.skipped_nonspawnable, vec![lane.id.clone()]);
@@ -6751,7 +6809,7 @@ mod tests {
             .unwrap();
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(9)), None, false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(9)), None, false, 2, 0, None, None, None)
             .unwrap();
         assert!(result.skipped_nonspawnable.is_empty());
         assert_eq!(result.spawned.len(), 1);
@@ -7017,6 +7075,7 @@ mod tests {
                 0,
                 Some(&profiles),
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(result.spawned, vec![(task.id.clone(), Some(55))]);
@@ -7071,6 +7130,7 @@ mod tests {
                 0,
                 None,
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -7116,7 +7176,7 @@ mod tests {
         let profiles: std::collections::HashSet<String> =
             ["alice".to_string()].into_iter().collect();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, Some(&profiles), None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, Some(&profiles), None, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 0);
         assert_eq!(result.skipped_unassigned, vec![unassigned.id.clone()]);
@@ -7158,7 +7218,7 @@ mod tests {
         }
 
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, Some(1))
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, Some(1), None)
             .unwrap();
         // alice: first task spawns, second hits the cap; bob unaffected.
         let spawned: Vec<String> = result.spawned.iter().map(|(id, _)| id.clone()).collect();
@@ -7172,7 +7232,7 @@ mod tests {
         // The seeded running column keeps the cap enforced next tick
         // (second stayed ready).
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, Some(1))
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, Some(1), None)
             .unwrap();
         assert_eq!(result.spawned.len(), 0);
         assert_eq!(
@@ -7182,7 +7242,7 @@ mod tests {
 
         // No cap → the backlog spawns.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert!(result.skipped_per_profile_capped.is_empty());
@@ -7203,11 +7263,133 @@ mod tests {
             store.ready_task(&task.id).unwrap();
         }
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| panic!("dry run"), None, true, 2, 0, None, Some(1))
+            .dispatch_once(dir.path(), false, |_, _| panic!("dry run"), None, true, 2, 0, None, Some(1), None)
             .unwrap();
         // The would-be spawn counts against the cap for the second task.
         assert_eq!(result.would_spawn.len(), 1);
         assert_eq!(result.skipped_per_profile_capped.len(), 1);
+    }
+
+    #[test]
+    fn dispatch_max_in_progress_saturated_skips_tick() {
+        let (dir, store) = temp_store();
+        // Two running tasks saturate the cap.
+        for title in ["busy-a", "busy-b"] {
+            let task = make_task(&store, title);
+            store.ready_task(&task.id).unwrap();
+            store
+                .claim_task(&task.id, "host:1", DEFAULT_CLAIM_TTL_SECS)
+                .unwrap();
+        }
+        let waiting = make_task(&store, "waiting");
+        store.ready_task(&waiting.id).unwrap();
+
+        let result = store
+            .dispatch_once(
+                dir.path(),
+                false,
+                |_, _| panic!("saturated tick must not spawn"),
+                Some(4),
+                false,
+                2,
+                0,
+                None,
+                None,
+                Some(2),
+            )
+            .unwrap();
+        // Hermes semantics: the tick returns early — nothing spawned,
+        // nothing bucketed as skipped; the backlog simply stays ready.
+        assert!(result.spawned.is_empty());
+        assert!(result.skipped_capped.is_empty());
+        assert!(result.would_spawn.is_empty());
+        assert_eq!(
+            store.get_task(&waiting.id).unwrap().unwrap().status,
+            "ready"
+        );
+    }
+
+    #[test]
+    fn dispatch_max_in_progress_clamps_headroom() {
+        let (dir, store) = temp_store();
+        let busy = make_task(&store, "busy");
+        store.ready_task(&busy.id).unwrap();
+        store
+            .claim_task(&busy.id, "host:1", DEFAULT_CLAIM_TTL_SECS)
+            .unwrap();
+        let mut queued = Vec::new();
+        for title in ["q1", "q2", "q3"] {
+            let task = make_task(&store, title);
+            store.ready_task(&task.id).unwrap();
+            queued.push(task.id);
+        }
+
+        // Cap 2 with one already running → exactly one new spawn even
+        // though max_spawn is unset.
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(7)), None, false, 2, 0, None, None, Some(2))
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        assert_eq!(result.spawned[0].0, queued[0]);
+
+        // Now saturated: the next tick returns early.
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(7)), None, false, 2, 0, None, None, Some(2))
+            .unwrap();
+        assert!(result.spawned.is_empty());
+
+        // Cap 0 disables the check → the rest of the backlog spawns.
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(7)), None, false, 2, 0, None, None, Some(0))
+            .unwrap();
+        assert_eq!(result.spawned.len(), 2);
+    }
+
+    #[test]
+    fn scratch_tip_emitted_once_per_install() {
+        let (dir, store) = temp_store();
+        let first = make_task(&store, "tip-one");
+        store.ready_task(&first.id).unwrap();
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5)), Some(4), false, 2, 0, None, None, None)
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        let events = store.events(&first.id).unwrap();
+        assert!(events.iter().any(|e| e.kind == "tip_scratch_workspace"));
+        assert!(dir.path().join(SCRATCH_TIP_SENTINEL_NAME).exists());
+
+        // Second scratch task on the same install stays silent.
+        let second = make_task(&store, "tip-two");
+        store.ready_task(&second.id).unwrap();
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5)), Some(4), false, 2, 0, None, None, None)
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        let events = store.events(&second.id).unwrap();
+        assert!(!events.iter().any(|e| e.kind == "tip_scratch_workspace"));
+    }
+
+    #[test]
+    fn scratch_tip_skipped_for_preserved_workspaces() {
+        let (dir, store) = temp_store();
+        let ws = dir.path().join("kept-workspace");
+        let task = store
+            .create_task(&NewTask {
+                title: "dir workspace".into(),
+                created_by: "tester".into(),
+                workspace_kind: Some("dir".into()),
+                workspace_path: Some(ws.display().to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5)), Some(4), false, 2, 0, None, None, None)
+            .unwrap();
+        assert_eq!(result.spawned.len(), 1);
+        let events = store.events(&task.id).unwrap();
+        assert!(!events.iter().any(|e| e.kind == "tip_scratch_workspace"));
+        assert!(!dir.path().join(SCRATCH_TIP_SENTINEL_NAME).exists());
     }
 
     #[test]
@@ -7320,6 +7502,7 @@ mod tests {
                 0,
                 None,
                 None,
+                None,
             )
             .unwrap();
         let run = seen_run.borrow().clone();
@@ -7359,7 +7542,7 @@ mod tests {
         // must skip the tick with zero writes.
         let held = KanbanStore::try_acquire_dispatch_tick_lock(&db_path).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None, None)
             .unwrap();
         assert!(result.skipped_locked);
         assert!(result.spawned.is_empty());
@@ -7368,7 +7551,7 @@ mod tests {
         // Released → the next tick proceeds.
         drop(held);
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None, None)
             .unwrap();
         assert!(!result.skipped_locked);
         assert_eq!(result.spawned.len(), 1);
@@ -8483,7 +8666,7 @@ mod tests {
 
         let tick = || {
             store
-                .dispatch_once(dir.path(), false, |_, _| Err("exec format error".to_string()), Some(4), false, 2, 0, None, None)
+                .dispatch_once(dir.path(), false, |_, _| Err("exec format error".to_string()), Some(4), false, 2, 0, None, None, None)
                 .unwrap()
         };
 
@@ -8525,7 +8708,7 @@ mod tests {
             .unwrap();
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom".to_string()), Some(4), false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom".to_string()), Some(4), false, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         assert!(result.spawn_failed.is_empty());
@@ -8547,7 +8730,7 @@ mod tests {
         let task = make_task(&store, "resilient");
         store.ready_task(&task.id).unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(
             store.get_task(&task.id).unwrap().unwrap().consecutive_failures,
@@ -8565,10 +8748,10 @@ mod tests {
         let other = make_task(&store, "blocked cycle");
         store.ready_task(&other.id).unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None, None)
             .unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None, None, None)
             .unwrap();
         let t = store.get_task(&other.id).unwrap().unwrap();
         assert_eq!(t.status, "blocked");
@@ -8974,6 +9157,7 @@ mod tests {
                 0,
                 None,
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
@@ -9010,6 +9194,7 @@ mod tests {
                 0,
                 None,
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(result.spawn_failed, vec![task.id.clone()]);
@@ -9031,7 +9216,7 @@ mod tests {
         let task = make_task(&store, "legacy worktrees");
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), true, |_, _| Ok(Some(7)), Some(2), false, 2, 0, None, None)
+            .dispatch_once(dir.path(), true, |_, _| Ok(Some(7)), Some(2), false, 2, 0, None, None, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         let t = store.get_task(&task.id).unwrap().unwrap();
@@ -9183,6 +9368,7 @@ mod tests {
                 false,
                 2,
                 0,
+                None,
                 None,
                 None,
             )

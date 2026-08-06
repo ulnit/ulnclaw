@@ -470,7 +470,21 @@ performance and a single static binary.
   Block, the `kanban_complete`/`kanban_block` tools and the gateway
   complete/block APIs all thread it). Spawn/workspace failures of a
   claimed attempt now end the run, release the claim back to ready
-  and count the failure (hermes `_record_spawn_failure`).
+  and count the failure (hermes `_record_spawn_failure`). P154 added
+  the `[kanban] max_in_progress` global concurrency cap (#33488): a
+  tick whose board already runs at/above the cap returns early (the
+  backlog stays ready, nothing is bucketed), otherwise the effective
+  spawn cap clamps to the tighter of `max_spawn` and
+  `max_in_progress` so the running column fills exactly to the cap —
+  slow workers (local LLMs, resource-constrained hosts) drain before
+  piled-up tasks time out. P154 also ported the one-time
+  scratch-workspace tip (hermes `_maybe_emit_scratch_tip`): the first
+  scratch workspace materialized across the whole install logs a
+  warning that scratch output is ephemeral (deleted when the task
+  completes), records a `tip_scratch_workspace` event on the task,
+  and touches the `.scratch_tip_shown` sentinel so the tip never
+  repeats; worktree/dir workspaces are preserved by design and never
+  tip.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

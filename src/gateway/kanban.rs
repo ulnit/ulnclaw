@@ -557,6 +557,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
             stale_timeout,
             Some(&known_profiles),
             config.kanban.max_in_progress_per_profile,
+            config.kanban.max_in_progress,
         )
     })
     .await;

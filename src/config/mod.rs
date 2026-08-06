@@ -769,6 +769,12 @@ pub struct KanbanConfig {
     /// (hermes `kanban.max_in_progress_per_profile`, #21582). None or
     /// 0 disables the cap.
     pub max_in_progress_per_profile: Option<usize>,
+    /// Global in-progress cap: when the board already has this many
+    /// running tasks, the dispatcher skips the tick so slow workers
+    /// can drain; otherwise only enough tasks spawn to reach the cap
+    /// (hermes `kanban.max_in_progress`, #33488). None or 0 disables
+    /// the cap (`max_spawn` still applies).
+    pub max_in_progress: Option<usize>,
     /// Rotate a per-task worker log once it reaches this many bytes,
     /// keeping one `.log.1` backup generation (hermes
     /// `kanban.worker_log_rotate_bytes`; default 2 MiB).
@@ -789,6 +795,7 @@ impl Default for KanbanConfig {
             auto_decompose_per_tick: 3,
             stale_timeout_seconds: 14400,
             max_in_progress_per_profile: None,
+            max_in_progress: None,
             worker_log_rotate_bytes: None,
         }
     }
