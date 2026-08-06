@@ -358,6 +358,9 @@ pub struct MsgContent {
     /// TIM `image_info_array` (field 8) — hermes
     /// `build_image_msg_body` entries.
     pub image_info_array: Vec<ImageInfo>,
+    /// TIM `index` (field 9) — TIMFaceElem face/sticker index; 0 for
+    /// Yuanbao catalog stickers (hermes omits zero varints on encode).
+    pub index: u64,
 }
 
 /// One `image_info_array` entry (hermes `build_image_msg_body`: type
@@ -410,6 +413,9 @@ fn encode_msg_content(content: &MsgContent) -> Vec<u8> {
         }
         buf.extend(encode_message_field(8, &img_buf));
     }
+    if content.index != 0 {
+        buf.extend(encode_varint_field(9, content.index));
+    }
     if !content.url.is_empty() {
         buf.extend(encode_string_field(10, &content.url));
     }
@@ -448,6 +454,7 @@ pub fn decode_msg_content(data: &[u8]) -> MsgContent {
         file_name: get_string(&map, 12),
         image_format: get_varint(&map, 3) as u32,
         image_info_array,
+        index: get_varint(&map, 9),
     }
 }
 
@@ -1116,5 +1123,42 @@ mod tests {
         assert_eq!(decode_send_rsp_code(&encode_varint_field(1, 0)), 0);
         assert_eq!(decode_send_rsp_code(&encode_varint_field(1, 42)), 42);
         assert_eq!(decode_send_rsp_code(&[]), 0);
+    }
+
+    #[test]
+    fn msg_content_index_field_round_trips() {
+        let content = MsgContent {
+            data: "{\"sticker_id\":\"225\"}".into(),
+            index: 7,
+            ..Default::default()
+        };
+        let element = MsgBodyElement {
+            msg_type: "TIMFaceElem".into(),
+            msg_content: content,
+        };
+        let decoded = decode_msg_body_element(&encode_msg_body_element(&element));
+        assert_eq!(decoded.msg_type, "TIMFaceElem");
+        assert_eq!(decoded.msg_content.index, 7);
+        assert_eq!(decoded.msg_content.data, "{\"sticker_id\":\"225\"}");
+    }
+
+    #[test]
+    fn msg_content_zero_index_omitted_like_hermes() {
+        // hermes `_encode_msg_content` skips zero varints, so catalog
+        // stickers (index=0) put only the data JSON on the wire.
+        let element = MsgBodyElement {
+            msg_type: "TIMFaceElem".into(),
+            msg_content: MsgContent {
+                data: "{\"sticker_id\":\"225\"}".into(),
+                ..Default::default()
+            },
+        };
+        let content_bytes = encode_msg_content(&element.msg_content);
+        let decoded = decode_msg_content(&content_bytes);
+        assert_eq!(decoded.index, 0);
+        assert_eq!(decoded.data, "{\"sticker_id\":\"225\"}");
+        // Only the data field (tag 0x22 + len + payload) may be on the
+        // wire — no field-9 varint present.
+        assert_eq!(content_bytes.len(), 2 + decoded.data.len());
     }
 }

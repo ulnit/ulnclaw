@@ -15,12 +15,16 @@
 //! PNG/JPEG/GIF/WebP dimensions, md5 uuid, TIM `image_format`) or
 //! TIMFileElem, caption appended as a TIMTextElem.
 //!
+//! Stickers are ported (hermes `yuanbao_sticker.py`): inbound
+//! TIMFaceElem renders as `[emoji: <name>]` and `STICKER:<name>`
+//! reply tags send catalog stickers as TIMFaceElem (fuzzy lookup).
+//!
 //! Known differences: the inbound middleware pipeline collapses into a
 //! direct decode→gate→dispatch path (recall guard, owner commands,
-//! forwarded chat-history parsing, anchor patching not ported); inbound
-//! media resolution/download and the sticker module are not ported
-//! (inbound media surfaces as `[media: <type>]` notes); the
-//! slow-response notifier and reply heartbeats are not ported.
+//! forwarded chat-history parsing, anchor patching not ported);
+//! inbound media resolution/download is not ported (inbound media
+//! surfaces as `[media: <type>]` notes); the slow-response notifier
+//! and reply heartbeats are not ported.
 
 use crate::messaging::{Dispatcher, MessageEvent};
 use crate::pairing::PairingStore;
@@ -751,6 +755,12 @@ async fn handle_inbound_frames(runner: &Arc<Runner>, frames: &[Vec<u8>], out_tx:
                     text_parts.push(element.msg_content.text.clone());
                 }
             }
+            "TIMFaceElem" => {
+                // hermes: `[emoji: {name}]` / `[emoji]` from the data JSON.
+                text_parts.push(crate::yuanbao_sticker::render_face_element(
+                    &element.msg_content,
+                ));
+            }
             other if !other.is_empty() => {
                 text_parts.push(format!("[media: {other}]"));
             }
@@ -797,6 +807,7 @@ async fn handle_inbound_frames(runner: &Arc<Runner>, frames: &[Vec<u8>], out_tx:
         send_text_via(runner, out_tx, &chat_id, &push.group_code, echo).await;
     }
     let (reply_text, media_paths) = crate::messaging::extract_media_tags(&outcome.reply);
+    let (reply_text, sticker_names) = crate::yuanbao_sticker::extract_sticker_tags(&reply_text);
     if media_paths.is_empty() {
         if !reply_text.trim().is_empty() {
             send_text_via(runner, out_tx, &chat_id, &push.group_code, &reply_text).await;
@@ -808,6 +819,9 @@ async fn handle_inbound_frames(runner: &Arc<Runner>, frames: &[Vec<u8>], out_tx:
             let caption = if index == 0 { reply_text.as_str() } else { "" };
             send_media_via(runner, out_tx, &chat_id, &push.group_code, path, caption).await;
         }
+    }
+    for name in &sticker_names {
+        send_sticker_via(runner, out_tx, &chat_id, &push.group_code, name).await;
     }
 }
 
@@ -1445,6 +1459,38 @@ async fn send_media_via(
     }
     if let Err(e) = send_msg_body_ws(runner, out_tx, chat_id, group_code, &elements).await {
         eprintln!("[yuanbao] media send failed to {chat_id}: {e}");
+    }
+}
+
+/// Send one sticker (hermes `StickerHandler` + `send_sticker`): fuzzy
+/// catalog lookup → TIMFaceElem over the WS, three attempts like
+/// `send_text_via`.
+async fn send_sticker_via(
+    runner: &Arc<Runner>,
+    out_tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    chat_id: &str,
+    group_code: &str,
+    name: &str,
+) {
+    let sticker = match crate::yuanbao_sticker::get_sticker_by_name(name) {
+        Some(sticker) => sticker,
+        None => {
+            eprintln!("[yuanbao] sticker not found: {name}");
+            return;
+        }
+    };
+    let element = crate::yuanbao_sticker::build_sticker_msg_body(sticker);
+    let mut last_error = String::new();
+    for _attempt in 0..3u32 {
+        match send_msg_body_ws(runner, out_tx, chat_id, group_code, std::slice::from_ref(&element))
+            .await
+        {
+            Ok(()) => return,
+            Err(e) => last_error = e,
+        }
+    }
+    if !last_error.is_empty() {
+        eprintln!("[yuanbao] sticker send failed to {chat_id}: {last_error}");
     }
 }
 

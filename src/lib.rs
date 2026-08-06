@@ -184,6 +184,7 @@ pub mod webhook_platforms;
 pub mod qqbot;
 pub mod yuanbao;
 pub mod yuanbao_proto;
+pub mod yuanbao_sticker;
 pub mod wecom;
 pub mod whatsapp;
 pub mod whatsapp_bridge;
