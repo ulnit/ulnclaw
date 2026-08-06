@@ -584,10 +584,20 @@ enum KanbanAction {
     Heartbeat { id: String },
     /// Mark a task done
     Done {
-        id: String,
+        /// One or more task ids (--result/--summary/--metadata apply
+        /// to all of them; hermes complete)
+        id: Vec<String>,
         /// Result summary
         #[arg(long)]
         result: Option<String>,
+        /// Structured handoff summary for downstream tasks (falls back
+        /// to --result; hermes complete --summary)
+        #[arg(long)]
+        summary: Option<String>,
+        /// JSON dict of structured facts stored on the closing run
+        /// (hermes complete --metadata)
+        #[arg(long)]
+        metadata: Option<String>,
     },
     /// Block a task with a reason
     Block {
@@ -597,11 +607,28 @@ enum KanbanAction {
         /// transient (hermes block --kind)
         #[arg(long)]
         kind: Option<String>,
+        /// Additional task ids to block with the same reason (hermes
+        /// block --ids bulk mode)
+        #[arg(long = "ids", num_args = 1..)]
+        extra_ids: Vec<String>,
     },
-    /// Unblock a task (blocked → ready)
-    Unblock { id: String },
-    /// Archive a task
-    Archive { id: String },
+    /// Unblock one or more tasks (blocked/scheduled → ready or todo)
+    Unblock {
+        id: Vec<String>,
+        /// Recorded as a comment before unblocking (hermes unblock
+        /// --reason)
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Archive one or more tasks (or purge archived ones with --rm)
+    Archive {
+        /// Task ids to archive
+        id: Vec<String>,
+        /// Permanently delete already-archived task ids (hermes
+        /// archive --rm)
+        #[arg(long = "rm", num_args = 1..)]
+        purge: Vec<String>,
+    },
     /// Comment on a task
     Comment { id: String, text: Vec<String> },
     /// Add a parent→child dependency (hermes `kanban link <parent> <child>`)
@@ -661,14 +688,30 @@ enum KanbanAction {
     },
     /// Park a task in Scheduled — waiting on time, not human input
     /// (hermes `kanban schedule`)
-    Schedule { id: String, reason: Vec<String> },
-    /// Manually promote a todo/blocked task to ready (hermes `kanban promote`)
+    Schedule {
+        id: String,
+        reason: Vec<String>,
+        /// Additional task ids to schedule with the same reason
+        /// (hermes schedule --ids bulk mode)
+        #[arg(long = "ids", num_args = 1..)]
+        extra_ids: Vec<String>,
+    },
     Promote {
         id: String,
         reason: Vec<String>,
         /// Promote even if parent dependencies are not done yet
         #[arg(long)]
         force: bool,
+        /// Additional task ids to promote with the same reason (hermes
+        /// promote --ids bulk mode)
+        #[arg(long = "ids", num_args = 1..)]
+        extra_ids: Vec<String>,
+        /// Validate the promotion without mutating state
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable result
+        #[arg(long)]
+        json: bool,
     },
     /// Release an active worker claim on a running task (hermes `kanban reclaim`)
     Reclaim { id: String, #[arg(long)] reason: Option<String> },
@@ -797,6 +840,10 @@ enum KanbanAction {
         /// Only show events for tasks assigned to this profile
         #[arg(long)]
         assignee: Option<String>,
+        /// Only show events from tasks in this tenant (hermes watch
+        /// --tenant)
+        #[arg(long)]
+        tenant: Option<String>,
         /// Comma-separated event kinds to include
         #[arg(long)]
         kinds: Option<String>,
@@ -4607,54 +4654,189 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!("heartbeat recorded for {}", task.id);
         }
-        KanbanAction::Done { id, result } => {
-            let resolved = resolve(&id)?;
-            let task = store
-                .complete_task(&resolved, result.as_deref())
-                .map_err(|e| e.to_string())?;
-            ulnclaw::plugins::fire_session_event(
-                "kanban_task_completed",
-                &task.id,
-                &cwd,
-                serde_json::json!({
-                    "task_id": task.id,
-                    "board": task.board,
-                    "assignee": task.assignee,
-                    "result": task.result,
-                }),
-            )
-            .await;
-            println!("{}", kanban_task_line(&task));
+        KanbanAction::Done { id, result, summary, metadata } => {
+            if id.is_empty() {
+                return Err("usage: ulnclaw kanban done <task-id> [more ids]".into());
+            }
+            let metadata_value = match metadata.as_deref() {
+                Some(raw) => {
+                    let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+                        format!("kanban: --metadata must be a JSON object: {e}")
+                    })?;
+                    if !value.is_object() {
+                        return Err("kanban: --metadata must be a JSON object".into());
+                    }
+                    Some(value)
+                }
+                None => None,
+            };
+            let mut failed: Vec<String> = Vec::new();
+            for raw in &id {
+                let resolved = match resolve(raw) {
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                        continue;
+                    }
+                };
+                match store.complete_task_with(
+                    &resolved,
+                    result.as_deref(),
+                    summary.as_deref(),
+                    metadata_value.as_ref(),
+                ) {
+                    Ok(task) => {
+                        ulnclaw::plugins::fire_session_event(
+                            "kanban_task_completed",
+                            &task.id,
+                            &cwd,
+                            serde_json::json!({
+                                "task_id": task.id,
+                                "board": task.board,
+                                "assignee": task.assignee,
+                                "result": task.result,
+                            }),
+                        )
+                        .await;
+                        println!("{}", kanban_task_line(&task));
+                    }
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                    }
+                }
+            }
+            if !failed.is_empty() {
+                return Err(format!("kanban: could not complete: {}", failed.join(", ")));
+            }
         }
-        KanbanAction::Block { id, reason, kind } => {
-            let resolved = resolve(&id)?;
+        KanbanAction::Block { id, reason, kind, extra_ids } => {
             let reason = reason.join(" ");
-            let task = store
-                .block_task_kind(&resolved, &reason, kind.as_deref())
-                .map_err(|e| e.to_string())?;
-            ulnclaw::plugins::fire_session_event(
-                "kanban_task_blocked",
-                &task.id,
-                &cwd,
-                serde_json::json!({
-                    "task_id": task.id,
-                    "board": task.board,
-                    "assignee": task.assignee,
-                    "reason": reason,
-                }),
-            )
-            .await;
-            println!("{}", kanban_task_line(&task));
+            let mut ids = vec![id];
+            ids.extend(extra_ids);
+            let mut failed: Vec<String> = Vec::new();
+            for raw in &ids {
+                let resolved = match resolve(raw) {
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                        continue;
+                    }
+                };
+                match store.block_task_kind(&resolved, &reason, kind.as_deref()) {
+                    Ok(task) => {
+                        ulnclaw::plugins::fire_session_event(
+                            "kanban_task_blocked",
+                            &task.id,
+                            &cwd,
+                            serde_json::json!({
+                                "task_id": task.id,
+                                "board": task.board,
+                                "assignee": task.assignee,
+                                "reason": reason,
+                            }),
+                        )
+                        .await;
+                        println!("{}", kanban_task_line(&task));
+                    }
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                    }
+                }
+            }
+            if !failed.is_empty() {
+                return Err(format!("kanban: could not block: {}", failed.join(", ")));
+            }
         }
-        KanbanAction::Unblock { id } => {
-            let resolved = resolve(&id)?;
-            let task = store.unblock_task(&resolved).map_err(|e| e.to_string())?;
-            println!("{}", kanban_task_line(&task));
+        KanbanAction::Unblock { id, reason } => {
+            if id.is_empty() {
+                return Err("usage: ulnclaw kanban unblock <task-id> [more ids]".into());
+            }
+            let mut failed: Vec<String> = Vec::new();
+            for raw in &id {
+                let resolved = match resolve(raw) {
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                        continue;
+                    }
+                };
+                if let Some(note) = reason.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                    store.add_comment(&resolved, "unblocker", note).ok();
+                }
+                match store.unblock_task(&resolved) {
+                    Ok(task) => println!("{}", kanban_task_line(&task)),
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                    }
+                }
+            }
+            if !failed.is_empty() {
+                return Err(format!("kanban: could not unblock: {}", failed.join(", ")));
+            }
         }
-        KanbanAction::Archive { id } => {
-            let resolved = resolve(&id)?;
-            let task = store.archive_task(&resolved).map_err(|e| e.to_string())?;
-            println!("archived {}", task.id);
+        KanbanAction::Archive { id, purge } => {
+            if !id.is_empty() && !purge.is_empty() {
+                return Err(
+                    "kanban: choose either task ids to archive or --rm archived task ids"
+                        .into(),
+                );
+            }
+            if id.is_empty() && purge.is_empty() {
+                return Err("kanban: at least one task id is required".into());
+            }
+            let mut failed: Vec<String> = Vec::new();
+            if !purge.is_empty() {
+                for raw in &purge {
+                    let resolved = match resolve(raw) {
+                        Ok(resolved) => resolved,
+                        Err(e) => {
+                            eprintln!("kanban: {raw}: {e}");
+                            failed.push(raw.clone());
+                            continue;
+                        }
+                    };
+                    match store.delete_archived_task(&resolved) {
+                        Ok(true) => println!("deleted {resolved}"),
+                        Ok(false) => {
+                            eprintln!(
+                                "kanban: cannot delete {resolved} (must already be archived)"
+                            );
+                            failed.push(raw.clone());
+                        }
+                        Err(e) => {
+                            eprintln!("kanban: {raw}: {e}");
+                            failed.push(raw.clone());
+                        }
+                    }
+                }
+            } else {
+                for raw in &id {
+                    let resolved = match resolve(raw) {
+                        Ok(resolved) => resolved,
+                        Err(e) => {
+                            eprintln!("kanban: {raw}: {e}");
+                            failed.push(raw.clone());
+                            continue;
+                        }
+                    };
+                    match store.archive_task(&resolved) {
+                        Ok(task) => println!("archived {}", task.id),
+                        Err(e) => {
+                            eprintln!("kanban: {raw}: {e}");
+                            failed.push(raw.clone());
+                        }
+                    }
+                }
+            }
+            if !failed.is_empty() {
+                return Err(format!("kanban: could not archive: {}", failed.join(", ")));
+            }
         }
         KanbanAction::Comment { id, text } => {
             let resolved = resolve(&id)?;
@@ -4849,21 +5031,84 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 println!("no diagnostics — the board looks healthy");
             }
         }
-        KanbanAction::Schedule { id, reason } => {
-            let resolved = resolve(&id)?;
+        KanbanAction::Schedule { id, reason, extra_ids } => {
             let reason = reason.join(" ");
-            let task = store
-                .schedule_task(&resolved, &reason)
-                .map_err(|e| e.to_string())?;
-            println!("\u{23F1} {} scheduled", task.id);
+            let mut ids = vec![id];
+            ids.extend(extra_ids);
+            let mut failed: Vec<String> = Vec::new();
+            for raw in &ids {
+                let resolved = match resolve(raw) {
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                        continue;
+                    }
+                };
+                match store.schedule_task(&resolved, &reason) {
+                    Ok(task) => println!("\u{23F1} {} scheduled", task.id),
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                    }
+                }
+            }
+            if !failed.is_empty() {
+                return Err(format!("kanban: could not schedule: {}", failed.join(", ")));
+            }
         }
-        KanbanAction::Promote { id, reason, force } => {
-            let resolved = resolve(&id)?;
+        KanbanAction::Promote { id, reason, force, extra_ids, dry_run, json } => {
             let reason = reason.join(" ");
-            let task = store
-                .promote_task(&resolved, &reason, force)
-                .map_err(|e| e.to_string())?;
-            println!("\u{25B6} {} promoted to ready", task.id);
+            let mut ids = vec![id];
+            ids.extend(extra_ids);
+            let mut failed: Vec<String> = Vec::new();
+            let mut results: Vec<serde_json::Value> = Vec::new();
+            for raw in &ids {
+                let resolved = match resolve(raw) {
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                        results.push(serde_json::json!({ "task_id": raw, "ok": false, "error": e.to_string() }));
+                        continue;
+                    }
+                };
+                if dry_run {
+                    match store.validate_promote(&resolved, force) {
+                        Ok(()) => {
+                            results.push(serde_json::json!({ "task_id": resolved, "would_promote": true }));
+                        }
+                        Err(e) => {
+                            results.push(serde_json::json!({ "task_id": resolved, "would_promote": false, "error": e.to_string() }));
+                        }
+                    }
+                    continue;
+                }
+                match store.promote_task(&resolved, &reason, force) {
+                    Ok(task) => {
+                        println!("\u{25B6} {} promoted to ready", task.id);
+                        results.push(serde_json::json!({ "task_id": task.id, "ok": true }));
+                    }
+                    Err(e) => {
+                        eprintln!("kanban: {raw}: {e}");
+                        failed.push(raw.clone());
+                        results.push(serde_json::json!({ "task_id": resolved, "ok": false, "error": e.to_string() }));
+                    }
+                }
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "dry_run": dry_run,
+                        "results": results,
+                    }))
+                    .map_err(|e| e.to_string())?
+                );
+            }
+            if !failed.is_empty() {
+                return Err(format!("kanban: could not promote: {}", failed.join(", ")));
+            }
         }
         KanbanAction::Reclaim { id, reason } => {
             let resolved = resolve(&id)?;
@@ -5380,7 +5625,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 _ => {}
             }
         }
-        KanbanAction::Watch { assignee, kinds, interval } => {
+        KanbanAction::Watch { assignee, tenant, kinds, interval } => {
             let kinds: Option<Vec<String>> = kinds.map(|raw| {
                 raw.split(',')
                     .map(|kind| kind.trim().to_string())
@@ -5395,6 +5640,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     .board_events_since(
                         last_id,
                         assignee.as_deref(),
+                        tenant.as_deref(),
                         kinds.as_deref(),
                         200,
                     )

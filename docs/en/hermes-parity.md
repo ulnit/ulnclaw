@@ -378,7 +378,20 @@ performance and a single static binary.
   completion; `unblock_task` now re-gates on open parents
   (blocked → `todo` while parents remain) matching hermes' invariant
   fix; the agent `kanban_block` tool and the gateway block API accept
-  the kind.
+  the kind; P143 completed the lifecycle CLI surface: bulk `kanban
+  done/block/schedule/unblock/promote/archive` (multiple ids, hermes
+  `task_ids` + `--ids`), `kanban done --summary/--metadata` storing
+  the structured handoff (full summary + JSON facts) on the closing
+  run while the `completed` event carries the first summary line
+  (400-char cap) for notifiers, `kanban archive --rm` purging
+  already-archived tasks with all related rows (guard: only archived
+  tasks delete), `kanban unblock --reason` commenting before
+  unblocking, `kanban promote --dry-run/--json` backed by a
+  mutation-free `validate_promote`, `kanban watch --tenant`, and
+  archive now closes an in-flight run as reclaimed + immediately
+  promotes children whose archived parent was the last gate
+  (`recompute_ready` treats archived parents as done, hermes
+  semantics).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

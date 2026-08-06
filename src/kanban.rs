@@ -2151,6 +2151,7 @@ impl KanbanStore {
         &self,
         after_id: i64,
         assignee: Option<&str>,
+        tenant: Option<&str>,
         kinds: Option<&[String]>,
         limit: usize,
     ) -> Result<Vec<(TaskEvent, String)>> {
@@ -2164,8 +2165,12 @@ impl KanbanStore {
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(board), Box::new(after_id)];
         if let Some(assignee) = assignee {
-            sql.push_str(" AND t.assignee = ?3");
+            sql.push_str(&format!(" AND t.assignee = ?{}", param_values.len() + 1));
             param_values.push(Box::new(assignee.to_string()));
+        }
+        if let Some(tenant) = tenant {
+            sql.push_str(&format!(" AND t.tenant = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(tenant.to_string()));
         }
         if let Some(kinds) = kinds.filter(|k| !k.is_empty()) {
             let placeholders: Vec<String> = (0..kinds.len())
@@ -3063,24 +3068,74 @@ impl KanbanStore {
     /// Move a task to done (hermes `complete_task` — allowed from any
     /// non-terminal status).
     pub fn complete_task(&self, id: &str, result: Option<&str>) -> Result<Task> {
+        self.complete_task_with(id, result, None, None)
+    }
+
+    /// Complete a task with optional structured handoff fields (hermes
+    /// `complete_task(summary=…, metadata=…)`). `summary` is the
+    /// handoff for downstream children (falls back to `result` when
+    /// omitted); `metadata` is a free-form JSON object of structured
+    /// facts (e.g. changed files, tests run). Both are stored on the
+    /// closing run and the `completed` event carries the summary's
+    /// first line (400-char cap) so notifiers can render it without a
+    /// second lookup.
+    pub fn complete_task_with(
+        &self,
+        id: &str,
+        result: Option<&str>,
+        summary: Option<&str>,
+        metadata: Option<&Value>,
+    ) -> Result<Task> {
+        let handoff = summary.or(result);
+        let event_summary = handoff
+            .map(|raw| {
+                raw.trim()
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(400)
+                    .collect::<String>()
+            })
+            .filter(|line| !line.is_empty());
         let now = Self::now();
         let task = self.transition(
             id,
             &["todo", "ready", "running", "scheduled", "blocked"],
             "done",
             "completed",
-            serde_json::json!({ "result": result }),
+            serde_json::json!({
+                "result": result,
+                "result_len": result.map(str::len).unwrap_or(0),
+                "summary": event_summary,
+            }),
             ", completed_at = ?3, result = ?4, claim_lock = NULL, claim_expires = NULL, \
              consecutive_failures = 0, last_failure_error = NULL, \
              block_kind = NULL, block_recurrences = 0",
             vec![Box::new(now), Box::new(result.map(|r| r.to_string()))],
         )?;
-        match self.close_active_run(id, "done", "completed", result, None)? {
+        let metadata_json = metadata.map(serde_json::to_string).transpose()
+            .map_err(|e| AgentError::session(format!("kanban: metadata: {e}")))?;
+        match self.close_active_run_full(
+            id,
+            "done",
+            "completed",
+            handoff,
+            None,
+            metadata_json.as_deref(),
+        )? {
             Some(_) => {}
             None => {
                 // CLI `kanban done` on a never-claimed task still leaves
-                // an attempt-history row (hermes _synthesize_ended_run).
-                self.synthesize_closed_run(id, "completed", result, None)?;
+                // an attempt-history row with the handoff fields
+                // (hermes _synthesize_ended_run).
+                self.synthesize_closed_run_full(
+                    id,
+                    "completed",
+                    handoff,
+                    None,
+                    metadata_json.as_deref(),
+                )?;
             }
         }
         Ok(task)
@@ -3246,7 +3301,20 @@ impl KanbanStore {
     /// promote`, the recovery path). Unless `force`, parents must all be
     /// done/archived — otherwise the dispatcher would demote the task
     /// again on the next tick.
-    pub fn promote_task(&self, id: &str, reason: &str, force: bool) -> Result<Task> {
+    /// Validate that `id` can be promoted WITHOUT mutating state
+    /// (hermes `promote --dry-run`): the task must exist in todo /
+    /// blocked, and unless `force`, every parent must be done or
+    /// archived.
+    pub fn validate_promote(&self, id: &str, force: bool) -> Result<()> {
+        let task = self
+            .get_task(id)?
+            .ok_or_else(|| AgentError::session(format!("kanban: task {id} not found")))?;
+        if task.status != "todo" && task.status != "blocked" {
+            return Err(AgentError::session(format!(
+                "kanban: task {id} is '{}' — only todo/blocked tasks can be promoted",
+                task.status
+            )));
+        }
         if !force {
             let blocked_by: Vec<String> = self
                 .parents_of(id)?
@@ -3268,6 +3336,11 @@ impl KanbanStore {
                 )));
             }
         }
+        Ok(())
+    }
+
+    pub fn promote_task(&self, id: &str, reason: &str, force: bool) -> Result<Task> {
+        self.validate_promote(id, force)?;
         self.transition(
             id,
             &["todo", "blocked"],
@@ -3413,15 +3486,84 @@ impl KanbanStore {
     }
 
     pub fn archive_task(&self, id: &str) -> Result<Task> {
-        self.transition(
+        let task = self.transition(
             id,
             &["todo", "ready", "running", "scheduled", "blocked", "done"],
             "archived",
             "archived",
             serde_json::json!({}),
-            ", claim_lock = NULL, claim_expires = NULL",
+            ", claim_lock = NULL, claim_expires = NULL, worker_pid = NULL",
             vec![],
+        )?;
+        // A run still in flight (archived from the dashboard mid-run)
+        // is closed as reclaimed so attempt history is not orphaned
+        // (hermes archive_task).
+        self.close_active_run(
+            id,
+            "reclaimed",
+            "reclaimed",
+            Some("task archived with run still active"),
+            None,
+        )?;
+        // Archived parents no longer block children — promote the
+        // newly-unblocked dependents immediately instead of waiting
+        // for a later dispatcher tick (hermes).
+        self.recompute_ready()?;
+        Ok(task)
+    }
+
+    /// Permanently remove an already-archived task and every related
+    /// row (hermes `delete_archived_task`, `kanban archive --rm`).
+    /// Safety guard: only `archived` tasks can be deleted — anything
+    /// else must be archived first, so accidental data loss requires
+    /// a second deliberate action. Returns false for non-archived or
+    /// unknown ids.
+    pub fn delete_archived_task(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM tasks WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error("purge"))?;
+        if status.as_deref() != Some("archived") {
+            return Ok(false);
+        }
+        conn.execute(
+            "DELETE FROM task_comments WHERE task_id = ?1",
+            params![id],
         )
+        .map_err(db_error("purge comments"))?;
+        conn.execute(
+            "DELETE FROM task_events WHERE task_id = ?1",
+            params![id],
+        )
+        .map_err(db_error("purge events"))?;
+        conn.execute(
+            "DELETE FROM task_links WHERE parent_id = ?1 OR child_id = ?1",
+            params![id],
+        )
+        .map_err(db_error("purge links"))?;
+        conn.execute(
+            "DELETE FROM task_attachments WHERE task_id = ?1",
+            params![id],
+        )
+        .map_err(db_error("purge attachments"))?;
+        conn.execute(
+            "DELETE FROM task_runs WHERE task_id = ?1",
+            params![id],
+        )
+        .map_err(db_error("purge runs"))?;
+        conn.execute(
+            "DELETE FROM kanban_notify_subs WHERE task_id = ?1",
+            params![id],
+        )
+        .map_err(db_error("purge subscriptions"))?;
+        conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])
+            .map_err(db_error("purge task"))?;
+        Ok(true)
     }
 
     // ------------------------------------------------------------- comments
@@ -3923,6 +4065,20 @@ impl KanbanStore {
         summary: Option<&str>,
         error: Option<&str>,
     ) -> Result<Option<i64>> {
+        self.close_active_run_full(task_id, status, outcome, summary, error, None)
+    }
+
+    /// [`Self::close_active_run`] with a JSON `metadata` object stored
+    /// on the closing run (hermes completion handoff facts).
+    pub fn close_active_run_full(
+        &self,
+        task_id: &str,
+        status: &str,
+        outcome: &str,
+        summary: Option<&str>,
+        error: Option<&str>,
+        metadata: Option<&str>,
+    ) -> Result<Option<i64>> {
         let now = Self::now();
         let conn = self.conn.lock().unwrap();
         let run_id: Option<i64> = conn
@@ -3942,10 +4098,11 @@ impl KanbanStore {
                 SET status = ?2, outcome = ?3,
                     summary = COALESCE(?4, summary),
                     error = COALESCE(?5, error),
+                    metadata = COALESCE(?7, metadata),
                     ended_at = ?6,
                     claim_lock = NULL, claim_expires = NULL, worker_pid = NULL
               WHERE id = ?1 AND ended_at IS NULL",
-            params![run_id, status, outcome, summary, error, now],
+            params![run_id, status, outcome, summary, error, now, metadata],
         )
         .map_err(db_error("run close"))?;
         conn.execute(
@@ -3967,6 +4124,18 @@ impl KanbanStore {
         summary: Option<&str>,
         error: Option<&str>,
     ) -> Result<i64> {
+        self.synthesize_closed_run_full(task_id, outcome, summary, error, None)
+    }
+
+    /// [`Self::synthesize_closed_run`] with a JSON `metadata` object.
+    pub fn synthesize_closed_run_full(
+        &self,
+        task_id: &str,
+        outcome: &str,
+        summary: Option<&str>,
+        error: Option<&str>,
+        metadata: Option<&str>,
+    ) -> Result<i64> {
         let now = Self::now();
         let conn = self.conn.lock().unwrap();
         let profile: Option<String> = conn
@@ -3980,10 +4149,10 @@ impl KanbanStore {
             .flatten();
         conn.execute(
             "INSERT INTO task_runs (
-                task_id, profile, status, outcome, summary, error,
+                task_id, profile, status, outcome, summary, error, metadata,
                 started_at, ended_at
-             ) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?6)",
-            params![task_id, profile, outcome, summary, error, now],
+             ) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7, ?7)",
+            params![task_id, profile, outcome, summary, error, metadata, now],
         )
         .map_err(db_error("run synthesize"))?;
         Ok(conn.last_insert_rowid())
@@ -4683,7 +4852,7 @@ impl KanbanStore {
             let mut all_done = true;
             for parent in parents {
                 match self.get_task(&parent)? {
-                    Some(task) if task.status == "done" => {}
+                    Some(task) if task.status == "done" || task.status == "archived" => {}
                     _ => {
                         all_done = false;
                         break;
@@ -5799,23 +5968,29 @@ mod tests {
         store.unblock_task(&task.id).unwrap();
 
         // No filters: everything since the start point, paired with titles.
-        let all = store.board_events_since(start, None, None, 100).unwrap();
+        let all = store.board_events_since(start, None, None, None, 100).unwrap();
         assert!(all.len() >= 3);
         assert!(all.iter().all(|(_, title)| title == "watched"));
 
         // Kind filter narrows the stream.
         let kinds = vec!["blocked".to_string()];
         let blocked_only = store
-            .board_events_since(start, None, Some(&kinds), 100)
+            .board_events_since(start, None, None, Some(&kinds), 100)
             .unwrap();
         assert_eq!(blocked_only.len(), 1);
         assert_eq!(blocked_only[0].0.kind, "blocked");
 
         // Assignee filter: bob matches, carol sees nothing.
-        let bob = store.board_events_since(start, Some("bob"), None, 100).unwrap();
+        let bob = store.board_events_since(start, Some("bob"), None, None, 100).unwrap();
         assert!(!bob.is_empty());
-        let carol = store.board_events_since(start, Some("carol"), None, 100).unwrap();
+        let carol = store.board_events_since(start, Some("carol"), None, None, 100).unwrap();
         assert!(carol.is_empty());
+
+        // Tenant filter (hermes watch --tenant): task has no tenant, so
+        // a tenant filter sees nothing while an untyped filter still
+        // matches.
+        let tenant = store.board_events_since(start, None, Some("acme"), None, 100).unwrap();
+        assert!(tenant.is_empty());
     }
 
     #[test]
@@ -7047,6 +7222,112 @@ mod tests {
             .into_iter()
             .find(|e| e.kind == "unblocked")
             .unwrap();
+        assert_eq!(store.get_task(&child.id).unwrap().unwrap().status, "todo");
+        let event = store
+            .events(&child.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "unblocked")
+            .unwrap();
         assert_eq!(event.payload["status"], "todo");
+    }
+
+    // ------------------------------------------------------------------
+    // P143 — completion handoff fields, archive purge, archive run close
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn complete_with_summary_and_metadata_lands_on_run() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "handoff");
+        store.ready_task(&task.id).unwrap();
+        let metadata = serde_json::json!({ "changed_files": ["src/main.rs"], "tests_run": 12 });
+        let done = store
+            .complete_task_with(
+                &task.id,
+                Some("all green"),
+                Some("fixed the parser\nlonger second line"),
+                Some(&metadata),
+            )
+            .unwrap();
+        assert_eq!(done.status, "done");
+
+        // Closing run carries the FULL summary (NOT the raw result) +
+        // metadata; only the event payload is capped to the first line.
+        let runs = store.list_runs(&task.id, true, None, None).unwrap();
+        let closed = runs.iter().find(|r| r.outcome.as_deref() == Some("completed")).unwrap();
+        assert_eq!(
+            closed.summary.as_deref(),
+            Some("fixed the parser\nlonger second line")
+        );
+        assert_eq!(
+            closed.metadata.as_ref().and_then(|m| m.get("tests_run")),
+            Some(&serde_json::json!(12))
+        );
+
+        // completed event carries the first summary line (400 cap) for
+        // notifiers.
+        let event = store
+            .events(&task.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "completed")
+            .unwrap();
+        assert_eq!(event.payload["summary"], "fixed the parser");
+        assert_eq!(event.payload["result_len"], 9);
+    }
+
+    #[test]
+    fn complete_summary_falls_back_to_result() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "fallback");
+        store.ready_task(&task.id).unwrap();
+        store
+            .complete_task_with(&task.id, Some("done and dusted"), None, None)
+            .unwrap();
+        let runs = store.list_runs(&task.id, true, None, None).unwrap();
+        let closed = runs.iter().find(|r| r.outcome.as_deref() == Some("completed")).unwrap();
+        assert_eq!(closed.summary.as_deref(), Some("done and dusted"));
+    }
+
+    #[test]
+    fn delete_archived_task_requires_archived_and_purges() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "purge me");
+        store.add_comment(&task.id, "tester", "a note").unwrap();
+        store.ready_task(&task.id).unwrap();
+
+        // Active tasks cannot be purged.
+        assert!(!store.delete_archived_task(&task.id).unwrap());
+
+        store.archive_task(&task.id).unwrap();
+        assert!(store.delete_archived_task(&task.id).unwrap());
+        assert!(store.get_task(&task.id).unwrap().is_none());
+        assert!(store.events(&task.id).unwrap().is_empty());
+        assert!(store.comments(&task.id).unwrap().is_empty());
+        // Second purge reports false (row already gone).
+        assert!(!store.delete_archived_task(&task.id).unwrap());
+    }
+
+    #[test]
+    fn archive_closes_active_run_and_promotes_children() {
+        let (_dir, store) = temp_store();
+        let parent = make_task(&store, "parent");
+        let child = make_task(&store, "child");
+        store.link_tasks(&parent.id, &child.id).unwrap();
+        store.ready_task(&parent.id).unwrap();
+        store
+            .claim_task(&parent.id, "host:1", DEFAULT_CLAIM_TTL_SECS)
+            .unwrap();
+
+        // Archiving mid-run closes the run as reclaimed...
+        store.archive_task(&parent.id).unwrap();
+        let runs = store.list_runs(&parent.id, true, None, None).unwrap();
+        assert!(runs
+            .iter()
+            .any(|r| r.outcome.as_deref() == Some("reclaimed")));
+
+        // ...and immediately promotes the orphaned child.
+        assert_eq!(store.get_task(&child.id).unwrap().unwrap().status, "ready");
     }
 }

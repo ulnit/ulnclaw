@@ -338,7 +338,17 @@
   （`block_loop_detected` 事件）—— 复发计数刻意跨越 unblock 保留、
   仅在任务完成时清零；`unblock_task` 现在按未完成父任务重新门控
   （父任务未了则 blocked → `todo`），与 hermes 的不变式修复一致；
-  agent `kanban_block` 工具与网关 block API 同步接受 kind。
+  agent `kanban_block` 工具与网关 block API 同步接受 kind；P143 补齐生命周期 CLI 面：批量 `kanban
+  done/block/schedule/unblock/promote/archive`（多个 id，hermes
+  `task_ids` + `--ids`），`kanban done --summary/--metadata` 把结构化
+  交接（完整 summary + JSON 事实）写入收尾 run，`completed` 事件则
+  携带 summary 首行（400 字符上限）供通知器渲染，`kanban archive
+  --rm` 彻底清除已归档任务及其全部关联行（护栏：仅 archived 可
+  删除），`kanban unblock --reason` 先记评论再解锁，`kanban promote
+  --dry-run/--json` 由无副作用的 `validate_promote` 支撑，`kanban
+  watch --tenant`；archive 现在同时把进行中的 run 以 reclaimed 收
+  尾，并立即晋升那些仅被已归档父任务挡住的子任务
+  （`recompute_ready` 按 hermes 语义把 archived 父任务视同完成）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
