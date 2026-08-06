@@ -20,8 +20,11 @@
 //! an RS256-signed JWT assertion (`jsonwebtoken`) exchanged at the
 //! key's `token_uri` for an access token (cached until ~5 min before
 //! expiry), then `POST /v1/{space}/messages` with 4000-char chunks
-//! (hermes `_MAX_TEXT_LENGTH`). The per-user OAuth `media.upload`
-//! flow (`oauth.py`) and typing-card patching are not ported.
+//! (hermes `_MAX_TEXT_LENGTH`). Native file attachments use the
+//! per-user OAuth `media.upload` flow (hermes `oauth.py`): users grant
+//! the `chat.messages.create` scope once via `/setup-files`, and the
+//! bot uploads + posts attachments AS the user. Typing-card patching
+//! is not ported.
 
 use crate::messaging::{Dispatcher, MessageEvent};
 use base64::Engine;
@@ -53,6 +56,15 @@ const PULL_MAX_MESSAGES: u64 = 1;
 /// Idle pacing between empty REST pulls (streaming pull blocks; REST
 /// must not hot-spin).
 const PULL_IDLE_DELAY: Duration = Duration::from_secs(1);
+/// Chat media upload base (discovery `chat.media().upload`). Google
+/// hard-rejects service-account auth on this endpoint — only user
+/// OAuth tokens work.
+const UPLOAD_API_BASE: &str = "https://chat.googleapis.com/upload/v1";
+/// Chat REST base for user-authed `messages.create`.
+const CHAT_API_BASE: &str = "https://chat.googleapis.com/v1";
+/// Cache-key sentinel for the legacy single-user token slot (hermes
+/// `_LEGACY_USER_IDENTITY`).
+const LEGACY_USER_IDENTITY: &str = "__legacy__";
 
 /// `[messaging.google_chat]` — Google Chat adapter (hermes
 /// `platforms.google_chat` plugin config + `GOOGLE_CHAT_*` env vars).
@@ -212,6 +224,13 @@ struct Runtime {
     dedup: Mutex<HashMap<String, u64>>,
     /// chat_id -> thread name for in-thread replies.
     threads: Mutex<HashMap<String, String>>,
+    /// chat_id -> most recent inbound sender email (hermes
+    /// `_last_sender_by_chat`) — per-user OAuth routing key.
+    last_sender: Mutex<HashMap<String, String>>,
+    /// Per-user OAuth token cache keyed by lowercased email plus the
+    /// `__legacy__` slot (hermes `_user_creds_by_email` +
+    /// `_user_credentials`).
+    user_tokens: Mutex<HashMap<String, Option<crate::google_chat_oauth::UserToken>>>,
 }
 
 impl Runtime {
@@ -348,6 +367,8 @@ pub fn register(cfg: &GoogleChatConfig) {
         pubsub_token: Mutex::new(None),
         dedup: Mutex::new(HashMap::new()),
         threads: Mutex::new(HashMap::new()),
+        last_sender: Mutex::new(HashMap::new()),
+        user_tokens: Mutex::new(HashMap::new()),
     });
     let _ = RUNTIME.set(runtime.clone());
     crate::messaging::register_platform_sender(
@@ -576,6 +597,25 @@ async fn process_envelope(
             return ack();
         }
     }
+    // Per-chat sender tracking for per-user OAuth routing (hermes
+    // `_last_sender_by_chat`), then the bot-local `/setup-files`
+    // intercept — an OAuth setup command, never an agent prompt.
+    if !sender_email.is_empty() {
+        runtime
+            .last_sender
+            .lock()
+            .await
+            .insert(space_name.clone(), sender_email.trim().to_lowercase());
+    }
+    if text.starts_with("/setup-files") {
+        let thread_opt = if thread_name.is_empty() {
+            None
+        } else {
+            Some(thread_name.as_str())
+        };
+        handle_setup_files(runtime, &space_name, thread_opt, &sender_email, &text).await;
+        return ack();
+    }
     if text.is_empty() {
         return ack();
     }
@@ -618,7 +658,7 @@ async fn process_envelope(
         full.push('\n');
     }
     full.push_str(&outcome.reply);
-    let (reply_text, _media) = crate::messaging::extract_media_tags(&full);
+    let (reply_text, media) = crate::messaging::extract_media_tags(&full);
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
         let thread = runtime.threads.lock().await.get(&space_name).cloned();
@@ -629,6 +669,14 @@ async fn process_envelope(
             {
                 eprintln!("[google_chat] reply failed: {e}");
             }
+        }
+    }
+    // MEDIA: tags — native attachment delivery via per-user OAuth
+    // (hermes `_send_file` per media file).
+    for path in &media {
+        let thread = runtime.threads.lock().await.get(&space_name).cloned();
+        if let Err(e) = send_file(runtime, &space_name, path, None, thread.as_deref()).await {
+            eprintln!("[google_chat] media delivery failed: {e}");
         }
     }
     ack()
@@ -650,6 +698,440 @@ impl crate::messaging::PlatformSender for GoogleChatSender {
             {
                 eprintln!("[google_chat] send_text to {chat_id} failed: {e}");
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-user OAuth attachment delivery (hermes `oauth.py` + `_send_file` +
+// `_handle_setup_files_command`)
+// ---------------------------------------------------------------------------
+
+/// Extension-based MIME guess for MEDIA: deliveries (hermes passes
+/// per-method hints; the generic path infers from the filename).
+pub fn guess_mime(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") | Some("jpg") | Some("jpeg") | Some("gif") | Some("webp") | Some("bmp") => {
+            "image/*"
+        }
+        Some("mp4") | Some("mov") | Some("webm") | Some("mkv") => "video/mp4",
+        Some("mp3") => "audio/mpeg",
+        Some("ogg") | Some("opus") => "audio/ogg",
+        Some("wav") => "audio/wav",
+        Some("pdf") => "application/pdf",
+        Some("txt") | Some("md") | Some("log") | Some("csv") => "text/plain",
+        Some("json") => "application/json",
+        Some("zip") => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Argument portion of a `/setup-files` message ("" for bare status).
+pub fn setup_files_arg(raw_text: &str) -> String {
+    let mut parts = raw_text.splitn(2, char::is_whitespace);
+    parts.next();
+    parts.next().unwrap_or("").trim().to_string()
+}
+
+/// Upload endpoint for a space (hermes `media().upload(parent=...)`).
+pub fn upload_url(space_name: &str) -> String {
+    format!("{UPLOAD_API_BASE}/{space_name}/attachments:upload")
+}
+
+/// `messages.create` URL; `messageReplyOption` is required for
+/// `thread.name` in the body to be honored (hermes `_create_message`
+/// API quirk).
+pub fn attachment_create_url(space_name: &str, threaded: bool) -> String {
+    let mut url = format!("{CHAT_API_BASE}/{space_name}/messages");
+    if threaded {
+        url.push_str("?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+    }
+    url
+}
+
+/// Body for the attachment-bearing `messages.create` (hermes
+/// `_send_file` body assembly).
+pub fn attachment_message_body(
+    attachment_ref: Value,
+    caption: Option<&str>,
+    thread_name: Option<&str>,
+) -> Value {
+    let mut body = json!({ "attachment": [{ "attachmentDataRef": attachment_ref }] });
+    if let Some(caption) = caption.filter(|c| !c.is_empty()) {
+        body["text"] = json!(caption);
+    }
+    if let Some(thread) = thread_name {
+        body["thread"] = json!({ "name": thread });
+    }
+    body
+}
+
+/// Text notice when user OAuth is unavailable (hermes
+/// `_post_attachment_fallback`; English rendering of the original).
+pub fn attachment_fallback_text(path: &std::path::Path, filename: &str, caption: Option<&str>) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(caption) = caption.filter(|c| !c.is_empty()) {
+        lines.push(caption.to_string());
+    }
+    lines.extend([
+        format!("⚠️ I couldn't attach **{filename}**."),
+        "Google Chat only allows file attachments when the bot has your explicit permission (user OAuth). It's a one-time consent you grant from this chat.".to_string(),
+        "**To enable it:** send `/setup-files` and follow the instructions.".to_string(),
+        format!("In the meantime the file is on the host: `{}`", path.display()),
+    ]);
+    lines.join("\n")
+}
+
+/// Token-cache lookup with refresh-on-expiry (hermes
+/// `_load_per_user_chat_api` + `refresh_or_none`: a failed refresh
+/// evicts the slot).
+async fn cached_user_token(
+    runtime: &Arc<Runtime>,
+    home: &std::path::Path,
+    email: Option<&str>,
+) -> Option<String> {
+    let cache_key = email
+        .map(|e| e.to_string())
+        .unwrap_or_else(|| LEGACY_USER_IDENTITY.to_string());
+    {
+        let mut cache = runtime.user_tokens.lock().await;
+        if let Some(slot) = cache.get(&cache_key) {
+            match slot {
+                Some(token) if !token.expired() => return Some(token.access_token.clone()),
+                Some(token) => {
+                    let refreshed = crate::google_chat_oauth::refresh_token(
+                        home,
+                        &runtime.client,
+                        token,
+                        email,
+                    )
+                    .await;
+                    return match refreshed {
+                        Some(t) => {
+                            let access = t.access_token.clone();
+                            cache.insert(cache_key, Some(t));
+                            Some(access)
+                        }
+                        None => {
+                            cache.remove(&cache_key);
+                            None
+                        }
+                    };
+                }
+                None => return None,
+            }
+        }
+    }
+    let creds =
+        crate::google_chat_oauth::load_user_credentials(home, &runtime.client, email).await?;
+    let access = creds.access_token.clone();
+    runtime
+        .user_tokens
+        .lock()
+        .await
+        .insert(cache_key, Some(creds));
+    Some(access)
+}
+
+/// Resolve the user OAuth token for an outbound attachment (hermes
+/// `_acquire_user_chat_api`): per-user token for the chat's most
+/// recent sender, then the legacy single-user slot. Returns
+/// `(access_token, identity)`.
+async fn acquire_user_token(
+    runtime: &Arc<Runtime>,
+    sender_email: Option<&str>,
+) -> Option<(String, String)> {
+    let home = crate::config::ulnclaw_home();
+    let per_user = sender_email
+        .map(|e| e.trim().to_lowercase())
+        .filter(|e| !e.is_empty());
+    if let Some(email) = per_user.as_deref() {
+        if let Some(token) = cached_user_token(runtime, &home, Some(email)).await {
+            return Some((token, email.to_string()));
+        }
+    }
+    if let Some(token) = cached_user_token(runtime, &home, None).await {
+        return Some((token, LEGACY_USER_IDENTITY.to_string()));
+    }
+    None
+}
+
+/// hermes `_send_file` — native Chat attachment via user OAuth:
+/// multipart upload to `attachments:upload`, then `messages.create`
+/// referencing the returned `attachmentDataRef`. BOTH calls use the
+/// user token — Google rejects service accounts on media.upload.
+async fn send_file(
+    runtime: &Arc<Runtime>,
+    space_name: &str,
+    path: &std::path::Path,
+    caption: Option<&str>,
+    thread_name: Option<&str>,
+) -> Result<(), String> {
+    if !path.is_file() {
+        return Err(format!("file not found: {}", path.display()));
+    }
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("upload.bin")
+        .to_string();
+    let sender_email = runtime.last_sender.lock().await.get(space_name).cloned();
+    let Some((user_token, identity)) = acquire_user_token(runtime, sender_email.as_deref()).await
+    else {
+        // No user OAuth — surface setup instructions in chat instead of
+        // silently failing.
+        let notice = attachment_fallback_text(path, &filename, caption);
+        return runtime
+            .create_message(space_name, &notice, thread_name)
+            .await
+            .map_err(|e| format!("attachment fallback notice: {e}"));
+    };
+    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let form = reqwest::multipart::Form::new()
+        .part(
+            "metadata",
+            reqwest::multipart::Part::bytes(
+                json!({ "filename": filename }).to_string().into_bytes(),
+            )
+            .mime_str("application/json")
+            .map_err(|e| format!("multipart metadata: {e}"))?,
+        )
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes)
+                .file_name(filename.clone())
+                .mime_str(guess_mime(path))
+                .map_err(|e| format!("multipart media: {e}"))?,
+        );
+    let resp = runtime
+        .client
+        .post(upload_url(space_name))
+        .bearer_auth(&user_token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("media upload: {e}"))?;
+    let status = resp.status().as_u16();
+    if status == 401 || status == 403 {
+        eprintln!(
+            "[google_chat] media.upload auth failure for identity={identity} (token revoked or scope missing) — falling back to text notice"
+        );
+        runtime.user_tokens.lock().await.remove(&identity);
+        let notice = attachment_fallback_text(path, &filename, caption);
+        return runtime
+            .create_message(space_name, &notice, thread_name)
+            .await
+            .map_err(|e| format!("attachment fallback notice: {e}"));
+    }
+    let body_text = resp.text().await.unwrap_or_default();
+    if status >= 400 {
+        return Err(format!(
+            "media upload failed ({status}): {}",
+            &body_text[..body_text.len().min(300)]
+        ));
+    }
+    let upload_resp: Value = serde_json::from_str(&body_text).unwrap_or(json!({}));
+    let attachment_ref = upload_resp
+        .get("attachmentDataRef")
+        .cloned()
+        .ok_or("upload returned no attachmentDataRef")?;
+    let body = attachment_message_body(attachment_ref, caption, thread_name);
+    let resp = runtime
+        .client
+        .post(attachment_create_url(space_name, thread_name.is_some()))
+        .bearer_auth(&user_token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("attachment message create: {e}"))?;
+    if resp.status().as_u16() >= 400 {
+        let status = resp.status();
+        let err = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "attachment message create failed ({status}): {}",
+            &err[..err.len().min(300)]
+        ));
+    }
+    Ok(())
+}
+
+/// Reply helper for the setup flow (send failures are logged, never
+/// fatal — hermes `_reply`).
+async fn setup_reply(runtime: &Arc<Runtime>, space: &str, thread: Option<&str>, text: &str) {
+    if let Err(e) = runtime.create_message(space, text, thread).await {
+        eprintln!("[google_chat] /setup-files reply failed: {e}");
+    }
+}
+
+/// hermes `_handle_setup_files_command` — in-chat per-user OAuth setup.
+/// Subcommands: bare status, `start`, `revoke`, `<code-or-url>`
+/// exchange. The sender email is the per-user token slot key.
+async fn handle_setup_files(
+    runtime: &Arc<Runtime>,
+    space_name: &str,
+    thread_name: Option<&str>,
+    sender_email: &str,
+    raw_text: &str,
+) {
+    let home = crate::config::ulnclaw_home();
+    let sender_key_owned = sender_email.trim().to_lowercase();
+    let sender_key: Option<&str> = if sender_key_owned.is_empty() {
+        None
+    } else {
+        Some(sender_key_owned.as_str())
+    };
+    let cache_key = sender_key
+        .map(|k| k.to_string())
+        .unwrap_or_else(|| LEGACY_USER_IDENTITY.to_string());
+    let arg = setup_files_arg(raw_text);
+
+    if arg.is_empty() {
+        // Status: what's configured and what to do next.
+        if crate::google_chat_oauth::token_path(&home, sender_key).exists()
+            && crate::google_chat_oauth::load_user_credentials(
+                &home,
+                &runtime.client,
+                sender_key,
+            )
+            .await
+            .is_some()
+        {
+            let who = sender_key.unwrap_or("shared (legacy)");
+            let path = crate::google_chat_oauth::token_path(&home, sender_key);
+            setup_reply(
+                runtime,
+                space_name,
+                thread_name,
+                &format!(
+                    "✅ Native attachment delivery is **active** for `{who}`.\nToken: `{}`\nSend `/setup-files revoke` to disable.",
+                    path.display()
+                ),
+            )
+            .await;
+            return;
+        }
+        if !crate::google_chat_oauth::client_secret_path(&home).exists() {
+            setup_reply(
+                runtime,
+                space_name,
+                thread_name,
+                "🔧 Native attachment delivery is **not configured**.\n\
+                 **Step 1 (one-time, on the host):** create OAuth client credentials at \
+                 https://console.cloud.google.com/apis/credentials → *Create credentials* → \
+                 *OAuth client ID* → *Desktop app*. Download the JSON. Then on the host run:\n\
+                 ```\n\
+                 ulnclaw google-chat-oauth client-secret /path/to/client_secret.json\n\
+                 ```\n\
+                 **Step 2:** come back here and send `/setup-files start`.",
+            )
+            .await;
+            return;
+        }
+        setup_reply(
+            runtime,
+            space_name,
+            thread_name,
+            "🔧 Client credentials are stored but you haven't authorized yet. Send `/setup-files start` to begin.",
+        )
+        .await;
+        return;
+    }
+
+    if arg == "start" {
+        if !crate::google_chat_oauth::client_secret_path(&home).exists() {
+            setup_reply(
+                runtime,
+                space_name,
+                thread_name,
+                "⚠️ No client credentials stored for this profile. Send `/setup-files` (no args) for setup instructions.",
+            )
+            .await;
+            return;
+        }
+        match crate::google_chat_oauth::start_auth(&home, sender_key) {
+            Ok(auth_url) => {
+                setup_reply(
+                    runtime,
+                    space_name,
+                    thread_name,
+                    &format!(
+                        "1. Open this URL in your browser and authorize:\n{auth_url}\n\n\
+                         2. After clicking *Allow*, your browser will fail to load \
+                         `http://localhost:1/?...&code=...`. That's expected.\n\n\
+                         3. Copy the entire failed URL from the browser's URL bar and paste it \
+                         back here as: `/setup-files <PASTE_URL>` (or just the `code=...` value).\n\n\
+                         Tip: the URL contains your access grant — keep it private."
+                    ),
+                )
+                .await;
+            }
+            Err(e) => {
+                setup_reply(runtime, space_name, thread_name, &format!("❌ Error: {e}")).await;
+            }
+        }
+        return;
+    }
+
+    if arg == "revoke" {
+        let output = crate::google_chat_oauth::revoke(&home, &runtime.client, sender_key).await;
+        // Scope the eviction to this sender's slot (hermes: Bob revoking
+        // must not break Alice's token nor the shared legacy fallback).
+        runtime.user_tokens.lock().await.remove(&cache_key);
+        setup_reply(
+            runtime,
+            space_name,
+            thread_name,
+            &format!("✅ Done.\n```\n{output}\n```"),
+        )
+        .await;
+        return;
+    }
+
+    // Anything else is the pasted auth code or failed-redirect URL.
+    match crate::google_chat_oauth::exchange_code(&home, &runtime.client, &arg, sender_key).await {
+        Ok(scope) => {
+            if let Some(creds) =
+                crate::google_chat_oauth::load_user_credentials(&home, &runtime.client, sender_key)
+                    .await
+            {
+                runtime
+                    .user_tokens
+                    .lock()
+                    .await
+                    .insert(cache_key, Some(creds));
+                setup_reply(
+                    runtime,
+                    space_name,
+                    thread_name,
+                    "✅ Authorized! Native attachment delivery is now active. Try asking me to send you a file.",
+                )
+                .await;
+            } else {
+                setup_reply(
+                    runtime,
+                    space_name,
+                    thread_name,
+                    &format!("✅ Authorized (scope: {scope})."),
+                )
+                .await;
+            }
+        }
+        Err(e) => {
+            setup_reply(
+                runtime,
+                space_name,
+                thread_name,
+                &format!(
+                    "❌ Token exchange failed: {e}\nSend `/setup-files start` to get a fresh OAuth URL."
+                ),
+            )
+            .await;
         }
     }
 }
@@ -1075,6 +1557,8 @@ mod tests {
             pubsub_token: Mutex::new(None),
             dedup: Mutex::new(HashMap::new()),
             threads: Mutex::new(HashMap::new()),
+            last_sender: Mutex::new(HashMap::new()),
+            user_tokens: Mutex::new(HashMap::new()),
         };
         assert!(!runtime.is_duplicate("spaces/a/messages/1").await);
         assert!(runtime.is_duplicate("spaces/a/messages/1").await);
@@ -1232,5 +1716,75 @@ mod tests {
         let resolved = cfg.resolve();
         assert_eq!(resolved.pubsub_subscription, "projects/p/subscriptions/s");
         std::env::remove_var("GOOGLE_CHAT_PUBSUB_SUBSCRIPTION");
+    }
+
+    #[test]
+    fn setup_files_arg_parsing() {
+        assert_eq!(setup_files_arg("/setup-files"), "");
+        assert_eq!(setup_files_arg("/setup-files   "), "");
+        assert_eq!(setup_files_arg("/setup-files start"), "start");
+        assert_eq!(setup_files_arg("/setup-files revoke"), "revoke");
+        let url = "http://localhost:1/?state=x&code=abc&scope=s";
+        assert_eq!(setup_files_arg(&format!("/setup-files {url}")), url);
+    }
+
+    #[test]
+    fn upload_and_create_urls() {
+        assert_eq!(
+            upload_url("spaces/AAA"),
+            "https://chat.googleapis.com/upload/v1/spaces/AAA/attachments:upload"
+        );
+        assert_eq!(
+            attachment_create_url("spaces/AAA", false),
+            "https://chat.googleapis.com/v1/spaces/AAA/messages"
+        );
+        assert_eq!(
+            attachment_create_url("spaces/AAA", true),
+            "https://chat.googleapis.com/v1/spaces/AAA/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
+        );
+    }
+
+    #[test]
+    fn attachment_message_body_assembly() {
+        let body = attachment_message_body(json!({"resourceName": "r1"}), None, None);
+        assert_eq!(body["attachment"][0]["attachmentDataRef"]["resourceName"], "r1");
+        assert!(body.get("text").is_none());
+        assert!(body.get("thread").is_none());
+        let body = attachment_message_body(
+            json!({"resourceName": "r1"}),
+            Some("caption"),
+            Some("spaces/AAA/threads/T"),
+        );
+        assert_eq!(body["text"], "caption");
+        assert_eq!(body["thread"]["name"], "spaces/AAA/threads/T");
+        // Empty caption is omitted.
+        let body = attachment_message_body(json!({}), Some(""), None);
+        assert!(body.get("text").is_none());
+    }
+
+    #[test]
+    fn fallback_notice_contents() {
+        let text = attachment_fallback_text(
+            std::path::Path::new("/tmp/report.pdf"),
+            "report.pdf",
+            Some("Here you go"),
+        );
+        assert!(text.starts_with("Here you go"));
+        assert!(text.contains("**report.pdf**"));
+        assert!(text.contains("/setup-files"));
+        assert!(text.contains("/tmp/report.pdf"));
+        let bare = attachment_fallback_text(std::path::Path::new("/tmp/x.bin"), "x.bin", None);
+        assert!(bare.starts_with("⚠️"));
+    }
+
+    #[test]
+    fn mime_guessing() {
+        use std::path::Path;
+        assert_eq!(guess_mime(Path::new("a.PNG")), "image/*");
+        assert_eq!(guess_mime(Path::new("a.mp4")), "video/mp4");
+        assert_eq!(guess_mime(Path::new("a.ogg")), "audio/ogg");
+        assert_eq!(guess_mime(Path::new("a.pdf")), "application/pdf");
+        assert_eq!(guess_mime(Path::new("a.unknown")), "application/octet-stream");
+        assert_eq!(guess_mime(Path::new("noext")), "application/octet-stream");
     }
 }

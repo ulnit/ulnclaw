@@ -115,6 +115,13 @@ enum Commands {
         #[command(subcommand)]
         action: WeixinAction,
     },
+    /// Google Chat per-user OAuth for native attachment delivery —
+    /// client-secret install / auth-url / code exchange / revoke
+    /// (hermes `plugins.platforms.google_chat.oauth` helper)
+    GoogleChatOauth {
+        #[command(subcommand)]
+        action: GoogleChatOauthAction,
+    },
     /// Filesystem checkpoint management (snapshot list/restore/prune)
     Checkpoints {
         #[command(subcommand)]
@@ -2153,6 +2160,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
         Commands::Weixin { action } => weixin_cmd(action).await,
+        Commands::GoogleChatOauth { action } => google_chat_oauth_cmd(action).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
         Commands::Diff { staged, all, dir, paths } => {
             let mode = if all {
@@ -4824,6 +4832,106 @@ async fn weixin_cmd(action: WeixinAction) -> Result<(), String> {
                 Ok(None) => Err("weixin login did not complete".into()),
                 Err(e) => Err(e),
             }
+        }
+    }
+}
+
+/// Google Chat per-user OAuth CLI (hermes
+/// `python -m plugins.platforms.google_chat.oauth`). The Chat API's
+/// media.upload endpoint rejects service accounts, so each user grants
+/// the `chat.messages.create` scope once; tokens persist under
+/// `<home>/google_chat_user_tokens/`.
+#[derive(Subcommand)]
+enum GoogleChatOauthAction {
+    /// Store the OAuth client-secret JSON (one-time host step; from
+    /// Google Cloud Console → OAuth client ID → Desktop app)
+    ClientSecret {
+        /// Path to the downloaded client_secret*.json
+        path: PathBuf,
+    },
+    /// Generate the authorization URL and persist the pending PKCE
+    /// session (hermes `get_auth_url`)
+    AuthUrl {
+        /// User email slot (default: shared legacy slot)
+        #[arg(long)]
+        email: Option<String>,
+    },
+    /// Exchange the pasted auth code or failed-redirect URL for tokens
+    /// (hermes `exchange_auth_code`)
+    AuthCode {
+        /// The `code` value or the full http://localhost:1/?... URL
+        code_or_url: String,
+        /// User email slot (default: shared legacy slot)
+        #[arg(long)]
+        email: Option<String>,
+    },
+    /// Revoke and delete a stored user token (hermes `revoke`)
+    Revoke {
+        /// User email slot (default: shared legacy slot)
+        #[arg(long)]
+        email: Option<String>,
+    },
+    /// Show stored client-secret and per-user token status
+    Check,
+}
+
+async fn google_chat_oauth_cmd(action: GoogleChatOauthAction) -> Result<(), String> {
+    let home = ulnclaw::config::ulnclaw_home();
+    match action {
+        GoogleChatOauthAction::ClientSecret { path } => {
+            let dest = ulnclaw::google_chat_oauth::store_client_secret(&home, &path)?;
+            println!("Stored client secret at {}", dest.display());
+            println!("Next: `ulnclaw google-chat-oauth auth-url` or send `/setup-files start` in chat.");
+            Ok(())
+        }
+        GoogleChatOauthAction::AuthUrl { email } => {
+            let url = ulnclaw::google_chat_oauth::start_auth(&home, email.as_deref())?;
+            println!("{url}");
+            println!();
+            println!("After authorizing, the browser fails at http://localhost:1 — paste the");
+            println!("full failed URL back here:");
+            println!("  ulnclaw google-chat-oauth auth-code '<URL>'");
+            Ok(())
+        }
+        GoogleChatOauthAction::AuthCode { code_or_url, email } => {
+            let client = reqwest::Client::new();
+            let scope = ulnclaw::google_chat_oauth::exchange_code(
+                &home,
+                &client,
+                &code_or_url,
+                email.as_deref(),
+            )
+            .await?;
+            println!("✅ Authorized (scope: {scope}).");
+            Ok(())
+        }
+        GoogleChatOauthAction::Revoke { email } => {
+            let client = reqwest::Client::new();
+            let output =
+                ulnclaw::google_chat_oauth::revoke(&home, &client, email.as_deref()).await;
+            println!("{output}");
+            Ok(())
+        }
+        GoogleChatOauthAction::Check => {
+            let secret = ulnclaw::google_chat_oauth::client_secret_path(&home);
+            if secret.exists() {
+                println!("client secret: {}", secret.display());
+            } else {
+                println!("client secret: not stored (run `ulnclaw google-chat-oauth client-secret <path>`)");
+            }
+            let legacy = ulnclaw::google_chat_oauth::token_path(&home, None);
+            if legacy.exists() {
+                println!("legacy token:  {}", legacy.display());
+            }
+            let emails = ulnclaw::google_chat_oauth::list_authorized_emails(&home);
+            if emails.is_empty() {
+                println!("user tokens:   none");
+            } else {
+                for email in emails {
+                    println!("user token:    {email}");
+                }
+            }
+            Ok(())
         }
     }
 }
