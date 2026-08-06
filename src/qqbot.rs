@@ -135,7 +135,13 @@ pub fn resolve_app_id(cfg: &QQBotConfig) -> String {
     if !trimmed.is_empty() {
         return trimmed.to_string();
     }
-    env_or_none("QQ_APP_ID").unwrap_or_default()
+    if let Some(value) = env_or_none("QQ_APP_ID") {
+        return value;
+    }
+    // Scan-to-configure credentials persisted by `ulnclaw qq login`.
+    load_onboard_credentials(&crate::config::ulnclaw_home())
+        .and_then(|v| v.get("app_id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+        .unwrap_or_default()
 }
 
 pub fn resolve_client_secret(cfg: &QQBotConfig) -> String {
@@ -143,7 +149,16 @@ pub fn resolve_client_secret(cfg: &QQBotConfig) -> String {
     if !trimmed.is_empty() {
         return trimmed.to_string();
     }
-    env_or_none("QQ_CLIENT_SECRET").unwrap_or_default()
+    if let Some(value) = env_or_none("QQ_CLIENT_SECRET") {
+        return value;
+    }
+    load_onboard_credentials(&crate::config::ulnclaw_home())
+        .and_then(|v| {
+            v.get("client_secret")
+                .and_then(|secret| secret.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_default()
 }
 
 fn open_dm_opted_in() -> bool {
@@ -1932,6 +1947,316 @@ async fn offer_pairing(runner: &Runner, sender_id: &str, chat_id: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Scan-to-configure onboarding (hermes `qqbot/onboard.py` + `crypto.py`)
+// ---------------------------------------------------------------------------
+
+/// hermes `ONBOARD_CREATE_PATH` / `ONBOARD_POLL_PATH` (portal host).
+const ONBOARD_CREATE_PATH: &str = "/lite/create_bind_task";
+const ONBOARD_POLL_PATH: &str = "/lite/poll_bind_result";
+/// hermes `QR_URL_TEMPLATE`.
+const QR_URL_TEMPLATE: &str =
+    "https://q.qq.com/qqbot/openclaw/connect.html?task_id={task_id}&_wv=2&source=hermes";
+/// hermes `ONBOARD_POLL_INTERVAL` / `ONBOARD_API_TIMEOUT`.
+const ONBOARD_POLL_INTERVAL_SECS: u64 = 2;
+const ONBOARD_API_TIMEOUT_SECS: u64 = 10;
+/// hermes `_MAX_REFRESHES` for expired QR codes.
+const ONBOARD_MAX_REFRESHES: u32 = 3;
+
+/// hermes `PORTAL_HOST` (overridable via `QQ_PORTAL_HOST` for corporate
+/// proxies / test environments).
+fn onboard_portal_host() -> String {
+    env_or_none("QQ_PORTAL_HOST").unwrap_or_else(|| "q.qq.com".to_string())
+}
+
+/// hermes `BindStatus` — `poll_bind_result` status codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindStatus {
+    None,
+    Pending,
+    Completed,
+    Expired,
+}
+
+impl BindStatus {
+    fn from_code(code: i64) -> BindStatus {
+        match code {
+            1 => BindStatus::Pending,
+            2 => BindStatus::Completed,
+            3 => BindStatus::Expired,
+            _ => BindStatus::None,
+        }
+    }
+}
+
+/// Credentials returned by a successful scan (hermes `qr_register`
+/// result dict).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QQOnboardCredentials {
+    pub app_id: String,
+    pub client_secret: String,
+    pub user_openid: String,
+}
+
+/// hermes `generate_bind_key` — random 256-bit AES key, base64. The key
+/// is passed to `create_bind_task` so the portal encrypts the bot's
+/// client_secret before returning it (the secret never travels in
+/// plaintext).
+pub fn generate_bind_key() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom_fill(&mut bytes);
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// hermes `decrypt_secret` — AES-256-GCM over
+/// `IV (12 bytes) || ciphertext || AuthTag (16 bytes)`, no AAD.
+pub fn decrypt_bind_secret(
+    encrypted_b64: &str,
+    key_b64: &str,
+) -> std::result::Result<String, String> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+    use base64::Engine;
+    let key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(key_b64.trim())
+        .map_err(|e| format!("bind key base64: {e}"))?;
+    if key_bytes.len() != 32 {
+        return Err(format!("bind key must be 32 bytes, got {}", key_bytes.len()));
+    }
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encrypted_b64.trim())
+        .map_err(|e| format!("encrypted secret base64: {e}"))?;
+    if raw.len() < 12 + 16 {
+        return Err("encrypted secret too short for IV + auth tag".to_string());
+    }
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| format!("aes key: {e}"))?;
+    let nonce = Nonce::from_slice(&raw[..12]);
+    let plaintext = cipher
+        .decrypt(nonce, &raw[12..])
+        .map_err(|e| format!("aes-gcm decrypt: {e}"))?;
+    String::from_utf8(plaintext).map_err(|e| format!("decrypted secret not utf-8: {e}"))
+}
+
+/// hermes `build_connect_url` — QR target URL for a bind task.
+pub fn build_connect_url(task_id: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    let encoded = utf8_percent_encode(task_id, NON_ALPHANUMERIC).to_string();
+    QR_URL_TEMPLATE.replace("{task_id}", &encoded)
+}
+
+/// hermes `get_api_headers` — `q.qq.com` requires `Accept:
+/// application/json` (without it the server answers with a JavaScript
+/// anti-bot challenge page).
+fn onboard_request(client: &reqwest::Client, url: &str, body: &Value) -> reqwest::RequestBuilder {
+    client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("User-Agent", "QQBotAdapter/1.1.0 (ulnclaw)")
+        .json(body)
+        .timeout(Duration::from_secs(ONBOARD_API_TIMEOUT_SECS))
+}
+
+/// hermes `_create_bind_task` → `(task_id, aes_key_base64)`.
+async fn create_bind_task(
+    client: &reqwest::Client,
+) -> std::result::Result<(String, String), String> {
+    let url = format!("https://{}{}", onboard_portal_host(), ONBOARD_CREATE_PATH);
+    let key = generate_bind_key();
+    let resp = onboard_request(client, &url, &json!({"key": key}))
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("create_bind_task: {e}"))?;
+    let data: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("create_bind_task json: {e}"))?;
+    if data.get("retcode").and_then(|v| v.as_i64()).unwrap_or(-1) != 0 {
+        return Err(data
+            .get("msg")
+            .and_then(|v| v.as_str())
+            .unwrap_or("create_bind_task failed")
+            .to_string());
+    }
+    let task_id = data
+        .pointer("/data/task_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if task_id.is_empty() {
+        return Err("create_bind_task: missing task_id in response".to_string());
+    }
+    Ok((task_id, key))
+}
+
+/// hermes `_poll_bind_result` → `(status, bot_appid, bot_encrypt_secret,
+/// user_openid)`.
+async fn poll_bind_result(
+    client: &reqwest::Client,
+    task_id: &str,
+) -> std::result::Result<(BindStatus, String, String, String), String> {
+    let url = format!("https://{}{}", onboard_portal_host(), ONBOARD_POLL_PATH);
+    let resp = onboard_request(client, &url, &json!({"task_id": task_id}))
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("poll_bind_result: {e}"))?;
+    let data: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("poll_bind_result json: {e}"))?;
+    if data.get("retcode").and_then(|v| v.as_i64()).unwrap_or(-1) != 0 {
+        return Err(data
+            .get("msg")
+            .and_then(|v| v.as_str())
+            .unwrap_or("poll_bind_result failed")
+            .to_string());
+    }
+    let status = BindStatus::from_code(
+        data.pointer("/data/status").and_then(|v| v.as_i64()).unwrap_or(0),
+    );
+    let app_id = data
+        .pointer("/data/bot_appid")
+        .map(|v| v.to_string().trim_matches('"').to_string())
+        .unwrap_or_default();
+    let encrypt_secret = data
+        .pointer("/data/bot_encrypt_secret")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let user_openid = data
+        .pointer("/data/user_openid")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok((status, app_id, encrypt_secret, user_openid))
+}
+
+/// hermes `_render_qr` — terminal ASCII QR (ulnclaw renders with the
+/// `qrcode` crate instead of Python `qrcode`).
+fn render_onboard_qr(data: &str) -> Option<String> {
+    let code = qrcode::QrCode::new(data.as_bytes()).ok()?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let mut out = String::new();
+    for row in colors.chunks(width) {
+        for color in row {
+            out.push_str(match color {
+                qrcode::Color::Dark => "██",
+                qrcode::Color::Light => "  ",
+            });
+        }
+        out.push('\n');
+    }
+    Some(out)
+}
+
+/// hermes `qr_register` — create bind task → display QR → poll →
+/// decrypt credentials, refreshing expired QR codes up to
+/// `ONBOARD_MAX_REFRESHES` times within the overall deadline.
+pub async fn qr_register(
+    timeout_seconds: u64,
+) -> std::result::Result<Option<QQOnboardCredentials>, String> {
+    let client = reqwest::Client::new();
+    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    for refresh_count in 0..=ONBOARD_MAX_REFRESHES {
+        let (task_id, aes_key) = match create_bind_task(&client).await {
+            Ok(result) => result,
+            Err(e) => {
+                eprintln!("[qqbot] onboard: failed to create bind task: {e}");
+                return Ok(None);
+            }
+        };
+        let url = build_connect_url(&task_id);
+        println!();
+        match render_onboard_qr(&url) {
+            Some(ascii) => {
+                println!("{ascii}");
+                println!("  请使用手机 QQ 扫描上方二维码，或直接打开链接：\n  {url}");
+            }
+            None => {
+                println!("  请在手机 QQ 中打开以下链接：\n  {url}");
+            }
+        }
+        println!();
+
+        loop {
+            if Instant::now() >= deadline {
+                eprintln!("[qqbot] onboard: poll timed out after {timeout_seconds}s");
+                return Ok(None);
+            }
+            match poll_bind_result(&client, &task_id).await {
+                Ok((BindStatus::Completed, app_id, encrypted_secret, user_openid)) => {
+                    let client_secret = decrypt_bind_secret(&encrypted_secret, &aes_key)?;
+                    println!();
+                    println!("  扫码完成！（App ID: {app_id}）");
+                    if !user_openid.is_empty() {
+                        println!("  扫码者 OpenID: {user_openid}");
+                    }
+                    return Ok(Some(QQOnboardCredentials {
+                        app_id,
+                        client_secret,
+                        user_openid,
+                    }));
+                }
+                Ok((BindStatus::Expired, _, _, _)) => {
+                    if refresh_count >= ONBOARD_MAX_REFRESHES {
+                        eprintln!(
+                            "[qqbot] onboard: QR code expired {ONBOARD_MAX_REFRESHES} times — giving up"
+                        );
+                        return Ok(None);
+                    }
+                    println!(
+                        "\n  二维码已过期，正在刷新… ({}/{ONBOARD_MAX_REFRESHES})",
+                        refresh_count + 1
+                    );
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => {} // transient poll error — retry after the interval
+            }
+            tokio::time::sleep(Duration::from_secs(ONBOARD_POLL_INTERVAL_SECS)).await;
+        }
+    }
+    Ok(None)
+}
+
+fn onboard_credentials_path(home: &Path) -> std::path::PathBuf {
+    home.join("qq").join("credentials.json")
+}
+
+/// Persist scan-to-configure credentials (hermes saves `QQ_APP_ID` /
+/// `QQ_CLIENT_SECRET` env values; ulnclaw writes an account file that
+/// `resolve_app_id` / `resolve_client_secret` read as a last fallback).
+pub fn save_onboard_credentials(
+    home: &Path,
+    creds: &QQOnboardCredentials,
+) -> std::result::Result<(), String> {
+    let payload = json!({
+        "app_id": creds.app_id,
+        "client_secret": creds.client_secret,
+        "user_openid": creds.user_openid,
+        "saved_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    });
+    let path = onboard_credentials_path(home);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, bytes)
+        .and_then(|_| std::fs::rename(&tmp, &path))
+        .map_err(|e| e.to_string())
+}
+
+/// Load persisted scan-to-configure credentials, if any.
+pub fn load_onboard_credentials(home: &Path) -> Option<Value> {
+    let raw = std::fs::read_to_string(onboard_credentials_path(home)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2216,5 +2541,76 @@ mod tests {
         assert_eq!(session_chat_id("platform-qq-ABC"), Some("ABC"));
         assert_eq!(session_chat_id("platform-qq-"), None);
         assert_eq!(session_chat_id("agent:main:qqbot:c2c:X"), None);
+    }
+
+    #[test]
+    fn bind_status_from_codes() {
+        assert_eq!(BindStatus::from_code(0), BindStatus::None);
+        assert_eq!(BindStatus::from_code(1), BindStatus::Pending);
+        assert_eq!(BindStatus::from_code(2), BindStatus::Completed);
+        assert_eq!(BindStatus::from_code(3), BindStatus::Expired);
+        assert_eq!(BindStatus::from_code(99), BindStatus::None);
+    }
+
+    #[test]
+    fn build_connect_url_matches_template() {
+        let url = build_connect_url("task 123/abc");
+        assert!(url.starts_with("https://q.qq.com/qqbot/openclaw/connect.html?task_id="));
+        assert!(url.contains("task%20123%2Fabc"));
+        assert!(url.ends_with("&_wv=2&source=hermes"));
+    }
+
+    #[test]
+    fn decrypt_bind_secret_round_trips() {
+        use aes_gcm::aead::Aead;
+        use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+        use base64::Engine;
+        let key_bytes = [7u8; 32];
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode(key_bytes);
+        let cipher = Aes256Gcm::new_from_slice(&key_bytes).unwrap();
+        let iv = [9u8; 12];
+        let mut blob = iv.to_vec();
+        // AESGCM.encrypt appends the 16-byte auth tag (hermes layout).
+        blob.extend(cipher.encrypt(Nonce::from_slice(&iv), &b"super-secret-value"[..]).unwrap());
+        let encrypted_b64 = base64::engine::general_purpose::STANDARD.encode(&blob);
+        assert_eq!(
+            decrypt_bind_secret(&encrypted_b64, &key_b64).unwrap(),
+            "super-secret-value"
+        );
+        // Wrong key fails authentication.
+        let bad_key = base64::engine::general_purpose::STANDARD.encode([8u8; 32]);
+        assert!(decrypt_bind_secret(&encrypted_b64, &bad_key).is_err());
+        // Truncated blob rejected.
+        assert!(decrypt_bind_secret(
+            &base64::engine::general_purpose::STANDARD.encode([0u8; 10]),
+            &key_b64
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn generate_bind_key_is_32_random_bytes() {
+        use base64::Engine;
+        let key = generate_bind_key();
+        let decoded = base64::engine::general_purpose::STANDARD.decode(&key).unwrap();
+        assert_eq!(decoded.len(), 32);
+        assert_ne!(key, generate_bind_key());
+    }
+
+    #[test]
+    fn onboard_credentials_save_and_load() {
+        let temp = tempfile::tempdir().unwrap();
+        let creds = QQOnboardCredentials {
+            app_id: "1024".into(),
+            client_secret: "s3cr3t".into(),
+            user_openid: "ou_scanner".into(),
+        };
+        assert!(load_onboard_credentials(temp.path()).is_none());
+        save_onboard_credentials(temp.path(), &creds).unwrap();
+        let loaded = load_onboard_credentials(temp.path()).unwrap();
+        assert_eq!(loaded["app_id"], "1024");
+        assert_eq!(loaded["client_secret"], "s3cr3t");
+        assert_eq!(loaded["user_openid"], "ou_scanner");
+        assert!(loaded["saved_at"].as_str().unwrap().ends_with('Z'));
     }
 }

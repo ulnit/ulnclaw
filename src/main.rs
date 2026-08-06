@@ -115,6 +115,12 @@ enum Commands {
         #[command(subcommand)]
         action: WeixinAction,
     },
+    /// QQ Bot scan-to-configure onboarding (hermes qqbot `qr_register`
+    /// gateway-setup wizard)
+    Qq {
+        #[command(subcommand)]
+        action: QqAction,
+    },
     /// Google Chat per-user OAuth for native attachment delivery —
     /// client-secret install / auth-url / code exchange / revoke
     /// (hermes `plugins.platforms.google_chat.oauth` helper)
@@ -2160,6 +2166,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
         Commands::Weixin { action } => weixin_cmd(action).await,
+        Commands::Qq { action } => qq_cmd(action).await,
         Commands::GoogleChatOauth { action } => google_chat_oauth_cmd(action).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
         Commands::Diff { staged, all, dir, paths } => {
@@ -4836,6 +4843,41 @@ async fn weixin_cmd(action: WeixinAction) -> Result<(), String> {
     }
 }
 
+#[derive(Subcommand)]
+enum QqAction {
+    /// Set up QQ Bot by scanning a QR code (persists credentials under
+    /// <home>/qq/ for [messaging.qq])
+    Login {
+        /// QR registration timeout in seconds (hermes default 600)
+        #[arg(long, default_value = "600")]
+        timeout: u64,
+    },
+}
+
+async fn qq_cmd(action: QqAction) -> Result<(), String> {
+    match action {
+        QqAction::Login { timeout } => {
+            let home = ulnclaw::config::ulnclaw_home();
+            match ulnclaw::qqbot::qr_register(timeout).await? {
+                Some(creds) => {
+                    ulnclaw::qqbot::save_onboard_credentials(&home, &creds)?;
+                    println!();
+                    println!("Saved credentials to {}.", home.join("qq").join("credentials.json").display());
+                    println!("Enable the adapter with:");
+                    println!("  [messaging.qq]");
+                    println!("  enabled = true");
+                    if !creds.user_openid.is_empty() {
+                        println!();
+                        println!("Optional — allow your own DMs:");
+                        println!("  allow_from = [\"{}\"]", creds.user_openid);
+                    }
+                    Ok(())
+                }
+                None => Err("qq login did not complete".into()),
+            }
+        }
+    }
+}
 /// Google Chat per-user OAuth CLI (hermes
 /// `python -m plugins.platforms.google_chat.oauth`). The Chat API's
 /// media.upload endpoint rejects service accounts, so each user grants
