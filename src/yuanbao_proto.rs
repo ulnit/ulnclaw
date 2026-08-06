@@ -361,6 +361,10 @@ pub struct MsgContent {
     /// TIM `index` (field 9) — TIMFaceElem face/sticker index; 0 for
     /// Yuanbao catalog stickers (hermes omits zero varints on encode).
     pub index: u64,
+    /// TIMCustomElem `ext_map` (field 999, `map<string, string>`) —
+    /// carries the base64-encoded ForwardMsgData payload for forwarded
+    /// WeChat chat records (hermes elem_type 1009).
+    pub ext_map: Vec<(String, String)>,
 }
 
 /// One `image_info_array` entry (hermes `build_image_msg_body`: type
@@ -425,6 +429,12 @@ fn encode_msg_content(content: &MsgContent) -> Vec<u8> {
     if !content.file_name.is_empty() {
         buf.extend(encode_string_field(12, &content.file_name));
     }
+    for (key, value) in &content.ext_map {
+        let mut entry = Vec::new();
+        entry.extend(encode_string_field(1, key));
+        entry.extend(encode_string_field(2, value));
+        buf.extend(encode_message_field(999, &entry));
+    }
     buf
 }
 
@@ -455,6 +465,13 @@ pub fn decode_msg_content(data: &[u8]) -> MsgContent {
         image_format: get_varint(&map, 3) as u32,
         image_info_array,
         index: get_varint(&map, 9),
+        ext_map: get_repeated_bytes(&map, 999)
+            .into_iter()
+            .map(|entry| {
+                let entry_map = fields_to_dict(parse_fields(&entry));
+                (get_string(&entry_map, 1), get_string(&entry_map, 2))
+            })
+            .collect(),
     }
 }
 
@@ -500,6 +517,181 @@ fn encode_log_ext(trace_id: &str) -> Vec<u8> {
 fn decode_log_ext(data: &[u8]) -> String {
     let map = fields_to_dict(parse_fields(data));
     get_string(&map, 1)
+}
+
+// ---------------------------------------------------------------------------
+// ForwardMsgData (hermes `decode_forward_msg_data` + sub-messages) —
+// the base64-decoded ext_map payload of forwarded WeChat chat records
+// (TIMCustomElem elem_type 1009).
+// ---------------------------------------------------------------------------
+
+/// One `multimedia` entry inside a forwarded record (hermes
+/// `_decode_forward_multimedia`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ForwardMultimedia {
+    pub media_type: String,
+    pub url: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub media_id: String,
+}
+
+/// One `msgContent` entry inside a forwarded message (hermes
+/// `_decode_forward_msg_content`): 1 = TEXT, 2 = MULTIMEDIA,
+/// 3 = nested FORWARD_MSG.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ForwardMsgContent {
+    pub content_type: u64,
+    pub text: String,
+    pub multimedia: Vec<ForwardMultimedia>,
+}
+
+/// One forwarded message (hermes `_decode_forward_msg`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ForwardMsg {
+    pub sender: String,
+    pub time: u64,
+    pub plain_text: String,
+    pub msg_content: Vec<ForwardMsgContent>,
+}
+
+/// Forwarded chat-record payload (hermes `decode_forward_msg_data`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ForwardMsgData {
+    pub sub_type: u64,
+    pub begin_time: u64,
+    pub end_time: u64,
+    pub nick_name: String,
+    pub msg: Vec<ForwardMsg>,
+}
+
+fn decode_forward_multimedia(data: &[u8]) -> ForwardMultimedia {
+    let map = fields_to_dict(parse_fields(data));
+    ForwardMultimedia {
+        media_type: get_string(&map, 1),
+        url: get_string(&map, 2),
+        file_name: get_string(&map, 4),
+        file_size: get_varint(&map, 5),
+        media_id: get_string(&map, 15),
+    }
+}
+
+fn decode_forward_msg_content(data: &[u8]) -> ForwardMsgContent {
+    let map = fields_to_dict(parse_fields(data));
+    ForwardMsgContent {
+        content_type: get_varint(&map, 1),
+        text: get_string(&map, 2),
+        multimedia: get_repeated_bytes(&map, 3)
+            .into_iter()
+            .map(|bytes| decode_forward_multimedia(&bytes))
+            .collect(),
+    }
+}
+
+fn decode_forward_msg(data: &[u8]) -> ForwardMsg {
+    let map = fields_to_dict(parse_fields(data));
+    ForwardMsg {
+        sender: get_string(&map, 1),
+        time: get_varint(&map, 2),
+        plain_text: get_string(&map, 3),
+        msg_content: get_repeated_bytes(&map, 4)
+            .into_iter()
+            .map(|bytes| decode_forward_msg_content(&bytes))
+            .collect(),
+    }
+}
+
+/// hermes `decode_forward_msg_data` — parse the base64-decoded ext_map
+/// value; `None` on empty input.
+pub fn decode_forward_msg_data(data: &[u8]) -> Option<ForwardMsgData> {
+    if data.is_empty() {
+        return None;
+    }
+    let map = fields_to_dict(parse_fields(data));
+    Some(ForwardMsgData {
+        sub_type: get_varint(&map, 1),
+        begin_time: get_varint(&map, 2),
+        end_time: get_varint(&map, 3),
+        nick_name: get_string(&map, 4),
+        msg: get_repeated_bytes(&map, 5)
+            .into_iter()
+            .map(|bytes| decode_forward_msg(&bytes))
+            .collect(),
+    })
+}
+
+/// hermes `_encode_forward_multimedia` (mock/test builder).
+pub fn encode_forward_multimedia(media: &ForwardMultimedia) -> Vec<u8> {
+    let mut buf = Vec::new();
+    if !media.media_type.is_empty() {
+        buf.extend(encode_string_field(1, &media.media_type));
+    }
+    if !media.url.is_empty() {
+        buf.extend(encode_string_field(2, &media.url));
+    }
+    if !media.file_name.is_empty() {
+        buf.extend(encode_string_field(4, &media.file_name));
+    }
+    if media.file_size != 0 {
+        buf.extend(encode_varint_field(5, media.file_size));
+    }
+    if !media.media_id.is_empty() {
+        buf.extend(encode_string_field(15, &media.media_id));
+    }
+    buf
+}
+
+/// hermes `_encode_forward_msg_content` (mock/test builder).
+pub fn encode_forward_msg_content(content: &ForwardMsgContent) -> Vec<u8> {
+    let mut buf = Vec::new();
+    if content.content_type != 0 {
+        buf.extend(encode_varint_field(1, content.content_type));
+    }
+    if !content.text.is_empty() {
+        buf.extend(encode_string_field(2, &content.text));
+    }
+    for media in &content.multimedia {
+        buf.extend(encode_message_field(3, &encode_forward_multimedia(media)));
+    }
+    buf
+}
+
+/// hermes `_encode_forward_msg` (mock/test builder).
+pub fn encode_forward_msg(msg: &ForwardMsg) -> Vec<u8> {
+    let mut buf = Vec::new();
+    if !msg.sender.is_empty() {
+        buf.extend(encode_string_field(1, &msg.sender));
+    }
+    if msg.time != 0 {
+        buf.extend(encode_varint_field(2, msg.time));
+    }
+    if !msg.plain_text.is_empty() {
+        buf.extend(encode_string_field(3, &msg.plain_text));
+    }
+    for content in &msg.msg_content {
+        buf.extend(encode_message_field(4, &encode_forward_msg_content(content)));
+    }
+    buf
+}
+
+/// hermes `encode_forward_msg_data` — "mainly used to build mock / test
+/// data; production code never needs to encode this".
+pub fn encode_forward_msg_data(data: &ForwardMsgData) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend(encode_varint_field(1, data.sub_type));
+    if data.begin_time != 0 {
+        buf.extend(encode_varint_field(2, data.begin_time));
+    }
+    if data.end_time != 0 {
+        buf.extend(encode_varint_field(3, data.end_time));
+    }
+    if !data.nick_name.is_empty() {
+        buf.extend(encode_string_field(4, &data.nick_name));
+    }
+    for msg in &data.msg {
+        buf.extend(encode_message_field(5, &encode_forward_msg(msg)));
+    }
+    buf
 }
 
 // ---------------------------------------------------------------------------

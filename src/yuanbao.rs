@@ -26,8 +26,10 @@
 //! `[kind|ybres:RID]` text anchors patch to local paths.
 //!
 //! Known differences: the inbound middleware pipeline collapses into a
-//! direct decode→gate→dispatch path (recall guard, owner commands,
-//! forwarded chat-history parsing not ported); anchor patching matches
+//! direct decode→gate→dispatch path (recall guard and owner commands
+//! not ported; forwarded WeChat chat records — elem_type 1009 — ARE
+//! deep-parsed into the prompt, minus the WS RUNNING loading
+//! heartbeat); anchor patching matches
 //! by resourceId instead of zipping; quote/observed-media backfill
 //! reads an adapter-side message-content cache + per-group observed
 //! buffer instead of the hermes transcript store (ulnclaw transcripts
@@ -74,6 +76,9 @@ const MSG_CONTENT_CACHE_MAX: usize = 200;
 const QUOTE_SNIPPET_MAX_CHARS: usize = 500;
 // hermes `_RESOLVABLE_MEDIA_KINDS` (voice is never re-resolved).
 const RESOLVABLE_MEDIA_KINDS: &[&str] = &["image", "file", "video"];
+// hermes `FORWARD_MSG_TEXT_MAX_CHARS` — per-record combined-text cap for
+// forwarded chat records (record count is NOT capped, design §2.10.3).
+const FORWARD_MSG_TEXT_MAX_CHARS: usize = 1000;
 
 /// hermes MAX_TEXT_CHUNK — Yuanbao single-message character limit.
 const MAX_TEXT_CHUNK: usize = 4000;
@@ -772,6 +777,24 @@ async fn handle_inbound_frames(runner: &Arc<Runner>, frames: &[Vec<u8>], out_tx:
     // resolve the refs into the media cache (hermes
     // MediaResolveMiddleware) and patch `[kind|ybres:RID]` anchors.
     let (raw_text, media_refs) = extract_inbound_text(&push.msg_body);
+    // hermes ForwardedRecordsParseMiddleware: deep-parse forwarded WeChat
+    // chat records (elem_type 1009) into the prompt. Runs before the
+    // empty-text guard — a bare forward carries no caption of its own.
+    let (raw_text, media_refs) = match extract_forwarded_records(&push.msg_body) {
+        Some(forward) => {
+            let mut forward_refs: Vec<MediaRef> = Vec::new();
+            let forward_text = build_forward_text(
+                &forward,
+                &push.sender_nickname,
+                &raw_text,
+                &mut forward_refs,
+            );
+            let mut all_refs = media_refs;
+            all_refs.extend(forward_refs);
+            (forward_text, all_refs)
+        }
+        None => (raw_text, media_refs),
+    };
     if raw_text.trim().is_empty() {
         return;
     }
@@ -936,7 +959,7 @@ const SKIPPABLE_PLACEHOLDERS: &[&str] = &[
 /// One inbound media reference (hermes `_extract_inbound_media_refs`
 /// entry): image/file URL plus the original filename for files.
 #[derive(Debug, Clone)]
-struct MediaRef {
+pub(crate) struct MediaRef {
     kind: &'static str,
     url: String,
     name: String,
@@ -1362,14 +1385,24 @@ fn patch_media_anchors(
             continue;
         }
         let local = attachment.path.display().to_string();
-        let (anchor, replacement) = match reference.kind {
-            "image" => (format!("[image|ybres:{rid}]"), format!("[image: {local}]")),
+        match reference.kind {
+            "image" => {
+                patched = patched.replacen(
+                    &format!("[image|ybres:{rid}]"),
+                    &format!("[image: {local}]"),
+                    1,
+                );
+            }
+            "video" => {
+                // Forwarded-record video markers (hermes PatchAnchors
+                // `[video: {path}]` replacement).
+                patched = patched.replacen(
+                    &format!("[video|ybres:{rid}]"),
+                    &format!("[video: {local}]"),
+                    1,
+                );
+            }
             _ => {
-                let anchor = if reference.name.is_empty() {
-                    format!("[file|ybres:{rid}]")
-                } else {
-                    format!("[file:{}|ybres:{rid}]", reference.name)
-                };
                 let label = if reference.name.is_empty() {
                     attachment
                         .path
@@ -1379,10 +1412,18 @@ fn patch_media_anchors(
                 } else {
                     reference.name.clone()
                 };
-                (anchor, format!("[file: {label} → {local}]"))
+                let replacement = format!("[file: {label} → {local}]");
+                let named = format!("[file:{}|ybres:{rid}]", reference.name);
+                // Forwarded-record file markers keep the filename OUTSIDE
+                // the anchor (`[file|ybres:RID] name`) — fall back to the
+                // nameless anchor when the named one is absent.
+                if !reference.name.is_empty() && patched.contains(&named) {
+                    patched = patched.replacen(&named, &replacement, 1);
+                } else {
+                    patched = patched.replacen(&format!("[file|ybres:{rid}]"), &replacement, 1);
+                }
             }
-        };
-        patched = patched.replacen(&anchor, &replacement, 1);
+        }
     }
     patched
 }
@@ -1655,6 +1696,158 @@ pub fn render_reply_to_prefix(text: &str, quote_id: Option<&str>, quote_text: Op
     }
     let snippet: String = quote_text.chars().take(QUOTE_SNIPPET_MAX_CHARS).collect();
     format!("[Replying to: \"{snippet}\"]\n\n{text}")
+}
+
+// ---------------------------------------------------------------------------
+// Forwarded chat records (hermes ForwardedRecordsParseMiddleware)
+// ---------------------------------------------------------------------------
+
+/// hermes `_extract_forwarded_records` — find the first TIMCustomElem
+/// with `elem_type == 1009` whose `ext_map` carries a decodable
+/// `wexin_forward_msg_*` ForwardMsgData (`sub_type == 1`). Note the
+/// hermes quirk: a 1009 element with an empty ext_map stops the scan.
+pub(crate) fn extract_forwarded_records(msg_body: &[proto::MsgBodyElement]) -> Option<proto::ForwardMsgData> {
+    use base64::Engine;
+    for element in msg_body {
+        if element.msg_type != "TIMCustomElem" {
+            continue;
+        }
+        let data_str = element.msg_content.data.as_str();
+        if data_str.is_empty() {
+            continue;
+        }
+        let Ok(custom) = serde_json::from_str::<Value>(data_str) else {
+            continue;
+        };
+        if custom.get("elem_type").and_then(|v| v.as_i64()) != Some(1009) {
+            continue;
+        }
+        if element.msg_content.ext_map.is_empty() {
+            return None;
+        }
+        for (key, value) in &element.msg_content.ext_map {
+            if !key.starts_with("wexin_forward_msg_") {
+                continue;
+            }
+            let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(value) else {
+                continue;
+            };
+            if let Some(forward) = proto::decode_forward_msg_data(&bytes) {
+                if forward.sub_type == 1 {
+                    return Some(forward);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// hermes `_media_marker` — render one forwarded `multimedia` entry as a
+/// text marker plus (when downloadable) a media ref. `media_id` is
+/// directly usable as a ybres RID (design §2.10.9); otherwise the
+/// resourceId parses out of the URL.
+fn forward_media_marker(media: &proto::ForwardMultimedia, plain_text: &str) -> (String, Option<MediaRef>) {
+    let media_type = media.media_type.trim().to_lowercase();
+    let url = media.url.trim().to_string();
+    let media_id = media.media_id.trim().to_string();
+    let file_name = media.file_name.trim().to_string();
+    let rid = if !media_id.is_empty() {
+        media_id
+    } else {
+        parse_resource_id(&url)
+    };
+    if media_type == "image" {
+        if !url.is_empty() && !rid.is_empty() {
+            return (
+                format!("[image|ybres:{rid}] {file_name}").trim_end().to_string(),
+                Some(MediaRef { kind: "image", url, name: String::new() }),
+            );
+        }
+        let label = if !file_name.is_empty() { &file_name } else { plain_text };
+        return (format!("[image] {label}").trim_end().to_string(), None);
+    }
+    if matches!(media_type.as_str(), "file" | "document" | "code") {
+        if !url.is_empty() && !rid.is_empty() {
+            return (
+                format!("[file|ybres:{rid}] {file_name}").trim_end().to_string(),
+                Some(MediaRef { kind: "file", url, name: file_name }),
+            );
+        }
+        return (format!("[file] {file_name}").trim_end().to_string(), None);
+    }
+    if media_type == "url" {
+        // Link share (e.g. WeChat article) — keep the URL for the agent.
+        return (format!("[link] {file_name} {url}").trim_end().to_string(), None);
+    }
+    if media_type == "video" {
+        if !url.is_empty() && !rid.is_empty() {
+            return (
+                format!("[video|ybres:{rid}] {file_name}").trim_end().to_string(),
+                Some(MediaRef { kind: "video", url, name: String::new() }),
+            );
+        }
+        let label = if !file_name.is_empty() { &file_name } else { url.as_str() };
+        return (format!("[video] {label}").trim_end().to_string(), None);
+    }
+    let kind_label = if media_type.is_empty() { "media" } else { media_type.as_str() };
+    let label = if !url.is_empty() { &url } else { &file_name };
+    (format!("[{kind_label}] {label}").trim_end().to_string(), None)
+}
+
+/// hermes `_walk_forward_msgs` + `build_forward_text` (dispatch flavor):
+/// body lines are `发送人：正文` with `[kind|ybres:RID]` media markers
+/// preserved, refs appended in textual order for resolution/patching,
+/// and a `用户附言：` footer when the forwarder added a caption.
+pub(crate) fn build_forward_text(
+    forward: &proto::ForwardMsgData,
+    sender_nickname: &str,
+    raw_text: &str,
+    refs_out: &mut Vec<MediaRef>,
+) -> String {
+    let nickname = if sender_nickname.trim().is_empty() { "用户" } else { sender_nickname };
+    let mut lines: Vec<String> = vec![
+        format!("当前用户的昵称为{nickname}"),
+        "以下为用户的聊天记录".to_string(),
+    ];
+    for msg in &forward.msg {
+        let mut rendered = msg.plain_text.clone();
+        if !msg.msg_content.is_empty() {
+            let mut parts: Vec<String> = Vec::new();
+            for content in &msg.msg_content {
+                match content.content_type {
+                    1 => parts.push(content.text.clone()),
+                    2 => {
+                        for media in &content.multimedia {
+                            let (marker, reference) = forward_media_marker(media, &msg.plain_text);
+                            parts.push(marker);
+                            if let Some(reference) = reference {
+                                refs_out.push(reference);
+                            }
+                        }
+                    }
+                    3 => parts.push("[嵌套聊天记录]".to_string()),
+                    _ => {
+                        if !msg.plain_text.is_empty() {
+                            parts.push(msg.plain_text.clone());
+                        }
+                    }
+                }
+            }
+            let joined: Vec<&str> = parts.iter().filter(|p| !p.is_empty()).map(String::as_str).collect();
+            let combined = joined.join("  ");
+            rendered = if combined.is_empty() { msg.plain_text.clone() } else { combined };
+        }
+        if rendered.chars().count() > FORWARD_MSG_TEXT_MAX_CHARS {
+            let truncated: String = rendered.chars().take(FORWARD_MSG_TEXT_MAX_CHARS).collect();
+            rendered = format!("{truncated}…(已截断)");
+        }
+        lines.push(format!("{}：{rendered}", msg.sender));
+    }
+    let mut text = lines.join("\n");
+    if !raw_text.trim().is_empty() {
+        text.push_str(&format!("\n\n用户附言：{}", raw_text.trim()));
+    }
+    text
 }
 
 // ---------------------------------------------------------------------------
@@ -2898,5 +3091,227 @@ mod tests {
         let rendered = render_reply_to_prefix("hi", Some("m1"), Some(&long));
         assert!(rendered.contains(&"x".repeat(500)));
         assert!(!rendered.contains(&"x".repeat(501)));
+    }
+
+    fn sample_forward_data() -> proto::ForwardMsgData {
+        proto::ForwardMsgData {
+            sub_type: 1,
+            begin_time: 100,
+            end_time: 200,
+            nick_name: "转发者".into(),
+            msg: vec![
+                proto::ForwardMsg {
+                    sender: "Alice".into(),
+                    time: 1,
+                    plain_text: "hello".into(),
+                    msg_content: vec![proto::ForwardMsgContent {
+                        content_type: 1,
+                        text: "hello world".into(),
+                        multimedia: Vec::new(),
+                    }],
+                },
+                proto::ForwardMsg {
+                    sender: "Bob".into(),
+                    time: 2,
+                    msg_content: vec![proto::ForwardMsgContent {
+                        content_type: 2,
+                        multimedia: vec![proto::ForwardMultimedia {
+                            media_type: "image".into(),
+                            url: "https://cdn.example/r?resourceId=fw-rid-1".into(),
+                            file_name: "pic.jpg".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+        }
+    }
+
+    fn custom_elem_with_forward(forward: &proto::ForwardMsgData, sub_type_override: Option<u64>) -> proto::MsgBodyElement {
+        use base64::Engine;
+        let mut data = forward.clone();
+        if let Some(sub) = sub_type_override {
+            data.sub_type = sub;
+        }
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode(proto::encode_forward_msg_data(&data));
+        proto::MsgBodyElement {
+            msg_type: "TIMCustomElem".into(),
+            msg_content: proto::MsgContent {
+                data: json!({"elem_type": 1009}).to_string(),
+                ext_map: vec![("wexin_forward_msg_abc_u1".into(), payload)],
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn forward_msg_data_round_trips() {
+        let data = sample_forward_data();
+        let encoded = proto::encode_forward_msg_data(&data);
+        assert_eq!(proto::decode_forward_msg_data(&encoded), Some(data));
+        assert_eq!(proto::decode_forward_msg_data(&[]), None);
+    }
+
+    #[test]
+    fn extract_forwarded_records_variants() {
+        let forward = sample_forward_data();
+        let body = vec![custom_elem_with_forward(&forward, None)];
+        let found = extract_forwarded_records(&body).unwrap();
+        assert_eq!(found.sub_type, 1);
+        assert_eq!(found.msg.len(), 2);
+        // Wrong sub_type → None.
+        let body = vec![custom_elem_with_forward(&forward, Some(2))];
+        assert!(extract_forwarded_records(&body).is_none());
+        // Non-1009 custom elem → None.
+        let other = proto::MsgBodyElement {
+            msg_type: "TIMCustomElem".into(),
+            msg_content: proto::MsgContent {
+                data: json!({"elem_type": 42}).to_string(),
+                ..Default::default()
+            },
+        };
+        assert!(extract_forwarded_records(&[other]).is_none());
+        // 1009 with empty ext_map stops the scan (hermes quirk) even
+        // when a valid element follows.
+        let empty_ext = proto::MsgBodyElement {
+            msg_type: "TIMCustomElem".into(),
+            msg_content: proto::MsgContent {
+                data: json!({"elem_type": 1009}).to_string(),
+                ..Default::default()
+            },
+        };
+        let body = vec![empty_ext, custom_elem_with_forward(&forward, None)];
+        assert!(extract_forwarded_records(&body).is_none());
+    }
+
+    #[test]
+    fn forward_media_marker_variants() {
+        // Image with usable RID — media_id wins over URL parsing.
+        let media = proto::ForwardMultimedia {
+            media_type: "image".into(),
+            url: "https://cdn/r?resourceId=x".into(),
+            file_name: "p.jpg".into(),
+            media_id: "mid-9".into(),
+            ..Default::default()
+        };
+        let (marker, reference) = forward_media_marker(&media, "");
+        assert_eq!(marker, "[image|ybres:mid-9] p.jpg");
+        assert_eq!(reference.unwrap().kind, "image");
+        // Document with filename.
+        let media = proto::ForwardMultimedia {
+            media_type: "document".into(),
+            url: "https://cdn/r?resourceId=f1".into(),
+            file_name: "r.pdf".into(),
+            ..Default::default()
+        };
+        let (marker, reference) = forward_media_marker(&media, "");
+        assert_eq!(marker, "[file|ybres:f1] r.pdf");
+        assert_eq!(reference.unwrap().name, "r.pdf");
+        // Link share keeps the URL, no downloadable ref.
+        let media = proto::ForwardMultimedia {
+            media_type: "url".into(),
+            url: "https://mp.weixin.qq.com/s/x".into(),
+            file_name: "文章".into(),
+            ..Default::default()
+        };
+        let (marker, reference) = forward_media_marker(&media, "");
+        assert_eq!(marker, "[link] 文章 https://mp.weixin.qq.com/s/x");
+        assert!(reference.is_none());
+        // RID-less image → plain marker with plain_text fallback.
+        let media = proto::ForwardMultimedia {
+            media_type: "image".into(),
+            url: "https://cdn/no-rid".into(),
+            ..Default::default()
+        };
+        let (marker, reference) = forward_media_marker(&media, "caption");
+        assert_eq!(marker, "[image] caption");
+        assert!(reference.is_none());
+        // Video marker + ref.
+        let media = proto::ForwardMultimedia {
+            media_type: "video".into(),
+            url: "https://cdn/r?resourceId=v1".into(),
+            file_name: "c.mp4".into(),
+            ..Default::default()
+        };
+        let (marker, reference) = forward_media_marker(&media, "");
+        assert_eq!(marker, "[video|ybres:v1] c.mp4");
+        assert_eq!(reference.unwrap().kind, "video");
+    }
+
+    #[test]
+    fn build_forward_text_renders_records() {
+        let forward = sample_forward_data();
+        let mut refs = Vec::new();
+        let text = build_forward_text(&forward, "小明", "请看看", &mut refs);
+        assert!(text.starts_with(
+            "当前用户的昵称为小明\n以下为用户的聊天记录\nAlice：hello world\nBob："
+        ));
+        assert!(text.contains("[image|ybres:fw-rid-1] pic.jpg"));
+        assert!(text.ends_with("用户附言：请看看"));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].kind, "image");
+        // Nickname fallback + no caption → no footer.
+        let mut refs = Vec::new();
+        let text = build_forward_text(&forward, " ", "", &mut refs);
+        assert!(text.starts_with("当前用户的昵称为用户\n"));
+        assert!(!text.contains("用户附言"));
+    }
+
+    #[test]
+    fn build_forward_text_caps_record_body() {
+        let long = "长".repeat(1200);
+        let forward = proto::ForwardMsgData {
+            sub_type: 1,
+            msg: vec![proto::ForwardMsg {
+                sender: "S".into(),
+                plain_text: long,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let text = build_forward_text(&forward, "", "", &mut Vec::new());
+        assert!(text.contains(&"长".repeat(1000)));
+        assert!(text.contains("…(已截断)"));
+        assert!(!text.contains(&"长".repeat(1001)));
+    }
+
+    #[test]
+    fn patch_media_anchors_handles_forward_markers() {
+        let refs = vec![
+            MediaRef {
+                kind: "file",
+                url: "https://cdn/r?resourceId=fw-f1".into(),
+                name: "report.pdf".into(),
+            },
+            MediaRef {
+                kind: "video",
+                url: "https://cdn/r?resourceId=fw-v1".into(),
+                name: "".into(),
+            },
+        ];
+        let resolved = vec![
+            Some(crate::messaging::MediaAttachment {
+                path: std::path::PathBuf::from("/cache/report.pdf"),
+                mime: "application/pdf".into(),
+                bytes: 10,
+                original_name: "report.pdf".into(),
+            }),
+            Some(crate::messaging::MediaAttachment {
+                path: std::path::PathBuf::from("/cache/clip.mp4"),
+                mime: "video/mp4".into(),
+                bytes: 10,
+                original_name: "".into(),
+            }),
+        ];
+        // Forward markers: filename OUTSIDE the file anchor; video anchor.
+        let text = "看 [file|ybres:fw-f1] report.pdf 和 [video|ybres:fw-v1] clip";
+        let patched = patch_media_anchors(text, &refs, &resolved);
+        assert!(patched.contains("[file: report.pdf → /cache/report.pdf]"));
+        assert!(patched.contains("[video: /cache/clip.mp4]"));
+        assert!(!patched.contains("ybres:fw-f1"));
+        assert!(!patched.contains("ybres:fw-v1"));
     }
 }

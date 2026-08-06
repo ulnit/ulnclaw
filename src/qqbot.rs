@@ -14,8 +14,10 @@
 //! back through `approval_gateway` with operator authorization (hermes
 //! `_default_interaction_dispatch`). Update-prompt ✓/✗ keyboards and the
 //! atomic `.update_response` answer file are ported as well. Known
-//! difference: the QR scan-to-configure onboarding flow (`onboard.py`,
-//! AES-256-GCM bound secrets) is not ported. Guild-DM replies route
+//! difference: the DM-policy wizard half of the hermes onboarding flow
+//! is not ported (QR scan-to-configure — `onboard.py`, AES-256-GCM
+//! bound secrets — IS ported via `ulnclaw qq login`). Guild-DM replies
+//! route
 //! through `/dms/<guild_id>/messages` (hermes' send path left the `dm`
 //! chat type unrouted).
 
