@@ -241,6 +241,13 @@ pub struct Task {
     /// Goal-loop turn budget (hermes `goal_max_turns`); None = the
     /// goal-loop default.
     pub goal_max_turns: Option<i64>,
+    /// Workflow template this card belongs to (hermes
+    /// `workflow_template_id`) — external workflow engines stamp and
+    /// query it; the board only stores and filters.
+    pub workflow_template_id: Option<String>,
+    /// Current step within the workflow template (hermes
+    /// `current_step_key`).
+    pub current_step_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -847,7 +854,7 @@ pub fn run_slash(home: &std::path::Path, rest: &str) -> String {
         }
         "list" => {
             let status = parts.next();
-            match store.list_tasks(None, status, None, 50) {
+            match store.list_tasks(None, status, None, None, 50) {
                 Ok(tasks) => {
                     if tasks.is_empty() {
                         return "(o_o) no tasks on this board\n".to_string();
@@ -1891,6 +1898,10 @@ pub struct NewTask {
     /// Goal-loop turn budget (hermes `create --goal-max-turns`); None
     /// = the goal-loop default. Must be >= 1 when set.
     pub goal_max_turns: Option<i64>,
+    /// Workflow template hook (hermes `workflow_template_id`).
+    pub workflow_template_id: Option<String>,
+    /// Workflow step hook (hermes `current_step_key`).
+    pub current_step_key: Option<String>,
     /// Creator session id for wake routing (hermes `session_id`),
     /// stamped by the agent `kanban_create` tool.
     pub session_id: Option<String>,
@@ -1948,7 +1959,9 @@ impl KanbanStore {
                 block_kind      TEXT,
                 block_recurrences INTEGER NOT NULL DEFAULT 0,
                 goal_mode       INTEGER NOT NULL DEFAULT 0,
-                goal_max_turns  INTEGER
+                goal_max_turns  INTEGER,
+                workflow_template_id TEXT,
+                current_step_key TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_board_status ON tasks (board, status);
             CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks (session_id);
@@ -2124,6 +2137,18 @@ impl KanbanStore {
         if !columns.contains("goal_max_turns") {
             conn.execute_batch("ALTER TABLE tasks ADD COLUMN goal_max_turns INTEGER;")
                 .map_err(db_error("migrate goal_max_turns"))?;
+        }
+        // Pre-P158 stores lack the workflow-template hooks (hermes
+        // workflow_template_id / current_step_key).
+        if !columns.contains("workflow_template_id") {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN workflow_template_id TEXT;",
+            )
+            .map_err(db_error("migrate workflow_template_id"))?;
+        }
+        if !columns.contains("current_step_key") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN current_step_key TEXT;")
+                .map_err(db_error("migrate current_step_key"))?;
         }
         let store = Self {
             conn: Mutex::new(conn),
@@ -2643,9 +2668,9 @@ impl KanbanStore {
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
              created_by, created_at, tenant, model, skills, max_runtime_seconds, \
              idempotency_key, max_retries, workspace_kind, workspace_path, branch_name, \
-             session_id, goal_mode, goal_max_turns) \
+             session_id, goal_mode, goal_max_turns, workflow_template_id, current_step_key) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                     ?16, ?17, ?18, ?19, ?20, ?21)",
+                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
             params![
                 id,
                 board,
@@ -2668,6 +2693,8 @@ impl KanbanStore {
                 task.session_id,
                 i64::from(task.goal_mode),
                 task.goal_max_turns,
+                task.workflow_template_id,
+                task.current_step_key,
             ],
         )
         .map_err(db_error("create task"))?;
@@ -3121,6 +3148,8 @@ impl KanbanStore {
             block_recurrences: row.get("block_recurrences")?,
             goal_mode: row.get::<_, i64>("goal_mode")? != 0,
             goal_max_turns: row.get("goal_max_turns")?,
+            workflow_template_id: row.get("workflow_template_id")?,
+            current_step_key: row.get("current_step_key")?,
         })
     }
 
@@ -3129,7 +3158,7 @@ impl KanbanStore {
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
         last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, \
-        session_id, current_run_id, block_kind, block_recurrences,         goal_mode, goal_max_turns";
+        session_id, current_run_id, block_kind, block_recurrences,         goal_mode, goal_max_turns, workflow_template_id, current_step_key";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -3176,6 +3205,7 @@ impl KanbanStore {
         board: Option<&str>,
         status: Option<&str>,
         assignee: Option<&str>,
+        workflow_template_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Task>> {
         let board = match board {
@@ -3195,6 +3225,10 @@ impl KanbanStore {
         if let Some(assignee) = assignee {
             sql.push_str(" AND assignee = ?");
             bindings.push(Box::new(assignee.to_string()));
+        }
+        if let Some(template) = workflow_template_id {
+            sql.push_str(" AND workflow_template_id = ?");
+            bindings.push(Box::new(template.to_string()));
         }
         sql.push_str(" ORDER BY priority DESC, created_at DESC LIMIT ?");
         bindings.push(Box::new(limit as i64));
@@ -6208,7 +6242,7 @@ impl KanbanStore {
             }
         }
 
-        let running = self.list_tasks(None, Some("running"), None, 10_000)?;
+        let running = self.list_tasks(None, Some("running"), None, None, 10_000)?;
         let mut running_count = running.len();
         // Global in-progress cap (hermes `kanban.max_in_progress`,
         // #33488): when the board already runs at/above the cap, skip
@@ -6557,7 +6591,7 @@ mod tests {
         let got = store.get_task(&task.id).unwrap().unwrap();
         assert_eq!(got.title, "Fix the parser");
 
-        let listed = store.list_tasks(None, None, None, 100).unwrap();
+        let listed = store.list_tasks(None, None, None, None, 100).unwrap();
         assert_eq!(listed.len(), 1);
 
         // Unique prefix resolution.
@@ -6642,7 +6676,7 @@ mod tests {
         assert_eq!(comments.len(), 2);
         assert_eq!(comments[0].author, "alice");
 
-        let alice_tasks = store.list_tasks(None, None, Some("alice"), 100).unwrap();
+        let alice_tasks = store.list_tasks(None, None, Some("alice"), None, 100).unwrap();
         assert_eq!(alice_tasks.len(), 1);
         assert_eq!(alice_tasks[0].id, a.id);
         assert_ne!(a.id, b.id);
@@ -6658,7 +6692,7 @@ mod tests {
         let task = make_task(&store, "On the ops board");
         assert_eq!(task.board, "ops");
         // default board listing does not see the ops task.
-        let default_tasks = store.list_tasks(Some("default"), None, None, 100).unwrap();
+        let default_tasks = store.list_tasks(Some("default"), None, None, None, 100).unwrap();
         assert!(default_tasks.is_empty());
         // Cannot remove a board with active tasks.
         assert!(store.remove_board("ops").is_err());
@@ -7649,6 +7683,41 @@ mod tests {
     }
 
     #[test]
+    fn workflow_fields_roundtrip_and_filter() {
+        let (_dir, store) = temp_store();
+        let in_flow = store
+            .create_task(&NewTask {
+                title: "step one".into(),
+                created_by: "tester".into(),
+                workflow_template_id: Some("wf/onboarding".into()),
+                current_step_key: Some("intro".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let fetched = store.get_task(&in_flow.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.workflow_template_id.as_deref(),
+            Some("wf/onboarding")
+        );
+        assert_eq!(fetched.current_step_key.as_deref(), Some("intro"));
+
+        let outside = make_task(&store, "no workflow");
+        let all = store.list_tasks(None, None, None, None, 100).unwrap();
+        assert!(all.len() >= 2);
+        let filtered = store
+            .list_tasks(None, None, None, Some("wf/onboarding"), 100)
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, in_flow.id);
+        // Unknown template → empty result.
+        let none = store
+            .list_tasks(None, None, None, Some("wf/missing"), 100)
+            .unwrap();
+        assert!(none.is_empty());
+        assert!(outside.workflow_template_id.is_none());
+    }
+
+    #[test]
     fn create_initial_status_blocked_parks_card() {
         let (_dir, store) = temp_store();
         let task = store
@@ -8072,7 +8141,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(second.title, "deploy"); // original task, not the duplicate
-        let all = store.list_tasks(None, None, None, 100).unwrap();
+        let all = store.list_tasks(None, None, None, None, 100).unwrap();
         assert_eq!(all.len(), 1);
         // A different key still creates a fresh task.
         let third = store
@@ -8130,7 +8199,7 @@ mod tests {
         let first = store
             .create_swarm("Ship a report", &swarm_specs(), "carol", "dave", "", Some("swarm-42"))
             .unwrap();
-        let before = store.list_tasks(None, None, None, 500).unwrap().len();
+        let before = store.list_tasks(None, None, None, None, 500).unwrap().len();
         let second = store
             .create_swarm("Ship a report", &swarm_specs(), "carol", "dave", "", Some("swarm-42"))
             .unwrap();
@@ -8138,7 +8207,7 @@ mod tests {
         assert_eq!(first.worker_ids, second.worker_ids);
         assert_eq!(first.verifier_id, second.verifier_id);
         assert_eq!(first.synthesizer_id, second.synthesizer_id);
-        let after = store.list_tasks(None, None, None, 500).unwrap().len();
+        let after = store.list_tasks(None, None, None, None, 500).unwrap().len();
         assert_eq!(before, after, "no duplicate graph may be created");
     }
 
@@ -8218,6 +8287,8 @@ mod tests {
             block_recurrences: 0,
             goal_mode: false,
             goal_max_turns: None,
+            workflow_template_id: None,
+            current_step_key: None,
         };
         let prompt = worker_prompt(home, &task);
         assert!(prompt.contains("kanban worker for task t_1"));

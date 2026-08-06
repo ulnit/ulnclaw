@@ -373,7 +373,7 @@ fn register_kanban(registry: &mut ToolRegistry) {
                 };
                 let status = args.get("status").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
-                match store.list_tasks(None, status, None, limit.max(1)) {
+                match store.list_tasks(None, status, None, None, limit.max(1)) {
                     Ok(tasks) => {
                         let rows: Vec<serde_json::Value> = tasks
                             .iter()

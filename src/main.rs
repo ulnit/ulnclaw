@@ -580,6 +580,10 @@ enum KanbanAction {
         assignee: Option<String>,
         #[arg(long)]
         board: Option<String>,
+        /// Only tasks belonging to this workflow template (hermes list
+        /// --workflow-template-id)
+        #[arg(long)]
+        workflow_template_id: Option<String>,
         #[arg(long, default_value = "200")]
         limit: usize,
         #[arg(long)]
@@ -4694,6 +4698,8 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     initial_status,
                     goal_mode: goal,
                     goal_max_turns,
+                    workflow_template_id: None,
+                    current_step_key: None,
                     workspace_kind: Some(workspace_kind),
                     workspace_path,
                     branch_name,
@@ -4714,6 +4720,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             status,
             assignee,
             board,
+            workflow_template_id,
             limit,
             json,
         } => {
@@ -4722,6 +4729,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     board.as_deref(),
                     status.as_deref(),
                     assignee.as_deref(),
+                    workflow_template_id.as_deref(),
                     limit,
                 )
                 .map_err(|e| e.to_string())?;
@@ -5272,7 +5280,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                         .ok_or_else(|| format!("task '{raw}' not found"))?]
                 }
                 None => store
-                    .list_tasks(None, None, None, 500)
+                    .list_tasks(None, None, None, None, 500)
                     .map_err(|e| e.to_string())?
                     .into_iter()
                     .filter(|t| t.status != "done" && t.status != "archived")

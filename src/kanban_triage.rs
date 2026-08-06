@@ -324,7 +324,7 @@ pub struct DecomposeOutcome {
 /// Task ids currently in the triage column (hermes `list_triage_ids`).
 pub fn list_triage_ids(store: &KanbanStore) -> crate::error::Result<Vec<String>> {
     Ok(store
-        .list_tasks(None, Some("triage"), None, 1000)?
+        .list_tasks(None, Some("triage"), None, None, 1000)?
         .into_iter()
         .map(|task| task.id)
         .collect())

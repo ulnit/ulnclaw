@@ -6164,6 +6164,8 @@ mod tests {
             block_recurrences: 0,
             goal_mode: false,
             goal_max_turns: None,
+            workflow_template_id: None,
+            current_step_key: None,
             id: "t_abc".into(),
             board: "default".into(),
             title: "Ship the widget".into(),

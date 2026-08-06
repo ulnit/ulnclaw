@@ -126,6 +126,8 @@ pub struct ListTasksQuery {
     pub status: Option<String>,
     pub assignee: Option<String>,
     pub board: Option<String>,
+    /// Workflow-template filter (hermes list --workflow-template-id).
+    pub workflow_template_id: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -140,6 +142,7 @@ pub async fn list_tasks(Query(query): Query<ListTasksQuery>) -> Response {
         query.board.as_deref(),
         query.status.as_deref().filter(|s| !s.is_empty()),
         query.assignee.as_deref().filter(|s| !s.is_empty()),
+        query.workflow_template_id.as_deref().filter(|s| !s.is_empty()),
         limit,
     ) {
         Ok(t) => t,
@@ -186,6 +189,12 @@ pub struct CreateTaskBody {
     /// --initial-status): `running` (default flow) | `blocked`.
     #[serde(default)]
     pub initial_status: Option<String>,
+    /// Workflow template hook (hermes workflow_template_id).
+    #[serde(default)]
+    pub workflow_template_id: Option<String>,
+    /// Workflow step hook (hermes current_step_key).
+    #[serde(default)]
+    pub current_step_key: Option<String>,
     /// Goal-loop worker (hermes create --goal).
     #[serde(default)]
     pub goal_mode: Option<bool>,
@@ -290,6 +299,8 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         triage: body.triage.unwrap_or(false),
         max_retries: body.max_retries,
         initial_status: body.initial_status,
+        workflow_template_id: body.workflow_template_id.filter(|s| !s.trim().is_empty()),
+        current_step_key: body.current_step_key.filter(|s| !s.trim().is_empty()),
         goal_mode: body.goal_mode.unwrap_or(false),
         goal_max_turns: body.goal_max_turns,
         workspace_kind: Some(workspace_kind),
