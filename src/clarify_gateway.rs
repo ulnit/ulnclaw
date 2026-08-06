@@ -143,6 +143,24 @@ pub fn mark_awaiting_text(clarify_id: &str) -> bool {
     }
 }
 
+/// True while an entry is still registered (hermes `_clarify_state`
+/// membership check in the Telegram callback handler — distinguishes
+/// "already resolved" taps from expired ones).
+pub fn contains(clarify_id: &str) -> bool {
+    entries().lock().unwrap().contains_key(clarify_id)
+}
+
+/// Look up a stored choice text without resolving the entry (hermes
+/// Telegram callback handler reads `_entries` to map the tapped index
+/// to the choice text before calling `resolve_gateway_clarify`).
+/// Out-of-range or non-numeric indexes return None.
+pub fn peek_choice(clarify_id: &str, idx_str: &str) -> Option<String> {
+    let entries = entries().lock().unwrap();
+    let entry = entries.get(clarify_id)?;
+    let idx = idx_str.parse::<usize>().ok()?;
+    entry.choices.get(idx).cloned()
+}
+
 /// Snapshot of a session's pending clarify for the text intercept.
 #[derive(Debug, Clone)]
 pub struct PendingClarify {
@@ -199,6 +217,27 @@ mod tests {
         // Second resolve: no waiter anymore.
         assert!(!resolve(&handle.clarify_id, "b"));
         assert!(pending_for_session("platform-whatsapp_cloud-1").is_none());
+    }
+
+    #[test]
+    fn contains_and_peek_choice_mirror_callback_lookup() {
+        let _guard = test_lock().lock().unwrap();
+        reset_for_tests();
+        let handle = register(
+            "platform-telegram-1",
+            "Pick",
+            &["Alpha".into(), "Beta".into()],
+            false,
+        );
+        assert!(contains(&handle.clarify_id));
+        assert_eq!(peek_choice(&handle.clarify_id, "1").as_deref(), Some("Beta"));
+        // Out-of-range and non-numeric lookups miss.
+        assert_eq!(peek_choice(&handle.clarify_id, "9"), None);
+        assert_eq!(peek_choice(&handle.clarify_id, "other"), None);
+        assert!(resolve(&handle.clarify_id, "Beta"));
+        // Resolved entry is gone: taps now report "already resolved".
+        assert!(!contains(&handle.clarify_id));
+        assert_eq!(peek_choice(&handle.clarify_id, "0"), None);
     }
 
     #[test]

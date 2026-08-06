@@ -1209,6 +1209,17 @@ pub mod telegram {
 
     const API: &str = "https://api.telegram.org";
 
+    /// Telegram Bot API base URL — normally `https://api.telegram.org`;
+    /// the `TELEGRAM_API_BASE` override exists for tests and corporate
+    /// proxies (mirrors the slack `SLACK_API_BASE` pattern).
+    pub(crate) fn telegram_api_base() -> String {
+        std::env::var("TELEGRAM_API_BASE")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| API.to_string())
+    }
+
     struct Sender {
         client: reqwest::Client,
         token: String,
@@ -1218,6 +1229,20 @@ pub mod telegram {
     impl PlatformSender for Sender {
         async fn send_text(&self, chat_id: &str, text: &str) {
             send_message(&self.client, &self.token, chat_id, text).await;
+        }
+
+        /// Inline-keyboard clarify prompt (hermes Telegram `send_clarify`).
+        /// Returns false on API failure so the numbered-text fallback still
+        /// goes out.
+        async fn send_clarify(
+            &self,
+            chat_id: &str,
+            clarify_id: &str,
+            question: &str,
+            choices: &[String],
+        ) -> bool {
+            send_clarify_message(&self.client, &self.token, chat_id, clarify_id, question, choices)
+                .await
         }
     }
 
@@ -1246,7 +1271,8 @@ pub mod telegram {
         }
         let mut offset: Option<i64> = None;
         loop {
-            let mut params = json!({"timeout": 25, "allowed_updates": ["message"]});
+            let mut params =
+                json!({"timeout": 25, "allowed_updates": ["message", "callback_query"]});
             if let Some(offset) = offset {
                 params["offset"] = json!(offset + 1);
             }
@@ -1265,6 +1291,14 @@ pub mod telegram {
             for update in updates {
                 let update_id = update.get("update_id").and_then(|v| v.as_i64()).unwrap_or(0);
                 offset = Some(offset.unwrap_or(0).max(update_id));
+                // Clarify button taps arrive as callback_query updates and
+                // resolve the pending clarify (hermes Telegram callback
+                // handler); they never enter the message pipeline.
+                if let Some(query) = update.get("callback_query") {
+                    handle_callback_query(&client, &token, &cfg, pairing.as_deref(), query)
+                        .await;
+                    continue;
+                }
                 let Some(message) = update.get("message") else { continue };
                 let text = message.get("text").and_then(|v| v.as_str()).unwrap_or("");
                 // Media (photo/document/video/audio/voice) is downloaded
@@ -1359,7 +1393,7 @@ pub mod telegram {
     }
 
     async fn api(client: &reqwest::Client, token: &str, method: &str, params: Value) -> Result<Value> {
-        let url = format!("{API}/bot{token}/{method}");
+        let url = format!("{}/bot{token}/{method}", telegram_api_base());
         let response = client
             .post(&url)
             .json(&params)
@@ -1379,6 +1413,231 @@ pub mod telegram {
                 value.get("description").and_then(|v| v.as_str()).unwrap_or("unknown error")
             )))
         }
+    }
+
+    /// HTML-escape for HTML parse-mode payloads (hermes `_html.escape`).
+    fn html_escape(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#x27;")
+    }
+
+    /// Render a clarify prompt with one inline button per choice (hermes
+    /// Telegram `send_clarify` layout): full option text in the message
+    /// body so mobile users can read long choices, short numeric button
+    /// labels to avoid Telegram truncation, plus a final "✏️ Other (type
+    /// answer)" row that flips the prompt into text-capture mode.
+    /// `cl:<id>:<idx|other>` callback payloads stay inside Telegram's
+    /// 64-byte callback_data cap. Returns false on API failure so the
+    /// caller falls back to numbered text.
+    async fn send_clarify_message(
+        client: &reqwest::Client,
+        token: &str,
+        chat_id: &str,
+        clarify_id: &str,
+        question: &str,
+        choices: &[String],
+    ) -> bool {
+        let mut text = format!("❓ {}", html_escape(question));
+        let mut rows: Vec<Value> = Vec::new();
+        if !choices.is_empty() {
+            let option_lines = choices
+                .iter()
+                .enumerate()
+                .map(|(idx, choice)| format!("{}. {}", idx + 1, html_escape(choice)))
+                .collect::<Vec<_>>()
+                .join("\n");
+            text = format!("{text}\n\n{option_lines}");
+            for idx in 0..choices.len() {
+                rows.push(json!([{
+                    "text": (idx + 1).to_string(),
+                    "callback_data": format!("cl:{clarify_id}:{idx}"),
+                }]));
+            }
+            rows.push(json!([{
+                "text": "✏️ Other (type answer)",
+                "callback_data": format!("cl:{clarify_id}:other"),
+            }]));
+        }
+        let mut params = json!({"chat_id": chat_id, "text": text, "parse_mode": "HTML"});
+        if !rows.is_empty() {
+            params["reply_markup"] = json!({"inline_keyboard": rows});
+        }
+        match api(client, token, "sendMessage", params).await {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("[telegram] send_clarify failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Route a clarify button tap (hermes Telegram `cl:` callback branch).
+    /// Every path answers the callback so the Telegram client stops the
+    /// loading spinner. Unauthorized taps get ⛔; taps on resolved prompts
+    /// say so; taps on expired prompts (tool side gave up) get the ⚠️
+    /// notice instead of a misleading ✓.
+    async fn handle_callback_query(
+        client: &reqwest::Client,
+        token: &str,
+        cfg: &TelegramConfig,
+        pairing: Option<&crate::pairing::PairingStore>,
+        query: &Value,
+    ) {
+        let Some(data) = query.get("data").and_then(|v| v.as_str()) else { return };
+        if !data.starts_with("cl:") {
+            return;
+        }
+        let parts: Vec<&str> = data.splitn(3, ':').collect();
+        if parts.len() != 3 {
+            return;
+        }
+        let clarify_id = parts[1];
+        let choice_token = parts[2];
+        let Some(query_id) = query.get("id").and_then(|v| v.as_str()) else { return };
+        let from = query.get("from").cloned().unwrap_or(json!({}));
+        let caller_id = from.get("id").map(|v| v.to_string()).unwrap_or_default();
+        let user_display = from
+            .get("first_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("User")
+            .to_string();
+        let message = query.get("message").cloned().unwrap_or(json!({}));
+        let original_text = message
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let chat_id = message
+            .get("chat")
+            .and_then(|c| c.get("id"))
+            .map(|v| match v {
+                Value::Number(n) => n.to_string(),
+                other => other.as_str().unwrap_or("").to_string(),
+            })
+            .unwrap_or_default();
+        let message_id = message.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
+
+        // Auth union: configured allowlist OR an approved pairing code
+        // (hermes `_is_callback_user_authorized`).
+        let authorized = allowlisted(&cfg.allowed_chat_ids, &chat_id)
+            || pairing
+                .map(|store| store.is_approved("telegram", &caller_id))
+                .unwrap_or(false);
+        if !authorized {
+            answer_callback(
+                client,
+                token,
+                query_id,
+                "⛔ You are not authorized to answer this prompt.",
+            )
+            .await;
+            return;
+        }
+
+        if !crate::clarify_gateway::contains(clarify_id) {
+            answer_callback(
+                client,
+                token,
+                query_id,
+                "This prompt has already been resolved.",
+            )
+            .await;
+            return;
+        }
+
+        if choice_token == "other" {
+            // Flip into text-capture mode; the next plain message in the
+            // session resolves the clarify (hermes mark_awaiting_text).
+            if !crate::clarify_gateway::mark_awaiting_text(clarify_id) {
+                notify_clarify_expired(client, token, query_id, &chat_id, message_id, &original_text)
+                    .await;
+                return;
+            }
+            answer_callback(client, token, query_id, "✏️ Type your answer in the chat.").await;
+            let edited = format!(
+                "❓ {}\n\n<i>Awaiting typed response from {}…</i>",
+                html_escape(&original_text),
+                html_escape(&user_display)
+            );
+            edit_clarify_message(client, token, &chat_id, message_id, &edited).await;
+            return;
+        }
+
+        let Ok(idx) = choice_token.parse::<usize>() else {
+            answer_callback(client, token, query_id, "Invalid choice.").await;
+            return;
+        };
+        // Choice text from the registered entry; fall back to the index if
+        // the entry was cleaned up (hermes race fallback).
+        let resolved_text = crate::clarify_gateway::peek_choice(clarify_id, choice_token)
+            .unwrap_or_else(|| format!("choice {}", idx + 1));
+        if crate::clarify_gateway::resolve(clarify_id, &resolved_text) {
+            let preview: String = resolved_text.chars().take(60).collect();
+            answer_callback(client, token, query_id, &format!("✓ {preview}")).await;
+            let edited = format!(
+                "❓ {}\n\n<b>{}:</b> {}",
+                html_escape(&original_text),
+                html_escape(&user_display),
+                html_escape(&resolved_text)
+            );
+            edit_clarify_message(client, token, &chat_id, message_id, &edited).await;
+        } else {
+            // Entry evicted (clarify timeout / gateway restart) between ask
+            // and tap — surface it instead of a misleading ✓.
+            notify_clarify_expired(client, token, query_id, &chat_id, message_id, &original_text)
+                .await;
+        }
+    }
+
+    /// answerCallbackQuery wrapper — always fire-and-forget; a failed
+    /// answer only means the spinner lingers (hermes ignores errors too).
+    async fn answer_callback(client: &reqwest::Client, token: &str, query_id: &str, text: &str) {
+        let params = json!({"callback_query_id": query_id, "text": text});
+        if let Err(e) = api(client, token, "answerCallbackQuery", params).await {
+            eprintln!("[telegram] answerCallbackQuery failed: {e}");
+        }
+    }
+
+    /// Edit the clarify prompt after a tap (hermes edit_message_text with
+    /// reply_markup=None — the explicit null drops the inline keyboard).
+    async fn edit_clarify_message(
+        client: &reqwest::Client,
+        token: &str,
+        chat_id: &str,
+        message_id: i64,
+        text: &str,
+    ) {
+        let params = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": null,
+        });
+        if let Err(e) = api(client, token, "editMessageText", params).await {
+            eprintln!("[telegram] editMessageText failed: {e}");
+        }
+    }
+
+    /// Tell the user a clarify tap arrived too late to be delivered
+    /// (hermes `_notify_clarify_expired`).
+    async fn notify_clarify_expired(
+        client: &reqwest::Client,
+        token: &str,
+        query_id: &str,
+        chat_id: &str,
+        message_id: i64,
+        original_text: &str,
+    ) {
+        answer_callback(client, token, query_id, "⚠️ This prompt expired — please /retry.").await;
+        let edited = format!(
+            "❓ {}\n\n<i>⚠️ This question expired or the session reset — please /retry.</i>",
+            html_escape(original_text)
+        );
+        edit_clarify_message(client, token, chat_id, message_id, &edited).await;
     }
 
     /// Send a reply, splitting at 4096-char Telegram limit (hermes chunks
@@ -1430,7 +1689,7 @@ pub mod telegram {
         let Some(file_path) = info.pointer("/result/file_path").and_then(|v| v.as_str()) else {
             return Vec::new();
         };
-        let url = format!("{API}/file/bot{token}/{file_path}");
+        let url = format!("{}/file/bot{token}/{file_path}", telegram_api_base());
         match client.get(&url).send().await.and_then(|r| r.error_for_status()) {
             Ok(response) => match response.bytes().await {
                 Ok(bytes) => cache_attachment(bytes.to_vec(), mime, &name)
@@ -1492,6 +1751,270 @@ pub mod telegram {
             if let Err(e) = api(client, token, "sendMessage", params).await {
                 eprintln!("[telegram] sendMessage failed: {e}");
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// axum mock of the Bot API — logs (method, body) per call.
+        async fn spawn_telegram_api(
+            log: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+            response_ok: bool,
+        ) -> String {
+            use axum::extract::State;
+            use axum::routing::post;
+            let app = axum::Router::new()
+                .route(
+                    "/botTEST/:method",
+                    post(
+                        move |State(log): State<Arc<std::sync::Mutex<Vec<(String, Value)>>>>,
+                         axum::extract::Path(method): axum::extract::Path<String>,
+                         axum::Json(body): axum::Json<Value>| async move {
+                            log.lock().unwrap().push((method, body));
+                            axum::Json(json!({ "ok": response_ok, "result": {} }))
+                        },
+                    ),
+                )
+                .with_state(log);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            format!("http://{addr}")
+        }
+
+        fn clarify_query(clarify_id: &str, token: &str) -> Value {
+            json!({
+                "id": "cb-1",
+                "from": {"id": 7, "first_name": "Ann"},
+                "data": format!("cl:{clarify_id}:{token}"),
+                "message": {
+                    "message_id": 99,
+                    "text": "❓ Pick\n\n1. Alpha\n2. Beta",
+                    "chat": {"id": 42},
+                },
+            })
+        }
+
+        fn authorized_cfg() -> TelegramConfig {
+            TelegramConfig {
+                allowed_chat_ids: vec!["42".into()],
+                ..Default::default()
+            }
+        }
+
+        #[tokio::test]
+        async fn telegram_send_clarify_renders_inline_keyboard() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            let ok = send_clarify_message(
+                &reqwest::Client::new(),
+                "TEST",
+                "42",
+                "abc123def456",
+                "Pick <one>",
+                &["Alpha & A".into(), "Beta".into()],
+            )
+            .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            assert!(ok);
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            let (method, body) = &reqs[0];
+            assert_eq!(method, "sendMessage");
+            let text = body["text"].as_str().unwrap();
+            // HTML parse mode with escaped question + numbered options in
+            // the body (hermes mobile readability layout).
+            assert_eq!(body["parse_mode"], "HTML");
+            assert!(text.starts_with("❓ Pick &lt;one&gt;"));
+            assert!(text.contains("1. Alpha &amp; A"));
+            assert!(text.contains("2. Beta"));
+            // One row per choice (short numeric labels) + Other row, with
+            // cl:<id>:<idx|other> callback payloads.
+            let rows = body["reply_markup"]["inline_keyboard"].as_array().unwrap();
+            assert_eq!(rows.len(), 3);
+            assert_eq!(rows[0][0]["text"], "1");
+            assert_eq!(rows[0][0]["callback_data"], "cl:abc123def456:0");
+            assert_eq!(rows[1][0]["text"], "2");
+            assert_eq!(rows[1][0]["callback_data"], "cl:abc123def456:1");
+            assert_eq!(rows[2][0]["text"], "✏️ Other (type answer)");
+            assert_eq!(rows[2][0]["callback_data"], "cl:abc123def456:other");
+        }
+
+        #[tokio::test]
+        async fn telegram_send_clarify_api_failure_returns_false() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), false).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            let ok = send_clarify_message(
+                &reqwest::Client::new(),
+                "TEST",
+                "42",
+                "abc123def456",
+                "Pick",
+                &["Alpha".into()],
+            )
+            .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            // False → messaging_clarify_fn sends the numbered-text fallback.
+            assert!(!ok);
+        }
+
+        #[tokio::test]
+        async fn telegram_callback_numeric_choice_resolves_clarify() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-telegram-42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let query = clarify_query(&clarify_id, "1");
+            handle_callback_query(&reqwest::Client::new(), "TEST", &authorized_cfg(), None, &query)
+                .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            // The tool waiter received the tapped choice text.
+            assert_eq!(handle.rx.await.unwrap(), "Beta");
+            let reqs = log.lock().unwrap();
+            let methods: Vec<&str> = reqs.iter().map(|(m, _)| m.as_str()).collect();
+            assert_eq!(methods, vec!["answerCallbackQuery", "editMessageText"]);
+            assert_eq!(reqs[0].1["text"], "✓ Beta");
+            let edit = &reqs[1].1;
+            assert!(edit["text"].as_str().unwrap().contains("<b>Ann:</b> Beta"));
+            // Explicit null drops the inline keyboard.
+            assert_eq!(edit["reply_markup"], Value::Null);
+        }
+
+        #[tokio::test]
+        async fn telegram_callback_other_flips_to_text_capture() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-telegram-42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let query = clarify_query(&clarify_id, "other");
+            handle_callback_query(&reqwest::Client::new(), "TEST", &authorized_cfg(), None, &query)
+                .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            // Entry survives in text-capture mode; the next message in the
+            // session resolves it (text intercept).
+            let pending = crate::clarify_gateway::pending_for_session("platform-telegram-42")
+                .expect("entry must survive the Other tap");
+            assert!(pending.awaiting_text);
+            assert!(crate::clarify_gateway::resolve(&clarify_id, "typed answer"));
+            assert_eq!(handle.rx.await.unwrap(), "typed answer");
+            let reqs = log.lock().unwrap();
+            let methods: Vec<&str> = reqs.iter().map(|(m, _)| m.as_str()).collect();
+            assert_eq!(methods, vec!["answerCallbackQuery", "editMessageText"]);
+            assert_eq!(reqs[0].1["text"], "✏️ Type your answer in the chat.");
+            assert!(reqs[1].1["text"]
+                .as_str()
+                .unwrap()
+                .contains("Awaiting typed response from Ann…"));
+        }
+
+        #[tokio::test]
+        async fn telegram_callback_stale_entry_answers_resolved() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            // No entry registered — a tap on a resolved/unknown prompt.
+            let query = clarify_query("zzzzzzzzzzzz", "0");
+            handle_callback_query(&reqwest::Client::new(), "TEST", &authorized_cfg(), None, &query)
+                .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "answerCallbackQuery");
+            assert_eq!(reqs[0].1["text"], "This prompt has already been resolved.");
+        }
+
+        #[tokio::test]
+        async fn telegram_callback_unauthorized_rejected() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-telegram-42",
+                "Pick",
+                &["Alpha".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let query = clarify_query(&clarify_id, "0");
+            // Chat 42 is not allowlisted and no pairing store exists.
+            let cfg = TelegramConfig {
+                allowed_chat_ids: vec!["999".into()],
+                ..Default::default()
+            };
+            handle_callback_query(&reqwest::Client::new(), "TEST", &cfg, None, &query).await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(
+                reqs[0].1["text"],
+                "⛔ You are not authorized to answer this prompt."
+            );
+            // The waiter is untouched — the legitimate user can still answer.
+            assert!(crate::clarify_gateway::contains(&clarify_id));
+            assert!(crate::clarify_gateway::resolve(&clarify_id, "Alpha"));
+        }
+
+        #[tokio::test]
+        async fn telegram_callback_expired_when_waiter_gone() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_telegram_api(log.clone(), true).await;
+            std::env::set_var("TELEGRAM_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-telegram-42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            // The clarify tool gave up (receiver dropped) before the tap.
+            drop(handle.rx);
+            let query = clarify_query(&clarify_id, "1");
+            handle_callback_query(&reqwest::Client::new(), "TEST", &authorized_cfg(), None, &query)
+                .await;
+            std::env::remove_var("TELEGRAM_API_BASE");
+            let reqs = log.lock().unwrap();
+            let methods: Vec<&str> = reqs.iter().map(|(m, _)| m.as_str()).collect();
+            assert_eq!(methods, vec!["answerCallbackQuery", "editMessageText"]);
+            assert_eq!(reqs[0].1["text"], "⚠️ This prompt expired — please /retry.");
+            assert!(reqs[1].1["text"]
+                .as_str()
+                .unwrap()
+                .contains("This question expired or the session reset"));
         }
     }
 }
