@@ -723,7 +723,8 @@ fn attach_webhook_routes(
     }
     if config.messaging.line.enabled {
         router = router.route("/webhooks/line", post(line_webhook_route));
-        tracing::info!("gateway webhook route mounted: /webhooks/line");
+        router = router.route("/line/media/:token/:filename", get(line_media_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/line (+/line/media)");
     }
     if config.messaging.google_chat.enabled {
         router = router.route("/webhooks/googlechat", post(google_chat_webhook_route));
@@ -1025,6 +1026,26 @@ async fn line_webhook_route(
             .await;
     let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, axum::Json(result.body)).into_response()
+}
+
+/// Serve outbound media registered by the LINE adapter (hermes
+/// `_handle_media`): token-gated, TTL-bounded, allowed-roots checked.
+async fn line_media_route(Path((token, _filename)): Path<(String, String)>) -> Response {
+    match crate::line::line_serve_media(&token).await {
+        crate::line::LineMediaResult::Found(bytes, mime) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, mime)],
+            bytes,
+        )
+            .into_response(),
+        crate::line::LineMediaResult::NotFound => {
+            (StatusCode::NOT_FOUND, "not found").into_response()
+        }
+        crate::line::LineMediaResult::Gone => (StatusCode::GONE, "gone").into_response(),
+        crate::line::LineMediaResult::Forbidden => {
+            (StatusCode::FORBIDDEN, "forbidden").into_response()
+        }
+    }
 }
 
 async fn google_chat_webhook_route(

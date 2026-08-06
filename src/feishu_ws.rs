@@ -697,6 +697,22 @@ fn dispatch_event_envelope(
         .pointer("/header/event_type")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    if event_type == "drive.notice.comment_add_v1" || event_type == "vc.bot.meeting_invited_v1" {
+        let cfg = cfg.clone();
+        let dispatcher = dispatcher.clone();
+        let envelope = envelope.clone();
+        let event_type = event_type.to_string();
+        tokio::spawn(async move {
+            crate::feishu_comment::dispatch_aux_event(
+                &cfg,
+                &dispatcher,
+                &event_type,
+                &envelope,
+            )
+            .await;
+        });
+        return;
+    }
     if event_type != "im.message.receive_v1" {
         return;
     }

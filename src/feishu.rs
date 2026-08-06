@@ -45,7 +45,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-const OPEN_API_BASE: &str = "https://open.feishu.cn";
+pub(crate) const OPEN_API_BASE: &str = "https://open.feishu.cn";
 const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
 /// Conservative outbound text chunk (Feishu's own limit is much larger).
 const MAX_MESSAGE_LENGTH: usize = 4000;
@@ -252,13 +252,19 @@ pub fn mentions_present(mentions: &Value) -> bool {
 // Tenant token + API helpers
 // ---------------------------------------------------------------------------
 
-struct FeishuApi {
+pub(crate) struct FeishuApi {
     client: reqwest::Client,
     cfg: ResolvedFeishu,
     token: Mutex<(String, std::time::Instant)>,
 }
 
 impl FeishuApi {
+    /// Tenant token accessor for satellite modules (drive comments,
+    /// meeting invites).
+    pub(crate) async fn api_token(&self) -> Result<String, String> {
+        self.tenant_access_token().await
+    }
+
     async fn tenant_access_token(&self) -> Result<String, String> {
         let (token, fetched_at) = self.token.lock().await.clone();
         if !token.is_empty() && fetched_at.elapsed() < Duration::from_secs(TOKEN_REFRESH_SECS) {
@@ -293,7 +299,7 @@ impl FeishuApi {
 
     /// Send a text message to a chat (`receive_id_type` from the target
     /// shape, hermes send-path parity).
-    async fn send_text(&self, chat_id: &str, text: &str) -> Result<(), String> {
+    pub(crate) async fn send_text(&self, chat_id: &str, text: &str) -> Result<(), String> {
         let token = self.tenant_access_token().await?;
         let (receive_id, receive_id_type) = if let Some(open_id) = chat_id.strip_prefix("ou_") {
             (format!("ou_{open_id}"), "open_id")
@@ -509,7 +515,7 @@ impl FeishuApi {
 
 /// Process-wide Feishu API handle (registered sender + webhook handlers
 /// share the tenant-token cache).
-fn feishu_api(cfg: &FeishuConfig) -> Arc<FeishuApi> {
+pub(crate) fn feishu_api(cfg: &FeishuConfig) -> Arc<FeishuApi> {
     static API: std::sync::OnceLock<Mutex<Option<Arc<FeishuApi>>>> = std::sync::OnceLock::new();
     let slot = API.get_or_init(|| Mutex::new(None));
     // Blocking lock here is fine: webhook setup runs once per request
@@ -691,6 +697,21 @@ pub async fn feishu_handle_webhook(
                 handle_message_event(&cfg_clone, &dispatcher, store.as_ref(), &payload).await;
             });
         }
+    }
+    if event_type == "drive.notice.comment_add_v1" || event_type == "vc.bot.meeting_invited_v1" {
+        let cfg_clone = cfg.clone();
+        let dispatcher = dispatcher.clone();
+        let payload = payload.clone();
+        let event_type = event_type.to_string();
+        tokio::spawn(async move {
+            crate::feishu_comment::dispatch_aux_event(
+                &cfg_clone,
+                &dispatcher,
+                &event_type,
+                &payload,
+            )
+            .await;
+        });
     }
     FeishuWebhookResponse {
         status: 200,

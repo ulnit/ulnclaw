@@ -111,6 +111,8 @@ pub mod email_platform;
 pub mod error;
 pub mod fallback;
 pub mod feishu;
+pub mod feishu_comment;
+pub mod feishu_meeting;
 pub mod feishu_ws;
 pub mod focus_view;
 pub mod gateway;
