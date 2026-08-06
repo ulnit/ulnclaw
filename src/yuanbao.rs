@@ -19,12 +19,19 @@
 //! TIMFaceElem renders as `[emoji: <name>]` and `STICKER:<name>`
 //! reply tags send catalog stickers as TIMFaceElem (fuzzy lookup).
 //!
+//! Inbound media is ported (hermes ExtractContentMiddleware +
+//! MediaResolveMiddleware): image/file refs resolve through
+//! `/api/resource/v1/download` (resourceId exchange, one 401 token
+//! refresh retry), download into the media cache as attachments, and
+//! `[kind|ybres:RID]` text anchors patch to local paths.
+//!
 //! Known differences: the inbound middleware pipeline collapses into a
 //! direct decode→gate→dispatch path (recall guard, owner commands,
-//! forwarded chat-history parsing, anchor patching not ported);
-//! inbound media resolution/download is not ported (inbound media
-//! surfaces as `[media: <type>]` notes); the slow-response notifier
-//! and reply heartbeats are not ported.
+//! forwarded chat-history parsing, quote/observed-media backfill not
+//! ported); anchor patching matches by resourceId instead of zipping;
+//! the resolve-concurrency config knob is fixed at the hermes default
+//! (6); the slow-response notifier and reply heartbeats are not
+//! ported.
 
 use crate::messaging::{Dispatcher, MessageEvent};
 use crate::pairing::PairingStore;
@@ -745,32 +752,25 @@ async fn handle_inbound_frames(runner: &Arc<Runner>, frames: &[Vec<u8>], out_tx:
         return;
     }
 
-    // Extract text + note media elements (media resolution rides private
-    // Yuanbao APIs and is not ported).
-    let mut text_parts: Vec<String> = Vec::new();
-    for element in &push.msg_body {
-        match element.msg_type.as_str() {
-            "TIMTextElem" => {
-                if !element.msg_content.text.is_empty() {
-                    text_parts.push(element.msg_content.text.clone());
-                }
-            }
-            "TIMFaceElem" => {
-                // hermes: `[emoji: {name}]` / `[emoji]` from the data JSON.
-                text_parts.push(crate::yuanbao_sticker::render_face_element(
-                    &element.msg_content,
-                ));
-            }
-            other if !other.is_empty() => {
-                text_parts.push(format!("[media: {other}]"));
-            }
-            _ => {}
-        }
-    }
-    let text = text_parts.join("\n");
-    if text.trim().is_empty() {
+    // Extract text + media refs (hermes ExtractContentMiddleware), then
+    // resolve the refs into the media cache (hermes
+    // MediaResolveMiddleware) and patch `[kind|ybres:RID]` anchors.
+    let (raw_text, media_refs) = extract_inbound_text(&push.msg_body);
+    if raw_text.trim().is_empty() {
         return;
     }
+    let resolved = resolve_inbound_media(runner, &media_refs).await;
+    let own_resolved = resolved.iter().filter(|entry| entry.is_some()).count();
+    // hermes PlaceholderFilterMiddleware: pure placeholder text with no
+    // resolved media of its own is dropped.
+    if own_resolved == 0 && SKIPPABLE_PLACEHOLDERS.contains(&raw_text.trim()) {
+        return;
+    }
+    let text = patch_media_anchors(&raw_text, &media_refs, &resolved);
+    let attachments: Vec<crate::messaging::MediaAttachment> = resolved
+        .iter()
+        .filter_map(|entry| entry.clone())
+        .collect();
 
     eprintln!(
         "[yuanbao] inbound from={} {} text_len={}",
@@ -791,7 +791,7 @@ async fn handle_inbound_frames(runner: &Arc<Runner>, frames: &[Vec<u8>], out_tx:
         sender_name,
         text,
         message_id: push.msg_id.clone(),
-        attachments: Vec::new(),
+        attachments,
     };
     if !crate::messaging::pre_gateway_dispatch_gate_public(&mut event).await {
         return;
@@ -835,6 +835,483 @@ fn open_opted_in() -> bool {
         }
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// Inbound media resolution (hermes ExtractContentMiddleware +
+// MediaResolveMiddleware collapsed into the direct dispatch path)
+// ---------------------------------------------------------------------------
+
+/// hermes `MediaResolveMiddleware._fetch_resource_url` endpoint.
+const RESOURCE_DOWNLOAD_PATH: &str = "/api/resource/v1/download";
+/// hermes httpx timeout for the resource exchange.
+const RESOURCE_RESOLVE_TIMEOUT_SECS: u64 = 15;
+/// Per-object download timeout.
+const MEDIA_DOWNLOAD_TIMEOUT_SECS: u64 = 60;
+/// hermes `_RESOURCE_CACHE_TTL_S` (24 hours).
+const RESOURCE_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+/// hermes `_RESOURCE_CACHE_MAX_SIZE`.
+const RESOURCE_CACHE_MAX_SIZE: usize = 256;
+/// hermes `_DEFAULT_RESOLVE_CONCURRENCY` (config knob not ported).
+const DEFAULT_RESOLVE_CONCURRENCY: usize = 6;
+
+/// hermes `PlaceholderFilterMiddleware.SKIPPABLE_PLACEHOLDERS`.
+const SKIPPABLE_PLACEHOLDERS: &[&str] = &[
+    "[image]", "[图片]", "[file]", "[文件]", "[video]", "[视频]", "[voice]", "[语音]",
+];
+
+/// One inbound media reference (hermes `_extract_inbound_media_refs`
+/// entry): image/file URL plus the original filename for files.
+#[derive(Debug, Clone)]
+struct MediaRef {
+    kind: &'static str,
+    url: String,
+    name: String,
+}
+
+/// hermes `_parse_resource_id` — resourceId query parameter.
+pub fn parse_resource_id(url: &str) -> String {
+    if url.is_empty() {
+        return String::new();
+    }
+    let Ok(parsed) = url::Url::parse(url) else {
+        return String::new();
+    };
+    for (key, value) in parsed.query_pairs() {
+        if key.eq_ignore_ascii_case("resourceid") {
+            return value.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+/// hermes `ExtractContentMiddleware` text half: render msg_body to the
+/// placeholder/anchor text and collect image/file media refs.
+///
+/// - TIMTextElem      -> text field
+/// - TIMImageElem     -> `[image]` / `[image|ybres:RID]` (medium preferred)
+/// - TIMFileElem      -> `[file: name]` / `[file:name|ybres:RID]`
+/// - TIMSoundElem     -> `[voice]` / `[voice|ybres:RID]`
+/// - TIMVideoFileElem -> `[video]` / `[video|ybres:RID]`
+/// - TIMFaceElem      -> `[emoji: name]` / `[emoji]` (sticker module)
+/// - anything else    -> `[media: type]`
+fn extract_inbound_text(msg_body: &[proto::MsgBodyElement]) -> (String, Vec<MediaRef>) {
+    let mut parts: Vec<String> = Vec::new();
+    let mut refs: Vec<MediaRef> = Vec::new();
+    for element in msg_body {
+        match element.msg_type.as_str() {
+            "TIMTextElem" => {
+                if !element.msg_content.text.is_empty() {
+                    parts.push(element.msg_content.text.clone());
+                }
+            }
+            "TIMImageElem" => {
+                // hermes: prefer the medium image (index 1), fall back to 0.
+                let info = if element.msg_content.image_info_array.len() > 1 {
+                    Some(&element.msg_content.image_info_array[1])
+                } else {
+                    element.msg_content.image_info_array.first()
+                };
+                let image_url = info
+                    .map(|entry| entry.url.trim().to_string())
+                    .unwrap_or_default();
+                let rid = parse_resource_id(&image_url);
+                parts.push(if rid.is_empty() {
+                    "[image]".to_string()
+                } else {
+                    format!("[image|ybres:{rid}]")
+                });
+                if !image_url.is_empty() {
+                    refs.push(MediaRef {
+                        kind: "image",
+                        url: image_url,
+                        name: String::new(),
+                    });
+                }
+            }
+            "TIMFileElem" => {
+                let file_url = element.msg_content.url.trim().to_string();
+                let file_name = element.msg_content.file_name.trim().to_string();
+                let rid = parse_resource_id(&file_url);
+                if rid.is_empty() {
+                    parts.push(if file_name.is_empty() {
+                        "[file]".to_string()
+                    } else {
+                        format!("[file: {file_name}]")
+                    });
+                } else {
+                    parts.push(if file_name.is_empty() {
+                        format!("[file|ybres:{rid}]")
+                    } else {
+                        format!("[file:{file_name}|ybres:{rid}]")
+                    });
+                }
+                if !file_url.is_empty() {
+                    refs.push(MediaRef {
+                        kind: "file",
+                        url: file_url,
+                        name: file_name,
+                    });
+                }
+            }
+            "TIMSoundElem" => {
+                let rid = parse_resource_id(element.msg_content.url.trim());
+                parts.push(if rid.is_empty() {
+                    "[voice]".to_string()
+                } else {
+                    format!("[voice|ybres:{rid}]")
+                });
+            }
+            "TIMVideoFileElem" => {
+                let rid = parse_resource_id(element.msg_content.url.trim());
+                parts.push(if rid.is_empty() {
+                    "[video]".to_string()
+                } else {
+                    format!("[video|ybres:{rid}]")
+                });
+            }
+            "TIMFaceElem" => {
+                // hermes: `[emoji: {name}]` / `[emoji]` from the data JSON.
+                parts.push(crate::yuanbao_sticker::render_face_element(
+                    &element.msg_content,
+                ));
+            }
+            other if !other.is_empty() => {
+                parts.push(format!("[media: {other}]"));
+            }
+            _ => {}
+        }
+    }
+    (parts.join("\n"), refs)
+}
+
+/// hermes `_guess_image_ext_from_url`.
+fn guess_image_ext_from_url(url: &str) -> String {
+    let path = url::Url::parse(url)
+        .map(|parsed| parsed.path().to_string())
+        .unwrap_or_default();
+    let ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|raw| raw.to_str())
+        .map(|raw| format!(".{}", raw.to_lowercase()))
+        .unwrap_or_default();
+    if matches!(
+        ext.as_str(),
+        ".jpg" | ".jpeg" | ".png" | ".gif" | ".webp" | ".bmp" | ".heic" | ".tiff"
+    ) {
+        ext
+    } else {
+        ".jpg".to_string()
+    }
+}
+
+/// hermes `os.path.basename(parsed.path) or "file"`.
+fn url_path_basename(url: &str) -> String {
+    let path = url::Url::parse(url)
+        .map(|parsed| parsed.path().to_string())
+        .unwrap_or_default();
+    path.rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("file")
+        .to_string()
+}
+
+fn resource_cache() -> &'static Mutex<HashMap<String, (crate::messaging::MediaAttachment, Instant)>>
+{
+    static CACHE: std::sync::OnceLock<
+        Mutex<HashMap<String, (crate::messaging::MediaAttachment, Instant)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// hermes `_get_cached_resource` — TTL + on-disk existence check.
+fn resource_cache_get(resource_id: &str) -> Option<crate::messaging::MediaAttachment> {
+    let mut cache = resource_cache().lock().unwrap();
+    let (attachment, cached_at) = cache.get(resource_id)?.clone();
+    if cached_at.elapsed() > Duration::from_secs(RESOURCE_CACHE_TTL_SECS) || !attachment.path.is_file() {
+        cache.remove(resource_id);
+        return None;
+    }
+    Some(attachment)
+}
+
+/// hermes `_put_cached_resource` — evicts the oldest 25% when full.
+fn resource_cache_put(resource_id: &str, attachment: crate::messaging::MediaAttachment) {
+    if resource_id.is_empty() {
+        return;
+    }
+    let mut cache = resource_cache().lock().unwrap();
+    if cache.len() >= RESOURCE_CACHE_MAX_SIZE {
+        let mut entries: Vec<(String, Instant)> = cache
+            .iter()
+            .map(|(key, (_, cached_at))| (key.clone(), *cached_at))
+            .collect();
+        entries.sort_by_key(|(_, cached_at)| *cached_at);
+        for (key, _) in entries.into_iter().take(RESOURCE_CACHE_MAX_SIZE / 4) {
+            cache.remove(&key);
+        }
+    }
+    cache.insert(resource_id.to_string(), (attachment, Instant::now()));
+}
+
+/// hermes `_fetch_resource_url` — exchange a resourceId for a direct
+/// download URL via `/api/resource/v1/download`, retrying once on 401
+/// with a forced sign-token refresh.
+async fn fetch_resource_url(runner: &Arc<Runner>, resource_id: &str) -> std::result::Result<String, String> {
+    let mut entry = runner.sign.get_token().await?;
+    let bot_id = {
+        let id = runner.bot_id.lock().unwrap().clone();
+        if id.is_empty() {
+            resolve_app_id(&runner.cfg)
+        } else {
+            id
+        }
+    };
+    if entry.token.is_empty() || bot_id.is_empty() {
+        return Err("missing token or bot_id for resource download".to_string());
+    }
+    let api_url = format!("{}{}", resolve_api_domain(&runner.cfg), RESOURCE_DOWNLOAD_PATH);
+    let client = reqwest::Client::new();
+    for attempt in 0..2u32 {
+        let response = client
+            .get(&api_url)
+            .query(&[("resourceId", resource_id)])
+            .header("Content-Type", "application/json")
+            .header("X-ID", &bot_id)
+            .header("X-Token", &entry.token)
+            .header("X-Source", &entry.source)
+            .timeout(Duration::from_secs(RESOURCE_RESOLVE_TIMEOUT_SECS))
+            .send()
+            .await
+            .map_err(|e| format!("resource/v1/download: {e}"))?;
+        let status = response.status().as_u16();
+        if status == 401 && attempt == 0 {
+            entry = runner.sign.force_refresh().await?;
+            continue;
+        }
+        if status >= 400 {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("resource/v1/download HTTP {status}: {body}"));
+        }
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("resource/v1/download json: {e}"))?;
+        if let Some(code) = payload.get("code").and_then(|v| v.as_i64()) {
+            if code != 0 {
+                let msg = payload.get("msg").and_then(|v| v.as_str()).unwrap_or("");
+                return Err(format!("resource/v1/download failed: code={code}, msg={msg}"));
+            }
+        }
+        let data = if payload.get("data").map(|v| v.is_object()).unwrap_or(false) {
+            payload.get("data").unwrap()
+        } else {
+            &payload
+        };
+        let real_url = data
+            .get("url")
+            .or_else(|| data.get("realUrl"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !real_url.is_empty() {
+            return Ok(real_url);
+        }
+        return Err("resource/v1/download missing url/realUrl".to_string());
+    }
+    Err("resource/v1/download did not return a URL".to_string())
+}
+
+/// hermes `_resolve_download_url` — placeholders resolve to the real
+/// URL; anything else (or a failed exchange) passes through unchanged.
+async fn resolve_download_url(runner: &Arc<Runner>, url: &str) -> String {
+    let rid = parse_resource_id(url);
+    if rid.is_empty() {
+        return url.to_string();
+    }
+    match fetch_resource_url(runner, &rid).await {
+        Ok(real_url) => real_url,
+        Err(e) => {
+            eprintln!("[yuanbao] resource resolve failed, using placeholder URL: {e}");
+            url.to_string()
+        }
+    }
+}
+
+/// hermes `_download_and_cache` — fetch (size-capped) + media-cache
+/// write, returning the attachment with its mime.
+async fn download_and_cache_media(
+    fetch_url: &str,
+    reference: &MediaRef,
+    resource_id: &str,
+) -> Option<crate::messaging::MediaAttachment> {
+    let response = match reqwest::Client::new()
+        .get(fetch_url)
+        .timeout(Duration::from_secs(MEDIA_DOWNLOAD_TIMEOUT_SECS))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            eprintln!(
+                "[yuanbao] inbound media download failed: kind={} err={e}",
+                reference.kind
+            );
+            return None;
+        }
+    };
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!(
+                "[yuanbao] inbound media download failed: kind={} err={e}",
+                reference.kind
+            );
+            return None;
+        }
+    };
+    if bytes.len() as u64 > MEDIA_MAX_SIZE_MB * 1024 * 1024 {
+        eprintln!(
+            "[yuanbao] inbound media too large ({} MB > {MEDIA_MAX_SIZE_MB} MB): kind={}",
+            bytes.len() / (1024 * 1024),
+            reference.kind
+        );
+        return None;
+    }
+    let (mime, filename_hint) = if reference.kind == "image" {
+        let ext = guess_image_ext_from_url(fetch_url);
+        let mut mime = crate::media_cache::mime_for_ext(std::path::Path::new(&format!("image{ext}")));
+        if !mime.starts_with("image/") {
+            mime = if content_type.starts_with("image/") {
+                content_type.clone()
+            } else {
+                "image/jpeg".to_string()
+            };
+        }
+        (mime, String::new())
+    } else {
+        let file_name = if reference.name.is_empty() {
+            url_path_basename(fetch_url)
+        } else {
+            reference.name.clone()
+        };
+        let guessed = crate::media_cache::mime_for_ext(std::path::Path::new(&file_name));
+        let mime = if guessed == "application/octet-stream" && !content_type.is_empty() {
+            content_type.clone()
+        } else {
+            guessed
+        };
+        (mime, file_name)
+    };
+    let home = crate::config::ulnclaw_home();
+    match crate::media_cache::cache_media_bytes(&home, &bytes, &mime, &filename_hint) {
+        Ok(path) => {
+            let attachment = crate::messaging::MediaAttachment {
+                path,
+                mime: crate::media_cache::normalize_mime(&mime),
+                bytes: bytes.len() as u64,
+                original_name: filename_hint,
+            };
+            resource_cache_put(resource_id, attachment.clone());
+            Some(attachment)
+        }
+        Err(e) => {
+            eprintln!(
+                "[yuanbao] inbound media cache failed: kind={} err={e}",
+                reference.kind
+            );
+            None
+        }
+    }
+}
+
+/// Resolve one ref (hermes `_resolve_one`): resource cache hit →
+/// resourceId exchange → download + media-cache write.
+async fn resolve_one_media(
+    runner: &Arc<Runner>,
+    reference: &MediaRef,
+) -> Option<crate::messaging::MediaAttachment> {
+    let rid = parse_resource_id(&reference.url);
+    if !rid.is_empty() {
+        if let Some(cached) = resource_cache_get(&rid) {
+            eprintln!(
+                "[yuanbao] resource cache hit: rid={rid} path={}",
+                cached.path.display()
+            );
+            return Some(cached);
+        }
+    }
+    let fetch_url = resolve_download_url(runner, &reference.url).await;
+    download_and_cache_media(&fetch_url, reference, &rid).await
+}
+
+/// hermes `_resolve_media_urls` — order-preserving bounded-concurrency
+/// resolution of all refs (hermes default concurrency 6).
+async fn resolve_inbound_media(
+    runner: &Arc<Runner>,
+    refs: &[MediaRef],
+) -> Vec<Option<crate::messaging::MediaAttachment>> {
+    use futures::StreamExt;
+    futures::stream::iter(refs.iter().cloned())
+        .map(|reference| {
+            let runner = runner.clone();
+            async move { resolve_one_media(&runner, &reference).await }
+        })
+        .buffered(DEFAULT_RESOLVE_CONCURRENCY)
+        .collect()
+        .await
+}
+
+/// hermes `PatchAnchorsMiddleware._patch` — replace resolved
+/// `[kind|ybres:RID]` anchors with local paths (`[image: /path]`,
+/// `[file: name → /path]`). Adaptation: anchors match by resourceId
+/// instead of positionally zipping the resolved list.
+fn patch_media_anchors(
+    text: &str,
+    refs: &[MediaRef],
+    resolved: &[Option<crate::messaging::MediaAttachment>],
+) -> String {
+    let mut patched = text.to_string();
+    for (reference, attachment) in refs.iter().zip(resolved.iter()) {
+        let Some(attachment) = attachment else {
+            continue;
+        };
+        let rid = parse_resource_id(&reference.url);
+        if rid.is_empty() {
+            continue;
+        }
+        let local = attachment.path.display().to_string();
+        let (anchor, replacement) = match reference.kind {
+            "image" => (format!("[image|ybres:{rid}]"), format!("[image: {local}]")),
+            _ => {
+                let anchor = if reference.name.is_empty() {
+                    format!("[file|ybres:{rid}]")
+                } else {
+                    format!("[file:{}|ybres:{rid}]", reference.name)
+                };
+                let label = if reference.name.is_empty() {
+                    attachment
+                        .path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or(local.clone())
+                } else {
+                    reference.name.clone()
+                };
+                (anchor, format!("[file: {label} → {local}]"))
+            }
+        };
+        patched = patched.replacen(&anchor, &replacement, 1);
+    }
+    patched
 }
 
 // ---------------------------------------------------------------------------
@@ -1777,5 +2254,174 @@ mod tests {
         assert_eq!(id.len(), 32);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(id, generate_file_id());
+    }
+
+    #[test]
+    fn parse_resource_id_variants() {
+        assert_eq!(
+            parse_resource_id("https://hunyuan.tencent.com/api/resource/download?resourceId=abc123"),
+            "abc123"
+        );
+        assert_eq!(
+            parse_resource_id("https://cdn.example/x.png?resourceid=low-1&x=1"),
+            "low-1"
+        );
+        assert_eq!(parse_resource_id("https://cdn.example/x.png?other=1"), "");
+        assert_eq!(parse_resource_id("not a url"), "");
+        assert_eq!(parse_resource_id(""), "");
+    }
+
+    #[test]
+    fn extract_inbound_text_renders_anchors_and_refs() {
+        let msg_body = vec![
+            proto::MsgBodyElement {
+                msg_type: "TIMTextElem".into(),
+                msg_content: proto::MsgContent {
+                    text: "看这个".into(),
+                    ..Default::default()
+                },
+            },
+            proto::MsgBodyElement {
+                msg_type: "TIMImageElem".into(),
+                msg_content: proto::MsgContent {
+                    image_info_array: vec![
+                        proto::ImageInfo {
+                            url: "https://cdn.example/small?resourceId=small-1".into(),
+                            ..Default::default()
+                        },
+                        proto::ImageInfo {
+                            url: "https://cdn.example/medium?resourceId=abc123".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+            },
+            proto::MsgBodyElement {
+                msg_type: "TIMImageElem".into(),
+                msg_content: proto::MsgContent::default(),
+            },
+            proto::MsgBodyElement {
+                msg_type: "TIMFileElem".into(),
+                msg_content: proto::MsgContent {
+                    url: "https://cdn.example/f?resourceId=def456".into(),
+                    file_name: "a.pdf".into(),
+                    ..Default::default()
+                },
+            },
+            proto::MsgBodyElement {
+                msg_type: "TIMSoundElem".into(),
+                msg_content: proto::MsgContent {
+                    url: "https://cdn.example/v?resourceId=snd1".into(),
+                    ..Default::default()
+                },
+            },
+            proto::MsgBodyElement {
+                msg_type: "TIMVideoFileElem".into(),
+                msg_content: proto::MsgContent::default(),
+            },
+            proto::MsgBodyElement {
+                msg_type: "TIMCustomElem".into(),
+                msg_content: proto::MsgContent::default(),
+            },
+        ];
+        let (text, refs) = extract_inbound_text(&msg_body);
+        assert_eq!(
+            text,
+            "看这个\n[image|ybres:abc123]\n[image]\n[file:a.pdf|ybres:def456]\n[voice|ybres:snd1]\n[video]\n[media: TIMCustomElem]"
+        );
+        // hermes: image (medium preferred) + file refs only.
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].kind, "image");
+        assert_eq!(refs[0].url, "https://cdn.example/medium?resourceId=abc123");
+        assert_eq!(refs[1].kind, "file");
+        assert_eq!(refs[1].url, "https://cdn.example/f?resourceId=def456");
+        assert_eq!(refs[1].name, "a.pdf");
+    }
+
+    #[test]
+    fn skippable_placeholders_match_hermes() {
+        assert_eq!(
+            SKIPPABLE_PLACEHOLDERS,
+            &["[image]", "[图片]", "[file]", "[文件]", "[video]", "[视频]", "[voice]", "[语音]"]
+        );
+    }
+
+    #[test]
+    fn guess_image_ext_from_url_variants() {
+        assert_eq!(guess_image_ext_from_url("https://cdn.example/a/b.PNG"), ".png");
+        assert_eq!(guess_image_ext_from_url("https://cdn.example/a/b.webp?x=1"), ".webp");
+        assert_eq!(guess_image_ext_from_url("https://cdn.example/a/b.exe"), ".jpg");
+        assert_eq!(guess_image_ext_from_url("https://cdn.example/a/b"), ".jpg");
+    }
+
+    #[test]
+    fn patch_media_anchors_rewrites_resolved() {
+        let temp = tempfile::tempdir().unwrap();
+        let image_path = temp.path().join("img.png");
+        let file_path = temp.path().join("doc.pdf");
+        std::fs::write(&image_path, b"png").unwrap();
+        std::fs::write(&file_path, b"pdf").unwrap();
+        let refs = vec![
+            MediaRef {
+                kind: "image",
+                url: "https://cdn.example/medium?resourceId=abc123".into(),
+                name: String::new(),
+            },
+            MediaRef {
+                kind: "file",
+                url: "https://cdn.example/f?resourceId=def456".into(),
+                name: "a.pdf".into(),
+            },
+            MediaRef {
+                kind: "image",
+                url: "https://cdn.example/x?resourceId=failed1".into(),
+                name: String::new(),
+            },
+        ];
+        let resolved = vec![
+            Some(crate::messaging::MediaAttachment {
+                path: image_path.clone(),
+                mime: "image/png".into(),
+                bytes: 3,
+                original_name: String::new(),
+            }),
+            Some(crate::messaging::MediaAttachment {
+                path: file_path.clone(),
+                mime: "application/pdf".into(),
+                bytes: 3,
+                original_name: "a.pdf".into(),
+            }),
+            None,
+        ];
+        let text = "看图\n[image|ybres:abc123]\n[file:a.pdf|ybres:def456]\n[image|ybres:failed1]";
+        let patched = patch_media_anchors(text, &refs, &resolved);
+        assert!(patched.contains(&format!("[image: {}]", image_path.display())));
+        assert!(patched.contains(&format!("[file: a.pdf → {}]", file_path.display())));
+        // Failed resolution leaves the anchor untouched.
+        assert!(patched.contains("[image|ybres:failed1]"));
+    }
+
+    #[test]
+    fn resource_cache_evicts_and_invalidates() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("cached.bin");
+        std::fs::write(&file_path, b"data").unwrap();
+        let make = || crate::messaging::MediaAttachment {
+            path: file_path.clone(),
+            mime: "image/jpeg".into(),
+            bytes: 4,
+            original_name: String::new(),
+        };
+        for index in 0..(RESOURCE_CACHE_MAX_SIZE + 1) {
+            resource_cache_put(&format!("evict-{index}"), make());
+        }
+        assert!(resource_cache().lock().unwrap().len() <= RESOURCE_CACHE_MAX_SIZE);
+
+        resource_cache_put("invalidate-me", make());
+        assert!(resource_cache_get("invalidate-me").is_some());
+        std::fs::remove_file(&file_path).unwrap();
+        // Cached file vanished on disk → entry invalidated.
+        assert!(resource_cache_get("invalidate-me").is_none());
     }
 }
