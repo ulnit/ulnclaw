@@ -82,7 +82,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # offline db recovery
 ./ulnclaw sessions repair          # repair malformed state.db schema (--check-only)
-./ulnclaw sessions browse          # interactive picker: filter + resume sessions (⌂ project badge when the cwd is inside a project folder)
+./ulnclaw sessions browse          # interactive picker: filter + resume sessions (⌂ project badge, right-hand details pane, Tab source filter, F2 sort toggle)
 ./ulnclaw sessions retitle-skills  # fix titles that leaked /skill scaffolds (--apply)
 ./ulnclaw sessions delete|rename|optimize # per-session delete / rename / FTS-merge + VACUUM
 ./ulnclaw skills list
@@ -346,7 +346,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # 离线数据库恢复
 ./ulnclaw sessions repair          # 修复受损 state.db 库结构（--check-only）
-./ulnclaw sessions browse          # 交互式会话挑选：过滤并恢复会话（cwd 在项目文件夹内时显示 ⌂ 项目徽章）
+./ulnclaw sessions browse          # 交互式会话挑选：过滤并恢复会话（⌂ 项目徽章、右侧详情窗格、Tab 来源过滤、F2 排序切换）
 ./ulnclaw sessions retitle-skills  # 修复泄漏 /skill 脚手架的会话标题（--apply）
 ./ulnclaw sessions delete|rename|optimize # 单会话删除/重命名；FTS 合并 + VACUUM 回收空间
 ./ulnclaw skills list

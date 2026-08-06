@@ -6988,13 +6988,18 @@ fn browse_row_matches(
         || row.source.to_lowercase().contains(&q)
 }
 
-/// Raw-mode terminal session browser (the hermes curses
-/// `_session_browse_picker` port): arrow-key navigation with scrolling,
-/// wrapping at the list edges, live type-to-filter, Enter selects, bare
-/// `q` quits while no filter is active, and Esc clears the filter first
-/// (quitting on the second press). Renders hermes' dim column-header
-/// strip and a bottom footer with the cursor position + filtered-from
-/// count. Returns the selected session id, or `None` when cancelled.
+/// Raw-mode terminal session browser (hermes curses
+/// `_session_browse_picker` port + ulnclaw interaction upgrades):
+/// arrow-key navigation with scrolling, wrapping at the list edges,
+/// live type-to-filter, Enter selects, bare `q` quits while no filter
+/// is active, and Esc clears the filter first (quitting on the second
+/// press). Renders hermes' dim column-header strip and a bottom footer
+/// with the cursor position + filtered-from count. Upgrades over the
+/// hermes picker: a right-hand details pane (terminal ≥ 90 cols) with
+/// the highlighted session's full title, id, source, project, cwd,
+/// last-active timestamp, and first-message preview; `Tab` cycles a
+/// per-source filter; `F2` toggles recent-first ↔ alphabetical sort.
+/// Returns the selected session id, or `None` when cancelled.
 fn run_session_browse_tui(
     rows: &[ulnclaw::session::sqlite::BrowseRow],
     projects: &std::collections::HashMap<String, String>,
@@ -7006,6 +7011,12 @@ fn run_session_browse_tui(
         style::{Color, Print, ResetColor, SetForegroundColor},
         terminal::{self, Clear, ClearType},
     };
+    use std::collections::BTreeSet;
+
+    /// Minimum terminal width before the details pane is shown.
+    const PANE_MIN_COLS: usize = 90;
+    /// Details pane width (excluding the gutter column).
+    const PANE_WIDTH: usize = 40;
 
     /// Restore the terminal on every exit path.
     struct TuiGuard;
@@ -7028,17 +7039,44 @@ fn run_session_browse_tui(
     terminal::enable_raw_mode().map_err(|e| e.to_string())?;
     let _guard = TuiGuard;
 
+    // Tab cycles "all sources" plus each distinct source present in the
+    // loaded rows.
+    let sources: Vec<String> = rows
+        .iter()
+        .map(|r| r.source.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut source_idx: usize = 0; // 0 = all sources
+    let mut sort_alpha = false;
     let mut cursor_idx: usize = 0;
     let mut scroll_offset: usize = 0;
     let mut filter = String::new();
 
     loop {
-        let filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> = rows
+        let source_filter: Option<&str> = if source_idx == 0 {
+            None
+        } else {
+            sources.get(source_idx - 1).map(String::as_str)
+        };
+        let mut filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> = rows
             .iter()
+            .filter(|r| source_filter.map(|s| r.source == s).unwrap_or(true))
             .filter(|r| {
                 browse_row_matches(r, projects.get(&r.id).map(String::as_str), &filter)
             })
             .collect();
+        if sort_alpha {
+            filtered.sort_by(|a, b| {
+                ulnclaw::tui_text::browse_title_sort_key(a.title.as_deref())
+                    .cmp(&ulnclaw::tui_text::browse_title_sort_key(b.title.as_deref()))
+                    .then_with(|| {
+                        b.last_active
+                            .partial_cmp(&a.last_active)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            });
+        }
         if cursor_idx >= filtered.len() {
             cursor_idx = filtered.len().saturating_sub(1);
         }
@@ -7056,12 +7094,20 @@ fn run_session_browse_tui(
             return Ok(None);
         }
 
-        // Header (hermes: filter line with block cursor, else key hints).
+        let pane_enabled = cols >= PANE_MIN_COLS;
+        let list_width = if pane_enabled {
+            cols.saturating_sub(PANE_WIDTH + 2)
+        } else {
+            cols
+        };
+
+        // Header (hermes: filter line with block cursor, else key hints),
+        // plus green chips for the active source filter / sort mode.
         if filter.is_empty() {
             queue!(
                 out,
                 SetForegroundColor(Color::Yellow),
-                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Esc quit"),
+                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F2 sort  Esc quit"),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -7074,10 +7120,28 @@ fn run_session_browse_tui(
             )
             .map_err(|e| e.to_string())?;
         }
+        if let Some(name) = source_filter {
+            queue!(
+                out,
+                SetForegroundColor(Color::Green),
+                Print(format!("  [source: {name}]")),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if sort_alpha {
+            queue!(
+                out,
+                SetForegroundColor(Color::Green),
+                Print("  [sort: A-Z]"),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+        }
         queue!(out, Print("\r\n")).map_err(|e| e.to_string())?;
 
         // Column-header strip (hermes dim "Title / Preview  Active  Src  ID").
-        let name_width = cols.saturating_sub(3 + 10 + 6 + 18 + 6).max(20);
+        let name_width = list_width.saturating_sub(3 + 10 + 6 + 18 + 6).max(20);
         queue!(
             out,
             SetForegroundColor(Color::DarkGrey),
@@ -7137,6 +7201,37 @@ fn run_session_browse_tui(
             )
             .map_err(|e| e.to_string())?;
         }
+
+        // Details pane for the highlighted session (upgrade over hermes).
+        if pane_enabled {
+            let pane_x = (list_width + 1) as u16;
+            let content_w = cols.saturating_sub(list_width + 3).max(8);
+            queue!(
+                out,
+                cursor::MoveTo(pane_x, 1),
+                SetForegroundColor(Color::DarkGrey),
+                Print("Details"),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+            if let Some(selected_row) = filtered.get(cursor_idx) {
+                let pane_lines = browse_details_pane_lines(
+                    selected_row,
+                    projects.get(&selected_row.id).map(String::as_str),
+                    content_w,
+                );
+                let max_lines = rows_h.saturating_sub(3);
+                for (offset, line) in pane_lines.iter().take(max_lines).enumerate() {
+                    queue!(
+                        out,
+                        cursor::MoveTo(pane_x, (2 + offset) as u16),
+                        Print(line)
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+
         // Footer on the bottom row: cursor position + filtered-from count
         // (hermes dim footer).
         queue!(out, cursor::MoveTo(0, rows_h.saturating_sub(1) as u16))
@@ -7215,6 +7310,20 @@ fn run_session_browse_tui(
                     KeyCode::End => {
                         cursor_idx = filtered.len().saturating_sub(1);
                     }
+                    KeyCode::Tab => {
+                        // Upgrade: cycle all → each source → all.
+                        if !sources.is_empty() {
+                            source_idx = (source_idx + 1) % (sources.len() + 1);
+                            cursor_idx = 0;
+                            scroll_offset = 0;
+                        }
+                    }
+                    KeyCode::F(2) => {
+                        // Upgrade: toggle recent-first ↔ alphabetical.
+                        sort_alpha = !sort_alpha;
+                        cursor_idx = 0;
+                        scroll_offset = 0;
+                    }
                     KeyCode::Backspace => {
                         if filter.pop().is_some() {
                             cursor_idx = 0;
@@ -7236,6 +7345,69 @@ fn run_session_browse_tui(
             _ => {}
         }
     }
+}
+
+/// Content lines for the browse details pane: full title, id, source,
+/// project, cwd, last-active (relative + absolute local time), and the
+/// wrapped first-user-message preview. All lines are pre-truncated to
+/// `width` display chars.
+fn browse_details_pane_lines(
+    row: &ulnclaw::session::sqlite::BrowseRow,
+    project: Option<&str>,
+    width: usize,
+) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let title = row
+        .title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| "(untitled)".to_string());
+    lines.extend(ulnclaw::tui_text::wrap_display_text(&title, width));
+    lines.push(String::new());
+    lines.extend(ulnclaw::tui_text::wrap_display_text(
+        &format!("id: {}", row.id),
+        width,
+    ));
+    lines.extend(ulnclaw::tui_text::wrap_display_text(
+        &format!("source: {}", row.source),
+        width,
+    ));
+    if let Some(slug) = project {
+        lines.extend(ulnclaw::tui_text::wrap_display_text(
+            &format!("project: {slug}"),
+            width,
+        ));
+    }
+    if let Some(cwd) = row.cwd.as_deref().filter(|c| !c.is_empty()) {
+        lines.extend(ulnclaw::tui_text::wrap_display_text(
+            &format!("cwd: {cwd}"),
+            width,
+        ));
+    }
+    let absolute = chrono::DateTime::from_timestamp(row.last_active as i64, 0)
+        .map(|dt| {
+            chrono::DateTime::<chrono::Local>::from(dt)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default();
+    let active = if absolute.is_empty() {
+        format!("active: {}", relative_time(row.last_active))
+    } else {
+        format!("active: {} \u{00B7} {}", relative_time(row.last_active), absolute)
+    };
+    lines.extend(ulnclaw::tui_text::wrap_display_text(&active, width));
+    if let Some(preview) = row.preview.as_deref().filter(|p| !p.trim().is_empty()) {
+        lines.push(String::new());
+        lines.extend(ulnclaw::tui_text::wrap_display_text(
+            &format!("first message: {preview}"),
+            width,
+        ));
+    }
+    lines
+        .into_iter()
+        .map(|line| line.chars().take(width).collect::<String>())
+        .collect()
 }
 
 /// Plain-stdin session picker fallback for non-TTY contexts (pipes, CI):
