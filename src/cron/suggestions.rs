@@ -250,6 +250,9 @@ impl SuggestionStore {
             created_at: now,
             last_run: None,
             last_status: None,
+            deliver: None,
+            origin: None,
+            last_delivery_error: None,
         };
         let store = crate::cron::CronStore::open_default().map_err(|e| e.to_string())?;
         store.add(&job).map_err(|e| e.to_string())?;

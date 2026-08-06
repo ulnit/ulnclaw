@@ -856,6 +856,45 @@ pub struct UlncLawConfig {
     /// Kanban dispatcher settings (hermes `kanban:` block).
     #[serde(default)]
     pub kanban: KanbanConfig,
+    /// Cron delivery + Chronos fire-webhook settings (hermes `cron:`
+    /// block: `wrap_response`, `chronos.*`).
+    #[serde(default)]
+    pub cron: CronConfig,
+}
+
+/// `[cron]` — cron delivery settings (hermes `cron.*`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CronConfig {
+    /// Wrap delivered cron output with a job-name header/footer so the
+    /// user knows it is a cron delivery (hermes `cron.wrap_response`,
+    /// default on).
+    pub wrap_response: bool,
+    /// Chronos NAS fire-webhook verification (hermes `cron.chronos.*`).
+    #[serde(default)]
+    pub chronos: ChronosConfig,
+}
+
+impl Default for CronConfig {
+    fn default() -> Self {
+        Self {
+            wrap_response: true,
+            chronos: ChronosConfig::default(),
+        }
+    }
+}
+
+/// `[cron.chronos]` — NAS fire-token verification (hermes
+/// `cron.chronos.*`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChronosConfig {
+    /// Expected `aud` claim (`agent:<instance_id>`).
+    pub expected_audience: Option<String>,
+    /// JWKS URL (or inline PEM public key) for NAS signatures.
+    pub nas_jwks_url: Option<String>,
+    /// Expected `iss` claim (the NAS portal URL); unset = not checked.
+    pub portal_url: Option<String>,
 }
 
 /// `[kanban]` — dispatcher settings (hermes `kanban.*`).

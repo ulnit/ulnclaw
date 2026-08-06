@@ -2054,13 +2054,12 @@ async fn gateway_cmd(
     };
 
     // Messaging platform gateways (hermes gateway/platforms): platforms
-    // live in the gateway process alongside the HTTP API.
+    // live in the gateway process alongside the HTTP API. The gate
+    // covers every `[messaging.*]` section — `run_messaging` starts
+    // each enabled platform loop (senders register on startup, which
+    // cron delivery and clarify routing depend on).
     let msg = &config.messaging;
-    if msg.telegram.enabled
-        || msg.discord.enabled
-        || msg.slack.enabled
-        || msg.signal.enabled
-    {
+    if msg.any_platform_enabled() {
         let messaging_config = config.clone();
         let agent = state.agent.clone();
         let store = state.store.clone();

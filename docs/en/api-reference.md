@@ -1037,9 +1037,11 @@ Binds and serves until interrupted.
 | POST | `/api/sessions/:id/chat` | yes | Run one turn inside the session |
 | POST | `/api/sessions/:id/chat/stream` | yes | Same, streamed as SSE chunks |
 | GET | `/api/jobs?include_disabled=true` | yes | Cron jobs (disabled hidden unless asked) |
-| POST | `/api/jobs` | yes | Create cron job (`name`, `schedule`, `prompt`, optional `skills`, `repeat`, `deliver="local"`) |
+| POST | `/api/jobs` | yes | Create cron job (`name`, `schedule`, `prompt`, optional `skills`, `repeat`, `deliver`) |
+| GET | `/api/jobs/delivery-targets` | yes | Delivery targets for the dropdown: implicit `local` + connected platforms with `home_target_set` |
+| POST | `/api/jobs/fire` | **no**¹ | Chronos NAS fire webhook: NAS-minted JWT (`[cron.chronos]`) → 401/400/200-gone/202 + background run |
 | GET | `/api/jobs/:id` | yes | Single job |
-| PATCH | `/api/jobs/:id` | yes | Update whitelisted fields (`name`, `schedule`, `prompt`, `skills`, `repeat`, `enabled`) |
+| PATCH | `/api/jobs/:id` | yes | Update whitelisted fields (`name`, `schedule`, `prompt`, `skills`, `repeat`, `enabled`, `deliver`) |
 | DELETE | `/api/jobs/:id` | yes | Delete job |
 | POST | `/api/jobs/:id/pause` | yes | Disable job (clears `next_run`) |
 | POST | `/api/jobs/:id/resume` | yes | Re-enable job (recomputes `next_run`) |
@@ -1138,7 +1140,28 @@ the same store the `ulnclaw cron` CLI uses).  Schedules accept interval
 shorthands (`30m`, `every 2h`, `1d`), 5-field cron expressions
 (`0 9 * * *`), and ISO timestamps for one-shot runs.  Validation limits:
 name ≤ 200 chars, prompt ≤ 5000 chars, `repeat` a positive integer.
-`deliver` only supports `"local"` (the default).
+
+`deliver` (default `local`) controls where the final response is
+auto-delivered when a run finishes: `local` (save only), `origin` (the
+chat the job was created in — captured by the `cronjob` tool), a
+platform name (`telegram`, `discord`, `slack`, `signal`, `matrix`,
+`email`, ...), an explicit `platform:chat_id[:thread_id]`, or a
+comma-separated mix incl. the `all` routing token. Targets resolve at
+fire time against the registered platform senders and the platform home
+channel env vars (`TELEGRAM_HOME_CHANNEL`, `MATRIX_HOME_ROOM`, ...);
+`[SILENT]` responses suppress delivery, wrapped output carries a
+`Cronjob Response: <name>` header (`[cron] wrap_response = false`
+disables), failed runs deliver a compact failure summary, and delivery
+errors land in the job's `last_delivery_error` field.
+
+¹ `POST /api/jobs/fire` bypasses the bearer key (hermes
+`PUBLIC_API_PATHS` parity) — the NAS-minted JWT is the gate. Configure
+`[cron.chronos] expected_audience` + `nas_jwks_url` (JWKS URL or inline
+PEM public key) + optional `portal_url` issuer; tokens must carry
+`purpose = "cron_fire"`. Responses: `401` invalid token, `400` missing
+`job_id`, `200 {"status":"gone"}` unknown job (NAS must not retry),
+`202 {"status":"accepted"}` with the job run in the background
+(claim-based dedup for NAS retries).
 
 ```bash
 # Create + inspect

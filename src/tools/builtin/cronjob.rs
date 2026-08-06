@@ -29,6 +29,9 @@ fn job_to_json(job: &CronJob) -> serde_json::Value {
         "next_run": job.next_run.map(|t| chrono::DateTime::from_timestamp(t as i64, 0).map(|d| d.to_rfc3339()).unwrap_or_default()),
         "last_run": job.last_run.map(|t| chrono::DateTime::from_timestamp(t as i64, 0).map(|d| d.to_rfc3339()).unwrap_or_default()),
         "last_status": job.last_status,
+        "deliver": job.deliver,
+        "origin": job.origin,
+        "last_delivery_error": job.last_delivery_error,
     })
 }
 
@@ -64,7 +67,8 @@ fn cronjob_tool() -> crate::tools::Tool {
                 "schedule": {"type": "string", "description": "REQUIRED for action=create. '30m', 'every 2h', '0 9 * * *', or ISO timestamp (one-shot)."},
                 "name": {"type": "string", "description": "Optional human-friendly name"},
                 "skills": {"type": "array", "items": {"type": "string"}, "description": "Skills to load before the prompt when the job runs"},
-                "repeat": {"type": "integer", "description": "Optional repeat count. Omit for defaults (once for one-shot, forever for recurring)."}
+                "repeat": {"type": "integer", "description": "Optional repeat count. Omit for defaults (once for one-shot, forever for recurring)."},
+                "deliver": {"type": "string", "description": "Where the final response is auto-delivered: 'origin' (the chat the job was created in, the default when created from a chat), 'local' (save only), a platform name ('telegram', 'discord', ...), 'platform:chat_id[:thread_id]', or a comma mix incl. 'all'. Defaults to origin when created inside a chat, else local."}
             },
             "required": ["action"]
         }))
@@ -93,6 +97,30 @@ fn cronjob_tool() -> crate::tools::Tool {
                         (Schedule::OneShot(_), None) => Some(1),
                         (_, r) => r,
                     };
+                    // Capture where the job was created so `deliver =
+                    // "origin"` can route the final response back to the
+                    // requesting chat (hermes cronjob origin capture).
+                    let origin = crate::messaging::current_messaging_ctx().map(|ctx| {
+                        crate::cron::JobOrigin {
+                            platform: ctx.platform,
+                            chat_id: ctx.chat_id,
+                            thread_id: None,
+                        }
+                    });
+                    // Default delivery to origin when available,
+                    // otherwise local (hermes `create_job` default).
+                    let deliver = match args.get("deliver").and_then(|v| v.as_str()) {
+                        Some(explicit) => crate::cron::delivery::normalize_deliver_value(Some(
+                            &serde_json::Value::String(explicit.to_string()),
+                        )),
+                        None => {
+                            if origin.is_some() {
+                                "origin".to_string()
+                            } else {
+                                "local".to_string()
+                            }
+                        }
+                    };
                     let job = CronJob {
                         id: format!("cron-{}", &uuid::Uuid::new_v4().to_string()[..8]),
                         name: args.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -105,6 +133,9 @@ fn cronjob_tool() -> crate::tools::Tool {
                         created_at: now(),
                         last_run: None,
                         last_status: None,
+                        deliver: Some(deliver),
+                        origin,
+                        last_delivery_error: None,
                     };
                     if let Err(e) = store.add(&job) {
                         return Ok(json!({"success": false, "error": e.to_string()}));
@@ -163,6 +194,11 @@ fn cronjob_tool() -> crate::tools::Tool {
                             }
                             if let Some(repeat) = args.get("repeat").and_then(|v| v.as_i64()) {
                                 job.repeat = Some(repeat);
+                            }
+                            if let Some(deliver) = args.get("deliver").and_then(|v| v.as_str()) {
+                                job.deliver = Some(crate::cron::delivery::normalize_deliver_value(
+                                    Some(&serde_json::Value::String(deliver.to_string())),
+                                ));
                             }
                             store.update(&job).ok();
                             Ok(json!({"success": true, "action": "update", "job": job_to_json(&job)}))

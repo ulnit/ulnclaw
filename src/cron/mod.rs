@@ -6,6 +6,8 @@
 //!   - 5-field cron expressions: "0 9 * * *"
 //!   - ISO timestamps for one-shot runs: "2026-06-01T09:00:00"
 
+pub mod chronos;
+pub mod delivery;
 pub mod suggestions;
 
 
@@ -14,6 +16,16 @@ use chrono::{DateTime, Duration, Local, NaiveDateTime};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+
+/// Where a job was created (platform chat), used by `deliver = "origin"`
+/// (hermes job `origin` dict).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct JobOrigin {
+    pub platform: String,
+    pub chat_id: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
@@ -30,6 +42,20 @@ pub struct CronJob {
     pub created_at: f64,
     pub last_run: Option<f64>,
     pub last_status: Option<String>,
+    /// Where the final response is auto-delivered: `"local"` (default),
+    /// `"origin"`, a platform name, `"platform:chat[:thread]"`, or a
+    /// comma-separated mix incl. the `all` routing token (hermes
+    /// `deliver`).
+    #[serde(default)]
+    pub deliver: Option<String>,
+    /// The chat the job was created in (drives `deliver = "origin"`).
+    #[serde(default)]
+    pub origin: Option<JobOrigin>,
+    /// Last delivery failure, tracked separately from the agent error —
+    /// a job can succeed but fail delivery (hermes
+    /// `last_delivery_error`).
+    #[serde(default)]
+    pub last_delivery_error: Option<String>,
 }
 
 fn now() -> f64 {
@@ -235,9 +261,45 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     next_run REAL,
     created_at REAL NOT NULL,
     last_run REAL,
-    last_status TEXT
+    last_status TEXT,
+    deliver TEXT,
+    origin TEXT,
+    last_delivery_error TEXT
 );
 "#;
+
+/// Columns added after the initial schema (stores created before P219
+/// lack them); migrated in place on open.
+const CRON_MIGRATION_COLUMNS: &[&str] = &[
+    "deliver TEXT",
+    "origin TEXT",
+    "last_delivery_error TEXT",
+];
+
+fn migrate_cron_schema(conn: &Connection) -> Result<()> {
+    let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(cron_jobs)")
+            .map_err(|e| AgentError::session(format!("cron schema: {}", e)))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| AgentError::session(format!("cron schema: {}", e)))?;
+        for row in rows {
+            if let Ok(name) = row {
+                existing.insert(name);
+            }
+        }
+    }
+    for column in CRON_MIGRATION_COLUMNS {
+        let name = column.split_whitespace().next().unwrap_or_default();
+        if !existing.contains(name) {
+            conn.execute(&format!("ALTER TABLE cron_jobs ADD COLUMN {}", column), [])
+                .map_err(|e| AgentError::session(format!("cron migrate: {}", e)))?;
+        }
+    }
+    Ok(())
+}
 
 pub struct CronStore {
     conn: Mutex<Connection>,
@@ -250,6 +312,7 @@ impl CronStore {
             .map_err(|e| AgentError::session(format!("open cron db: {}", e)))?;
         conn.execute_batch(CRON_SCHEMA)
             .map_err(|e| AgentError::session(format!("cron schema: {}", e)))?;
+        migrate_cron_schema(&conn)?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -261,8 +324,8 @@ impl CronStore {
     pub fn add(&self, job: &CronJob) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
         conn.execute(
-            "INSERT INTO cron_jobs (id, name, schedule, prompt, skills, enabled, repeat, next_run, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO cron_jobs (id, name, schedule, prompt, skills, enabled, repeat, next_run, created_at, deliver, origin)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 job.id,
                 job.name,
@@ -273,6 +336,8 @@ impl CronStore {
                 job.repeat,
                 job.next_run,
                 job.created_at,
+                job.deliver,
+                job.origin.as_ref().and_then(|origin| serde_json::to_string(origin).ok()),
             ],
         )
         .map_err(|e| AgentError::session(format!("add job: {}", e)))?;
@@ -283,7 +348,8 @@ impl CronStore {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
         conn.execute(
             "UPDATE cron_jobs SET name=?2, schedule=?3, prompt=?4, skills=?5, enabled=?6,
-                repeat=?7, next_run=?8, last_run=?9, last_status=?10
+                repeat=?7, next_run=?8, last_run=?9, last_status=?10, deliver=?11, origin=?12,
+                last_delivery_error=?13
              WHERE id=?1",
             params![
                 job.id,
@@ -296,6 +362,9 @@ impl CronStore {
                 job.next_run,
                 job.last_run,
                 job.last_status,
+                job.deliver,
+                job.origin.as_ref().and_then(|origin| serde_json::to_string(origin).ok()),
+                job.last_delivery_error,
             ],
         )
         .map_err(|e| AgentError::session(format!("update job: {}", e)))?;
@@ -306,7 +375,8 @@ impl CronStore {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
         let row = conn
             .query_row(
-                "SELECT id, name, schedule, prompt, skills, enabled, repeat, next_run, created_at, last_run, last_status
+                "SELECT id, name, schedule, prompt, skills, enabled, repeat, next_run, created_at, last_run, last_status,
+                    deliver, origin, last_delivery_error
                  FROM cron_jobs WHERE id = ?1",
                 params![id],
                 |row| {
@@ -322,26 +392,49 @@ impl CronStore {
                         row.get::<_, f64>(8)?,
                         row.get::<_, Option<f64>>(9)?,
                         row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, Option<String>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| AgentError::session(e.to_string()))?;
-        Ok(row.map(|(id, name, schedule, prompt, skills, enabled, repeat, next_run, created_at, last_run, last_status)| {
-            CronJob {
+        Ok(row.map(
+            |(
                 id,
                 name,
                 schedule,
                 prompt,
-                skills: serde_json::from_str(&skills).unwrap_or_default(),
-                enabled: enabled != 0,
+                skills,
+                enabled,
                 repeat,
                 next_run,
                 created_at,
                 last_run,
                 last_status,
-            }
-        }))
+                deliver,
+                origin,
+                last_delivery_error,
+            )| {
+                CronJob {
+                    id,
+                    name,
+                    schedule,
+                    prompt,
+                    skills: serde_json::from_str(&skills).unwrap_or_default(),
+                    enabled: enabled != 0,
+                    repeat,
+                    next_run,
+                    created_at,
+                    last_run,
+                    last_status,
+                    deliver,
+                    origin: origin.and_then(|raw| serde_json::from_str(&raw).ok()),
+                    last_delivery_error,
+                }
+            },
+        ))
     }
 
     pub fn list(&self) -> Result<Vec<CronJob>> {
@@ -490,10 +583,19 @@ mod tests {
             created_at: now(),
             last_run: None,
             last_status: None,
+            deliver: Some("origin".into()),
+            origin: Some(JobOrigin {
+                platform: "telegram".into(),
+                chat_id: "-100123".into(),
+                thread_id: Some("7".into()),
+            }),
+            last_delivery_error: None,
         };
         store.add(&job).unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
-        assert!(store.get("job-1").unwrap().is_some());
+        let loaded = store.get("job-1").unwrap().unwrap();
+        assert_eq!(loaded.deliver.as_deref(), Some("origin"));
+        assert_eq!(loaded.origin.as_ref().unwrap().chat_id, "-100123");
         assert!(store.remove("job-1").unwrap());
         assert_eq!(store.list().unwrap().len(), 0);
     }
@@ -514,6 +616,9 @@ mod tests {
             created_at: now(),
             last_run: None,
             last_status: None,
+            deliver: None,
+            origin: None,
+            last_delivery_error: None,
         };
         store.add(&job).unwrap();
 

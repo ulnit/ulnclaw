@@ -144,6 +144,45 @@ fn default_pairing() -> bool {
     true
 }
 
+impl MessagingConfig {
+    /// True when any platform section is enabled — the gate for
+    /// spawning `run_messaging` (router-mounted platforms like
+    /// whatsapp_cloud/msgraph/webhook ride gateway routes but still
+    /// register senders via their startup paths).
+    pub fn any_platform_enabled(&self) -> bool {
+        self.telegram.enabled
+            || self.discord.enabled
+            || self.slack.enabled
+            || self.signal.enabled
+            || self.whatsapp_cloud.enabled
+            || self.msgraph.enabled
+            || self.webhook.enabled
+            || self.bluebubbles.enabled
+            || self.weixin.enabled
+            || self.qq.enabled
+            || self.yuanbao.enabled
+            || self.email.enabled
+            || self.mattermost.enabled
+            || self.matrix.enabled
+            || self.dingtalk.enabled
+            || self.wecom.enabled
+            || self.feishu.enabled
+            || self.homeassistant.enabled
+            || self.sms.enabled
+            || self.whatsapp.enabled
+            || self.irc.enabled
+            || self.ntfy.enabled
+            || self.simplex.enabled
+            || self.teams.enabled
+            || self.line.enabled
+            || self.google_chat.enabled
+            || self.buzz.enabled
+            || self.photon.enabled
+            || self.raft.enabled
+            || self.a2a.enabled
+    }
+}
+
 /// `[messaging.telegram]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TelegramConfig {

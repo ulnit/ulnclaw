@@ -1036,9 +1036,11 @@ axum 路由表（供 `serve` 与测试使用）。
 | POST | `/api/sessions/:id/chat` | 是 | 在该会话内执行一轮对话 |
 | POST | `/api/sessions/:id/chat/stream` | 是 | 同上，以 SSE chunk 流式返回 |
 | GET | `/api/jobs?include_disabled=true` | 是 | 定时任务列表（默认隐藏已停用任务） |
-| POST | `/api/jobs` | 是 | 创建定时任务（`name`、`schedule`、`prompt`，可选 `skills`、`repeat`、`deliver="local"`） |
+| POST | `/api/jobs` | 是 | 创建定时任务（`name`、`schedule`、`prompt`，可选 `skills`、`repeat`、`deliver`） |
+| GET | `/api/jobs/delivery-targets` | 是 | 投递目标下拉清单：隐式 `local` + 已连接平台（含 `home_target_set`） |
+| POST | `/api/jobs/fire` | **否**¹ | Chronos NAS 触发 webhook：NAS 铸造 JWT（`[cron.chronos]`）→ 401/400/200-gone/202 + 后台运行 |
 | GET | `/api/jobs/:id` | 是 | 单个任务 |
-| PATCH | `/api/jobs/:id` | 是 | 更新白名单字段（`name`、`schedule`、`prompt`、`skills`、`repeat`、`enabled`） |
+| PATCH | `/api/jobs/:id` | 是 | 更新白名单字段（`name`、`schedule`、`prompt`、`skills`、`repeat`、`enabled`、`deliver`） |
 | DELETE | `/api/jobs/:id` | 是 | 删除任务 |
 | POST | `/api/jobs/:id/pause` | 是 | 停用任务（清空 `next_run`） |
 | POST | `/api/jobs/:id/resume` | 是 | 重新启用任务（重算 `next_run`） |
@@ -1133,7 +1135,24 @@ event: response.completed                # 完整信封：output + usage
 `ulnclaw cron` CLI 共用同一存储）。调度支持间隔简写（`30m`、
 `every 2h`、`1d`）、5 段 cron 表达式（`0 9 * * *`）以及 ISO 时间戳
 一次性任务。校验上限：name ≤ 200 字符、prompt ≤ 5000 字符、
-`repeat` 为正整数。`deliver` 仅支持 `"local"`（默认）。
+`repeat` 为正整数。
+
+`deliver`（默认 `local`）控制运行结束时最终响应的自动投递去向：
+`local`（仅保存）、`origin`（任务创建所在的聊天——由 `cronjob` 工具捕获）、
+平台名（`telegram`、`discord`、`slack`、`signal`、`matrix`、`email` 等）、
+显式 `platform:chat_id[:thread_id]`，或含 `all` 路由令牌的逗号混合。
+目标在触发时按已注册的平台发送器与平台 home 频道环境变量
+（`TELEGRAM_HOME_CHANNEL`、`MATRIX_HOME_ROOM` 等）解析；`[SILENT]`
+响应抑制投递，包装输出带 `Cronjob Response: <name>` 抬头
+（`[cron] wrap_response = false` 关闭），失败运行投递紧凑失败摘要，
+投递错误记入任务的 `last_delivery_error` 字段。
+
+¹ `POST /api/jobs/fire` 绕过 bearer key（对齐 hermes `PUBLIC_API_PATHS`）——
+NAS 铸造的 JWT 即门闸。配置 `[cron.chronos] expected_audience` +
+`nas_jwks_url`（JWKS URL 或内联 PEM 公钥）+ 可选 `portal_url` 签发者；
+令牌必须携带 `purpose = "cron_fire"`。应答：`401` 令牌无效、`400` 缺
+`job_id`、`200 {"status":"gone"}` 任务不存在（NAS 不应重试）、
+`202 {"status":"accepted"}` 任务后台运行（认领去重 NAS 重试）。
 
 ```bash
 # 创建 + 查看

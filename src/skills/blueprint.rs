@@ -168,6 +168,9 @@ pub fn blueprint_to_job(spec: &BlueprintSpec, name_override: Option<&str>) -> Re
         created_at: now,
         last_run: None,
         last_status: None,
+        deliver: None,
+        origin: None,
+        last_delivery_error: None,
     })
 }
 

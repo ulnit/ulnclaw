@@ -28,7 +28,9 @@
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
 //!     `POST /v1/runs/:id/stop`
 //!   - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/{id}`,
-//!     `POST /api/jobs/{id}/pause|resume|run` — cron job management
+//!     `POST /api/jobs/{id}/pause|resume|run`,
+//!     `GET /api/jobs/delivery-targets`, `POST /api/jobs/fire` —
+//!     cron job management + external delivery + Chronos fire webhook
 //!   - `GET /v1/skills`, `GET /v1/toolsets` — discovery endpoints
 //!
 //! Bearer-token auth via `[gateway] key` / `ULNCLAW_GATEWAY_KEY` (optional;
@@ -602,6 +604,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
                 .delete(learning_node_delete),
         )
         .route("/api/jobs", get(list_jobs).post(create_job))
+        .route("/api/jobs/delivery-targets", get(job_delivery_targets))
+        .route("/api/jobs/fire", post(fire_job))
         .route(
             "/api/jobs/:id",
             get(get_job).patch(update_job).delete(delete_job),
@@ -1467,6 +1471,20 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
     left.iter().zip(right).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
+/// The Chronos fire webhook is public like hermes' `PUBLIC_API_PATHS`
+/// entry for `/api/cron/fire`: the NAS-minted JWT is the gate, not the
+/// dashboard bearer key. Matches the bare path and `/p/<profile>`
+/// multiplex mirrors.
+fn is_cron_fire_path(path: &str) -> bool {
+    if path == "/api/jobs/fire" {
+        return true;
+    }
+    path.strip_prefix("/p/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(_, tail)| tail == "api/jobs/fire")
+        .unwrap_or(false)
+}
+
 async fn auth_middleware(
     State(state): State<Arc<GatewayState>>,
     headers: HeaderMap,
@@ -1481,6 +1499,7 @@ async fn auth_middleware(
         || path == "/health/detailed"
         || path == "/v1/health"
         || path.starts_with("/webhooks/")
+        || is_cron_fire_path(&path)
     {
         return next.run(request).await;
     }
@@ -3549,8 +3568,10 @@ struct CreateJobRequest {
     schedule: Option<String>,
     #[serde(default)]
     prompt: Option<String>,
+    /// `Value` (not `String`): hermes accepts lists here too and
+    /// `_normalize_deliver_value` flattens them to a comma list.
     #[serde(default)]
-    deliver: Option<String>,
+    deliver: Option<Value>,
     #[serde(default)]
     skills: Option<Vec<String>>,
     #[serde(default)]
@@ -3598,12 +3619,10 @@ async fn create_job(State(state): State<Arc<GatewayState>>, Json(request): Json<
             );
         }
     }
-    if let Some(deliver) = request.deliver.as_deref().filter(|d| *d != "local") {
-        return jobs_error(
-            StatusCode::BAD_REQUEST,
-            &format!("Unsupported deliver target: {}", deliver),
-        );
-    }
+    // `deliver` is stored verbatim (normalized) and resolved at fire
+    // time — hermes `create_job` accepts any target string and lets
+    // resolution fail soft at run time.
+    let deliver = crate::cron::delivery::normalize_deliver_value(request.deliver.as_ref());
     let parsed = match crate::cron::parse_schedule(&schedule) {
         Ok(parsed) => parsed,
         Err(e) => {
@@ -3625,6 +3644,9 @@ async fn create_job(State(state): State<Arc<GatewayState>>, Json(request): Json<
         created_at: now_secs(),
         last_run: None,
         last_status: None,
+        deliver: Some(deliver),
+        origin: None,
+        last_delivery_error: None,
     };
     match store.add(&job) {
         Ok(()) => Json(json!({"job": job_value(&job)})).into_response(),
@@ -3661,9 +3683,18 @@ async fn update_job(
     let Some(obj) = body.as_object() else {
         return jobs_error(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
-    // Whitelist of mutable fields (hermes `_UPDATE_ALLOWED_FIELDS`, minus
-    // deliver which this port does not persist).
-    let allowed = ["name", "schedule", "prompt", "skills", "repeat", "enabled"];
+    // Whitelist of mutable fields (hermes blocks only the immutable
+    // fields; this port whitelists the mutable ones, incl. `deliver`
+    // since P219 persists it).
+    let allowed = [
+        "name",
+        "schedule",
+        "prompt",
+        "skills",
+        "repeat",
+        "enabled",
+        "deliver",
+    ];
     let updates: Vec<(&String, &Value)> = obj
         .iter()
         .filter(|(key, _)| allowed.contains(&key.as_str()))
@@ -3737,6 +3768,10 @@ async fn update_job(
                     }
                 }
             }
+            "deliver" => {
+                let deliver = crate::cron::delivery::normalize_deliver_value(Some(value));
+                job.deliver = Some(deliver);
+            }
             _ => {}
         }
     }
@@ -3790,6 +3825,102 @@ async fn resume_job(State(state): State<Arc<GatewayState>>, Path(id): Path<Strin
     set_job_enabled(&state, &id, true).await
 }
 
+/// `GET /api/jobs/delivery-targets` — delivery targets the dropdown
+/// should offer (hermes `GET /api/cron/delivery-targets`): always the
+/// implicit `local` option plus every connected gateway platform, with
+/// `home_target_set` so the UI can prompt for a home channel.
+async fn job_delivery_targets() -> Response {
+    let mut targets = vec![json!({
+        "id": "local",
+        "name": "Local (save only)",
+        "home_target_set": true,
+        "home_env_var": Value::Null,
+    })];
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let connected = crate::cron::delivery::connected_messaging_platforms(&config.messaging);
+    targets.extend(crate::cron::delivery::cron_delivery_targets(&connected));
+    Json(json!({ "targets": targets })).into_response()
+}
+
+/// `POST /api/jobs/fire` — Chronos managed-cron fire webhook (NAS →
+/// agent), hermes `POST /api/cron/fire` parity. Authenticated by a
+/// short-lived NAS-minted JWT (the route is public — the JWT is the
+/// gate, not the gateway bearer key). Verifies, claims the job, returns
+/// 202 immediately and runs the job in the background so a long agent
+/// turn never trips NAS's HTTP timeout.
+async fn fire_job(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let token = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .trim()
+                .strip_prefix("Bearer ")
+                .unwrap_or(value.trim())
+                .to_string()
+        })
+        .unwrap_or_default();
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let chronos = &config.cron.chronos;
+    let claims = crate::cron::chronos::verify_fire_token(
+        &token,
+        chronos.expected_audience.as_deref().unwrap_or(""),
+        chronos.nas_jwks_url.as_deref(),
+        chronos.portal_url.as_deref(),
+        30,
+    )
+    .await;
+    if claims.is_none() {
+        return jobs_error(StatusCode::UNAUTHORIZED, "invalid fire token");
+    }
+    let payload: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let job_id = payload
+        .get("job_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let Some(job_id) = job_id else {
+        return jobs_error(StatusCode::BAD_REQUEST, "missing job_id");
+    };
+    let store = match cron_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    let mut job = match store.get(job_id) {
+        Ok(Some(job)) => job,
+        // Job is gone (cancelled / completed) — nothing to fire. 200 so
+        // NAS does not retry a fire that is intentionally absent.
+        Ok(None) => {
+            return Json(json!({ "status": "gone", "job_id": job_id })).into_response()
+        }
+        Err(e) => return server_error(&e.to_string()),
+    };
+    // CAS claim: a NAS retry that lands while the previous fire is still
+    // running is accepted but not double-dispatched.
+    if !take_fire_claim(job_id) {
+        return Json(json!({ "status": "accepted", "job_id": job_id })).into_response();
+    }
+    if job.prompt.trim().is_empty() {
+        release_fire_claim(job_id);
+        return jobs_error(StatusCode::BAD_REQUEST, "Job has no prompt to run");
+    }
+    match spawn_job_run(state.clone(), &mut job, store).await {
+        Some(_) => (
+            StatusCode::ACCEPTED,
+            Json(json!({ "status": "accepted", "job_id": job_id })),
+        )
+            .into_response(),
+        None => {
+            release_fire_claim(job_id);
+            server_error("failed to start job run")
+        }
+    }
+}
+
 /// `POST /api/jobs/:id/run` — trigger one immediate execution as a tracked
 /// run (hermes `_handle_run_job`).
 async fn run_job_now(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
@@ -3811,10 +3942,89 @@ async fn run_job_now(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
     Json(json!({"job": job_value(&job), "run_id": run_id})).into_response()
 }
 
-/// Dispatch one cron job as a tracked run (shared by `POST /api/jobs/:id/run`
-/// and the scheduler): creates the cron-run session + run row, records the
-/// outcome back onto the job when the run finishes, and executes the turn
-/// inside the cron approval scope. Returns the run id.
+/// In-flight Chronos fire claims (hermes store CAS claim): dedupes a
+/// NAS retry that arrives while a previous fire of the same job is
+/// still running.
+fn fire_claims() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static CLAIMS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    CLAIMS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Take the fire claim for a job. Returns false when a fire is already
+/// in flight for it.
+fn take_fire_claim(job_id: &str) -> bool {
+    fire_claims()
+        .lock()
+        .map(|mut claims| claims.insert(job_id.to_string()))
+        .unwrap_or(true)
+}
+
+fn release_fire_claim(job_id: &str) {
+    if let Ok(mut claims) = fire_claims().lock() {
+        claims.remove(job_id);
+    }
+}
+
+/// Deliver one cron job's final response to its resolved targets (hermes
+/// `_deliver_result`, live-adapter lane): wraps the content when
+/// configured, strips `MEDIA:` tags (senders are text-only), and sends
+/// via each platform's registered sender. Returns None on success /
+/// nothing-to-deliver, or an error string.
+async fn deliver_job_result(job: &CronJob, content: &str, wrap_response: bool) -> Option<String> {
+    let targets = crate::cron::delivery::resolve_delivery_targets(job);
+    if targets.is_empty() {
+        let deliver = crate::cron::delivery::normalize_deliver_value(
+            job.deliver
+                .as_ref()
+                .map(|deliver| Value::String(deliver.clone()))
+                .as_ref(),
+        );
+        if deliver == "local" {
+            return None; // local-only jobs don't deliver — not a failure
+        }
+        // deliver=origin with no resolvable origin and no configured
+        // home channels: treat as local rather than reporting an error
+        // (hermes #43014) — output stays in the run/session.
+        if deliver == "origin" {
+            return None;
+        }
+        return Some(format!(
+            "no delivery target resolved for deliver={}",
+            deliver
+        ));
+    }
+    let body = if wrap_response {
+        crate::cron::delivery::wrap_delivery_content(job, content)
+    } else {
+        content.to_string()
+    };
+    let (cleaned, _media) = crate::messaging::extract_media_tags(&body);
+    let mut errors: Vec<String> = Vec::new();
+    for target in targets {
+        let key = crate::cron::delivery::sender_key_for(&target.platform);
+        match crate::messaging::platform_sender(&key) {
+            Some(sender) => {
+                sender.send_text(&target.chat_id, &cleaned).await;
+            }
+            None => errors.push(format!(
+                "platform '{}' has no registered sender",
+                target.platform
+            )),
+        }
+    }
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("; "))
+    }
+}
+
+/// Dispatch one cron job as a tracked run (shared by `POST /api/jobs/:id/run`,
+/// the scheduler, and the Chronos fire webhook): creates the cron-run
+/// session + run row, records the outcome back onto the job when the run
+/// finishes (incl. external delivery + `last_delivery_error`), and
+/// executes the turn inside the cron approval scope. Returns the run id.
 async fn spawn_job_run(
     state: Arc<GatewayState>,
     job: &mut CronJob,
@@ -3843,39 +4053,78 @@ async fn spawn_job_run(
     job.last_status = Some("running".to_string());
     store.update(job).ok();
 
-    // Record the outcome on the job row once the run finishes.
+    // Record the outcome on the job row once the run finishes, then
+    // deliver the final response to the configured target(s) (hermes
+    // `run_one_job` delivery block).
     let job_store = Arc::clone(&store);
+    let job_snapshot = job.clone();
     let job_id = job.id.clone();
     let runs = state.runs.clone();
     let outcome_run_id = run_id.clone();
     tokio::spawn(async move {
         let outcome = loop {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let snapshot = runs
-                .lock()
-                .await
-                .get(&outcome_run_id)
-                .map(|run| (run.status.clone(), run.error.clone()));
+            let snapshot = runs.lock().await.get(&outcome_run_id).map(|run| {
+                (
+                    run.status.clone(),
+                    run.error.clone(),
+                    run.result.clone(),
+                )
+            });
             match snapshot {
-                None => break ("failed".to_string(), Some("run lost".to_string())),
-                Some((status, error))
+                None => break ("failed".to_string(), Some("run lost".to_string()), None),
+                Some((status, error, result))
                     if matches!(status.as_str(), "completed" | "failed") =>
                 {
-                    break (status, error)
+                    break (status, error, result)
                 }
                 Some(_) => continue,
             }
         };
+        let (status, mut run_error, result) = outcome;
+        let mut success = status == "completed";
+        // Empty final responses are a soft failure (hermes #8585): the
+        // agent ran but produced nothing useful.
+        let result_text = result.unwrap_or_default();
+        if success && result_text.trim().is_empty() {
+            success = false;
+            run_error = Some(
+                "Agent completed but produced empty response (model error, timeout, or misconfiguration)"
+                    .to_string(),
+            );
+        }
+        // Failed jobs deliver a compact failure summary; successful jobs
+        // deliver the response unless it is a silence marker (hermes
+        // `_is_cron_silence_response`).
+        let wrap_response = crate::config::UlncLawConfig::load(None)
+            .map(|config| config.cron.wrap_response)
+            .unwrap_or(true);
+        let mut delivery_error: Option<String> = None;
+        if success {
+            if !crate::cron::delivery::is_cron_silence_response(&result_text) {
+                delivery_error =
+                    deliver_job_result(&job_snapshot, &result_text, wrap_response).await;
+            }
+        } else {
+            let summary = crate::cron::delivery::summarize_cron_failure_for_delivery(
+                &job_snapshot,
+                run_error.as_deref(),
+            );
+            if !summary.trim().is_empty() {
+                delivery_error =
+                    deliver_job_result(&job_snapshot, &summary, wrap_response).await;
+            }
+        }
         if let Ok(Some(mut job)) = job_store.get(&job_id) {
-            job.last_status = Some(match outcome.0.as_str() {
-                "completed" => "ok".to_string(),
-                other => format!(
-                    "error: {}",
-                    outcome.1.clone().unwrap_or_else(|| other.to_string())
-                ),
+            job.last_status = Some(match (success, &run_error) {
+                (true, _) => "ok".to_string(),
+                (false, Some(error)) => format!("error: {}", error),
+                (false, None) => format!("error: {}", status),
             });
+            job.last_delivery_error = delivery_error;
             job_store.update(&job).ok();
         }
+        release_fire_claim(&job_id);
     });
 
     spawn_tracked_run(state, run_id.clone(), session_id, job.prompt.clone(), true);
@@ -5849,6 +6098,314 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_jobs_delivery_targets_local_first() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[messaging.telegram]\nenabled = true\n\n[messaging.matrix]\nenabled = true\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let (state, _temp) = jobs_state();
+        let app = router(state);
+        let (status, body) = get_json(app, "/api/jobs/delivery-targets", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let targets = body["targets"].as_array().unwrap();
+        // Implicit local option always first.
+        assert_eq!(targets[0]["id"], "local");
+        assert_eq!(targets[0]["name"], "Local (save only)");
+        assert_eq!(targets[0]["home_target_set"], true);
+        let ids: Vec<&str> = targets.iter().map(|t| t["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"telegram"), "enabled telegram listed");
+        assert!(ids.contains(&"matrix"), "enabled matrix listed");
+        assert!(!ids.contains(&"discord"), "disabled discord hidden");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_jobs_deliver_persisted_and_updatable() {
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Explicit platform target accepted and persisted.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "d1", "schedule": "1h", "prompt": "x", "deliver": "telegram"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["job"]["deliver"], "telegram");
+        let job_id = body["job"]["id"].as_str().unwrap().to_string();
+
+        // Array deliver normalizes to a comma list.
+        let (_, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "d2", "schedule": "1h", "prompt": "x", "deliver": ["telegram", "discord"]}),
+        ).await;
+        assert_eq!(body["job"]["deliver"], "telegram,discord");
+
+        // Omitted deliver defaults to local.
+        let (_, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "d3", "schedule": "1h", "prompt": "x"}),
+        ).await;
+        assert_eq!(body["job"]["deliver"], "local");
+
+        // PATCH deliver updates it.
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/jobs/{}", job_id), Some(token),
+            json!({"deliver": "origin"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["job"]["deliver"], "origin");
+        let (_, body) = get_json(app.clone(), &format!("/api/jobs/{}", job_id), Some(token)).await;
+        assert_eq!(body["job"]["deliver"], "origin");
+    }
+
+    /// Fixed test-only RSA private key (twin of the public half in
+    /// `cron::chronos` tests) for signing fire tokens.
+    const FIRE_TEST_PRIVATE_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCSvaIDx3Hb8l3N
+9XeRqOaS573tRdCt7uuymy03owpSYiTbaWiyWw2muUEPwiywcyLaCChSwRncPyJ9
+0Mnd/e1D1NAnST16A1lYl+TO+tDS4ect657i8BxqE7LasjNZUe4uXJ9yFD9nFrgs
+mgI6OcZfcQvdjO/ztzEz/ThBWh7LTIyvzp13Dboo/mwCMZXTTslce/ffCDu04mbU
+eTV4eJswOUHfUPaZ92KsHYgaZmg2ghwW+i8DdJ7MkKrsO2K86fBhOi5FbVNqUYul
+jD2ptKiJDUm+6jkTX+MuLaETQWYFXSVoxke2xD/psL9sDJcWZOYwKL6d/elWkD1P
+lCHiJHPRAgMBAAECggEAJVINjqB/GM1/hg5UJruqSNqft2T2OgZ186r7yRayXVmQ
+vi0E77ewtSKQpY1hCE+AIavJdaKfDSERiKY9cTRPz9ykRBmghROs+ZdIHkw0KC5E
+Oa2fb2BaGbCA4JZJ8QGhbjEobD8yEOn6VX2l62EeTs/VkLdzn6yL2wkf8Z8WDeY7
+kp5IIgktXVKZ0xP2lKhcE04EmPj8T3FGzS6AibdsBhjwRSdBFlmE0wqKa2k6lBns
+D5m8H1OnE0/tWMJ+YOZHN+29CLwpKcksOWl38h1FUw42EL7oprul7ydS02OLWjwy
+sGmVies77zLFYPvseyxMwu8KL5Fn7lzlYQL1zEHDsQKBgQDG35BWdbHaU5oFFwCb
+xgkKN4qx0kreBsd6eTwwfI5rQHy778Cc19P4ApuI9HmRxKII9FbKuHzJb3ZRrmN9
+MwRhmCtklXxvaw075WBZVERgKbGA3P5hlNcjX1JmvgPNLkCW+qTtJp1zcCgf1h/7
+UXgxqUoQ3DR1M6FgXq5a6iRU8wKBgQC85G1LXMERMGDKWzixLigP78TbiW258vMU
+MKTRf4Jli8RKASRAe+DFs0klk5eYvlqyWgZt6/4vkPguOfmy/KW5kl2n3CfoRIed
+DshI6M19BHEV4G6N3qzsnNQxoQPeDN/IamDou0RhyTwgudgBVdaHMxNPuKOtxCBC
+xWV1JjTVKwKBgDVHtA3V3l5Vw4/Vh840EjvwgXH+mxw8yLihPmTnGejWEBTxuLLM
+h/eMC0t35BIPkjG/9Hi/UH9PI23iwLjMMEJNWGLMQdg/3/3KCDQmhWMWCH4ztttB
+2xmY8iSgh7gyyg8o+4Kls803oShWX58fRopXhoZZ2JwFxxhghWnKDQ3NAoGBAJ5Q
+lYnkY6yUb4sqiYl2tf0laEjYFi8TgMgbPQiZZiDV095ytn+VU/5fFZ945EYQxNNW
+wKzAbnpPdrLHxJBPUFcIZZaa3pe9WCw6h4MUG6X8YwuC3yXoy+ZES1SNL0CcabL/
+9dkZm2aZ0tta57+2webu1/CpQAYTqzZLW42kSAOhAoGBAKiE8vYmA4EcmxngSYEA
+cnOnGmFUh6k36PMifq5EQmPJvy1kK5zn2Ay9pOXN0DT89NjTF7n/2+3yQRRWzWDY
+ELGypw8hndOvpGrG2zj7MnhECfEcXZcTh3PrBEU/DsYV3EISNN5qh4Uby1zeYqxU
+FFkH6vhVrqNHIzR6WyBVZTya
+-----END PRIVATE KEY-----"#;
+
+    const FIRE_TEST_PUBLIC_PEM: &str = r#"-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkr2iA8dx2/JdzfV3kajm
+kue97UXQre7rspstN6MKUmIk22loslsNprlBD8IssHMi2ggoUsEZ3D8ifdDJ3f3t
+Q9TQJ0k9egNZWJfkzvrQ0uHnLeue4vAcahOy2rIzWVHuLlyfchQ/Zxa4LJoCOjnG
+X3EL3Yzv87cxM/04QVoey0yMr86ddw26KP5sAjGV007JXHv33wg7tOJm1Hk1eHib
+MDlB31D2mfdirB2IGmZoNoIcFvovA3SezJCq7DtivOnwYTouRW1TalGLpYw9qbSo
+iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
+0QIDAQAB
+-----END PUBLIC KEY-----"#;
+
+    fn sign_fire_token(aud: &str) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = json!({"aud": aud, "exp": now + 300, "purpose": "cron_fire"});
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_rsa_pem(FIRE_TEST_PRIVATE_PEM.as_bytes()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_fire_webhook_rejects_without_valid_token() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let (state, _temp) = jobs_state();
+        let app = router(state);
+        // No chronos config → verification cannot succeed. The route is
+        // public (no bearer key needed) but the JWT gate rejects.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs/fire", None,
+            json!({"job_id": "anything"}),
+        ).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"], "invalid fire token");
+        // Garbage token also 401s.
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/jobs/fire")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer not-a-jwt")
+            .body(axum::body::Body::from(r#"{"job_id":"x"}"#))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fire_webhook_lifecycle() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let config = format!(
+            "[cron.chronos]\nexpected_audience = \"agent:test-instance\"\nnas_jwks_url = '''{}'''\n",
+            FIRE_TEST_PUBLIC_PEM
+        );
+        std::fs::write(dir.path().join("config.toml"), config).unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Create a job to fire.
+        let (_, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "fireable", "schedule": "1h", "prompt": "say hi"}),
+        ).await;
+        let job_id = body["job"]["id"].as_str().unwrap().to_string();
+
+        let fire_token = sign_fire_token("agent:test-instance");
+        let fire_auth = format!("Bearer {}", fire_token);
+
+        // Missing job_id → 400.
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/jobs/fire")
+            .header("content-type", "application/json")
+            .header("authorization", &fire_auth)
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app.clone(), request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Unknown job → 200 gone (so NAS does not retry).
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/jobs/fire")
+            .header("content-type", "application/json")
+            .header("authorization", &fire_auth)
+            .body(axum::body::Body::from(r#"{"job_id":"nope"}"#))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app.clone(), request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["status"], "gone");
+
+        // Real job → 202 accepted, background run dispatched.
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/jobs/fire")
+            .header("content-type", "application/json")
+            .header("authorization", &fire_auth)
+            .body(axum::body::Body::from(serde_json::to_string(&json!({"job_id": job_id})).unwrap()))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app.clone(), request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["job_id"], job_id);
+
+        // Wrong audience → 401.
+        let bad_token = sign_fire_token("agent:someone-else");
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/jobs/fire")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", bad_token))
+            .body(axum::body::Body::from(serde_json::to_string(&json!({"job_id": job_id})).unwrap()))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    struct RecordingSender {
+        texts: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::messaging::PlatformSender for RecordingSender {
+        async fn send_text(&self, chat_id: &str, text: &str) {
+            self.texts
+                .lock()
+                .unwrap()
+                .push((chat_id.to_string(), text.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_job_run_delivers_result_via_sender() {
+        let texts: Arc<std::sync::Mutex<Vec<(String, String)>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        crate::messaging::register_platform_sender(
+            "testdeliv",
+            Arc::new(RecordingSender { texts: texts.clone() }),
+        );
+
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Explicit target: platform "testdeliv" is not a known platform,
+        // but the explicit `platform:chat` form resolves verbatim.
+        let (_, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "delivered", "schedule": "1h", "prompt": "say hi", "deliver": "testdeliv:chat-42"}),
+        ).await;
+        let job_id = body["job"]["id"].as_str().unwrap().to_string();
+
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/jobs/{}/run", job_id), Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The provider is unreachable, so the run fails and the failure
+        // summary is delivered to the configured target.
+        let mut delivered = Vec::new();
+        for _ in 0..100 {
+            delivered = texts.lock().unwrap().clone();
+            if !delivered.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].0, "chat-42");
+        assert!(delivered[0].1.contains("Cron 'delivered' failed"));
+        // Job row: run failed, but delivery itself succeeded.
+        let (_, body) = get_json(app.clone(), &format!("/api/jobs/{}", job_id), Some(token)).await;
+        assert!(body["job"]["last_status"].as_str().unwrap().starts_with("error:"));
+        assert!(body["job"]["last_delivery_error"].is_null());
+    }
+
+    #[tokio::test]
     async fn test_skills_listing() {
         let (state, temp) = jobs_state();
         let skill_dir = temp.path().join("skills").join("demo");
@@ -6465,6 +7022,9 @@ mod tests {
             created_at: crate::gateway::now_secs(),
             last_run: None,
             last_status: None,
+            deliver: None,
+            origin: None,
+            last_delivery_error: None,
         };
         cron_store.add(&job).unwrap();
 
