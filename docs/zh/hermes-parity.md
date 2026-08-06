@@ -437,7 +437,11 @@
   `workflow_template_id` / `current_step_key` 任务列）：外部工作流引擎在建卡
   时打标（网关 create API 携带两字段），并经 `kanban list
   --workflow-template-id` 查回（SQL 级过滤；网关 list API 同名查询参数）。
-  模板引擎本体在两个项目中都位于看板之外。
+  模板引擎本体在两个项目中都位于看板之外。看板其余有意保留的差异：
+  `create --project`（hermes 的项目登记簿未移植——看板 board 承担同样角色）、
+  按任务 `--model`/`--provider` worker 覆盖（`model` 列与 `kanban set-model`
+  已有，但 provider 覆盖需要全局 CLI 管线支持）、调度期 `default_assignee`
+  应用（ulnclaw 在默认 profile 上 spawn 未指派任务而不是跳过）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

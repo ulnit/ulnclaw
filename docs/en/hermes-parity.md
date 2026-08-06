@@ -506,7 +506,14 @@ performance and a single static binary.
   cards at create time (gateway create API carries both fields) and
   query them back via `kanban list --workflow-template-id` (SQL-level
   filter; gateway list API takes the same query param). The template
-  engine itself lives outside the board in both projects.
+  engine itself lives outside the board in both projects. Remaining
+  deliberate kanban divergences: `create --project` (hermes' project
+  registry is not ported — boards fill the same role), per-task
+  `--model`/`--provider` worker overrides (the `model` column and
+  `kanban set-model` exist, but a provider override would need global
+  CLI plumbing), and dispatch-time `default_assignee` application
+  (ulnclaw spawns unassigned tasks on the default profile instead of
+  skipping them).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the
