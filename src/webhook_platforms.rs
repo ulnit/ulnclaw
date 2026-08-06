@@ -14,8 +14,9 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::error::{AgentError, Result};
 use crate::messaging::{Dispatcher, MessageEvent};
@@ -691,7 +692,24 @@ pub struct MsGraphConfig {
     /// (hermes refuses to start without it).
     #[serde(default)]
     pub client_state: String,
+    /// Resource patterns accepted for dispatch (hermes
+    /// `accepted_resources`): exact, sub-path prefix (`path` matches
+    /// `path/...` too) or wildcard prefix (`path*`). Empty = accept all.
+    #[serde(default)]
+    pub accepted_resources: Vec<String>,
+    /// Custom prompt template (hermes `extra.prompt`): `{dotted.path}`
+    /// placeholders resolve against the notification payload; empty
+    /// renders the pretty-printed JSON dump instead.
+    #[serde(default)]
+    pub prompt: String,
+    /// Receipt dedup ledger size (hermes `max_seen_receipts`, default
+    /// 5000).
+    #[serde(default)]
+    pub max_seen_receipts: usize,
 }
+
+/// hermes `DEFAULT_MAX_SEEN_RECEIPTS`.
+const MSGRAPH_DEFAULT_MAX_SEEN_RECEIPTS: usize = 5000;
 
 /// Graph subscription validation: echo `validationToken` as `text/plain`
 /// (hermes `_handle_validation`).
@@ -712,71 +730,238 @@ pub fn msgraph_state_ok(notification: &Value, expected: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// hermes `_build_receipt_key`.
+pub fn msgraph_receipt_key(notification: &Value) -> Option<String> {
+    let explicit_id = notification
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if explicit_id.is_empty() {
+        None
+    } else {
+        Some(format!("id:{explicit_id}"))
+    }
+}
+
+fn msgraph_receipts() -> &'static Mutex<(HashSet<String>, VecDeque<String>)> {
+    static RECEIPTS: std::sync::OnceLock<Mutex<(HashSet<String>, VecDeque<String>)>> =
+        std::sync::OnceLock::new();
+    RECEIPTS.get_or_init(|| Mutex::new((HashSet::new(), VecDeque::new())))
+}
+
+/// hermes `_has_seen_receipt` + `_remember_receipt` — FIFO-evicting
+/// dedup ledger. Returns true when the key was already seen.
+fn msgraph_remember_receipt(key: &str, max_seen: usize) -> bool {
+    let mut guard = msgraph_receipts().lock().unwrap();
+    if guard.0.contains(key) {
+        return true;
+    }
+    guard.0.insert(key.to_string());
+    guard.1.push_back(key.to_string());
+    let cap = max_seen.max(1);
+    while guard.1.len() > cap {
+        if let Some(oldest) = guard.1.pop_front() {
+            guard.0.remove(&oldest);
+        }
+    }
+    false
+}
+
+/// hermes `_normalize_resource_value`.
+fn normalize_resource_value(resource: &str) -> String {
+    resource.trim().trim_matches('/').to_string()
+}
+
+/// hermes `_resource_accepted` — exact, sub-path prefix, or `prefix*`
+/// wildcard matching.
+pub fn msgraph_resource_accepted(resource: &str, accepted_resources: &[String]) -> bool {
+    if accepted_resources.is_empty() {
+        return true;
+    }
+    let normalized_resource = normalize_resource_value(resource);
+    for pattern in accepted_resources {
+        let normalized_pattern = normalize_resource_value(pattern);
+        if normalized_pattern.is_empty() {
+            continue;
+        }
+        if let Some(prefix) = normalized_pattern.strip_suffix('*') {
+            let prefix = prefix.trim_end_matches('/');
+            if normalized_resource == prefix
+                || normalized_resource.starts_with(&format!("{prefix}/"))
+            {
+                return true;
+            }
+            continue;
+        }
+        if normalized_resource == normalized_pattern
+            || normalized_resource.starts_with(&format!("{normalized_pattern}/"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// hermes `json.dumps(..., sort_keys=True)` — serde maps keep insertion
+/// order, so rebuild through BTreeMap recursively.
+fn sorted_json(value: &Value, pretty: bool) -> String {
+    fn to_sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let sorted: std::collections::BTreeMap<String, Value> = map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), to_sorted(v)))
+                    .collect();
+                Value::Object(sorted.into_iter().collect())
+            }
+            Value::Array(items) => Value::Array(items.iter().map(to_sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    let sorted = to_sorted(value);
+    if pretty {
+        serde_json::to_string_pretty(&sorted).unwrap_or_default()
+    } else {
+        serde_json::to_string(&sorted).unwrap_or_default()
+    }
+}
+
+fn sha1_hex(data: &str) -> String {
+    use sha1::Digest;
+    let digest = sha1::Sha1::digest(data.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// hermes `_render_template` — resolve `{dotted.path}` placeholders
+/// against the payload map; unresolved placeholders stay literal,
+/// dict/list values render as compact JSON truncated to 2000 chars.
+pub fn msgraph_render_template(template: &str, payload: &Value) -> String {
+    let re = regex::Regex::new(r"\{([a-zA-Z0-9_.]+)\}").expect("static template regex");
+    re.replace_all(template, |caps: &regex::Captures| {
+        let key = &caps[1];
+        let mut value: &Value = payload;
+        for part in key.split('.') {
+            match value.get(part) {
+                Some(next) => value = next,
+                None => return format!("{{{key}}}"),
+            }
+        }
+        match value {
+            Value::Object(_) | Value::Array(_) => {
+                let compact = serde_json::to_string(value).unwrap_or_default();
+                compact.chars().take(2000).collect()
+            }
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        }
+    })
+    .to_string()
+}
+
+/// hermes `_render_prompt` — custom template or the pretty-printed JSON
+/// dump (4000-char budget).
+pub fn msgraph_render_prompt(notification: &Value, template: &str) -> String {
+    if !template.trim().is_empty() {
+        let payload = json!({
+            "notification": notification,
+            "resource": notification.get("resource").cloned().unwrap_or(Value::String(String::new())),
+            "change_type": notification.get("changeType").cloned().unwrap_or(Value::String(String::new())),
+            "subscription_id": notification.get("subscriptionId").cloned().unwrap_or(Value::String(String::new())),
+        });
+        return msgraph_render_template(template, &payload);
+    }
+    let rendered: String = sorted_json(notification, true).chars().take(4000).collect();
+    format!("Microsoft Graph change notification:\n\n```json\n{rendered}\n```")
+}
+
+/// Batch outcome — hermes accepted/duplicate/auth-rejected/other-rejected
+/// counters drive the HTTP status (202 / 403 / 400).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MsGraphOutcome {
+    pub accepted: usize,
+    pub duplicates: usize,
+    pub auth_rejected: usize,
+    pub other_rejected: usize,
+}
+
 /// Handle a Graph notification batch: validate clientState per
-/// notification and surface accepted ones as per-resource events.
-/// Returns the number of accepted notifications.
+/// notification, filter resources, dedup receipts, and dispatch accepted
+/// ones as internal events (hermes `_handle_notification`).
 pub async fn msgraph_handle_webhook(
     cfg: &MsGraphConfig,
     dispatcher: &Arc<Dispatcher>,
     raw_body: &[u8],
     query: &[(String, String)],
-) -> Result<usize> {
+) -> Result<MsGraphOutcome> {
     if raw_body.len() > MAX_WEBHOOK_BODY_BYTES {
         return Err(AgentError::config("msgraph webhook body too large"));
     }
     // Graph may tack a validationToken onto a POST right after subscription.
-    if let Some(_token) = msgraph_validation_token(query) {
-        return Ok(0);
-    }
-    if cfg.client_state.is_empty() {
-        return Err(AgentError::config(
-            "msgraph refuses notifications without client_state configured",
-        ));
+    if msgraph_validation_token(query).is_some() {
+        return Ok(MsGraphOutcome::default());
     }
     let payload: Value = serde_json::from_slice(raw_body)
         .map_err(|e| AgentError::config(format!("msgraph webhook parse: {e}")))?;
     let Some(notifications) = payload.get("value").and_then(|v| v.as_array()) else {
-        return Ok(0);
+        return Err(AgentError::config(
+            "msgraph webhook payload missing value array",
+        ));
     };
-    let mut accepted = 0usize;
+    let max_seen = if cfg.max_seen_receipts == 0 {
+        MSGRAPH_DEFAULT_MAX_SEEN_RECEIPTS
+    } else {
+        cfg.max_seen_receipts
+    };
+    let mut outcome = MsGraphOutcome::default();
     for notification in notifications {
-        if !msgraph_state_ok(notification, &cfg.client_state) {
-            eprintln!("[msgraph] rejected notification: clientState mismatch");
+        if !notification.is_object() {
+            outcome.other_rejected += 1;
             continue;
         }
-        accepted += 1;
         let resource = notification
             .get("resource")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let change_type = notification
-            .get("changeType")
+            .unwrap_or("");
+        if !msgraph_resource_accepted(resource, &cfg.accepted_resources) {
+            outcome.other_rejected += 1;
+            continue;
+        }
+        if cfg.client_state.is_empty() || !msgraph_state_ok(notification, &cfg.client_state) {
+            outcome.auth_rejected += 1;
+            continue;
+        }
+        let receipt_key = msgraph_receipt_key(notification);
+        if let Some(key) = &receipt_key {
+            if msgraph_remember_receipt(key, max_seen) {
+                outcome.duplicates += 1;
+                continue;
+            }
+        }
+        outcome.accepted += 1;
+        let subscription_id = notification
+            .get("subscriptionId")
             .and_then(|v| v.as_str())
-            .unwrap_or("changed")
-            .to_string();
-        // Hermes forwards the notification to a fetcher (Teams/Outlook)
-        // that retrieves the actual message; ulnclaw surfaces the change
-        // itself so workflows can react (documented difference).
+            .unwrap_or("unknown");
+        // hermes `_build_message_event`: receipt id, else sha1 over the
+        // sorted notification JSON.
+        let message_id = receipt_key.unwrap_or_else(|| {
+            format!("sha1:{}", sha1_hex(&sorted_json(notification, false)))
+        });
         let event = MessageEvent {
             platform: "msgraph".into(),
-            chat_id: resource.clone(),
-            sender_id: "graph".into(),
+            chat_id: format!("msgraph:{subscription_id}"),
+            sender_id: "msgraph".into(),
             sender_name: "Microsoft Graph".into(),
-            text: format!("[graph notification] {change_type}: {resource}"),
-            message_id: notification
-                .get("subscriptionId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
+            text: msgraph_render_prompt(notification, &cfg.prompt),
+            message_id,
             attachments: Vec::new(),
         };
-        match dispatcher.handle_event(event).await {
-            Ok(_) => {} // Notifications have no chat to echo transcripts into.
-            Err(e) => eprintln!("[msgraph] dispatch failed: {e}"),
+        if let Err(e) = dispatcher.handle_event(event).await {
+            eprintln!("[msgraph] dispatch failed: {e}");
         }
     }
-    Ok(accepted)
+    Ok(outcome)
 }
 
 // ---------------------------------------------------------------------------
@@ -1416,6 +1601,80 @@ mod tests {
         assert!(!msgraph_state_ok(&json!({}), "s3cr3t"));
     }
 
+    #[test]
+    fn msgraph_receipt_key_and_fifo_dedup() {
+        assert_eq!(
+            msgraph_receipt_key(&json!({"id": "n1"})).as_deref(),
+            Some("id:n1")
+        );
+        assert_eq!(msgraph_receipt_key(&json!({"id": "  "})), None);
+        assert_eq!(msgraph_receipt_key(&json!({})), None);
+        // Unique prefixes keep the global ledger isolated per test.
+        assert!(!msgraph_remember_receipt("t206-a", 2));
+        assert!(msgraph_remember_receipt("t206-a", 2));
+        assert!(!msgraph_remember_receipt("t206-b", 2));
+        // Cap 2 → adding a third evicts the oldest (t206-a).
+        assert!(!msgraph_remember_receipt("t206-c", 2));
+        assert!(!msgraph_remember_receipt("t206-a", 2));
+    }
+
+    #[test]
+    fn msgraph_resource_filter_matching() {
+        let empty: Vec<String> = Vec::new();
+        assert!(msgraph_resource_accepted("anything", &empty));
+        let patterns: Vec<String> = vec!["users/me/messages".into(), "teams/*".into()];
+        assert!(msgraph_resource_accepted("users/me/messages", &patterns));
+        // Sub-path prefix matches like hermes.
+        assert!(msgraph_resource_accepted("users/me/messages/extra", &patterns));
+        assert!(msgraph_resource_accepted("/users/me/messages/", &patterns));
+        // Wildcard: exact prefix or prefix/<sub>.
+        assert!(msgraph_resource_accepted("teams", &patterns));
+        assert!(msgraph_resource_accepted("teams/123", &patterns));
+        assert!(!msgraph_resource_accepted("teamsx", &patterns));
+        assert!(!msgraph_resource_accepted("users/other/messages", &patterns));
+    }
+
+    #[test]
+    fn msgraph_render_template_resolves_dotted_paths() {
+        let payload = json!({
+            "resource": "teams/1",
+            "notification": {"changeType": "created", "nested": {"deep": "v"}},
+        });
+        assert_eq!(
+            msgraph_render_template("r={resource} c={notification.changeType}", &payload),
+            "r=teams/1 c=created"
+        );
+        assert_eq!(
+            msgraph_render_template("d={notification.nested.deep}", &payload),
+            "d=v"
+        );
+        // Missing paths stay literal.
+        assert_eq!(msgraph_render_template("x={nope.gone}", &payload), "x={nope.gone}");
+        // Dict values render as compact JSON.
+        let rendered = msgraph_render_template("n={notification.nested}", &payload);
+        assert_eq!(rendered, "n={\"deep\":\"v\"}");
+    }
+
+    #[test]
+    fn msgraph_render_prompt_default_and_template() {
+        let notification = json!({"b": 2, "a": 1, "resource": "r", "changeType": "created", "subscriptionId": "s1"});
+        let prompt = msgraph_render_prompt(&notification, "");
+        assert!(prompt.starts_with("Microsoft Graph change notification:\n\n```json\n"));
+        // Sorted keys: "a" precedes "b" in the pretty dump.
+        let a_pos = prompt.find("\"a\": 1").unwrap();
+        let b_pos = prompt.find("\"b\": 2").unwrap();
+        assert!(a_pos < b_pos);
+        let templated = msgraph_render_prompt(&notification, "{change_type} on {resource}");
+        assert_eq!(templated, "created on r");
+    }
+
+    #[test]
+    fn msgraph_sorted_json_is_deterministic() {
+        let value = json!({"z": [3, {"y": 1, "x": 2}], "a": "b"});
+        assert_eq!(sorted_json(&value, false), r#"{"a":"b","z":[3,{"x":2,"y":1}]}"#);
+        // Stable input for the sha1 message-id fallback.
+        assert_eq!(sha1_hex("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+    }
     // ------------------------------------------------------------------
     // WhatsApp interactive messages (hermes whatsapp_cloud parity)
     // ------------------------------------------------------------------

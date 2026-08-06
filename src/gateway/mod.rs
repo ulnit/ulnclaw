@@ -1193,17 +1193,31 @@ async fn msgraph_webhook_route(
         )
             .into_response();
     }
-    if body.is_empty() {
-        return StatusCode::OK.into_response();
-    }
     let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
-    if let Err(e) =
-        crate::webhook_platforms::msgraph_handle_webhook(cfg, &dispatcher, &body, &query).await
+    // hermes `_handle_notification` status semantics: 202 when anything
+    // was ingested or deduped (Graph acks and stops retrying), 403 when
+    // the whole batch failed clientState auth, 400 for malformed /
+    // resource-not-accepted batches, 413 oversize.
+    match crate::webhook_platforms::msgraph_handle_webhook(cfg, &dispatcher, &body, &query).await
     {
-        tracing::warn!("msgraph webhook rejected: {e}");
+        Ok(outcome) => {
+            if outcome.accepted > 0 || outcome.duplicates > 0 {
+                StatusCode::ACCEPTED.into_response()
+            } else if outcome.auth_rejected > 0 && outcome.other_rejected == 0 {
+                StatusCode::FORBIDDEN.into_response()
+            } else {
+                StatusCode::BAD_REQUEST.into_response()
+            }
+        }
+        Err(e) => {
+            tracing::warn!("msgraph webhook rejected: {e}");
+            if e.to_string().contains("too large") {
+                StatusCode::PAYLOAD_TOO_LARGE.into_response()
+            } else {
+                StatusCode::BAD_REQUEST.into_response()
+            }
+        }
     }
-    // Graph requires 2xx to stop notification retries — always ack.
-    StatusCode::OK.into_response()
 }
 
 // ---------------------------------------------------------------------------
