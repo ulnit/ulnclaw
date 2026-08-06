@@ -7461,7 +7461,45 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
             let selected = if std::io::IsTerminal::is_terminal(&std::io::stdout())
                 && std::io::IsTerminal::is_terminal(&std::io::stdin())
             {
-                match run_session_browse_tui(&rows, &project_by_session) {
+                // P224: F5 reload + F8 archive callbacks backed by fresh
+                // store connections (the picker may outlive this scope's
+                // borrow of `store`).
+                let reload_home = home.clone();
+                let reload_source = source.clone();
+                let reload_limit = limit.max(1);
+                let reload_excludes: Vec<String> =
+                    excludes.iter().map(|s| s.to_string()).collect();
+                let reload = move || {
+                    let fresh_store =
+                        SqliteSessionStore::open(reload_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    let exclude_refs: Vec<&str> =
+                        reload_excludes.iter().map(String::as_str).collect();
+                    let fresh = fresh_store
+                        .list_sessions_for_browse(
+                            reload_limit,
+                            reload_source.as_deref(),
+                            &exclude_refs,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let fresh_projects = resolve_browse_projects(&fresh);
+                    Ok((fresh, fresh_projects))
+                };
+                let archive_home = home.clone();
+                let archive = move |id: &str| {
+                    let archive_store =
+                        SqliteSessionStore::open(archive_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    archive_store
+                        .set_session_archived(id, true)
+                        .map_err(|e| e.to_string())
+                };
+                match run_session_browse_tui(
+                    rows.clone(),
+                    project_by_session.clone(),
+                    Some(&reload),
+                    Some(&archive),
+                ) {
                     Ok(selected) => selected,
                     Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
                 }
@@ -7711,10 +7749,20 @@ fn browse_row_matches(
 /// the highlighted session's full title, id, source, project, cwd,
 /// last-active timestamp, and first-message preview; `Tab` cycles a
 /// per-source filter; `F2` toggles recent-first ↔ alphabetical sort.
-/// Returns the selected session id, or `None` when cancelled.
+///
+/// P224 interaction upgrades: `F1` opens a dismissible keybinding help
+/// overlay, `F5` reloads the session list from disk through `reload`
+/// (a live gateway may create sessions mid-browse), `F8` archives the
+/// highlighted session after an inline `y` confirmation (via
+/// `archive`, then auto-reloads), `Shift+Tab` cycles the source filter
+/// backwards, and transient footer notices report reload/archive
+/// outcomes until the next keypress. Returns the selected session id,
+/// or `None` when cancelled.
 fn run_session_browse_tui(
-    rows: &[ulnclaw::session::sqlite::BrowseRow],
-    projects: &std::collections::HashMap<String, String>,
+    mut rows: Vec<ulnclaw::session::sqlite::BrowseRow>,
+    mut projects: std::collections::HashMap<String, String>,
+    reload: Option<&dyn Fn() -> Result<(Vec<ulnclaw::session::sqlite::BrowseRow>, std::collections::HashMap<String, String>), String>>,
+    archive: Option<&dyn Fn(&str) -> Result<(), String>>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -7751,21 +7799,29 @@ fn run_session_browse_tui(
     terminal::enable_raw_mode().map_err(|e| e.to_string())?;
     let _guard = TuiGuard;
 
-    // Tab cycles "all sources" plus each distinct source present in the
-    // loaded rows.
-    let sources: Vec<String> = rows
-        .iter()
-        .map(|r| r.source.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
     let mut source_idx: usize = 0; // 0 = all sources
     let mut sort_alpha = false;
     let mut cursor_idx: usize = 0;
     let mut scroll_offset: usize = 0;
     let mut filter = String::new();
+    // P224 interaction state: help overlay, archive confirmation, and a
+    // transient footer notice (cleared by the next keypress).
+    let mut show_help = false;
+    let mut confirm_archive = false;
+    let mut notice: Option<String> = None;
 
     loop {
+        // Tab cycles "all sources" plus each distinct source present in
+        // the loaded rows (recomputed after every F5 reload).
+        let sources: Vec<String> = rows
+            .iter()
+            .map(|r| r.source.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if source_idx > sources.len() {
+            source_idx = 0;
+        }
         let source_filter: Option<&str> = if source_idx == 0 {
             None
         } else {
@@ -7792,6 +7848,17 @@ fn run_session_browse_tui(
         if cursor_idx >= filtered.len() {
             cursor_idx = filtered.len().saturating_sub(1);
         }
+        // Owned copy for modal actions (archive confirm) so the key
+        // handler can mutate `rows` without fighting the borrow of
+        // `filtered`.
+        let highlighted_id: Option<String> =
+            filtered.get(cursor_idx).map(|row| row.id.clone());
+        let highlighted_label: Option<String> = filtered.get(cursor_idx).map(|row| {
+            row.title
+                .clone()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| row.id.clone())
+        });
 
         let (cols, rows_h) = terminal::size().map_err(|e| e.to_string())?;
         let (cols, rows_h) = (cols as usize, rows_h as usize);
@@ -7819,7 +7886,7 @@ fn run_session_browse_tui(
             queue!(
                 out,
                 SetForegroundColor(Color::Yellow),
-                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F2 sort  Esc quit"),
+                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F2 sort  F1 help  F5 reload  F8 archive  Esc quit"),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -7944,10 +8011,55 @@ fn run_session_browse_tui(
             }
         }
 
-        // Footer on the bottom row: cursor position + filtered-from count
-        // (hermes dim footer).
+        // Help overlay (P224, F1): keybinding table drawn over the list
+        // area; any key dismisses it.
+        if show_help {
+            for (offset, (key, desc)) in
+                ulnclaw::tui_text::browse_help_entries().iter().enumerate()
+            {
+                let y = 2 + offset;
+                if y + 1 >= rows_h {
+                    break;
+                }
+                queue!(
+                    out,
+                    cursor::MoveTo(2, y as u16),
+                    SetForegroundColor(Color::Green),
+                    Print(format!("{:<12}", key)),
+                    ResetColor,
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(desc),
+                    ResetColor
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+
+        // Footer on the bottom row: archive confirmation > transient
+        // notice > cursor position + filtered-from count (hermes dim
+        // footer).
         queue!(out, cursor::MoveTo(0, rows_h.saturating_sub(1) as u16))
             .map_err(|e| e.to_string())?;
+        if confirm_archive {
+            let label = highlighted_label.clone().unwrap_or_default();
+            queue!(
+                out,
+                SetForegroundColor(Color::Yellow),
+                Print(ulnclaw::tui_text::browse_archive_confirm_text(&label)),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
+        } else if let Some(text) = notice.clone() {
+            queue!(
+                out,
+                SetForegroundColor(Color::Green),
+                Print(format!("  {text}")),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
+        } else {
         let footer = if filtered.is_empty() {
             format!("  0/{} sessions", rows.len())
         } else {
@@ -7965,6 +8077,7 @@ fn run_session_browse_tui(
         )
         .map_err(|e| e.to_string())?;
         out.flush().map_err(|e| e.to_string())?;
+        }
 
         match event::read().map_err(|e| e.to_string())? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -7972,6 +8085,45 @@ fn run_session_browse_tui(
                     && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
                 {
                     return Ok(None);
+                }
+                // Any keypress clears the transient notice (P224).
+                notice = None;
+                // Help overlay is modal: any key dismisses it (P224).
+                if show_help {
+                    show_help = false;
+                    continue;
+                }
+                // Archive confirmation is modal (P224): y archives, any
+                // other key cancels.
+                if confirm_archive {
+                    confirm_archive = false;
+                    if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                        if let Some(id) = highlighted_id.clone() {
+                            match archive {
+                                Some(archive_fn) => match archive_fn(&id) {
+                                    Ok(()) => {
+                                        rows.retain(|r| r.id != id);
+                                        if let Some(reload_fn) = reload {
+                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn() {
+                                                rows = fresh_rows;
+                                                projects = fresh_projects;
+                                            }
+                                        }
+                                        cursor_idx = 0;
+                                        scroll_offset = 0;
+                                        notice = Some(format!("Archived {id}."));
+                                    }
+                                    Err(e) => {
+                                        notice = Some(format!("Archive failed: {e}"));
+                                    }
+                                },
+                                None => {
+                                    notice = Some("Archiving is unavailable here.".to_string());
+                                }
+                            }
+                        }
+                    }
+                    continue;
                 }
                 match key.code {
                     KeyCode::Esc => {
@@ -8030,11 +8182,56 @@ fn run_session_browse_tui(
                             scroll_offset = 0;
                         }
                     }
+                    KeyCode::BackTab => {
+                        // P224: Shift+Tab cycles the source filter backwards.
+                        if !sources.is_empty() {
+                            source_idx = if source_idx == 0 {
+                                sources.len()
+                            } else {
+                                source_idx - 1
+                            };
+                            cursor_idx = 0;
+                            scroll_offset = 0;
+                        }
+                    }
                     KeyCode::F(2) => {
                         // Upgrade: toggle recent-first ↔ alphabetical.
                         sort_alpha = !sort_alpha;
                         cursor_idx = 0;
                         scroll_offset = 0;
+                    }
+                    KeyCode::F(1) => {
+                        // P224: keybinding help overlay.
+                        show_help = true;
+                    }
+                    KeyCode::F(5) => {
+                        // P224: reload the session list from disk — a live
+                        // gateway may create sessions mid-browse.
+                        match reload {
+                            Some(reload_fn) => match reload_fn() {
+                                Ok((fresh_rows, fresh_projects)) => {
+                                    let count = fresh_rows.len();
+                                    rows = fresh_rows;
+                                    projects = fresh_projects;
+                                    cursor_idx = 0;
+                                    scroll_offset = 0;
+                                    notice = Some(format!("Reloaded — {count} session(s)."));
+                                }
+                                Err(e) => {
+                                    notice = Some(format!("Reload failed: {e}"));
+                                }
+                            },
+                            None => {
+                                notice = Some("Reload is unavailable here.".to_string());
+                            }
+                        }
+                    }
+                    KeyCode::F(8) => {
+                        // P224: archive the highlighted session after an
+                        // inline confirmation.
+                        if highlighted_id.is_some() && archive.is_some() {
+                            confirm_archive = true;
+                        }
                     }
                     KeyCode::Backspace => {
                         if filter.pop().is_some() {

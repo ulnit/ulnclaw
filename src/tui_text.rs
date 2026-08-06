@@ -133,3 +133,64 @@ mod tests {
         assert_eq!(c, d); // blank titles count as untitled
     }
 }
+
+/// Keybinding table for the raw-mode session browser help overlay
+/// (P224 interaction upgrade). `(key, description)` pairs in display
+/// order; the TUI renders them as a dismissible overlay.
+pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("\u{2191}/\u{2193}", "navigate (wraps at the list edges)"),
+        ("PgUp/PgDn", "scroll a page at a time"),
+        ("Home/End", "jump to the first / last session"),
+        ("Enter", "select and resume the highlighted session"),
+        ("Type", "live filter over title, preview, id, source, project"),
+        ("Backspace", "delete one filter character"),
+        ("Esc", "clear the filter; a second press quits"),
+        ("q", "quit while no filter is active"),
+        ("Tab", "cycle the source filter (all \u{2192} cli \u{2192} cron \u{2192} \u{2026})"),
+        ("Shift+Tab", "cycle the source filter backwards"),
+        ("F2", "toggle recent-first \u{2194} alphabetical sort"),
+        ("F5", "reload the session list from disk"),
+        ("F8", "archive the highlighted session (y confirms)"),
+        ("F1", "toggle this help overlay"),
+        ("Ctrl+C", "quit"),
+    ]
+}
+
+/// Footer confirmation prompt for archiving the highlighted session from
+/// the browser (P224). Keeps the label short so it fits narrow terminals.
+pub fn browse_archive_confirm_text(label: &str) -> String {
+    let mut label: String = label.chars().take(40).collect();
+    if label.chars().count() == 40 {
+        label.push('\u{2026}');
+    }
+    format!("Archive \u{201C}{label}\u{201D}?  y = archive \u{00B7} any other key = cancel")
+}
+
+#[cfg(test)]
+mod browse_tui_upgrade_tests {
+    #[test]
+    fn browse_help_entries_cover_core_keys() {
+        let entries = super::browse_help_entries();
+        let keys: Vec<&str> = entries.iter().map(|(k, _)| *k).collect();
+        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F5", "F8", "Shift+Tab"] {
+            assert!(keys.contains(&expected), "missing help row for {expected}");
+        }
+        // Every entry has a non-empty description.
+        assert!(entries.iter().all(|(_, d)| !d.is_empty()));
+    }
+
+    #[test]
+    fn browse_archive_confirm_text_truncates_long_labels() {
+        let text = super::browse_archive_confirm_text("Fix the build");
+        assert!(text.contains("Fix the build"));
+        assert!(text.contains("y = archive"));
+
+        let long = "x".repeat(80);
+        let text = super::browse_archive_confirm_text(&long);
+        // 40 kept chars + ellipsis, never the full 80.
+        assert!(text.contains(&"x".repeat(40)));
+        assert!(!text.contains(&"x".repeat(41)));
+        assert!(text.ends_with("cancel"));
+    }
+}
