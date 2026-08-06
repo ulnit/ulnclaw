@@ -226,6 +226,12 @@ enum Commands {
         #[command(subcommand)]
         action: Option<ProxyAction>,
     },
+    /// Sandbox egress via managed iron-proxy: install/setup/start/stop/
+    /// restart/reload/status/disable/config (hermes `hermes egress`)
+    Egress {
+        #[command(subcommand)]
+        action: EgressAction,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -1586,6 +1592,56 @@ enum ProxyAction {
     Providers,
 }
 
+/// `ulnclaw egress` subcommands (hermes `hermes_cli/proxy_cli.py`).
+#[derive(Subcommand)]
+enum EgressAction {
+    /// Download the pinned iron-proxy binary
+    Install {
+        /// Re-download even if a managed copy already exists
+        #[arg(long)]
+        force: bool,
+    },
+    /// Wizard: install + CA + mint tokens + write config
+    Setup {
+        /// Override the tunnel port (default 9090)
+        #[arg(long)]
+        tunnel_port: Option<u16>,
+        /// Discover provider keys from secrets.bitwarden instead of env
+        #[arg(long)]
+        from_bitwarden: bool,
+        /// Explicitly switch credential_source back to env on re-setup
+        #[arg(long)]
+        no_bitwarden: bool,
+        /// Mint fresh proxy tokens for every provider
+        #[arg(long)]
+        rotate_tokens: bool,
+        /// Restart a running daemon automatically after writing config
+        #[arg(long, conflicts_with = "no_restart")]
+        restart: bool,
+        /// Do not restart a running daemon after setup
+        #[arg(long)]
+        no_restart: bool,
+    },
+    /// Start the managed iron-proxy
+    Start,
+    /// Stop the managed iron-proxy
+    Stop,
+    /// Restart the managed iron-proxy
+    Restart,
+    /// Hot-reload the running daemon's ruleset from proxy.yaml
+    Reload,
+    /// Show proxy state and mappings
+    Status {
+        /// Print the proxy tokens (default: redacted prefix only)
+        #[arg(long)]
+        show_tokens: bool,
+    },
+    /// Turn off the proxy integration
+    Disable,
+    /// Print the generated proxy.yaml path
+    Config,
+}
+
 #[derive(Subcommand)]
 enum PairingAction {
     /// Show pending pairing requests and approved users
@@ -2163,6 +2219,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Auth { action } => auth_cmd(&config, action.unwrap_or(AuthAction::Status)).await,
         Commands::Sync { action } => sync_cmd(&config, action.unwrap_or(SyncAction::Status)).await,
         Commands::Proxy { action } => proxy_cmd(&config, action).await,
+        Commands::Egress { action } => egress_cmd(action).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
         Commands::Weixin { action } => weixin_cmd(action).await,
@@ -3310,6 +3367,17 @@ async fn handle_slash(
                 .map_err(|e| e.to_string())?;
             print!("{output}");
         }
+        "/egress" => {
+            // Docker egress proxy status (hermes `/egress` →
+            // proxy_cli.format_status_text).
+            let show_tokens = rest.trim() == "--show-tokens";
+            let text = tokio::task::spawn_blocking(move || {
+                ulnclaw::egress_cmd::format_status_text(show_tokens)
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            println!("{text}");
+        }
         "/hatch" => {
             // Generate a brand-new pet from a description (hermes `/hatch`).
             // Runs the full image-model pipeline, so keep the blocking calls
@@ -3370,7 +3438,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /kanban [list|show|create|done|block|unblock|comment|boards]   coordination board (hermes /kanban)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /kanban [list|show|create|done|block|unblock|comment|boards]   coordination board (hermes /kanban)\n  /egress [--show-tokens]   Docker egress proxy status (hermes /egress)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /quit           exit"
             );
         }
         "/history" => {
@@ -3992,6 +4060,45 @@ async fn proxy_cmd(config: &UlncLawConfig, action: Option<ProxyAction>) -> Resul
         }
     }
     Ok(())
+}
+
+/// `ulnclaw egress` — managed iron-proxy sandbox egress (hermes
+/// `hermes egress`). Handlers are synchronous (subprocess + fs), so
+/// they run on the blocking pool.
+async fn egress_cmd(action: EgressAction) -> Result<(), String> {
+    use ulnclaw::egress_cmd;
+    tokio::task::spawn_blocking(move || match action {
+        EgressAction::Install { force } => egress_cmd::handle_install(force),
+        EgressAction::Setup {
+            tunnel_port,
+            from_bitwarden,
+            no_bitwarden,
+            rotate_tokens,
+            restart,
+            no_restart,
+        } => egress_cmd::handle_setup(egress_cmd::SetupOptions {
+            tunnel_port,
+            from_bitwarden,
+            no_bitwarden,
+            rotate_tokens,
+            restart: if restart {
+                Some(true)
+            } else if no_restart {
+                Some(false)
+            } else {
+                None
+            },
+        }),
+        EgressAction::Start => egress_cmd::handle_start(),
+        EgressAction::Stop => egress_cmd::handle_stop(),
+        EgressAction::Restart => egress_cmd::handle_restart(),
+        EgressAction::Reload => egress_cmd::handle_reload(),
+        EgressAction::Status { show_tokens } => egress_cmd::handle_status(show_tokens),
+        EgressAction::Disable => egress_cmd::handle_disable(),
+        EgressAction::Config => egress_cmd::handle_config(),
+    })
+    .await
+    .map_err(|e| format!("egress task join: {e}"))?
 }
 
 async fn sync_cmd(config: &UlncLawConfig, action: SyncAction) -> Result<(), String> {

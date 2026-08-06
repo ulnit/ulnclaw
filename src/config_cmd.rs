@@ -41,7 +41,7 @@ pub fn env_path() -> PathBuf {
     crate::config::ulnclaw_home().join(".env")
 }
 
-fn load_toml(path: &Path) -> Result<Value, String> {
+pub(crate) fn load_toml(path: &Path) -> Result<Value, String> {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     if text.trim().is_empty() {
         return Ok(Value::Table(toml::map::Map::new()));
@@ -50,7 +50,7 @@ fn load_toml(path: &Path) -> Result<Value, String> {
         .map_err(|e| format!("✗ Cannot parse {}: {e}", path.display()))
 }
 
-fn save_toml(path: &Path, value: &Value) -> Result<(), String> {
+pub(crate) fn save_toml(path: &Path, value: &Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
