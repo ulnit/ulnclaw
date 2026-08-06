@@ -25,6 +25,12 @@ pub const STATUSES: &[&str] = &[
 /// Valid task workspace kinds (hermes `VALID_WORKSPACE_KINDS`).
 pub const VALID_WORKSPACE_KINDS: &[&str] = &["scratch", "worktree", "dir"];
 
+/// Initial statuses `create --initial-status` accepts (hermes
+/// `VALID_INITIAL_STATUSES`): `running` keeps the default flow (the
+/// card is a human/terminal lane), `blocked` parks it for human-ops
+/// review until unblocked.
+pub const VALID_INITIAL_STATUSES: &[&str] = &["running", "blocked"];
+
 /// Typed block reasons (hermes `VALID_BLOCK_KINDS`).
 pub const VALID_BLOCK_KINDS: &[&str] = &[
     "dependency",
@@ -1875,6 +1881,10 @@ pub struct NewTask {
     /// Worktree branch name (hermes `create --branch`; only valid
     /// with the worktree kind).
     pub branch_name: Option<String>,
+    /// Park the card directly in a column at create time (hermes
+    /// `create --initial-status`): `blocked` waits for human-ops
+    /// review; `running` keeps the default flow.
+    pub initial_status: Option<String>,
     /// Goal-loop mode (hermes `create --goal`): the spawned worker
     /// keeps working until the auxiliary judge agrees the card is done.
     pub goal_mode: bool,
@@ -2596,8 +2606,33 @@ impl KanbanStore {
                 .filter(|path| !path.is_empty())
                 .map(str::to_string);
         }
+        if let Some(status) = task
+            .initial_status
+            .as_deref()
+            .map(str::trim)
+            .filter(|status| !status.is_empty())
+        {
+            if !VALID_INITIAL_STATUSES.contains(&status) {
+                return Err(AgentError::session(format!(
+                    "kanban: initial_status must be one of running, blocked (got '{status}')"
+                )));
+            }
+        }
         let now = Self::now();
-        let initial_status = if task.triage { "triage" } else { "todo" };
+        // Hermes order: an explicit blocked park wins over triage.
+        let initial_status = if task
+            .initial_status
+            .as_deref()
+            .map(str::trim)
+            .filter(|status| !status.is_empty())
+            == Some("blocked")
+        {
+            "blocked"
+        } else if task.triage {
+            "triage"
+        } else {
+            "todo"
+        };
         let skills_json = task
             .skills
             .as_ref()
@@ -7611,6 +7646,66 @@ mod tests {
             })
             .unwrap_err();
         assert!(err.to_string().contains("goal_max_turns"));
+    }
+
+    #[test]
+    fn create_initial_status_blocked_parks_card() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "needs human review".into(),
+                created_by: "tester".into(),
+                initial_status: Some("blocked".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.status, "blocked");
+        // Unblock moves it to ready like any blocked card.
+        let unblocked = store.unblock_task(&task.id).unwrap();
+        assert_eq!(unblocked.status, "ready");
+    }
+
+    #[test]
+    fn create_initial_status_running_keeps_default_flow() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "terminal lane".into(),
+                created_by: "tester".into(),
+                initial_status: Some("running".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.status, "todo");
+    }
+
+    #[test]
+    fn create_initial_status_blocked_beats_triage() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "parked".into(),
+                created_by: "tester".into(),
+                triage: true,
+                initial_status: Some("blocked".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.status, "blocked");
+    }
+
+    #[test]
+    fn create_initial_status_invalid_rejected() {
+        let (_dir, store) = temp_store();
+        let err = store
+            .create_task(&NewTask {
+                title: "bogus".into(),
+                created_by: "tester".into(),
+                initial_status: Some("done".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("initial_status"));
     }
 
     #[test]

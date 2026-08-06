@@ -182,6 +182,10 @@ pub struct CreateTaskBody {
     /// (hermes max_retries; must be >= 1).
     #[serde(default)]
     pub max_retries: Option<i64>,
+    /// Park the card directly in a column (hermes create
+    /// --initial-status): `running` (default flow) | `blocked`.
+    #[serde(default)]
+    pub initial_status: Option<String>,
     /// Goal-loop worker (hermes create --goal).
     #[serde(default)]
     pub goal_mode: Option<bool>,
@@ -222,6 +226,19 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         if turns < 1 {
             return super::bad_request(
                 &format!("goal_max_turns must be >= 1 (got {turns})"),
+                None,
+            );
+        }
+    }
+    if let Some(status) = body
+        .initial_status
+        .as_deref()
+        .map(str::trim)
+        .filter(|status| !status.is_empty())
+    {
+        if !crate::kanban::VALID_INITIAL_STATUSES.contains(&status) {
+            return super::bad_request(
+                &format!("initial_status must be one of running, blocked (got '{status}')"),
                 None,
             );
         }
@@ -272,6 +289,7 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         idempotency_key: body.idempotency_key.filter(|k| !k.trim().is_empty()),
         triage: body.triage.unwrap_or(false),
         max_retries: body.max_retries,
+        initial_status: body.initial_status,
         goal_mode: body.goal_mode.unwrap_or(false),
         goal_max_turns: body.goal_max_turns,
         workspace_kind: Some(workspace_kind),

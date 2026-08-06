@@ -555,6 +555,11 @@ enum KanbanAction {
         /// create --branch)
         #[arg(long)]
         branch: Option<String>,
+        /// Park the card directly in a column: running (default flow)
+        /// or blocked for human-ops review (hermes create
+        /// --initial-status)
+        #[arg(long)]
+        initial_status: Option<String>,
         /// Goal-loop mode: the spawned worker keeps working in its
         /// session until the auxiliary judge agrees the card is done
         /// (hermes create --goal)
@@ -4618,6 +4623,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             max_retries,
             workspace,
             branch,
+            initial_status,
             goal,
             goal_max_turns,
             json,
@@ -4685,6 +4691,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     idempotency_key,
                     triage,
                     max_retries,
+                    initial_status,
                     goal_mode: goal,
                     goal_max_turns,
                     workspace_kind: Some(workspace_kind),
