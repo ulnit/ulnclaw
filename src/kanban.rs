@@ -187,6 +187,10 @@ pub struct Task {
     pub completed_at: Option<i64>,
     pub tenant: Option<String>,
     pub model: Option<String>,
+    /// Provider the per-task model override belongs to (hermes
+    /// `provider_override`); NULL = the worker profile's provider.
+    /// Only honored alongside `model`.
+    pub provider: Option<String>,
     pub result: Option<String>,
     pub claim_lock: Option<String>,
     pub claim_expires: Option<i64>,
@@ -514,6 +518,29 @@ pub fn default_spawn(home: &Path, task: &Task) -> std::result::Result<Option<i64
     spawn_worker(home, task, None)
 }
 
+/// Extra CLI flags a spawned worker carries for `task` (hermes
+/// `_default_spawn` model/provider pinning): `--profile <assignee>`
+/// plus `--model` / `--provider` when the card pins an override. The
+/// provider flag only rides along with a model (hermes contract).
+pub fn worker_spawn_flags(task: &Task) -> Vec<String> {
+    let mut flags = Vec::new();
+    if let Some(assignee) = task.assignee.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+        flags.push("--profile".to_string());
+        flags.push(assignee.to_string());
+    }
+    if let Some(model) = task.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        flags.push("--model".to_string());
+        flags.push(model.to_string());
+        if let Some(provider) =
+            task.provider.as_deref().map(str::trim).filter(|p| !p.is_empty())
+        {
+            flags.push("--provider".to_string());
+            flags.push(provider.to_string());
+        }
+    }
+    flags
+}
+
 /// Like [`default_spawn`] but the worker runs in `workdir` (an isolated
 /// worktree when the dispatcher prepared one).
 pub fn spawn_worker(
@@ -547,8 +574,8 @@ pub fn spawn_worker(
         .map_err(|e| format!("clone log handle: {e}"))?;
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("run").arg(worker_prompt(home, task));
-    if let Some(assignee) = task.assignee.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
-        cmd.arg("--profile").arg(assignee);
+    for flag in worker_spawn_flags(task) {
+        cmd.arg(flag);
     }
     cmd.env("ULNCLAW_KANBAN_TASK", &task.id);
     // Stale-run guard (hermes HERMES_KANBAN_RUN_ID): completions from
@@ -1869,6 +1896,9 @@ pub struct NewTask {
     pub skills: Option<Vec<String>>,
     /// Per-attempt runtime cap (seconds) enforced by the dispatcher.
     pub max_runtime_seconds: Option<i64>,
+    /// Provider the per-task model override belongs to (hermes
+    /// `provider_override`); requires `model`.
+    pub provider: Option<String>,
     /// Dedup key: creating with the key of an existing non-archived task
     /// returns that task instead of a duplicate (hermes idempotency_key).
     pub idempotency_key: Option<String>,
@@ -1961,7 +1991,8 @@ impl KanbanStore {
                 goal_mode       INTEGER NOT NULL DEFAULT 0,
                 goal_max_turns  INTEGER,
                 workflow_template_id TEXT,
-                current_step_key TEXT
+                current_step_key TEXT,
+                provider        TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_board_status ON tasks (board, status);
             CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks (session_id);
@@ -2149,6 +2180,12 @@ impl KanbanStore {
         if !columns.contains("current_step_key") {
             conn.execute_batch("ALTER TABLE tasks ADD COLUMN current_step_key TEXT;")
                 .map_err(db_error("migrate current_step_key"))?;
+        }
+        // Pre-P159 stores lack the provider-override column (hermes
+        // provider_override).
+        if !columns.contains("provider") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN provider TEXT;")
+                .map_err(db_error("migrate provider"))?;
         }
         let store = Self {
             conn: Mutex::new(conn),
@@ -2597,6 +2634,11 @@ impl KanbanStore {
             .map(str::trim)
             .filter(|branch| !branch.is_empty())
             .map(str::to_string);
+        if task.provider.is_some() && task.model.is_none() {
+            return Err(AgentError::session(
+                "kanban: a provider override requires a model override (--model)",
+            ));
+        }
         if let Some(turns) = task.goal_max_turns {
             if turns < 1 {
                 return Err(AgentError::session(
@@ -2666,11 +2708,11 @@ impl KanbanStore {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
-             created_by, created_at, tenant, model, skills, max_runtime_seconds, \
+             created_by, created_at, tenant, model, provider, skills, max_runtime_seconds, \
              idempotency_key, max_retries, workspace_kind, workspace_path, branch_name, \
              session_id, goal_mode, goal_max_turns, workflow_template_id, current_step_key) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             params![
                 id,
                 board,
@@ -2683,6 +2725,7 @@ impl KanbanStore {
                 now,
                 task.tenant,
                 task.model,
+                task.provider,
                 skills_json,
                 task.max_runtime_seconds,
                 idempotency_key,
@@ -3126,6 +3169,7 @@ impl KanbanStore {
             completed_at: row.get("completed_at")?,
             tenant: row.get("tenant")?,
             model: row.get("model")?,
+            provider: row.get("provider")?,
             result: row.get("result")?,
             claim_lock: row.get("claim_lock")?,
             claim_expires: row.get("claim_expires")?,
@@ -3154,7 +3198,7 @@ impl KanbanStore {
     }
 
     const TASK_COLUMNS: &'static str = "id, board, title, body, assignee, status, priority, \
-        created_by, created_at, started_at, completed_at, tenant, model, result, \
+        created_by, created_at, started_at, completed_at, tenant, model, provider, result, \
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
         last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, \
@@ -4329,14 +4373,28 @@ impl KanbanStore {
         self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
     }
 
-    /// Per-task model override (hermes `kanban set-model`).
-    pub fn set_model(&self, id: &str, model: Option<&str>) -> Result<Task> {
+    /// Per-task model/provider override (hermes `kanban set-model
+    /// [--provider]`): takes effect on the next dispatch. Clearing the
+    /// model clears the provider with it; a provider without a model
+    /// is rejected (hermes contract).
+    pub fn set_model(
+        &self,
+        id: &str,
+        model: Option<&str>,
+        provider: Option<&str>,
+    ) -> Result<Task> {
         let model = model.map(str::trim).filter(|m| !m.is_empty());
+        let provider = provider.map(str::trim).filter(|p| !p.is_empty());
+        if provider.is_some() && model.is_none() {
+            return Err(AgentError::session(
+                "kanban: a provider override requires a model override",
+            ));
+        }
         let conn = self.conn.lock().unwrap();
         let updated = conn
             .execute(
-                "UPDATE tasks SET model = ?2 WHERE id = ?1 AND status NOT IN ('done', 'archived')",
-                params![id, model],
+                "UPDATE tasks SET model = ?2, provider = ?3 WHERE id = ?1 AND status NOT IN ('done', 'archived')",
+                params![id, model, provider],
             )
             .map_err(db_error("set-model"))?;
         drop(conn);
@@ -4348,7 +4406,7 @@ impl KanbanStore {
         self.append_event(
             id,
             "model_set",
-            serde_json::json!({ "model": model }),
+            serde_json::json!({ "model": model, "provider": provider }),
         )?;
         self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
     }
@@ -8266,6 +8324,7 @@ mod tests {
             completed_at: None,
             tenant: None,
             model: None,
+            provider: None,
             result: None,
             claim_lock: None,
             claim_expires: None,
@@ -8504,6 +8563,80 @@ mod tests {
     }
 
     #[test]
+    fn set_model_pins_provider_and_clears_together() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "pinned worker");
+        let pinned = store
+            .set_model(&task.id, Some("gpt-5.2"), Some("openrouter"))
+            .unwrap();
+        assert_eq!(pinned.model.as_deref(), Some("gpt-5.2"));
+        assert_eq!(pinned.provider.as_deref(), Some("openrouter"));
+
+        // Clearing the model clears the provider with it.
+        let cleared = store.set_model(&task.id, None, None).unwrap();
+        assert!(cleared.model.is_none());
+        assert!(cleared.provider.is_none());
+
+        // A provider without a model is rejected (hermes contract).
+        let err = store
+            .set_model(&task.id, None, Some("openrouter"))
+            .unwrap_err();
+        assert!(err.to_string().contains("requires a model"));
+    }
+
+    #[test]
+    fn create_provider_requires_model() {
+        let (_dir, store) = temp_store();
+        let err = store
+            .create_task(&NewTask {
+                title: "orphan provider".into(),
+                created_by: "tester".into(),
+                provider: Some("openrouter".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("requires a model"));
+    }
+
+    #[test]
+    fn worker_spawn_flags_pin_model_and_provider() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "pinned".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                model: Some("gpt-5.2".into()),
+                provider: Some("openrouter".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            worker_spawn_flags(&task),
+            vec![
+                "--profile", "alice",
+                "--model", "gpt-5.2",
+                "--provider", "openrouter",
+            ]
+        );
+
+        // Model without provider: no provider flag.
+        let model_only = store
+            .create_task(&NewTask {
+                title: "model only".into(),
+                created_by: "tester".into(),
+                model: Some("gpt-5.2".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(worker_spawn_flags(&model_only), vec!["--model", "gpt-5.2"]);
+
+        // Plain task: no flags at all.
+        let plain = make_task(&store, "plain");
+        assert!(worker_spawn_flags(&plain).is_empty());
+    }
+
+    #[test]
     fn edit_title_and_body() {
         let (_dir, store) = temp_store();
         let task = make_task(&store, "old title");
@@ -8522,9 +8655,9 @@ mod tests {
     fn set_model_override_and_clear() {
         let (_dir, store) = temp_store();
         let task = make_task(&store, "model task");
-        let pinned = store.set_model(&task.id, Some("gpt-5.2")).unwrap();
+        let pinned = store.set_model(&task.id, Some("gpt-5.2"), None).unwrap();
         assert_eq!(pinned.model.as_deref(), Some("gpt-5.2"));
-        let cleared = store.set_model(&task.id, None).unwrap();
+        let cleared = store.set_model(&task.id, None, None).unwrap();
         assert!(cleared.model.is_none());
     }
 

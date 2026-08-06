@@ -169,6 +169,13 @@ pub struct CreateTaskBody {
     pub parents: Option<Vec<String>>,
     #[serde(default)]
     pub priority: Option<i64>,
+    /// Per-task model override (hermes model_override).
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Provider the model belongs to (hermes provider_override);
+    /// requires `model`.
+    #[serde(default)]
+    pub provider: Option<String>,
     /// Skills force-loaded into the dispatcher worker prompt.
     #[serde(default)]
     pub skills: Option<Vec<String>>,
@@ -239,6 +246,11 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
             );
         }
     }
+    if body.provider.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
+        && body.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none()
+    {
+        return super::bad_request("provider requires model", None);
+    }
     if let Some(status) = body
         .initial_status
         .as_deref()
@@ -291,7 +303,8 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         assignee: body.assignee.filter(|a| !a.trim().is_empty()),
         priority: body.priority.unwrap_or(0),
         tenant: None,
-        model: None,
+        model: body.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        provider: body.provider.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
         created_by: "gateway".to_string(),
         skills: body.skills.filter(|s| !s.is_empty()),
         max_runtime_seconds: body.max_runtime_seconds,

@@ -114,7 +114,7 @@ performance and a single static binary.
 | Memory system | ✅ | MEMORY.md/USER.md with prompt injection |
 | Cron scheduler | ✅ | job store + schedule parsing + poll loop (`cron::run_scheduler`) |
 | MCP client (`mcp_tool.py`) | ✅ core | stdio JSON-RPC: initialize/tools/list/tools/call; `[[mcp.servers]]` config; tools registered as `mcp__<server>__<tool>`; OSV malware preflight for npx/uvx/pipx launches (`osv_check.py` port: MAL-* advisories block, fail-open, 1h verdict cache, `OSV_ENDPOINT`/`OSV_CHECK_CACHE_TTL` overrides) |
-| CLI (`hermes_cli/`) | ✅ core | chat REPL with slash commands (incl. `/rollback [N|hash] [file]`, `/rollback diff <N>`, `/diff` checkpoint commands, `/recap`, `/goal` + `/subgoal` standing-goal loop, `/kanban` inline board ops, `/pet` + `/hatch` petdex surfaces), one-shot `run`, sessions/tools/skills/cron/checkpoints subcommands (incl. `sessions export --format md\|html` — SHA256-verified Markdown or standalone HTML + manifest —, `sessions recap`, `sessions recover`, `sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`, `kanban init`/`boards list|create|rm|switch|show|rename|set-workdir`/`create`/`list [--workflow-template-id T]`/`show`/`ready`/`assign`/`claim`/`heartbeat`/`done`/`block`/`unblock`/`archive`/`comment`/`link`/`unlink`/`dispatch [--max-spawn N] [--dry-run]`/`gc`/`swarm <goal> --worker ASSIGNEE:TITLE[:skill,skill] [--worker ...] --verifier ASSIGNEE --synthesizer ASSIGNEE [--idempotency-key K] [--json]`/`specify [id | --all]`/`decompose [id | --all]`/`diagnostics [id] [--min-severity S] [--json]`/`schedule`/`promote [--force]`/`reclaim`/`reassign [--reclaim]`/`edit`/`set-model`/`attach`|`attachments`|`attach-rm`/`tail [--follow]`/`stats [--json]`/`watch [--assignee P] [--kinds K] [--interval S]` (kanban task engine: boards, TTL claim locks + stale takeover, hermes status lifecycle with icons, comments + event trail, `kanban_task_*` plugin hooks), `secrets status/sync/bitwarden setup|install|status|disable/onepassword setup|status|set|remove|disable`, `computer-use status/doctor/install`, `plugins list/enable/disable/accept-hooks`, `hooks list/test/revoke/doctor`, `pairing list/approve/revoke/clear-pending`, `weixin login` (WeChat iLink QR-scan account setup), `auth login/status/refresh/logout`, `sync status/pull/push/now/enable/disable/device`, `uninstall --full/--dry-run/--yes` (code checkout + shell PATH entries + wrapper symlinks + optional home wipe; hermes `uninstall.py` port — Windows registry/env steps not ported)), `moa run/list/delete`, `models providers/list/info/refresh` (models.dev catalog), `skills blueprints/schedule/unschedule`, `diff`, `init` |
+| CLI (`hermes_cli/`) | ✅ core | chat REPL with slash commands (incl. `/rollback [N|hash] [file]`, `/rollback diff <N>`, `/diff` checkpoint commands, `/recap`, `/goal` + `/subgoal` standing-goal loop, `/kanban` inline board ops, `/pet` + `/hatch` petdex surfaces), one-shot `run`, sessions/tools/skills/cron/checkpoints subcommands (incl. `sessions export --format md\|html` — SHA256-verified Markdown or standalone HTML + manifest —, `sessions recap`, `sessions recover`, `sessions prune`/`archive`/`stats`/`delete`/`rename`/`optimize`/`repair`/`browse`/`retitle-skills`, `kanban init`/`boards list|create|rm|switch|show|rename|set-workdir`/`create`/`list [--workflow-template-id T]`/`show`/`ready`/`assign`/`claim`/`heartbeat`/`done`/`block`/`unblock`/`archive`/`comment`/`link`/`unlink`/`dispatch [--max-spawn N] [--dry-run]`/`gc`/`swarm <goal> --worker ASSIGNEE:TITLE[:skill,skill] [--worker ...] --verifier ASSIGNEE --synthesizer ASSIGNEE [--idempotency-key K] [--json]`/`specify [id | --all]`/`decompose [id | --all]`/`diagnostics [id] [--min-severity S] [--json]`/`schedule`/`promote [--force]`/`reclaim`/`reassign [--reclaim]`/`edit`/`set-model [--provider P]`/`attach`|`attachments`|`attach-rm`/`tail [--follow]`/`stats [--json]`/`watch [--assignee P] [--kinds K] [--interval S]` (kanban task engine: boards, TTL claim locks + stale takeover, hermes status lifecycle with icons, comments + event trail, `kanban_task_*` plugin hooks), `secrets status/sync/bitwarden setup|install|status|disable/onepassword setup|status|set|remove|disable`, `computer-use status/doctor/install`, `plugins list/enable/disable/accept-hooks`, `hooks list/test/revoke/doctor`, `pairing list/approve/revoke/clear-pending`, `weixin login` (WeChat iLink QR-scan account setup), `auth login/status/refresh/logout`, `sync status/pull/push/now/enable/disable/device`, `uninstall --full/--dry-run/--yes` (code checkout + shell PATH entries + wrapper symlinks + optional home wipe; hermes `uninstall.py` port — Windows registry/env steps not ported)), `moa run/list/delete`, `models providers/list/info/refresh` (models.dev catalog), `skills blueprints/schedule/unschedule`, `diff`, `init` |
 | Git working diff (`working_diff.py`) | ✅ | `ulnclaw diff [--staged|--all] [--dir PATH] [paths...]` + REPL `/gitdiff [staged|all]`: working/staged/all modes, untracked files folded in via `git diff --no-index` (50-file cap), timeouts; the checkpoint-based REPL `/diff` remains separate |
 | Delegation | ✅ | SubAgentRunner trait, depth limit, child sessions |
 | Mixture of Agents (`moa_loop.py`, `moa_config.py`) | ✅ core | `[moa.presets.<name>]` reference fan-out + aggregator synthesis (`ulnclaw moa run/list/delete`, REPL `/moa <prompt>`); parallel references, loud/silent degraded policy, all-failed early return, joined-fallback on aggregator failure; the persistent `provider: moa` facade, traces, and privacy filter are not ported |
@@ -506,14 +506,20 @@ performance and a single static binary.
   cards at create time (gateway create API carries both fields) and
   query them back via `kanban list --workflow-template-id` (SQL-level
   filter; gateway list API takes the same query param). The template
-  engine itself lives outside the board in both projects. Remaining
-  deliberate kanban divergences: `create --project` (hermes' project
-  registry is not ported — boards fill the same role), per-task
-  `--model`/`--provider` worker overrides (the `model` column and
-  `kanban set-model` exist, but a provider override would need global
-  CLI plumbing), and dispatch-time `default_assignee` application
-  (ulnclaw spawns unassigned tasks on the default profile instead of
-  skipping them).
+  engine itself lives outside the board in both projects. P159 wired
+  per-task model/provider overrides to the workers (hermes
+  `model_override` / `provider_override`): a new `provider` task
+  column, `kanban create --provider` / gateway create body,
+  `kanban set-model [--provider P]` (provider clears together with
+  the model; provider-without-model is rejected — hermes contract),
+  global `-m/--model` + `--provider` CLI flags that win over config
+  and profile (the flags the spawned `ulnclaw run` worker carries),
+  and `dispatch_spawn` now passes `--model` / `--provider` from the
+  card. Remaining deliberate kanban divergences: `create --project`
+  (hermes' project registry is not ported — boards fill the same
+  role) and dispatch-time `default_assignee` application (ulnclaw
+  spawns unassigned tasks on the default profile instead of skipping
+  them).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

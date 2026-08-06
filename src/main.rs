@@ -34,6 +34,15 @@ struct Cli {
     /// Continue the most recent session (hermes --continue)
     #[arg(short = 'c', long, global = true)]
     continue_last: bool,
+    /// Model override for this invocation (hermes -m): wins over the
+    /// profile's configured model.
+    #[arg(short = 'm', long, global = true)]
+    model: Option<String>,
+    /// Provider override for this invocation (hermes --provider):
+    /// resolves the model against this backend instead of the
+    /// configured one.
+    #[arg(long, global = true)]
+    provider: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -529,6 +538,10 @@ enum KanbanAction {
         tenant: Option<String>,
         #[arg(long)]
         model: Option<String>,
+        /// Provider the pinned model belongs to; requires --model
+        /// (hermes create --provider)
+        #[arg(long)]
+        provider: Option<String>,
         /// Skill force-loaded into the dispatcher worker (repeatable)
         #[arg(long = "skill")]
         skills: Vec<String>,
@@ -793,8 +806,15 @@ enum KanbanAction {
         metadata: Option<String>,
     },
     /// Set a per-task model override; omit the model to clear it
-    /// (hermes `kanban set-model`)
-    SetModel { id: String, model: Option<String> },
+    /// (hermes `kanban set-model [--provider]`)
+    SetModel {
+        id: String,
+        model: Option<String>,
+        /// Provider the model belongs to; cleared together with the
+        /// model (hermes set-model --provider)
+        #[arg(long)]
+        provider: Option<String>,
+    },
     /// Attach a local file to a task (hermes `kanban attach`)
     Attach { id: String, path: PathBuf },
     /// List a task's attachments (hermes `kanban attachments`)
@@ -1558,6 +1578,15 @@ fn load_config(cli: &Cli) -> UlncLawConfig {
         .unwrap_or_default();
     if let Some(ref profile) = cli.profile {
         config = config.with_profile(profile);
+    }
+    // CLI -m / --provider win over config AND profile (hermes -m
+    // semantics): kanban workers pinned via task overrides ride these
+    // same flags.
+    if let Some(model) = cli.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        config.model.model = model.to_string();
+    }
+    if let Some(provider) = cli.provider.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        config.model.provider = provider.to_string();
     }
     // Resolve the active theme once per process (hermes init_skin_from_config).
     ulnclaw::skin::init_skin_from_config(&config);
@@ -4620,6 +4649,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             priority,
             tenant,
             model,
+            provider,
             skills,
             max_runtime,
             idempotency_key,
@@ -4649,6 +4679,9 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                         "kanban: --max-retries must be >= 1 (got {max_retries}); use 1 to trip on the first failure"
                     ));
                 }
+            }
+            if provider.is_some() && model.is_none() {
+                return Err("kanban: --provider requires --model".into());
             }
             if let Some(turns) = goal_max_turns {
                 if turns < 1 {
@@ -4689,6 +4722,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     priority,
                     tenant,
                     model,
+                    provider,
                     created_by: KanbanStore::claimer_id(),
                     skills: if skills.is_empty() { None } else { Some(skills) },
                     max_runtime_seconds,
@@ -5473,10 +5507,10 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 println!("{} edited — {}", task.id, task.title);
             }
         }
-        KanbanAction::SetModel { id, model } => {
+        KanbanAction::SetModel { id, model, provider } => {
             let resolved = resolve(&id)?;
             let task = store
-                .set_model(&resolved, model.as_deref())
+                .set_model(&resolved, model.as_deref(), provider.as_deref())
                 .map_err(|e| e.to_string())?;
             match &task.model {
                 Some(model) => println!("{} model pinned to {model}", task.id),

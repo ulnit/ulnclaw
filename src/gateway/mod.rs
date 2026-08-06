@@ -6179,6 +6179,7 @@ mod tests {
             completed_at: None,
             tenant: None,
             model: None,
+            provider: None,
             result: Some("legacy result".into()),
             claim_lock: None,
             claim_expires: None,
