@@ -8,11 +8,16 @@
 //! Voice notes prefer QQ's built-in `asr_refer_text` transcript, then
 //! fall back to the central `[stt]` pipeline via the cached audio.
 //!
-//! Known differences: inline keyboards (`keyboards.py`) and the QR
-//! scan-to-configure onboarding flow (`onboard.py`, AES-256-GCM bound
-//! secrets) are not ported — INTERACTION_CREATE events are only
-//! acknowledged; guild-DM replies route through `/dms/<guild_id>/messages`
-//! (hermes' send path left the `dm` chat type unrouted).
+//! Inline keyboards are ported (`keyboards.py`): exec-approval prompts
+//! render as ✅ 允许一次 / ⭐ 始终允许 / ❌ 拒绝 callback buttons via the
+//! `send_exec_approval` contract, and INTERACTION_CREATE clicks route
+//! back through `approval_gateway` with operator authorization (hermes
+//! `_default_interaction_dispatch`). Update-prompt ✓/✗ keyboards and the
+//! atomic `.update_response` answer file are ported as well. Known
+//! difference: the QR scan-to-configure onboarding flow (`onboard.py`,
+//! AES-256-GCM bound secrets) is not ported. Guild-DM replies route
+//! through `/dms/<guild_id>/messages` (hermes' send path left the `dm`
+//! chat type unrouted).
 
 use crate::messaging::{Dispatcher, MediaAttachment, MessageEvent};
 use crate::pairing::PairingStore;
@@ -52,6 +57,13 @@ const MEDIA_TYPE_IMAGE: i64 = 1;
 const MEDIA_TYPE_VIDEO: i64 = 2;
 const MEDIA_TYPE_VOICE: i64 = 3;
 const MEDIA_TYPE_FILE: i64 = 4;
+
+/// hermes `keyboards.py` button_data prefixes.
+const APPROVAL_BUTTON_PREFIX: &str = "approve:";
+const UPDATE_PROMPT_PREFIX: &str = "update_prompt:";
+/// hermes `_APPROVAL_TIMEOUT_SECONDS` (matches the gateway default
+/// approval timeout).
+const APPROVAL_TIMEOUT_SECONDS: u32 = 300;
 
 /// hermes identify intents: C2C/group @-messages + public guild messages
 /// + guild direct messages + interactions.
@@ -559,6 +571,165 @@ impl QQHandle {
         }
         body
     }
+
+    /// hermes `send_with_keyboard`: one message with an inline keyboard,
+    /// never chunked (a keyboard message has exactly one interactive
+    /// surface). C2C/group only — guild/dm chats have no keyboard
+    /// support.
+    pub async fn send_text_with_keyboard(
+        &self,
+        chat_id: &str,
+        content: &str,
+        keyboard: &Value,
+    ) -> std::result::Result<(), String> {
+        let chat_type = self.chat_type(chat_id);
+        if chat_type != "c2c" && chat_type != "group" {
+            return Err(format!(
+                "inline keyboards not supported for chat_type {chat_type:?}"
+            ));
+        }
+        let formatted = self.format_message(content);
+        let reply_to = self.last_msg_id.lock().unwrap().get(chat_id).cloned();
+        let mut body = self.build_text_body(&formatted, reply_to.as_deref());
+        body["keyboard"] = keyboard.clone();
+        let path = if chat_type == "c2c" {
+            format!("/v2/users/{chat_id}/messages")
+        } else {
+            format!("/v2/groups/{chat_id}/messages")
+        };
+        self.api_request(
+            reqwest::Method::POST,
+            &path,
+            Some(&body),
+            Duration::from_secs(DEFAULT_API_TIMEOUT_SECS),
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Inline keyboards (hermes `keyboards.py`)
+// ---------------------------------------------------------------------------
+
+/// hermes `_make_callback_button`.
+fn callback_button(
+    btn_id: &str,
+    label: &str,
+    visited_label: &str,
+    data: &str,
+    style: u8,
+    group_id: &str,
+) -> Value {
+    json!({
+        "id": btn_id,
+        "render_data": {
+            "label": label,
+            "visited_label": visited_label,
+            "style": style,
+        },
+        "action": {
+            "type": 1,
+            "data": data,
+            "permission": {"type": 2},
+            "click_limit": 1,
+        },
+        "group_id": group_id,
+    })
+}
+
+/// hermes `build_approval_keyboard`: `[✅ 允许一次] [⭐ 始终允许] [❌ 拒绝]`,
+/// all sharing `group_id = "approval"` so one click greys the rest. The
+/// persistent-scope button hides when unavailable.
+pub fn build_approval_keyboard(session_key: &str, allow_permanent: bool) -> Value {
+    let mut buttons = vec![callback_button(
+        "allow",
+        "✅ 允许一次",
+        "已允许",
+        &format!("{APPROVAL_BUTTON_PREFIX}{session_key}:allow-once"),
+        1,
+        "approval",
+    )];
+    if allow_permanent {
+        buttons.push(callback_button(
+            "always",
+            "⭐ 始终允许",
+            "已始终允许",
+            &format!("{APPROVAL_BUTTON_PREFIX}{session_key}:allow-always"),
+            1,
+            "approval",
+        ));
+    }
+    buttons.push(callback_button(
+        "deny",
+        "❌ 拒绝",
+        "已拒绝",
+        &format!("{APPROVAL_BUTTON_PREFIX}{session_key}:deny"),
+        0,
+        "approval",
+    ));
+    json!({"content": {"rows": [{"buttons": buttons}]}})
+}
+
+/// hermes `build_update_prompt_keyboard`: `[✓ 确认] [✗ 取消]`.
+pub fn build_update_prompt_keyboard() -> Value {
+    json!({"content": {"rows": [{"buttons": [
+        callback_button(
+            "yes",
+            "✓ 确认",
+            "已确认",
+            &format!("{UPDATE_PROMPT_PREFIX}y"),
+            1,
+            "update_prompt",
+        ),
+        callback_button(
+            "no",
+            "✗ 取消",
+            "已取消",
+            &format!("{UPDATE_PROMPT_PREFIX}n"),
+            0,
+            "update_prompt",
+        ),
+    ]}]}})
+}
+
+/// hermes `parse_approval_button_data` — the session key may itself
+/// contain colons, so the middle group is greedy up to the decision.
+pub fn parse_approval_button_data(button_data: &str) -> Option<(String, String)> {
+    let re = regex::Regex::new(r"^approve:(.+):(allow-once|allow-always|deny)$").unwrap();
+    let caps = re.captures(button_data)?;
+    Some((caps[1].to_string(), caps[2].to_string()))
+}
+
+/// hermes `parse_update_prompt_button_data` → `'y'` or `'n'`.
+pub fn parse_update_prompt_button_data(button_data: &str) -> Option<String> {
+    let re = regex::Regex::new(r"^update_prompt:(y|n)$").unwrap();
+    let caps = re.captures(button_data)?;
+    Some(caps[1].to_string())
+}
+
+/// hermes `_build_exec_text` (no-cwd variant used by
+/// `send_exec_approval`): markdown body under the approval keyboard.
+pub fn build_exec_approval_text(
+    command: &str,
+    title: &str,
+    description: &str,
+    timeout_sec: u32,
+) -> String {
+    let mut lines: Vec<String> = vec!["🔐 **命令执行审批**".to_string(), String::new()];
+    if !command.is_empty() {
+        let preview: String = command.chars().take(300).collect();
+        lines.push(format!("```\n{preview}\n```"));
+    }
+    if !title.is_empty() && title != command {
+        lines.push(format!("📋 {title}"));
+    }
+    if !description.is_empty() {
+        lines.push(format!("📝 {description}"));
+    }
+    lines.push(String::new());
+    lines.push(format!("⏱️ 超时: {timeout_sec} 秒"));
+    lines.join("\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -972,6 +1143,44 @@ impl crate::messaging::PlatformSender for QQSender {
     async fn send_text(&self, chat_id: &str, text: &str) {
         self.handle.send_text(chat_id, text).await;
     }
+
+    /// hermes qqbot `send_exec_approval` contract: 3-button approval
+    /// keyboard (QQ collapses the session tier into "always" — the
+    /// `/approve session` text command stays available). Guild/dm chats
+    /// return false so the caller falls back to numbered text.
+    async fn send_exec_approval(
+        &self,
+        chat_id: &str,
+        command: &str,
+        session_key: &str,
+        description: &str,
+        allow_permanent: bool,
+        _allow_session: bool,
+        smart_denied: bool,
+    ) -> bool {
+        let mut description = description.to_string();
+        if smart_denied {
+            description.push_str(" Owner override applies to this one operation only.");
+        }
+        let text = build_exec_approval_text(
+            command,
+            "Execute this command?",
+            &description,
+            APPROVAL_TIMEOUT_SECONDS,
+        );
+        let keyboard = build_approval_keyboard(session_key, allow_permanent && !smart_denied);
+        match self
+            .handle
+            .send_text_with_keyboard(chat_id, &text, &keyboard)
+            .await
+        {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[qqbot] send_exec_approval to {chat_id} failed: {e}");
+                false
+            }
+        }
+    }
 }
 
 fn register_sender(handle: Arc<QQHandle>) {
@@ -1186,23 +1395,12 @@ async fn run_ws_session(runner: &Arc<Runner>, gateway_url: &str, session: &mut W
                         });
                     }
                     "INTERACTION_CREATE" => {
-                        // Acknowledge button interactions (keyboard routing
-                        // itself is not ported).
-                        if let Some(id) = d.get("id").and_then(|v| v.as_str()) {
-                            let handle = runner.handle.clone();
-                            let id = id.to_string();
-                            tokio::spawn(async move {
-                                handle
-                                    .api_request(
-                                        reqwest::Method::PUT,
-                                        &format!("/interactions/{id}"),
-                                        Some(&json!({})),
-                                        Duration::from_secs(DEFAULT_API_TIMEOUT_SECS),
-                                    )
-                                    .await
-                                    .ok();
-                            });
-                        }
+                        // ACK + button routing (hermes `_on_interaction` +
+                        // `_default_interaction_dispatch`).
+                        let runner = runner.clone();
+                        tokio::spawn(async move {
+                            handle_interaction(&runner, &d).await;
+                        });
                     }
                     _ => {}
                 }
@@ -1563,6 +1761,167 @@ fn group_allowed(cfg: &QQBotConfig, group_id: &str, _user_id: &str) -> bool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Inline-keyboard interactions (hermes `_on_interaction` +
+// `_default_interaction_dispatch`)
+// ---------------------------------------------------------------------------
+
+/// Extract the ulnclaw chat id from a `platform-qq-<chat>` session key.
+fn session_chat_id(session_key: &str) -> Option<&str> {
+    let chat_id = session_key.strip_prefix("platform-qq-")?;
+    if chat_id.is_empty() {
+        return None;
+    }
+    Some(chat_id)
+}
+
+/// hermes `_is_authorized_interaction_for_session`, adapted to ulnclaw
+/// session keys (`platform-qq-<chat>`, one session per chat): c2c clicks
+/// must come from the chat's own user; group/guild clicks must originate
+/// in the session's chat from a user who passes the intake gate
+/// (allowlist ∪ pairing ∪ open policy).
+fn interaction_authorized(
+    runner: &Runner,
+    operator: &str,
+    event_chat: &str,
+    session_key: &str,
+) -> bool {
+    if operator.is_empty() {
+        return false;
+    }
+    let Some(chat_id) = session_chat_id(session_key) else {
+        return false;
+    };
+    match runner.handle.chat_type(chat_id).as_str() {
+        "c2c" => operator == chat_id,
+        "dm" => is_dm_fully_authorized(&runner.cfg, runner.pairing.as_ref(), operator),
+        _ => {
+            if !event_chat.is_empty() && event_chat != chat_id {
+                return false;
+            }
+            runner.cfg.group_policy == "open"
+                || entry_matches(&runner.cfg.group_allow_from, operator)
+                || runner
+                    .pairing
+                    .as_ref()
+                    .map(|store| store.is_approved("qq", operator))
+                    .unwrap_or(false)
+        }
+    }
+}
+
+/// hermes `_write_update_response`: atomically persist the update-prompt
+/// answer (`y`/`n`) for the detached update watcher via tmp + rename.
+fn write_update_response(answer: &str, operator: &str) {
+    let home = crate::config::ulnclaw_home();
+    let response_path = home.join(".update_response");
+    let tmp_path = home.join(".update_response.tmp");
+    match std::fs::write(&tmp_path, answer).and_then(|_| std::fs::rename(&tmp_path, &response_path))
+    {
+        Ok(()) => eprintln!("[qqbot] update prompt answered {answer:?} by {operator}"),
+        Err(e) => eprintln!("[qqbot] failed to write update response: {e}"),
+    }
+}
+
+/// hermes `_on_interaction` + `_default_interaction_dispatch`: ACK the
+/// interaction promptly (the client shows an error icon otherwise), then
+/// route `approve:<session>:<decision>` clicks into the approval gateway
+/// and `update_prompt:<y|n>` clicks into the `.update_response` file.
+async fn handle_interaction(runner: &Arc<Runner>, d: &Value) {
+    let id = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let resolved = d.pointer("/data/resolved");
+    let button_data = resolved
+        .and_then(|r| r.get("button_data"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let group_member_openid = d
+        .get("group_member_openid")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let user_openid = d.get("user_openid").and_then(|v| v.as_str()).unwrap_or("");
+    let resolver_user_id = resolved
+        .and_then(|r| r.get("user_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    // hermes `InteractionEvent.operator_openid` preference order.
+    let operator = [group_member_openid, user_openid, resolver_user_id]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .unwrap_or("");
+    let group_openid = d
+        .get("group_openid")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let guild_id = d.get("guild_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if id.is_empty() {
+        eprintln!("[qqbot] INTERACTION_CREATE missing id, skipping ACK");
+        return;
+    }
+    if let Err(e) = runner
+        .handle
+        .api_request(
+            reqwest::Method::PUT,
+            &format!("/interactions/{id}"),
+            Some(&json!({"code": 0})),
+            Duration::from_secs(DEFAULT_API_TIMEOUT_SECS),
+        )
+        .await
+    {
+        eprintln!("[qqbot] interaction ACK failed: {e}");
+    }
+    if button_data.is_empty() {
+        return;
+    }
+
+    if let Some((session_key, decision)) = parse_approval_button_data(&button_data) {
+        // hermes `_APPROVAL_BUTTON_TO_CHOICE` (QQ's 3-button layout has no
+        // session tier).
+        let choice = match decision.as_str() {
+            "allow-once" => crate::approval_gateway::CHOICE_ONCE,
+            "allow-always" => crate::approval_gateway::CHOICE_ALWAYS,
+            "deny" => crate::approval_gateway::CHOICE_DENY,
+            other => {
+                eprintln!("[qqbot] unknown approval decision {other:?} (session={session_key})");
+                return;
+            }
+        };
+        if !interaction_authorized(runner, operator, group_openid, &session_key) {
+            eprintln!(
+                "[qqbot] rejected unauthorized approval click for session {session_key} (operator={operator})"
+            );
+            return;
+        }
+        if crate::approval_gateway::resolve(&session_key, choice) {
+            eprintln!(
+                "[qqbot] button resolved approval for session {session_key} (choice={choice}, operator={operator})"
+            );
+        } else {
+            eprintln!("[qqbot] approval already resolved or expired for session {session_key}");
+        }
+        return;
+    }
+
+    if let Some(answer) = parse_update_prompt_button_data(&button_data) {
+        let chat = [group_openid, guild_id, user_openid]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        let update_session_key = format!("platform-qq-{chat}");
+        if !interaction_authorized(runner, operator, group_openid, &update_session_key) {
+            eprintln!(
+                "[qqbot] rejected unauthorized update prompt click (operator={operator})"
+            );
+            return;
+        }
+        write_update_response(&answer, operator);
+        return;
+    }
+
+    eprintln!("[qqbot] unrecognised button_data {button_data:?} from interaction {id}");
+}
+
 async fn offer_pairing(runner: &Runner, sender_id: &str, chat_id: &str) {
     eprintln!("[qqbot] refusing message from {sender_id} — add it to messaging.qq.allow_from or approve a pairing code");
     if let Some(store) = &runner.pairing {
@@ -1748,5 +2107,114 @@ mod tests {
         // Expired entries pass again.
         seen.insert("m3".into(), Instant::now() - Duration::from_secs(DEDUP_WINDOW_SECS + 1));
         assert!(!dedup_check(&mut seen, "m3"));
+    }
+
+    #[test]
+    fn approval_keyboard_layout_matches_hermes() {
+        let kb = build_approval_keyboard("platform-qq-ABC", true);
+        let buttons = &kb["content"]["rows"][0]["buttons"];
+        assert_eq!(buttons.as_array().unwrap().len(), 3);
+        let ids: Vec<&str> = buttons
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["allow", "always", "deny"]);
+        assert_eq!(buttons[0]["render_data"]["label"], "✅ 允许一次");
+        assert_eq!(buttons[1]["render_data"]["label"], "⭐ 始终允许");
+        assert_eq!(buttons[2]["render_data"]["label"], "❌ 拒绝");
+        assert_eq!(
+            buttons[0]["action"]["data"],
+            "approve:platform-qq-ABC:allow-once"
+        );
+        assert_eq!(
+            buttons[1]["action"]["data"],
+            "approve:platform-qq-ABC:allow-always"
+        );
+        assert_eq!(buttons[2]["action"]["data"], "approve:platform-qq-ABC:deny");
+        // Callback action, all-users permission, single-use, shared group.
+        for b in buttons.as_array().unwrap() {
+            assert_eq!(b["action"]["type"], 1);
+            assert_eq!(b["action"]["permission"]["type"], 2);
+            assert_eq!(b["action"]["click_limit"], 1);
+            assert_eq!(b["group_id"], "approval");
+        }
+        assert_eq!(buttons[2]["render_data"]["style"], 0);
+    }
+
+    #[test]
+    fn approval_keyboard_hides_permanent_button() {
+        let kb = build_approval_keyboard("sk", false);
+        let buttons = kb["content"]["rows"][0]["buttons"].as_array().unwrap();
+        assert_eq!(buttons.len(), 2);
+        assert_eq!(buttons[0]["id"], "allow");
+        assert_eq!(buttons[1]["id"], "deny");
+    }
+
+    #[test]
+    fn update_prompt_keyboard_layout() {
+        let kb = build_update_prompt_keyboard();
+        let buttons = &kb["content"]["rows"][0]["buttons"];
+        assert_eq!(buttons[0]["action"]["data"], "update_prompt:y");
+        assert_eq!(buttons[1]["action"]["data"], "update_prompt:n");
+        assert_eq!(buttons[0]["group_id"], "update_prompt");
+        assert_eq!(buttons[0]["render_data"]["label"], "✓ 确认");
+        assert_eq!(buttons[1]["render_data"]["label"], "✗ 取消");
+    }
+
+    #[test]
+    fn approval_button_data_parses_with_colons() {
+        // Session keys may contain colons — the middle group is greedy.
+        let parsed =
+            parse_approval_button_data("approve:agent:main:qqbot:c2c:OPENID:allow-always");
+        assert_eq!(
+            parsed,
+            Some(("agent:main:qqbot:c2c:OPENID".to_string(), "allow-always".to_string()))
+        );
+        assert_eq!(
+            parse_approval_button_data("approve:platform-qq-XYZ:deny"),
+            Some(("platform-qq-XYZ".to_string(), "deny".to_string()))
+        );
+        assert_eq!(parse_approval_button_data("approve:sk:maybe"), None);
+        assert_eq!(parse_approval_button_data("update_prompt:y"), None);
+        assert_eq!(parse_approval_button_data(""), None);
+    }
+
+    #[test]
+    fn update_prompt_button_data_parsing() {
+        assert_eq!(
+            parse_update_prompt_button_data("update_prompt:y"),
+            Some("y".to_string())
+        );
+        assert_eq!(
+            parse_update_prompt_button_data("update_prompt:n"),
+            Some("n".to_string())
+        );
+        assert_eq!(parse_update_prompt_button_data("update_prompt:x"), None);
+        assert_eq!(parse_update_prompt_button_data("approve:sk:deny"), None);
+    }
+
+    #[test]
+    fn exec_approval_text_layout() {
+        let text =
+            build_exec_approval_text("rm -rf /tmp/x", "Execute this command?", "dangerous", 300);
+        assert!(text.starts_with("🔐 **命令执行审批**"));
+        assert!(text.contains("```\nrm -rf /tmp/x\n```"));
+        assert!(text.contains("📋 Execute this command?"));
+        assert!(text.contains("📝 dangerous"));
+        assert!(text.contains("⏱️ 超时: 300 秒"));
+        // Command previews truncate at 300 chars (hermes `command[:300]`).
+        let long = "x".repeat(400);
+        let text = build_exec_approval_text(&long, "", "", 300);
+        assert!(text.contains(&"x".repeat(300)));
+        assert!(!text.contains(&"x".repeat(301)));
+    }
+
+    #[test]
+    fn session_chat_id_extraction() {
+        assert_eq!(session_chat_id("platform-qq-ABC"), Some("ABC"));
+        assert_eq!(session_chat_id("platform-qq-"), None);
+        assert_eq!(session_chat_id("agent:main:qqbot:c2c:X"), None);
     }
 }
