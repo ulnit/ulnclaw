@@ -555,6 +555,14 @@ enum KanbanAction {
         /// create --branch)
         #[arg(long)]
         branch: Option<String>,
+        /// Goal-loop mode: the spawned worker keeps working in its
+        /// session until the auxiliary judge agrees the card is done
+        /// (hermes create --goal)
+        #[arg(long)]
+        goal: bool,
+        /// Goal-loop turn budget (hermes create --goal-max-turns)
+        #[arg(long)]
+        goal_max_turns: Option<i64>,
         #[arg(long)]
         json: bool,
     },
@@ -2431,6 +2439,17 @@ async fn one_shot(
     .await;
     println!("{}", content);
 
+    // Kanban goal-loop mode (hermes cli.py quiet path): a worker spawned
+    // for a goal_mode card keeps working in THIS session until the
+    // auxiliary judge agrees the card is done, the worker terminates the
+    // task itself, or the turn budget runs out (sticky block). No-op for
+    // every normal worker and every non-kanban run.
+    if ulnclaw::kanban::worker_goal_mode_env() {
+        if let Some(task_id) = ulnclaw::kanban::worker_task_env() {
+            kanban_goal_loop_for_worker(&agent, &task_id, &content, target.as_deref()).await;
+        }
+    }
+
     // Kanban stop-guard (hermes agent/kanban_stop.py): a dispatcher-spawned
     // worker must end on kanban_complete/kanban_block. If the run finished
     // without moving the task to a terminal status, nudge and continue
@@ -2479,6 +2498,107 @@ async fn one_shot(
     )
     .await;
     Ok(())
+}
+
+/// Kanban goal-mode worker loop (hermes cli.py
+/// `_run_kanban_goal_loop_q`): drive a goal_mode worker through the
+/// Ralph-style judge loop IN THIS SESSION until the judge agrees the
+/// card is done, the worker terminates the task itself, or the turn
+/// budget runs out (sticky block for human review). All errors are
+/// swallowed — a broken goal loop must never wedge a worker; the
+/// dispatcher's claim TTL / crash detection is the backstop.
+async fn kanban_goal_loop_for_worker(
+    agent: &Agent,
+    task_id: &str,
+    first_response: &str,
+    target: Option<&str>,
+) {
+    let store = match ulnclaw::kanban::KanbanStore::open_default() {
+        Ok(store) => store,
+        Err(e) => {
+            eprintln!("kanban goal loop: open store failed: {e}");
+            return;
+        }
+    };
+    let task = match store.get_task(task_id) {
+        Ok(Some(task)) => task,
+        _ => return,
+    };
+    let mut goal_parts = vec![task.title.clone()];
+    if !task.body.trim().is_empty() {
+        goal_parts.push(task.body.clone());
+    }
+    let goal_text = goal_parts.join("\n\n");
+    if goal_text.trim().is_empty() {
+        return;
+    }
+    let max_turns = task
+        .goal_max_turns
+        .filter(|turns| *turns > 0)
+        .map(|turns| turns as u32)
+        .or_else(ulnclaw::kanban::worker_goal_max_turns_env)
+        .unwrap_or(ulnclaw::goals::DEFAULT_MAX_TURNS as u32);
+    let store_ref = &store;
+    let ctx = agent.context();
+    let Some(provider) = ctx.provider.clone() else {
+        eprintln!("kanban goal loop: no provider available for the judge; skipping the loop");
+        return;
+    };
+    let config = ctx.config.clone();
+    let result = ulnclaw::goals::run_kanban_goal_loop(
+        task_id,
+        |prompt| {
+            Box::pin(async move {
+                match agent.run_with_session(&prompt, None, target).await {
+                    Ok(result) => {
+                        if !result.content.is_empty() {
+                            println!("{}", result.content);
+                        }
+                        Ok(result.content)
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
+            })
+        },
+        || {
+            let store = store_ref;
+            Box::pin(async move {
+                store.get_task(task_id).ok().flatten().map(|t| t.status)
+            })
+        },
+        |reason| {
+            let store = store_ref;
+            Box::pin(async move {
+                if let Err(e) = store.block_task_guarded(
+                    task_id,
+                    &reason,
+                    None,
+                    ulnclaw::kanban::worker_run_id_for(task_id),
+                ) {
+                    eprintln!("kanban goal loop: block failed: {e}");
+                }
+            })
+        },
+        |response| {
+            let config = config.clone();
+            let provider = provider.clone();
+            let goal = goal_text.clone();
+            Box::pin(async move {
+                let (verdict, _transport_failed) =
+                    ulnclaw::goals::judge_goal(&config, provider, &goal, &response, &[], &[], None)
+                        .await;
+                verdict
+            })
+        },
+        |msg| println!("{msg}"),
+        max_turns,
+        first_response,
+    )
+    .await;
+    println!(
+        "kanban goal loop: task {task_id} outcome={:?} after {} turn(s) — {}",
+        result.outcome, result.turns_used, result.reason
+    );
 }
 
 /// Resolve `--resume <id|prefix>` / `--continue` to a concrete session id
@@ -4498,6 +4618,8 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             max_retries,
             workspace,
             branch,
+            goal,
+            goal_max_turns,
             json,
         } => {
             let title = title.join(" ");
@@ -4515,6 +4637,13 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 if max_retries < 1 {
                     return Err(format!(
                         "kanban: --max-retries must be >= 1 (got {max_retries}); use 1 to trip on the first failure"
+                    ));
+                }
+            }
+            if let Some(turns) = goal_max_turns {
+                if turns < 1 {
+                    return Err(format!(
+                        "kanban: --goal-max-turns must be >= 1 (got {turns})"
                     ));
                 }
             }
@@ -4556,6 +4685,8 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     idempotency_key,
                     triage,
                     max_retries,
+                    goal_mode: goal,
+                    goal_max_turns,
                     workspace_kind: Some(workspace_kind),
                     workspace_path,
                     branch_name,
@@ -4753,6 +4884,45 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                         continue;
                     }
                 };
+                // Goal-mode judge gate (hermes #38367): a goal-mode card
+                // completed from the CLI must carry evidence the auxiliary
+                // judge accepts; fail-open when no judge can run.
+                if let Ok(Some(task)) = store.get_task(&resolved) {
+                    if task.goal_mode {
+                        let mut goal_parts = vec![task.title.clone()];
+                        if !task.body.trim().is_empty() {
+                            goal_parts.push(task.body.clone());
+                        }
+                        let goal_text = goal_parts.join("\n\n");
+                        let text = summary
+                            .as_deref()
+                            .or(result.as_deref())
+                            .unwrap_or("")
+                            .to_string();
+                        let config =
+                            ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
+                        let gate = match build_provider(&config) {
+                            Ok(provider) => {
+                                ulnclaw::goals::goal_completion_gate(
+                                    &config,
+                                    Some(provider),
+                                    &goal_text,
+                                    &text,
+                                )
+                                .await
+                            }
+                            Err(_) => Ok(()),
+                        };
+                        if let Err(reason) = gate {
+                            eprintln!(
+                                "kanban: goal completion of {resolved} rejected by judge: {reason}. \
+                                 Provide evidence matching the task's acceptance criteria."
+                            );
+                            failed.push(raw.clone());
+                            continue;
+                        }
+                    }
+                }
                 match store.complete_task_with_artifacts(
                     &home,
                     &resolved,

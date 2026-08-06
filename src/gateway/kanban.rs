@@ -182,6 +182,13 @@ pub struct CreateTaskBody {
     /// (hermes max_retries; must be >= 1).
     #[serde(default)]
     pub max_retries: Option<i64>,
+    /// Goal-loop worker (hermes create --goal).
+    #[serde(default)]
+    pub goal_mode: Option<bool>,
+    /// Goal-loop turn budget (hermes create --goal-max-turns; must be
+    /// >= 1 when set).
+    #[serde(default)]
+    pub goal_max_turns: Option<i64>,
     /// Workspace: `scratch` | `worktree` | `worktree:<path>` |
     /// `dir:<path>` (hermes create --workspace).
     #[serde(default)]
@@ -207,6 +214,14 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
                 &format!(
                     "max_retries must be >= 1 (got {max_retries}); use 1 to trip on the first failure"
                 ),
+                None,
+            );
+        }
+    }
+    if let Some(turns) = body.goal_max_turns {
+        if turns < 1 {
+            return super::bad_request(
+                &format!("goal_max_turns must be >= 1 (got {turns})"),
                 None,
             );
         }
@@ -257,6 +272,8 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         idempotency_key: body.idempotency_key.filter(|k| !k.trim().is_empty()),
         triage: body.triage.unwrap_or(false),
         max_retries: body.max_retries,
+        goal_mode: body.goal_mode.unwrap_or(false),
+        goal_max_turns: body.goal_max_turns,
         workspace_kind: Some(workspace_kind),
         workspace_path,
         branch_name,

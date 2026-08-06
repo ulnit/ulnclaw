@@ -421,7 +421,16 @@
   `_maybe_emit_scratch_tip`）：整个安装内首次物化 scratch 工作区时，
   调度器警告 scratch 产物是临时的（任务完成即删除），在任务上记录
   `tip_scratch_workspace` 事件，并写入 `.scratch_tip_shown` 哨兵文件
-  使提示不再重复；worktree/dir 工作区按设计保留，从不提示。
+  使提示不再重复；worktree/dir 工作区按设计保留，从不提示。P156 增加看板 goal 模式
+  worker（hermes `create --goal` / `--goal-max-turns`）：goal 卡片 spawn 的
+  worker 在同一会话内把运行包进 Ralph 式评判循环 —— 每轮结束后由辅助评判
+  模型（`[auxiliary.goal_judge]`）对照卡片标题+正文评估最新回复；`continue`
+  注入续跑提示，`done` 先发一次明确的 kanban_complete 提醒、再提醒无效则以
+  "评判已完成但从未收尾" 阻塞卡片，turn 预算耗尽（或任务被回收/归档）以粘性
+  block 留待人工审查。goal 卡片的完成在 CLI `kanban done` 与 `kanban_complete`
+  工具两条路径上过 #38367 评判门：评判可用时结论必须为 `done`，否则带着评判理
+  由拒绝完成（未配置/不可达评判时 fail-open；网关 `/api/kanban` complete 端点
+  有意不门控）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

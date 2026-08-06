@@ -618,6 +618,34 @@ fn register_kanban(registry: &mut ToolRegistry) {
                                     .collect()
                             })
                             .unwrap_or_default();
+                        // Goal-mode judge gate (hermes #38367): a goal-mode
+                        // card's completion must carry evidence the
+                        // auxiliary judge accepts. Fail-open when no judge
+                        // can run.
+                        if let Ok(Some(task)) = store.get_task(&id) {
+                            if task.goal_mode {
+                                let mut goal_parts = vec![task.title.clone()];
+                                if !task.body.trim().is_empty() {
+                                    goal_parts.push(task.body.clone());
+                                }
+                                let goal_text = goal_parts.join("\n\n");
+                                let text = summary
+                                    .or(result)
+                                    .unwrap_or("");
+                                if let Err(reason) = crate::goals::goal_completion_gate(
+                                    &ctx.config,
+                                    ctx.provider.clone(),
+                                    &goal_text,
+                                    text,
+                                )
+                                .await
+                                {
+                                    return Ok(kanban_error(format!(
+                                        "kanban_complete rejected by goal judge: {reason}.                                          Provide evidence matching the task's acceptance criteria."
+                                    )));
+                                }
+                            }
+                        }
                         store.complete_task_with_artifacts(
                             &ctx.home,
                             &id,

@@ -484,7 +484,20 @@ performance and a single static binary.
   completes), records a `tip_scratch_workspace` event on the task,
   and touches the `.scratch_tip_shown` sentinel so the tip never
   repeats; worktree/dir workspaces are preserved by design and never
-  tip.
+  tip. P156 added kanban goal-mode workers (hermes `create --goal` /
+  `--goal-max-turns`): a goal card spawns a worker that wraps its run
+  in the Ralph-style judge loop IN THE SAME SESSION — after every turn
+  the auxiliary judge (`[auxiliary.goal_judge]`) evaluates the latest
+  response against the card's title+body; `continue` feeds a
+  continuation prompt, `done` issues one explicit kanban_complete
+  nudge and then blocks the card as judged-done-never-finalized, and
+  an exhausted turn budget (or a reclaimed/archived task) ends in a
+  sticky block for human review. Goal-card completions pass the #38367
+  judge gate on the CLI `kanban done` and the `kanban_complete` tool:
+  a verdict other than `done` rejects the completion with the judge's
+  reason (fail-open when no judge is configured or reachable; the
+  gateway `/api/kanban` complete endpoint is deliberately not
+  gated).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

@@ -227,6 +227,14 @@ pub struct Task {
     /// Unblock-loop counter: same-cause re-blocks after an unblock
     /// (hermes `block_recurrences`); reset only on completion.
     pub block_recurrences: i64,
+    /// Goal-loop worker (hermes `goal_mode`): the dispatcher-spawned
+    /// worker keeps working in its session until the auxiliary judge
+    /// agrees the card is done, the worker terminates the task, or the
+    /// turn budget runs out (sticky block).
+    pub goal_mode: bool,
+    /// Goal-loop turn budget (hermes `goal_max_turns`); None = the
+    /// goal-loop default.
+    pub goal_max_turns: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -534,6 +542,15 @@ pub fn spawn_worker(
     // this worker carry the run id they were spawned under.
     if let Some(run_id) = task.current_run_id {
         cmd.env("ULNCLAW_KANBAN_RUN_ID", run_id.to_string());
+    }
+    // Goal-loop mode (hermes HERMES_KANBAN_GOAL_MODE): the worker wraps
+    // its run in the Ralph-style judge loop. Only set when enabled so
+    // non-goal tasks keep a clean env.
+    if task.goal_mode {
+        cmd.env("ULNCLAW_KANBAN_GOAL_MODE", "1");
+        if let Some(turns) = task.goal_max_turns {
+            cmd.env("ULNCLAW_KANBAN_GOAL_MAX_TURNS", turns.to_string());
+        }
     }
     if let Some(workdir) = workdir {
         cmd.current_dir(workdir);
@@ -974,6 +991,27 @@ pub fn worker_task_env() -> Option<String> {
         .or_else(|| crate::config::get_env_value("HERMES_KANBAN_TASK"))
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+/// Whether this worker was spawned for a goal-mode card (hermes
+/// `HERMES_KANBAN_GOAL_MODE`).
+pub fn worker_goal_mode_env() -> bool {
+    matches!(
+        crate::config::get_env_value("ULNCLAW_KANBAN_GOAL_MODE")
+            .or_else(|| crate::config::get_env_value("HERMES_KANBAN_GOAL_MODE"))
+            .as_deref()
+            .map(str::trim),
+        Some("1") | Some("true")
+    )
+}
+
+/// Goal-loop turn budget from the dispatcher env (hermes
+/// `HERMES_KANBAN_GOAL_MAX_TURNS`).
+pub fn worker_goal_max_turns_env() -> Option<u32> {
+    crate::config::get_env_value("ULNCLAW_KANBAN_GOAL_MAX_TURNS")
+        .or_else(|| crate::config::get_env_value("HERMES_KANBAN_GOAL_MAX_TURNS"))
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|turns: &u32| *turns > 0)
 }
 
 /// Whether the kanban stop-guard is active for this process (hermes
@@ -1837,6 +1875,12 @@ pub struct NewTask {
     /// Worktree branch name (hermes `create --branch`; only valid
     /// with the worktree kind).
     pub branch_name: Option<String>,
+    /// Goal-loop mode (hermes `create --goal`): the spawned worker
+    /// keeps working until the auxiliary judge agrees the card is done.
+    pub goal_mode: bool,
+    /// Goal-loop turn budget (hermes `create --goal-max-turns`); None
+    /// = the goal-loop default. Must be >= 1 when set.
+    pub goal_max_turns: Option<i64>,
     /// Creator session id for wake routing (hermes `session_id`),
     /// stamped by the agent `kanban_create` tool.
     pub session_id: Option<String>,
@@ -1892,7 +1936,9 @@ impl KanbanStore {
                 branch_name     TEXT,
                 session_id      TEXT,
                 block_kind      TEXT,
-                block_recurrences INTEGER NOT NULL DEFAULT 0
+                block_recurrences INTEGER NOT NULL DEFAULT 0,
+                goal_mode       INTEGER NOT NULL DEFAULT 0,
+                goal_max_turns  INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_board_status ON tasks (board, status);
             CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks (session_id);
@@ -2056,6 +2102,18 @@ impl KanbanStore {
                 "ALTER TABLE tasks ADD COLUMN block_recurrences INTEGER NOT NULL DEFAULT 0;",
             )
             .map_err(db_error("migrate block_recurrences"))?;
+        }
+        // Pre-P156 stores lack the goal-loop columns (hermes goal_mode /
+        // goal_max_turns).
+        if !columns.contains("goal_mode") {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN goal_mode INTEGER NOT NULL DEFAULT 0;",
+            )
+            .map_err(db_error("migrate goal_mode"))?;
+        }
+        if !columns.contains("goal_max_turns") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN goal_max_turns INTEGER;")
+                .map_err(db_error("migrate goal_max_turns"))?;
         }
         let store = Self {
             conn: Mutex::new(conn),
@@ -2504,6 +2562,13 @@ impl KanbanStore {
             .map(str::trim)
             .filter(|branch| !branch.is_empty())
             .map(str::to_string);
+        if let Some(turns) = task.goal_max_turns {
+            if turns < 1 {
+                return Err(AgentError::session(
+                    "kanban: goal_max_turns must be >= 1",
+                ));
+            }
+        }
         if branch_name.is_some() && workspace_kind != "worktree" {
             return Err(AgentError::session(
                 "kanban: branch_name is only valid for worktree workspaces",
@@ -2543,9 +2608,9 @@ impl KanbanStore {
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
              created_by, created_at, tenant, model, skills, max_runtime_seconds, \
              idempotency_key, max_retries, workspace_kind, workspace_path, branch_name, \
-             session_id) \
+             session_id, goal_mode, goal_max_turns) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                     ?16, ?17, ?18, ?19)",
+                     ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 id,
                 board,
@@ -2566,6 +2631,8 @@ impl KanbanStore {
                 workspace_path,
                 branch_name,
                 task.session_id,
+                i64::from(task.goal_mode),
+                task.goal_max_turns,
             ],
         )
         .map_err(db_error("create task"))?;
@@ -3017,6 +3084,8 @@ impl KanbanStore {
             current_run_id: row.get("current_run_id")?,
             block_kind: row.get("block_kind")?,
             block_recurrences: row.get("block_recurrences")?,
+            goal_mode: row.get::<_, i64>("goal_mode")? != 0,
+            goal_max_turns: row.get("goal_max_turns")?,
         })
     }
 
@@ -3025,7 +3094,7 @@ impl KanbanStore {
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
         last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, \
-        session_id, current_run_id, block_kind, block_recurrences";
+        session_id, current_run_id, block_kind, block_recurrences,         goal_mode, goal_max_turns";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -7510,6 +7579,76 @@ mod tests {
     }
 
     #[test]
+    fn goal_mode_fields_roundtrip() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "goal card".into(),
+                created_by: "tester".into(),
+                goal_mode: true,
+                goal_max_turns: Some(7),
+                ..Default::default()
+            })
+            .unwrap();
+        let fetched = store.get_task(&task.id).unwrap().unwrap();
+        assert!(fetched.goal_mode);
+        assert_eq!(fetched.goal_max_turns, Some(7));
+
+        // Default stays classic single-shot.
+        let plain = make_task(&store, "classic");
+        let plain = store.get_task(&plain.id).unwrap().unwrap();
+        assert!(!plain.goal_mode);
+        assert_eq!(plain.goal_max_turns, None);
+
+        // Budget must be positive.
+        let err = store
+            .create_task(&NewTask {
+                title: "bad budget".into(),
+                created_by: "tester".into(),
+                goal_mode: true,
+                goal_max_turns: Some(0),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("goal_max_turns"));
+    }
+
+    #[test]
+    fn dispatch_spawn_sees_goal_mode() {
+        let (dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "goal worker".into(),
+                created_by: "tester".into(),
+                goal_mode: true,
+                goal_max_turns: Some(4),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let capture = seen.clone();
+        store
+            .dispatch_once(
+                dir.path(),
+                false,
+                move |task, _| {
+                    *capture.borrow_mut() = Some((task.goal_mode, task.goal_max_turns));
+                    Ok(Some(9))
+                },
+                None,
+                false,
+                2,
+                0,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(*seen.borrow(), Some((true, Some(4))));
+    }
+
+    #[test]
     fn worker_log_rotation_keeps_one_backup() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("t_abc123.log");
@@ -7981,7 +8120,10 @@ mod tests {
             session_id: None,
             current_run_id: None,
             block_kind: None,
-            block_recurrences: 0,};
+            block_recurrences: 0,
+            goal_mode: false,
+            goal_max_turns: None,
+        };
         let prompt = worker_prompt(home, &task);
         assert!(prompt.contains("kanban worker for task t_1"));
         assert!(prompt.contains("DONE-SKILL"), "skill body must be inlined");

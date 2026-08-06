@@ -6162,6 +6162,8 @@ mod tests {
             current_run_id: None,
             block_kind: None,
             block_recurrences: 0,
+            goal_mode: false,
+            goal_max_turns: None,
             id: "t_abc".into(),
             board: "default".into(),
             title: "Ship the widget".into(),

@@ -1722,6 +1722,274 @@ pub async fn draft_contract(
 // Tests
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Kanban goal-mode worker loop (hermes `run_kanban_goal_loop`)
+// ---------------------------------------------------------------------------
+
+/// Fed to a goal-mode worker when the judge says the card is not done
+/// yet (hermes `KANBAN_GOAL_CONTINUATION_TEMPLATE`).
+pub const KANBAN_GOAL_CONTINUATION_TEMPLATE: &str =
+    "[Continuing toward this kanban task — judge says it is not done yet]\n\
+     Reason: {reason}\n\n\
+     Take the next concrete step toward completing the task. When the work \
+     is genuinely finished, call kanban_complete with a summary. If you are \
+     blocked and need human input, call kanban_block with a reason. Do not \
+     stop without calling one of them.";
+
+/// Fed when the judge believes the work is done but the worker never
+/// called kanban_complete / kanban_block (hermes
+/// `KANBAN_GOAL_FINALIZE_TEMPLATE`).
+pub const KANBAN_GOAL_FINALIZE_TEMPLATE: &str =
+    "[The work looks complete, but the task is still open]\n\
+     Reason: {reason}\n\n\
+     If the task is genuinely done, call kanban_complete now with a short \
+     summary of what you did. If something still blocks completion, call \
+     kanban_block with the reason instead.";
+
+fn fill_reason(template: &str, reason: &str) -> String {
+    template.replace("{reason}", reason)
+}
+
+/// Terminal outcome of a kanban goal loop (hermes
+/// `run_kanban_goal_loop` decision dict).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KanbanGoalOutcome {
+    /// The worker called kanban_complete itself.
+    CompletedByWorker,
+    /// The worker called kanban_block itself.
+    BlockedByWorker,
+    /// The loop blocked the task: turn budget exhausted, or judged done
+    /// but the worker never finalized.
+    BlockedBudget,
+    /// The loop gave up without mutating the task (status check failed,
+    /// task reclaimed/archived, run_turn error) — the dispatcher owns
+    /// whatever happens next.
+    Stopped,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct KanbanGoalLoopResult {
+    pub outcome: KanbanGoalOutcome,
+    pub turns_used: u32,
+    pub reason: String,
+}
+
+/// Boxed future alias for the injected callbacks.
+pub type GoalLoopFuture<'a, T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+/// Drive a kanban goal-mode worker through the Ralph-style goal loop
+/// (hermes `run_kanban_goal_loop`).
+///
+/// The dispatcher spawns a goal-mode worker like any other worker; its
+/// first turn has already run by the time this is called and
+/// `first_response` is that turn's reply. From here:
+///
+/// 1. If the worker already terminated the task (kanban_complete /
+///    kanban_block), stop — nothing to do.
+/// 2. Otherwise judge the latest response against `goal_text` (the
+///    card's title + body). `continue` → feed a continuation prompt and
+///    run another turn IN THE SAME SESSION. `done` but the task still
+///    open → one explicit "call kanban_complete" nudge; a second
+///    `done` verdict blocks the card for human review.
+/// 3. When the turn budget is exhausted with the task still open,
+///    `block` is invoked so the card lands in a sticky blocked state
+///    for human review (NOT a silent exit).
+///
+/// No session persistence here — a worker process is ephemeral, the
+/// turn budget lives in a local counter. `wait` verdicts are treated as
+/// `continue`: workers finish via kanban_complete / kanban_block, not
+/// by parking.
+pub async fn run_kanban_goal_loop<'e, R, S, B, J, L>(
+    task_id: &str,
+    mut run_turn: R,
+    mut task_status: S,
+    mut block: B,
+    mut judge: J,
+    mut log: L,
+    max_turns: u32,
+    first_response: &str,
+) -> KanbanGoalLoopResult
+where
+    R: FnMut(String) -> GoalLoopFuture<'e, Result<String, String>>,
+    S: FnMut() -> GoalLoopFuture<'e, Option<String>>,
+    B: FnMut(String) -> GoalLoopFuture<'e, ()>,
+    J: FnMut(String) -> GoalLoopFuture<'e, JudgeVerdict>,
+    L: FnMut(String),
+{
+    let max_turns = if max_turns < 1 { DEFAULT_MAX_TURNS as u32 } else { max_turns };
+    let mut last_response = first_response.to_string();
+    // The first turn already consumed one unit of budget.
+    let mut turns_used: u32 = 1;
+    let mut nudged_to_finalize = false;
+
+    loop {
+        // Did the worker terminate the task itself this turn?
+        let status = match task_status().await {
+            Some(status) => status,
+            None => {
+                return KanbanGoalLoopResult {
+                    outcome: KanbanGoalOutcome::Stopped,
+                    turns_used,
+                    reason: "status check failed".into(),
+                }
+            }
+        };
+        match status.as_str() {
+            "done" => {
+                log(format!(
+                    "kanban goal loop: task {task_id} completed by worker after {turns_used} turn(s)"
+                ));
+                return KanbanGoalLoopResult {
+                    outcome: KanbanGoalOutcome::CompletedByWorker,
+                    turns_used,
+                    reason: "worker completed the task".into(),
+                };
+            }
+            "blocked" => {
+                log(format!(
+                    "kanban goal loop: task {task_id} blocked by worker after {turns_used} turn(s)"
+                ));
+                return KanbanGoalLoopResult {
+                    outcome: KanbanGoalOutcome::BlockedByWorker,
+                    turns_used,
+                    reason: "worker blocked the task".into(),
+                };
+            }
+            "running" | "ready" => {}
+            other => {
+                // Reclaimed / archived / unexpected — let the
+                // dispatcher own it.
+                log(format!(
+                    "kanban goal loop: task {task_id} status={other:?}; stopping"
+                ));
+                return KanbanGoalLoopResult {
+                    outcome: KanbanGoalOutcome::Stopped,
+                    turns_used,
+                    reason: format!("status={other}"),
+                };
+            }
+        }
+
+        // Still open — judge whether the latest response satisfies the
+        // card.
+        let mut verdict = judge(last_response.clone()).await;
+        if verdict.verdict == "wait" {
+            verdict.verdict = "continue".into();
+        }
+        log(format!(
+            "kanban goal loop: turn {turns_used}/{max_turns} verdict={} reason={}",
+            verdict.verdict,
+            truncate_chars(&verdict.reason, 120)
+        ));
+
+        let prompt = if verdict.verdict == "done" {
+            if nudged_to_finalize {
+                // Already asked once to call kanban_complete and it
+                // still didn't — block for review rather than spin.
+                block(format!(
+                    "Goal-mode worker's output looked complete but it never called \
+                     kanban_complete after a finalize nudge ({}).",
+                    truncate_chars(&verdict.reason, 300)
+                ))
+                .await;
+                return KanbanGoalLoopResult {
+                    outcome: KanbanGoalOutcome::BlockedBudget,
+                    turns_used,
+                    reason: "judged done, never finalized".into(),
+                };
+            }
+            nudged_to_finalize = true;
+            fill_reason(
+                KANBAN_GOAL_FINALIZE_TEMPLATE,
+                &truncate_chars(&verdict.reason, 400),
+            )
+        } else {
+            fill_reason(
+                KANBAN_GOAL_CONTINUATION_TEMPLATE,
+                &truncate_chars(&verdict.reason, 400),
+            )
+        };
+
+        // Budget check BEFORE spending another turn.
+        if turns_used >= max_turns {
+            block(format!(
+                "Goal-mode worker exhausted its turn budget ({turns_used}/{max_turns}) \
+                 without completing the task. Last judge verdict: {}",
+                truncate_chars(&verdict.reason, 300)
+            ))
+            .await;
+            return KanbanGoalLoopResult {
+                outcome: KanbanGoalOutcome::BlockedBudget,
+                turns_used,
+                reason: "turn budget exhausted".into(),
+            };
+        }
+
+        // Run another turn in the same session.
+        match run_turn(prompt).await {
+            Ok(response) => last_response = response,
+            Err(e) => {
+                return KanbanGoalLoopResult {
+                    outcome: KanbanGoalOutcome::Stopped,
+                    turns_used,
+                    reason: format!("run_turn error: {e}"),
+                }
+            }
+        }
+        turns_used += 1;
+    }
+}
+
+/// Completion-gate decision for goal-mode cards (hermes #38367 judge
+/// gate). Pure helper: `verdict` is the judge's verdict string for the
+/// proposed completion text, or None when no judge could run at all.
+///
+/// Non-goal tasks always pass. Goal tasks pass on `done`, on `skipped`
+/// (judge unreachable — fail-open like the hermes availability
+/// precheck), and when no verdict exists; any other verdict rejects.
+pub fn goal_gate_allows(goal_mode: bool, verdict: Option<&str>) -> bool {
+    if !goal_mode {
+        return true;
+    }
+    matches!(verdict, None | Some("done") | Some("skipped"))
+}
+
+/// Completion gate for goal-mode cards (hermes #38367 judge gate):
+/// check the proposed completion text against the card's acceptance
+/// criteria with the auxiliary judge.
+///
+/// Fail-open: no provider, or auxiliary routing that cannot resolve a
+/// judge, allows the completion (the hermes availability precheck). A
+/// judge that runs allows only `done` / `skipped`; anything else
+/// rejects with the judge's reason.
+pub async fn goal_completion_gate(
+    config: &UlncLawConfig,
+    provider: Option<Arc<dyn Provider>>,
+    goal: &str,
+    text: &str,
+) -> Result<(), String> {
+    let Some(provider) = provider else {
+        return Ok(());
+    };
+    if crate::provider::auxiliary::resolve_aux_task(
+        config,
+        TASK_GOAL_JUDGE,
+        provider.clone(),
+    )
+    .is_err()
+    {
+        return Ok(());
+    }
+    let (verdict, _transport_failed) =
+        judge_goal(config, provider, goal, text, &[], &[], None).await;
+    if goal_gate_allows(true, Some(verdict.verdict.as_str())) {
+        Ok(())
+    } else {
+        Err(verdict.reason)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2175,6 +2443,171 @@ mod tests {
         let mut empty = GoalManager::new("sess-e", None, DEFAULT_MAX_TURNS);
         assert!(empty.add_subgoal("x").is_err());
         assert!(empty.clear_subgoals().is_err());
+    }
+
+    fn verdict(v: &str) -> JudgeVerdict {
+        JudgeVerdict {
+            verdict: v.into(),
+            reason: format!("{v} reason"),
+            parse_failed: false,
+            wait: None,
+        }
+    }
+
+    type LoopBox<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+
+    #[tokio::test]
+    async fn goal_loop_worker_completed_itself() {
+        let turns = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let turns_clone = turns.clone();
+        let result = run_kanban_goal_loop(
+            "t_done",
+            move |_prompt| {
+                turns_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Box::pin(async { Ok("more work".to_string()) }) as LoopBox<_>
+            },
+            || Box::pin(async { Some("done".to_string()) }) as LoopBox<_>,
+            |_reason| Box::pin(async {}) as LoopBox<()>,
+            |_response| Box::pin(async { verdict("continue") }) as LoopBox<_>,
+            |_msg| {},
+            5,
+            "first response",
+        )
+        .await;
+        assert_eq!(result.outcome, KanbanGoalOutcome::CompletedByWorker);
+        assert_eq!(result.turns_used, 1);
+        assert_eq!(turns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn goal_loop_worker_blocked_itself() {
+        let result = run_kanban_goal_loop(
+            "t_blk",
+            |_prompt| Box::pin(async { Ok(String::new()) }) as LoopBox<_>,
+            || Box::pin(async { Some("blocked".to_string()) }) as LoopBox<_>,
+            |_reason| Box::pin(async {}) as LoopBox<()>,
+            |_response| Box::pin(async { verdict("continue") }) as LoopBox<_>,
+            |_msg| {},
+            5,
+            "first",
+        )
+        .await;
+        assert_eq!(result.outcome, KanbanGoalOutcome::BlockedByWorker);
+        assert_eq!(result.turns_used, 1);
+    }
+
+    #[tokio::test]
+    async fn goal_loop_blocks_when_budget_exhausted() {
+        let block_reason = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let block_clone = block_reason.clone();
+        let result = run_kanban_goal_loop(
+            "t_budget",
+            |_prompt| Box::pin(async { Ok("still working".to_string()) }) as LoopBox<_>,
+            || Box::pin(async { Some("running".to_string()) }) as LoopBox<_>,
+            move |reason| {
+                *block_clone.lock().unwrap() = Some(reason);
+                Box::pin(async {}) as LoopBox<()>
+            },
+            |_response| Box::pin(async { verdict("continue") }) as LoopBox<_>,
+            |_msg| {},
+            2,
+            "first",
+        )
+        .await;
+        assert_eq!(result.outcome, KanbanGoalOutcome::BlockedBudget);
+        assert_eq!(result.turns_used, 2);
+        assert_eq!(result.reason, "turn budget exhausted");
+        let reason = block_reason.lock().unwrap().clone().unwrap();
+        assert!(reason.contains("exhausted its turn budget (2/2)"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn goal_loop_finalize_nudge_then_block() {
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let prompts_clone = prompts.clone();
+        let block_reason = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let block_clone = block_reason.clone();
+        let result = run_kanban_goal_loop(
+            "t_nudge",
+            move |prompt| {
+                prompts_clone.lock().unwrap().push(prompt);
+                Box::pin(async { Ok("ok".to_string()) }) as LoopBox<_>
+            },
+            || Box::pin(async { Some("running".to_string()) }) as LoopBox<_>,
+            move |reason| {
+                *block_clone.lock().unwrap() = Some(reason);
+                Box::pin(async {}) as LoopBox<()>
+            },
+            |_response| Box::pin(async { verdict("done") }) as LoopBox<_>,
+            |_msg| {},
+            8,
+            "first",
+        )
+        .await;
+        assert_eq!(result.outcome, KanbanGoalOutcome::BlockedBudget);
+        assert_eq!(result.reason, "judged done, never finalized");
+        let prompts = prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("task is still open"), "{}", prompts[0]);
+        let reason = block_reason.lock().unwrap().clone().unwrap();
+        assert!(reason.contains("never called kanban_complete"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn goal_loop_wait_verdict_treated_as_continue() {
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let prompts_clone = prompts.clone();
+        let result = run_kanban_goal_loop(
+            "t_wait",
+            move |prompt| {
+                prompts_clone.lock().unwrap().push(prompt);
+                Box::pin(async { Ok("ok".to_string()) }) as LoopBox<_>
+            },
+            || Box::pin(async { Some("running".to_string()) }) as LoopBox<_>,
+            |_reason| Box::pin(async {}) as LoopBox<()>,
+            |_response| Box::pin(async { verdict("wait") }) as LoopBox<_>,
+            |_msg| {},
+            2,
+            "first",
+        )
+        .await;
+        assert_eq!(result.outcome, KanbanGoalOutcome::BlockedBudget);
+        assert_eq!(result.reason, "turn budget exhausted");
+        // wait downgrades to continue → continuation template, not
+        // finalize.
+        let prompts = prompts.lock().unwrap();
+        assert!(prompts[0].contains("not done yet"), "{}", prompts[0]);
+    }
+
+    #[tokio::test]
+    async fn goal_loop_stops_on_unexpected_status() {
+        let result = run_kanban_goal_loop(
+            "t_gone",
+            |_prompt| Box::pin(async { Ok(String::new()) }) as LoopBox<_>,
+            || Box::pin(async { Some("archived".to_string()) }) as LoopBox<_>,
+            |_reason| Box::pin(async {}) as LoopBox<()>,
+            |_response| Box::pin(async { verdict("continue") }) as LoopBox<_>,
+            |_msg| {},
+            5,
+            "first",
+        )
+        .await;
+        assert_eq!(result.outcome, KanbanGoalOutcome::Stopped);
+        assert_eq!(result.reason, "status=archived");
+    }
+
+    #[test]
+    fn goal_gate_allows_semantics() {
+        // Non-goal tasks always pass.
+        assert!(goal_gate_allows(false, Some("continue")));
+        assert!(goal_gate_allows(false, None));
+        // Goal tasks: done / skipped / no-judge pass; anything else
+        // rejects.
+        assert!(goal_gate_allows(true, Some("done")));
+        assert!(goal_gate_allows(true, Some("skipped")));
+        assert!(goal_gate_allows(true, None));
+        assert!(!goal_gate_allows(true, Some("continue")));
+        assert!(!goal_gate_allows(true, Some("wait")));
     }
 
     #[test]
