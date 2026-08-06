@@ -702,6 +702,10 @@ fn attach_webhook_routes(
         router = router.route("/webhooks/bluebubbles", post(bluebubbles_webhook_route));
         tracing::info!("gateway webhook route mounted: /webhooks/bluebubbles");
     }
+    if config.messaging.feishu.enabled {
+        router = router.route("/webhooks/feishu", post(feishu_webhook_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/feishu");
+    }
     router
 }
 
@@ -873,6 +877,41 @@ async fn whatsapp_webhook_route(
             }
         }
     }
+}
+
+async fn feishu_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let cfg = &config.messaging.feishu;
+    let header_pairs: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let pairing = if config.messaging.pairing {
+        Some(crate::pairing::PairingStore::open(&crate::config::ulnclaw_home()))
+    } else {
+        None
+    };
+    let result = crate::feishu::feishu_handle_webhook(
+        cfg,
+        &dispatcher,
+        pairing.as_ref(),
+        &body,
+        &header_pairs,
+    )
+    .await;
+    let status = match result.status {
+        200 => StatusCode::OK,
+        400 => StatusCode::BAD_REQUEST,
+        401 => StatusCode::UNAUTHORIZED,
+        413 => StatusCode::PAYLOAD_TOO_LARGE,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, axum::Json(result.body)).into_response()
 }
 
 async fn bluebubbles_webhook_route(

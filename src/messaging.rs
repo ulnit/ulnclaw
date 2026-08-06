@@ -76,6 +76,17 @@ pub struct MessagingConfig {
     /// plugin, sans E2EE).
     #[serde(default)]
     pub matrix: crate::matrix::MatrixConfig,
+    /// DingTalk via Stream Mode (hermes `platforms.dingtalk` plugin).
+    #[serde(default)]
+    pub dingtalk: crate::dingtalk::DingTalkConfig,
+    /// WeCom AI Bot via WebSocket gateway (hermes `platforms.wecom`
+    /// plugin).
+    #[serde(default)]
+    pub wecom: crate::wecom::WeComConfig,
+    /// Feishu/Lark via gateway webhook (hermes `platforms.feishu`
+    /// plugin, webhook transport).
+    #[serde(default)]
+    pub feishu: crate::feishu::FeishuConfig,
 }
 
 fn default_pairing() -> bool {
@@ -778,8 +789,24 @@ pub async fn run_messaging(
             crate::matrix::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.dingtalk.enabled {
+        let cfg = msg.dingtalk.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::dingtalk::run(cfg, dispatcher, pairing).await;
+        }));
+    }
+    if msg.wecom.enabled {
+        let cfg = msg.wecom.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::wecom::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix] enabled = true)");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom] enabled = true)");
         return;
     }
     for task in tasks {
