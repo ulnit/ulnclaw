@@ -12,6 +12,7 @@ import { PetOverlay } from "./pet";
 import { ModelPickerOverlay } from "./model-picker";
 import { FindBar } from "./find-bar";
 import { CommandPalette } from "./command-palette";
+import { ArtifactsOverlay } from "./artifacts";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -54,6 +55,7 @@ const state = {
   picker: null as ModelPickerOverlay | null,
   findBar: null as FindBar | null,
   palette: null as CommandPalette | null,
+  artifacts: null as ArtifactsOverlay | null,
   view: "chat" as "chat" | "kanban" | "projects" | "jobs",
 };
 
@@ -647,6 +649,17 @@ async function start(): Promise<void> {
   // webview): Ctrl/Cmd+F opens over the chat view, Enter steps.
   state.findBar = new FindBar(chatMain, el.messages, () => state.view === "chat");
 
+  // Artifacts browser (hermes artifacts-view parity): scans recent
+  // transcripts for links/files/images.
+  state.artifacts = new ArtifactsOverlay(
+    () => state.client,
+    () => state.sessions,
+    (id) => {
+      const session = state.sessions.find((s) => s.id === id);
+      if (session) void openSession(session);
+    },
+  );
+
   // Command palette (hermes command-palette parity): Ctrl/Cmd+K fuzzy
   // launcher for views, session switching, and session actions.
   state.palette = new CommandPalette({
@@ -664,6 +677,7 @@ async function start(): Promise<void> {
       if (state.current) await deleteSession(state.current);
     },
     modelPicker: () => state.picker?.open() ?? Promise.resolve(),
+    artifacts: () => state.artifacts?.open() ?? Promise.resolve(),
     findInChat: () => {
       switchView("chat");
       state.findBar?.open();
