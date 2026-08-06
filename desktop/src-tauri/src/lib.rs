@@ -3,7 +3,9 @@
 //! HTTP API from the webview (see ../src/gateway.ts).
 
 use std::sync::Mutex;
-use tauri::State;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, State};
 
 /// Handle of the managed gateway child process.
 struct GatewayProcess(Mutex<Option<u32>>);
@@ -170,10 +172,59 @@ mod toml_min {
     }
 }
 
+/// Show the main window (tray menu + left-click handler share this).
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Build the system-tray icon: Show/Quit menu, left-click restores the
+/// window. Failure is non-fatal — the app keeps running windowed (e.g.
+/// environments without a status-notifier implementation).
+fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let show = MenuItem::with_id(app, "show", "Show ulnclaw", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let mut builder = TrayIconBuilder::new()
+        .tooltip("ulnclaw")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder.build(app.handle())?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(GatewayProcess(Mutex::new(None)))
+        .setup(|app| {
+            if let Err(err) = setup_tray(app) {
+                eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             find_ulnclaw_binary,
             default_gateway_port,

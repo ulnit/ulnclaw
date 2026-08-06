@@ -75,6 +75,9 @@ child process.
   API (`POST /api/pets/hatch`, `GET /api/pets/hatch/:id`,
   `POST /api/pets/hatch/:id/pick|cancel`,
   `GET /api/pets/hatch/:id/draft/:index`).
+- **System tray** — tray icon with a Show/Quit menu; left-click restores
+  the main window. Creation is best-effort: without a status-notifier
+  implementation the app continues windowed.
 
 ### Prerequisites
 
@@ -166,6 +169,8 @@ Rust 侧负责托管 `ulnclaw gateway` 子进程。
   （`POST /api/pets/hatch`、`GET /api/pets/hatch/:id`、
   `POST /api/pets/hatch/:id/pick|cancel`、
   `GET /api/pets/hatch/:id/draft/:index`）。
+- **系统托盘** —— 带 Show/Quit 菜单的托盘图标，左键恢复主窗口；
+  创建为尽力而为：缺少状态通知器实现时应用继续以纯窗口模式运行。
 
 ### 前置条件
 
