@@ -31,6 +31,35 @@ export interface ChatReply {
   session_id: string;
 }
 
+export interface LearningGraphNode {
+  id: string;
+  label: string;
+  kind: "skill" | "memory";
+  timestamp: number | null;
+  category: string;
+  useCount: number;
+  state: string;
+  createdBy: string | null;
+  pinned: boolean;
+  memorySource?: string;
+}
+
+export interface LearningGraphPayload {
+  nodes: LearningGraphNode[];
+  edges: { source: string; target: string }[];
+  clusters: { category: string; count: number }[];
+  memory: { source: string; title: string; body: string; timestamp: number | null }[];
+  stats: Record<string, number>;
+}
+
+export interface LearningNodeDetail {
+  ok: boolean;
+  kind: "skill" | "memory";
+  label: string;
+  content: string;
+  message?: string;
+}
+
 /** One provider row from GET /api/model/options (gateway render_row). */
 export interface ModelOptionRow {
   slug: string;
@@ -295,6 +324,50 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`create session: HTTP ${response.status}`);
     return response.json();
+  }
+
+  async learningGraph(): Promise<LearningGraphPayload> {
+    const response = await fetch(this.endpoint("/api/learning/graph"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`learning graph: HTTP ${response.status}`);
+    return (await response.json()) as LearningGraphPayload;
+  }
+
+  async learningNode(id: string): Promise<LearningNodeDetail> {
+    const response = await fetch(
+      this.endpoint(`/api/learning/node?id=${encodeURIComponent(id)}`),
+      { headers: this.headers() },
+    );
+    const value = (await response.json()) as LearningNodeDetail;
+    if (!response.ok || !value.ok) {
+      throw new Error(value.message || `learning node: HTTP ${response.status}`);
+    }
+    return value;
+  }
+
+  async editLearningNode(id: string, content: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/learning/node"), {
+      method: "PUT",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ id, content }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok || !value.ok) {
+      throw new Error(value.message || `edit node: HTTP ${response.status}`);
+    }
+  }
+
+  async deleteLearningNode(id: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/learning/node"), {
+      method: "DELETE",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok || !value.ok) {
+      throw new Error(value.message || `delete node: HTTP ${response.status}`);
+    }
   }
 
   async messages(sessionId: string): Promise<MessageRow[]> {

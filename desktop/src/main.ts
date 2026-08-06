@@ -13,6 +13,7 @@ import { ModelPickerOverlay } from "./model-picker";
 import { FindBar } from "./find-bar";
 import { CommandPalette } from "./command-palette";
 import { ArtifactsOverlay } from "./artifacts";
+import { LearningOverlay } from "./learning";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -56,6 +57,7 @@ const state = {
   findBar: null as FindBar | null,
   palette: null as CommandPalette | null,
   artifacts: null as ArtifactsOverlay | null,
+  learning: null as LearningOverlay | null,
   view: "chat" as "chat" | "kanban" | "projects" | "jobs",
 };
 
@@ -649,6 +651,10 @@ async function start(): Promise<void> {
   // webview): Ctrl/Cmd+F opens over the chat view, Enter steps.
   state.findBar = new FindBar(chatMain, el.messages, () => state.view === "chat");
 
+  // Learning view (hermes star-map parity): learned skills + memory
+  // graph over /api/learning/*.
+  state.learning = new LearningOverlay(() => state.client);
+
   // Artifacts browser (hermes artifacts-view parity): scans recent
   // transcripts for links/files/images.
   state.artifacts = new ArtifactsOverlay(
@@ -678,6 +684,7 @@ async function start(): Promise<void> {
     },
     modelPicker: () => state.picker?.open() ?? Promise.resolve(),
     artifacts: () => state.artifacts?.open() ?? Promise.resolve(),
+    learning: () => state.learning?.open() ?? Promise.resolve(),
     findInChat: () => {
       switchView("chat");
       state.findBar?.open();

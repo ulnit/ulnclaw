@@ -23,6 +23,7 @@ export interface CommandPaletteHooks {
   deleteSession(): void | Promise<void>;
   modelPicker(): void | Promise<void>;
   artifacts(): void | Promise<void>;
+  learning(): void | Promise<void>;
   findInChat(): void;
   switchView(view: "chat" | "kanban" | "projects" | "jobs"): void;
   openSettings(): void;
@@ -118,6 +119,7 @@ export class CommandPalette {
       { id: "view-jobs", label: "Go to Jobs (cron)", group: "Navigate", run: () => hooks.switchView("jobs") },
       { id: "find", label: "Find in chat", group: "Session", hint: "Ctrl/Cmd+F", run: () => hooks.findInChat() },
       { id: "artifacts", label: "Browse artifacts…", group: "Session", hint: "links, files, images", run: () => hooks.artifacts() },
+      { id: "learning", label: "Learning graph…", group: "Session", hint: "learned skills + memory", run: () => hooks.learning() },
       { id: "model", label: "Model for this session…", group: "Session", run: () => hooks.modelPicker() },
       { id: "rename", label: "Rename session…", group: "Session", run: () => hooks.renameSession() },
       { id: "delete", label: "Delete session…", group: "Session", run: () => hooks.deleteSession() },

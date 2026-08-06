@@ -594,6 +594,13 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/model", post(lock_session_model))
         .route("/api/sessions/:id/recap", get(session_recap))
         .route("/api/uploads", post(upload_media))
+        .route("/api/learning/graph", get(learning_graph))
+        .route(
+            "/api/learning/node",
+            get(learning_node_get)
+                .put(learning_node_put)
+                .delete(learning_node_delete),
+        )
         .route("/api/jobs", get(list_jobs).post(create_job))
         .route(
             "/api/jobs/:id",
@@ -2840,6 +2847,93 @@ async fn session_messages(
 /// back the path reference. The agent inspects it with
 /// vision_analyze/read_file — hermes' text-fallback media semantics for
 /// surfaces without native multimodal injection.
+// ── Learning graph (hermes web_server /api/learning/* parity) ─────────────
+
+/// GET /api/learning/graph — learned skills + memory chunks with graph
+/// edges (desktop "star map" / journey panel).
+async fn learning_graph(State(state): State<Arc<GatewayState>>) -> Response {
+    let home = state.agent.context().home.clone();
+    let payload = tokio::task::spawn_blocking(move || crate::learning_graph::build_learning_graph(&home))
+        .await
+        .unwrap_or_else(|e| json!({"error": format!("learning graph task failed: {e}")}));
+    axum::Json(payload).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct LearningNodeQuery {
+    id: String,
+}
+
+/// GET /api/learning/node?id= — node content for an edit prefill.
+async fn learning_node_get(
+    State(state): State<Arc<GatewayState>>,
+    Query(params): Query<LearningNodeQuery>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let id = params.id.clone();
+    let result = tokio::task::spawn_blocking(move || crate::learning_mutations::node_detail(&home, &id))
+        .await
+        .unwrap_or_else(|e| json!({"ok": false, "message": format!("task failed: {e}")}));
+    if result.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        axum::Json(result).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(result),
+        )
+            .into_response()
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LearningNodeRef {
+    id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct LearningNodeEdit {
+    id: String,
+    content: String,
+}
+
+/// DELETE /api/learning/node — archive a learned skill or remove a
+/// memory chunk.
+async fn learning_node_delete(
+    State(state): State<Arc<GatewayState>>,
+    axum::Json(body): axum::Json<LearningNodeRef>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let id = body.id.clone();
+    let result = tokio::task::spawn_blocking(move || crate::learning_mutations::delete_node(&home, &id))
+        .await
+        .unwrap_or_else(|e| json!({"ok": false, "message": format!("task failed: {e}")}));
+    if result.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        axum::Json(result).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, axum::Json(result)).into_response()
+    }
+}
+
+/// PUT /api/learning/node — rewrite a node's content.
+async fn learning_node_put(
+    State(state): State<Arc<GatewayState>>,
+    axum::Json(body): axum::Json<LearningNodeEdit>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let id = body.id.clone();
+    let content = body.content.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::learning_mutations::edit_node(&home, &id, &content)
+    })
+    .await
+    .unwrap_or_else(|e| json!({"ok": false, "message": format!("task failed: {e}")}));
+    if result.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        axum::Json(result).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, axum::Json(result)).into_response()
+    }
+}
+
 async fn upload_media(
     State(state): State<Arc<GatewayState>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -4719,6 +4813,151 @@ mod tests {
         assert_eq!(body["service"], "ulnclaw-gateway");
     }
 
+    fn learning_state(home: &std::path::Path) -> Arc<GatewayState> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let provider = Arc::new(
+            OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let agent = Agent::new(provider, ToolRegistry::new())
+            .with_store(store)
+            .with_context(crate::tools::context::ToolContext::default().with_home(home));
+        GatewayState::new(Arc::new(agent), "test-model".into(), "test".into(), Some("sekret".into()), ApprovalRouter::new())
+            .expect("state builds")
+    }
+
+    async fn send_json(
+        app: Router,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let mut request = axum::http::Request::builder().uri(uri).method(method);
+        if let Some(token) = token {
+            request = request.header("authorization", format!("Bearer {}", token));
+        }
+        let request = request
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, value)
+    }
+
+    fn seed_learning_home() -> tempfile::TempDir {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path();
+        let skill_dir = home.join("skills").join("debug-helper");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: debug-helper\ncategory: debugging\n---\n\n# Debug helper\n",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("skills").join(".usage.json"),
+            r#"{"debug-helper": {"use_count": 3, "created_by": "agent", "state": "active"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join("memory")).unwrap();
+        std::fs::write(
+            home.join("memory").join("MEMORY.md"),
+            "# Memory\n\n- user prefers dark mode\n- deploy on fridays\n",
+        )
+        .unwrap();
+        temp
+    }
+
+    #[tokio::test]
+    async fn test_learning_graph_and_node_mutations() {
+        let temp = seed_learning_home();
+        let app = router(learning_state(temp.path()));
+
+        // Graph: learned skill + both memory entries surface.
+        let (status, body) = get_json(app.clone(), "/api/learning/graph", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let ids: Vec<&str> = body["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&"debug-helper"));
+        assert!(ids.contains(&"memory:memory:0"));
+        assert!(ids.contains(&"memory:memory:1"));
+        assert_eq!(body["stats"]["learned_skills"], 1);
+        assert_eq!(body["stats"]["memory_nodes"], 2);
+
+        // Node detail: skill + memory prefills.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/learning/node?id=debug-helper",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["kind"], "skill");
+        assert!(body["content"].as_str().unwrap().contains("Debug helper"));
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/learning/node?id=memory:memory:0",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["content"], "user prefers dark mode");
+        let (status, _) = get_json(app.clone(), "/api/learning/node?id=nope", Some("sekret")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Edit a memory entry.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/learning/node",
+            Some("sekret"),
+            json!({"id": "memory:memory:0", "content": "user prefers light mode"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let (_, body) = get_json(
+            app.clone(),
+            "/api/learning/node?id=memory:memory:0",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(body["content"], "user prefers light mode");
+
+        // Delete the second entry.
+        let (status, body) = send_json(
+            app.clone(),
+            "DELETE",
+            "/api/learning/node",
+            Some("sekret"),
+            json!({"id": "memory:memory:1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let (_, body) = get_json(app.clone(), "/api/learning/graph", Some("sekret")).await;
+        assert_eq!(body["stats"]["memory_nodes"], 1);
+        drop(temp);
+    }
+
     #[tokio::test]
     async fn test_auth_gates_api_routes() {
         let app = router(test_state());
@@ -5378,29 +5617,6 @@ mod tests {
         headers.insert("x-hermes-session-id", "legacy".parse().unwrap());
         assert_eq!(session_id_from_headers(&headers), Some("legacy".into()));
         assert_eq!(session_id_from_headers(&HeaderMap::new()), None);
-    }
-
-    async fn send_json(
-        app: Router,
-        method: &str,
-        uri: &str,
-        token: Option<&str>,
-        body: Value,
-    ) -> (StatusCode, Value) {
-        let mut request = axum::http::Request::builder().uri(uri).method(method);
-        if let Some(token) = token {
-            request = request.header("authorization", format!("Bearer {}", token));
-        }
-        let request = request
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
     /// State with a cron store + skills dir attached (phase 9 endpoints).
