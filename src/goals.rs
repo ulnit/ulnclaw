@@ -1636,7 +1636,9 @@ pub async fn judge_goal(
         temperature: Some(0.0),
         stream: false,
         stop: None,
-    };
+    
+    images: None,
+};
 
     match resolution.provider.chat_completion(request).await {
         Ok(response) => (parse_judge_response(&response.content.unwrap_or_default()), false),
@@ -1697,7 +1699,9 @@ pub async fn draft_contract(
         temperature: Some(0.0),
         stream: false,
         stop: None,
-    };
+    
+    images: None,
+};
     let response = match resolution.provider.chat_completion(request).await {
         Ok(response) => response,
         Err(e) => {

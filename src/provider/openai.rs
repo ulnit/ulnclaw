@@ -221,8 +221,10 @@ struct ApiRequest {
 #[derive(Serialize)]
 struct ApiMessage {
     role: String,
+    /// JSON string for plain text, array of content parts when images
+    /// are attached (P226 multimodal injection).
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<ApiToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -393,10 +395,39 @@ pub fn parse_stream_chunk(data: &str) -> crate::error::Result<crate::provider::S
 
 // --- Conversion helpers ---
 
+/// Attach images to the last user message (P226 native multimodal
+/// injection): its `content` becomes an array of parts — the text part
+/// plus one `image_url` part per image (hermes media-injection parity).
+fn attach_images(api_messages: &mut [ApiMessage], images: &[crate::provider::MessageImage]) {
+    if images.is_empty() {
+        return;
+    }
+    let Some(idx) = api_messages.iter().rposition(|m| m.role == "user") else {
+        return;
+    };
+    let mut parts: Vec<serde_json::Value> = Vec::new();
+    if let Some(content) = api_messages[idx].content.clone() {
+        let text = match content {
+            serde_json::Value::String(text) => text,
+            other => other.to_string(),
+        };
+        if !text.trim().is_empty() {
+            parts.push(serde_json::json!({"type": "text", "text": text}));
+        }
+    }
+    for image in images {
+        parts.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": {"url": image.url},
+        }));
+    }
+    api_messages[idx].content = Some(serde_json::Value::Array(parts));
+}
+
 fn message_to_api(msg: &Message) -> ApiMessage {
     ApiMessage {
         role: msg.role.to_string(),
-        content: msg.content.clone(),
+        content: msg.content.clone().map(serde_json::Value::String),
         tool_calls: msg.tool_calls.as_ref().map(|calls| {
             calls
                 .iter()
@@ -432,7 +463,10 @@ impl Provider for OpenAiProvider {
         let url = self.api_url();
         debug!("OpenAI API call to: {}", url);
 
-        let api_messages: Vec<ApiMessage> = request.messages.iter().map(message_to_api).collect();
+        let mut api_messages: Vec<ApiMessage> = request.messages.iter().map(message_to_api).collect();
+        if let Some(ref images) = request.images {
+            attach_images(&mut api_messages, images);
+        }
 
         let api_tools: Option<Vec<ApiTool>> = if request.tools.is_empty() {
             None
@@ -499,7 +533,10 @@ impl Provider for OpenAiProvider {
         let url = self.api_url();
         debug!("OpenAI streaming call to: {}", url);
 
-        let api_messages: Vec<ApiMessage> = request.messages.iter().map(message_to_api).collect();
+        let mut api_messages: Vec<ApiMessage> = request.messages.iter().map(message_to_api).collect();
+        if let Some(ref images) = request.images {
+            attach_images(&mut api_messages, images);
+        }
         let api_tools: Option<Vec<ApiTool>> = if request.tools.is_empty() {
             None
         } else {
@@ -802,7 +839,9 @@ mod streaming_tests {
             temperature: None,
             stream: false,
             stop: None,
-        };
+        
+        images: None,
+};
         let response = provider.chat_completion(request).await.unwrap();
         assert_eq!(response.content.as_deref(), Some("recovered"));
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
@@ -849,7 +888,9 @@ mod streaming_tests {
             temperature: None,
             stream: false,
             stop: None,
-        };
+        
+        images: None,
+};
         let err = provider.chat_completion(request).await.unwrap_err();
         assert!(err.to_string().contains("429"), "got: {}", err);
         assert_eq!(attempts.load(Ordering::SeqCst), 2); // initial + 1 retry
@@ -874,6 +915,96 @@ mod streaming_tests {
         assert_eq!(
             lines,
             vec!["data: one", "", "data: two", ": keepalive", "data: [DONE]"]
+        );
+    }
+
+    #[test]
+    fn attach_images_builds_content_parts_on_last_user_message() {
+        let mut messages = vec![
+            ApiMessage {
+                role: "system".to_string(),
+                content: Some(serde_json::Value::String("sys".to_string())),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ApiMessage {
+                role: "user".to_string(),
+                content: Some(serde_json::Value::String("what is this?".to_string())),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ApiMessage {
+                role: "assistant".to_string(),
+                content: Some(serde_json::Value::String("hmm".to_string())),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ApiMessage {
+                role: "user".to_string(),
+                content: Some(serde_json::Value::String("and this?".to_string())),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ];
+        let images = vec![crate::provider::MessageImage {
+            url: "data:image/png;base64,AAA".to_string(),
+            media_type: Some("image/png".to_string()),
+        }];
+        attach_images(&mut messages, &images);
+        // Earlier user message untouched.
+        assert_eq!(
+            messages[1].content,
+            Some(serde_json::Value::String("what is this?".to_string()))
+        );
+        // Last user message became a parts array: text + image_url.
+        let parts = messages[3].content.clone().unwrap();
+        let arr = parts.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "and this?");
+        assert_eq!(arr[1]["type"], "image_url");
+        assert_eq!(arr[1]["image_url"]["url"], "data:image/png;base64,AAA");
+        // Non-user messages untouched.
+        assert_eq!(
+            messages[0].content,
+            Some(serde_json::Value::String("sys".to_string()))
+        );
+    }
+
+    #[test]
+    fn attach_images_noop_when_empty_or_no_user() {
+        let mut messages = vec![ApiMessage {
+            role: "assistant".to_string(),
+            content: Some(serde_json::Value::String("hi".to_string())),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }];
+        let images = vec![crate::provider::MessageImage {
+            url: "data:image/png;base64,AAA".to_string(),
+            media_type: None,
+        }];
+        attach_images(&mut messages, &images);
+        // No user message → untouched.
+        assert_eq!(
+            messages[0].content,
+            Some(serde_json::Value::String("hi".to_string()))
+        );
+        let mut user = vec![ApiMessage {
+            role: "user".to_string(),
+            content: Some(serde_json::Value::String("hi".to_string())),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }];
+        attach_images(&mut user, &[]);
+        assert_eq!(
+            user[0].content,
+            Some(serde_json::Value::String("hi".to_string()))
         );
     }
 }

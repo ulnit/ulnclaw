@@ -182,7 +182,9 @@ pub async fn generate_title_forced(
         temperature: Some(0.3),
         stream: false,
         stop: None,
-    };
+    
+    images: None,
+};
 
     let content = match resolution.provider.chat_completion(request).await {
         Ok(response) => response.content.unwrap_or_default(),

@@ -215,7 +215,9 @@ async fn call_aux(
         temperature: Some(0.3),
         stream: false,
         stop: None,
-    };
+    
+    images: None,
+};
     let response = resolution.provider.chat_completion(request).await?;
     Ok(response.content.unwrap_or_default())
 }

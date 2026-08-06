@@ -104,6 +104,7 @@ fn simple_user_request(prompt: &str, model: &str, temperature: Option<f32>, max_
         temperature,
         stream: false,
         stop: None,
+        images: None,
     }
 }
 
@@ -287,7 +288,9 @@ Proceeding without aggregated guidance.]\nReferences: {}\n\n{}",
                 temperature: preset.aggregator_temperature,
                 stream: false,
                 stop: None,
-            };
+            
+            images: None,
+};
             match provider.chat_completion(request).await {
                 Ok(response) => response.content.unwrap_or_default(),
                 Err(e) => {
@@ -719,7 +722,9 @@ for this turn. Synthesize it into your answer; do not quote it verbatim.]\n{}",
         temperature: preset.aggregator_temperature,
         stream: false,
         stop: request.stop.clone(),
-    };
+    
+    images: None,
+};
     let provider = factory(&preset.aggregator)?;
     match provider.chat_completion(aggregator_request).await {
         Ok(response) => Ok(response),
@@ -1057,6 +1062,7 @@ mod tests {
             temperature: None,
             stream: false,
             stop: None,
+            images: None,
         }
     }
 

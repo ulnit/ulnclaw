@@ -472,8 +472,12 @@
   看板其余有意保留的
   差异：调度期 `default_assignee` 应用（ulnclaw 在默认 profile 上 spawn
   未指派任务而不是跳过）。
-- 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
-  video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
+- 消息平台：图片附件以原生多模态内容注入用户轮（P226，对齐 hermes
+  媒体注入）：≤ 8 MB 的 `image/*` 文件 base64 编码为 `data:` URL，随本轮
+  请求发送 —— OpenAI 兼容端以 `image_url` 部件、Anthropic 以 base64 图像
+  块呈现；其余媒介（以及 `[messaging] multimodal_injection = false` 时的
+  图片）仍为缓存路径引用，agent 用 vision_analyze/video_analyze/read_file
+  检视。注入的图片仅存活于当前轮（会话历史保留文本轮）。
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
   在静态二进制中需以 `stt.local.command` 或云 provider 替代；Telegram clarify + 执行审批行内键盘已移植（P225）；
   hermes 全部二十二个平台适配器均已移植（微信/QQ/元宝以原生适配器加入；WhatsApp Cloud + MS-Graph 接入、通用 webhook 平台、Twilio SMS、Microsoft Teams、LINE、Google Chat、Raft 与 A2A 均经网关 webhook 路由）；配对与 hermes 相同按

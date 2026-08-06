@@ -550,9 +550,15 @@ performance and a single static binary.
   divergences: dispatch-time `default_assignee` application (ulnclaw
   spawns unassigned tasks on the default profile instead of skipping
   them).
-- Messaging: media arrives as cached path references the agent inspects
-  with vision_analyze/video_analyze/read_file (hermes' native multimodal
-  user-turn injection is not ported); voice notes ARE transcribed via the
+- Messaging: image attachments are injected natively into the user turn
+  as multimodal content parts (P226, hermes media-injection parity):
+  `image/*` files ≤ 8 MB are base64-encoded into `data:` URLs and ride
+  the turn on OpenAI-compatible (`image_url` parts) and Anthropic
+  (base64 image blocks) providers; every other medium — and images when
+  `[messaging] multimodal_injection = false` — stays a cached path
+  reference the agent inspects with vision_analyze/video_analyze/read_file.
+  Injected images are ephemeral to the live turn (session history keeps
+  the text turn). Voice notes ARE transcribed via the
   `[stt]` pipeline, but the built-in `local` faster-whisper provider needs
   `stt.local.command` or a cloud provider in the static binary; Telegram
   clarify + exec-approval inline keyboards ARE ported (P225); all twenty-two of hermes' platform adapters

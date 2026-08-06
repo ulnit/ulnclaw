@@ -136,7 +136,9 @@ impl ContextCompressor {
             temperature: Some(0.2),
             stream: false,
             stop: None,
-        };
+        
+        images: None,
+};
 
         let summary = match provider.chat_completion(summary_request).await {
             Ok(response) => response.content.unwrap_or_default(),

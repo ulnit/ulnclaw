@@ -192,7 +192,10 @@ impl AnthropicProvider {
     }
 
     fn build_body(&self, request: &ProviderRequest, stream: bool) -> Value {
-        let (system, messages) = messages_to_anthropic(&request.messages);
+        let (system, mut messages) = messages_to_anthropic(&request.messages);
+        if let Some(ref images) = request.images {
+            attach_images_anthropic(&mut messages, images);
+        }
         let tools = tools_to_anthropic(&request.tools);
         let mut body = json!({
             "model": request.model,
@@ -322,6 +325,38 @@ struct AnthropicErrorDetail {
 /// - Assistant tool calls become `tool_use` blocks.
 /// - Tool messages become `tool_result` blocks; consecutive tool results are
 ///   merged into one user turn (Anthropic requires alternating roles).
+/// Attach images to the last user turn as anthropic base64 image blocks
+/// (P226 native multimodal injection). Only `data:` URLs are injected —
+/// http(s) image URLs stay path-referenced text (messaging always builds
+/// data URLs from the media cache).
+fn attach_images_anthropic(messages: &mut [Value], images: &[crate::provider::MessageImage]) {
+    let mut blocks: Vec<Value> = Vec::new();
+    for image in images {
+        let Some(data) = image.data_url_base64() else {
+            continue;
+        };
+        blocks.push(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image.resolved_media_type(),
+                "data": data,
+            },
+        }));
+    }
+    if blocks.is_empty() {
+        return;
+    }
+    let Some(idx) = messages.iter().rposition(|m| m["role"] == "user") else {
+        return;
+    };
+    if let Some(arr) = messages[idx].get_mut("content").and_then(|c| c.as_array_mut()) {
+        for block in blocks {
+            arr.push(block);
+        }
+    }
+}
+
 pub fn messages_to_anthropic(messages: &[Message]) -> (Option<String>, Vec<Value>) {
     let mut system_parts: Vec<String> = Vec::new();
     let mut out: Vec<Value> = Vec::new();
@@ -985,5 +1020,39 @@ mod tests {
             lines.push(line);
         }
         assert_eq!(lines, vec!["data: a", "", "data: b", "data: c"]);
+    }
+
+    #[test]
+    fn attach_images_anthropic_appends_base64_blocks() {
+        let mut messages = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "what is this?"}],
+        })];
+        let images = vec![crate::provider::MessageImage {
+            url: "data:image/jpeg;base64,/9j/4AAQ".to_string(),
+            media_type: Some("image/jpeg".to_string()),
+        }];
+        attach_images_anthropic(&mut messages, &images);
+        let blocks = messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(blocks[1]["source"]["data"], "/9j/4AAQ");
+    }
+
+    #[test]
+    fn attach_images_anthropic_skips_http_urls() {
+        let mut messages = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}],
+        })];
+        let images = vec![crate::provider::MessageImage {
+            url: "https://example.com/cat.jpg".to_string(),
+            media_type: None,
+        }];
+        attach_images_anthropic(&mut messages, &images);
+        assert_eq!(messages[0]["content"].as_array().unwrap().len(), 1);
     }
 }

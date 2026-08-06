@@ -505,6 +505,23 @@ impl Agent {
         conversation_history: Option<Vec<Message>>,
         resume_session_id: Option<&str>,
     ) -> Result<RunResult> {
+        self.run_with_session_images(user_message, Vec::new(), conversation_history, resume_session_id)
+            .await
+    }
+
+    /// Run with images natively attached to the user turn (P226
+    /// multimodal injection — hermes media-injection parity). Images
+    /// ride every model call of THIS turn (the tool loop re-sends the
+    /// user turn each iteration, same as hermes keeping the media in
+    /// the turn's content parts); they are not persisted into the
+    /// session history.
+    pub async fn run_with_session_images(
+        &self,
+        user_message: &str,
+        images: Vec<crate::provider::MessageImage>,
+        conversation_history: Option<Vec<Message>>,
+        resume_session_id: Option<&str>,
+    ) -> Result<RunResult> {
         // Per-turn primary restore (hermes `restore_primary_runtime`): a
         // fallback activated on the previous turn does not stick.
         *self.fallback_active.lock().await = None;
@@ -701,7 +718,7 @@ impl Agent {
                 );
                 let _ = crate::plugins::invoke_hook("pre_api_request", payload).await;
             }
-            let response = match self.call_provider(&messages).await {
+            let response = match self.call_provider(&messages, &images).await {
                 Ok(response) => response,
                 Err(error) => {
                     if crate::plugins::has_hook("api_request_error") {
@@ -919,15 +936,19 @@ impl Agent {
         Ok(result.content)
     }
 
-    async fn call_provider(&self, messages: &[Message]) -> Result<crate::provider::ProviderResponse> {
+    async fn call_provider(
+        &self,
+        messages: &[Message],
+        images: &[crate::provider::MessageImage],
+    ) -> Result<crate::provider::ProviderResponse> {
         // Active runtime: primary provider, or the last activated fallback
         // (hermes keeps the fallback active until the next turn restores
         // the primary).
         let active_index = *self.fallback_active.lock().await;
-        let result = self.call_on_active(messages, active_index).await;
+        let result = self.call_on_active(messages, images, active_index).await;
         match result {
             Ok(response) => Ok(response),
-            Err(error) => self.failover(messages, active_index, error).await,
+            Err(error) => self.failover(messages, images, active_index, error).await,
         }
     }
 
@@ -935,6 +956,7 @@ impl Agent {
     async fn call_on_active(
         &self,
         messages: &[Message],
+        images: &[crate::provider::MessageImage],
         active_index: Option<usize>,
     ) -> Result<crate::provider::ProviderResponse> {
         match active_index {
@@ -944,14 +966,14 @@ impl Agent {
                         .provider
                         .get_or_try_init(|| self.build_fallback_provider(entry))
                         .await?;
-                    self.call_with(messages, provider.as_ref(), entry.model.clone())
+                    self.call_with(messages, images, provider.as_ref(), entry.model.clone())
                         .await
                 }
                 None => Err(AgentError::provider("fallback index out of range")),
             },
             None => {
                 let provider = self.provider.clone();
-                self.call_with(messages, provider.as_ref(), self.effective_model())
+                self.call_with(messages, images, provider.as_ref(), self.effective_model())
                     .await
             }
         }
@@ -963,6 +985,7 @@ impl Agent {
     async fn failover(
         &self,
         messages: &[Message],
+        images: &[crate::provider::MessageImage],
         from_index: Option<usize>,
         mut error: AgentError,
     ) -> Result<crate::provider::ProviderResponse> {
@@ -988,7 +1011,7 @@ impl Agent {
                 }
             };
             match self
-                .call_with(messages, provider.as_ref(), entry.model.clone())
+                .call_with(messages, images, provider.as_ref(), entry.model.clone())
                 .await
             {
                 Ok(response) => {
@@ -1006,6 +1029,7 @@ impl Agent {
     async fn call_with(
         &self,
         messages: &[Message],
+        images: &[crate::provider::MessageImage],
         provider: &dyn Provider,
         model: String,
     ) -> Result<crate::provider::ProviderResponse> {
@@ -1020,6 +1044,11 @@ impl Agent {
             temperature: self.config.temperature,
             stream: STREAM_EMITTER.try_with(|_| ()).is_ok(),
             stop: None,
+            images: if images.is_empty() {
+                None
+            } else {
+                Some(images.to_vec())
+            },
         };
 
         // Non-streaming path (no active stream consumer, or provider

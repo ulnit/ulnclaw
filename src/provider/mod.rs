@@ -78,6 +78,52 @@ pub struct ProviderRequest {
     pub temperature: Option<f32>,
     pub stream: bool,
     pub stop: Option<Vec<String>>,
+    /// Images attached to the LAST user message — native multimodal
+    /// user-turn injection (hermes media-injection parity, P226).
+    /// Providers serialize them as content parts; vision-less providers
+    /// ignore them (the text turn still carries the path references).
+    pub images: Option<Vec<MessageImage>>,
+}
+
+/// Image attached natively to a user turn (P226 multimodal injection).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MessageImage {
+    /// `http(s)` URL or a `data:` URL (base64). Messaging turns use
+    /// data URLs built from the media cache.
+    pub url: String,
+    /// Media type — required by block-based providers (anthropic
+    /// base64 image blocks); inferred from a data-URL prefix when
+    /// omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+}
+
+impl MessageImage {
+    /// Resolved media type: explicit field first, then the data-URL
+    /// prefix, then a generic image fallback.
+    pub fn resolved_media_type(&self) -> String {
+        if let Some(ref mt) = self.media_type {
+            if !mt.trim().is_empty() {
+                return mt.trim().to_string();
+            }
+        }
+        if let Some(rest) = self.url.strip_prefix("data:") {
+            if let Some((mt, _)) = rest.split_once(';') {
+                if !mt.is_empty() {
+                    return mt.to_string();
+                }
+            }
+        }
+        "image/png".to_string()
+    }
+
+    /// Base64 payload of a `data:` URL (without the prefix), when this
+    /// image is inline data.
+    pub fn data_url_base64(&self) -> Option<&str> {
+        let rest = self.url.strip_prefix("data:")?;
+        let (_, data) = rest.split_once(",")?;
+        Some(data)
+    }
 }
 
 /// Response from a provider
@@ -313,5 +359,57 @@ impl ProviderConfig {
                 "Local provider not yet implemented",
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod message_image_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_media_type_prefers_explicit_field() {
+        let image = MessageImage {
+            url: "data:image/jpeg;base64,AAA".to_string(),
+            media_type: Some("image/webp".to_string()),
+        };
+        assert_eq!(image.resolved_media_type(), "image/webp");
+    }
+
+    #[test]
+    fn resolved_media_type_infers_from_data_url() {
+        let image = MessageImage {
+            url: "data:image/png;base64,AAA".to_string(),
+            media_type: None,
+        };
+        assert_eq!(image.resolved_media_type(), "image/png");
+        // Blank field falls through to inference too.
+        let blank = MessageImage {
+            url: "data:image/gif;base64,AAA".to_string(),
+            media_type: Some("  ".to_string()),
+        };
+        assert_eq!(blank.resolved_media_type(), "image/gif");
+    }
+
+    #[test]
+    fn resolved_media_type_fallback_for_http_urls() {
+        let image = MessageImage {
+            url: "https://example.com/cat.jpg".to_string(),
+            media_type: None,
+        };
+        assert_eq!(image.resolved_media_type(), "image/png");
+    }
+
+    #[test]
+    fn data_url_base64_extracts_payload() {
+        let image = MessageImage {
+            url: "data:image/png;base64,aGVsbG8=".to_string(),
+            media_type: None,
+        };
+        assert_eq!(image.data_url_base64(), Some("aGVsbG8="));
+        let http = MessageImage {
+            url: "https://example.com/cat.jpg".to_string(),
+            media_type: None,
+        };
+        assert_eq!(http.data_url_base64(), None);
     }
 }

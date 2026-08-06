@@ -367,7 +367,9 @@ pub async fn smart_assess(
         temperature: Some(0.0),
         stream: false,
         stop: None,
-    };
+    
+    images: None,
+};
     match provider.chat_completion(request).await {
         Ok(response) => parse_smart_verdict(response.content.as_deref().unwrap_or("")),
         Err(_) => SmartVerdict::Escalate,

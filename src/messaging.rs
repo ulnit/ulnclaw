@@ -41,6 +41,12 @@ pub struct MessagingConfig {
     /// `pair` behavior). Approved codes join the allowlist as a union.
     #[serde(default = "default_pairing")]
     pub pairing: bool,
+    /// Inject image attachments natively into the user turn as
+    /// multimodal content parts (P226, hermes media-injection parity).
+    /// When false — or for non-image media — attachments stay path
+    /// references the agent inspects with vision_analyze/read_file.
+    #[serde(default = "default_multimodal_injection")]
+    pub multimodal_injection: bool,
     /// WhatsApp Cloud webhook platform (mounted on the gateway router).
     #[serde(default)]
     pub whatsapp_cloud: crate::webhook_platforms::WhatsAppCloudConfig,
@@ -138,6 +144,10 @@ pub struct MessagingConfig {
     /// `platforms.a2a` plugin).
     #[serde(default)]
     pub a2a: crate::a2a::A2aConfig,
+}
+
+fn default_multimodal_injection() -> bool {
+    true
 }
 
 fn default_pairing() -> bool {
@@ -713,19 +723,38 @@ impl Dispatcher {
         } else {
             format!("{}: {}", event.sender_name, user_text)
         };
-        // Cached attachments are referenced by path so the agent can apply
-        // vision_analyze / video_analyze / read_file (hermes text-fallback
-        // semantics for media). Transcribed voice notes already appear in
-        // the enriched text — skip them to avoid duplicate path noise.
+        // Cached attachments: images are injected natively into the user
+        // turn as multimodal content (P226, hermes media-injection
+        // parity); every other medium stays a path reference the agent
+        // can inspect with vision_analyze / video_analyze / read_file
+        // (hermes text-fallback semantics). Transcribed voice notes
+        // already appear in the enriched text — skip them to avoid
+        // duplicate noise.
         let remaining: Vec<&MediaAttachment> = event
             .attachments
             .iter()
             .filter(|a| !transcribed.contains(&a.path))
             .collect();
-        prompt.push_str(&attachment_note_refs(&remaining));
+        let (injectable, mut referenced) = if config.messaging.multimodal_injection {
+            split_injectable_images(&remaining)
+        } else {
+            (Vec::new(), remaining.clone())
+        };
+        let mut images: Vec<crate::provider::MessageImage> = Vec::new();
+        for attachment in injectable {
+            match data_url_from_cache(attachment) {
+                Some(url) => images.push(crate::provider::MessageImage {
+                    url,
+                    media_type: Some(attachment.mime.clone()),
+                }),
+                // Unreadable cache entry → degrade to a path reference.
+                None => referenced.push(attachment),
+            }
+        }
+        prompt.push_str(&attachment_note_refs(&referenced));
         let result = self
             .agent
-            .run_with_session(&prompt, Some(history.clone()), Some(key))
+            .run_with_session_images(&prompt, images, Some(history.clone()), Some(key))
             .await?;
         *history = result
             .conversation
@@ -842,6 +871,41 @@ async fn download_to_cache(
             None
         }
     }
+}
+
+/// Per-image inline-injection cap — base64 inflates ~33%, and
+/// providers reject giant payloads (hermes applies a similar ceiling).
+const MAX_INLINE_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Split cached attachments into inline-injectable images (mime
+/// `image/*` within the size cap) and everything else (P226 multimodal
+/// injection). Non-images and oversized images stay path references.
+fn split_injectable_images<'a>(
+    attachments: &[&'a MediaAttachment],
+) -> (Vec<&'a MediaAttachment>, Vec<&'a MediaAttachment>) {
+    let mut images = Vec::new();
+    let mut rest = Vec::new();
+    for attachment in attachments {
+        if attachment.mime.starts_with("image/") && attachment.bytes <= MAX_INLINE_IMAGE_BYTES {
+            images.push(*attachment);
+        } else {
+            rest.push(*attachment);
+        }
+    }
+    (images, rest)
+}
+
+/// Build a `data:` URL from a cached attachment (base64). `None` when
+/// the file vanished or reads empty — the caller degrades the
+/// attachment back to a path reference.
+fn data_url_from_cache(attachment: &MediaAttachment) -> Option<String> {
+    let data = std::fs::read(&attachment.path).ok()?;
+    if data.is_empty() {
+        return None;
+    }
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    Some(format!("data:{};base64,{}", attachment.mime, encoded))
 }
 
 /// Render attachments as a text note appended to the user message —
@@ -4939,6 +5003,56 @@ mod tests {
         assert!(note.contains("1234 bytes"));
         assert!(note.contains("pic.jpg"));
         assert!(note.contains("vision_analyze"));
+    }
+
+    #[test]
+    fn split_injectable_images_filters_mime_and_size() {
+        let img_ok = MediaAttachment {
+            path: std::path::PathBuf::from("/tmp/cache/a.png"),
+            mime: "image/png".into(),
+            bytes: 1024,
+            original_name: "a.png".into(),
+        };
+        let img_big = MediaAttachment {
+            path: std::path::PathBuf::from("/tmp/cache/big.png"),
+            mime: "image/png".into(),
+            bytes: MAX_INLINE_IMAGE_BYTES + 1,
+            original_name: "big.png".into(),
+        };
+        let video = MediaAttachment {
+            path: std::path::PathBuf::from("/tmp/cache/v.mp4"),
+            mime: "video/mp4".into(),
+            bytes: 2048,
+            original_name: "v.mp4".into(),
+        };
+        let attachments: Vec<&MediaAttachment> = vec![&img_ok, &img_big, &video];
+        let (images, rest) = split_injectable_images(&attachments);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].path, img_ok.path);
+        assert_eq!(rest.len(), 2);
+    }
+
+    #[test]
+    fn data_url_from_cache_encodes_file_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("img.bin");
+        std::fs::write(&path, b"hello").unwrap();
+        let attachment = MediaAttachment {
+            path,
+            mime: "image/png".into(),
+            bytes: 5,
+            original_name: "img.png".into(),
+        };
+        let url = data_url_from_cache(&attachment).expect("encodes");
+        assert_eq!(url, "data:image/png;base64,aGVsbG8=");
+        // Missing file degrades to None (caller keeps the path ref).
+        let missing = MediaAttachment {
+            path: dir.path().join("nope.bin"),
+            mime: "image/png".into(),
+            bytes: 5,
+            original_name: "x".into(),
+        };
+        assert!(data_url_from_cache(&missing).is_none());
     }
 
     #[test]
