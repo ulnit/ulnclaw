@@ -2045,11 +2045,21 @@ async fn gateway_cmd(
                 Ok(ulnclaw::gateway::router(state))
             })
         });
+        let scope_base = home.clone();
+        let scope_builder: ulnclaw::gateway::ProfileScopeBuilder = Arc::new(move |name: &str| {
+            // Profile secret scope (hermes `_profile_runtime_scope`):
+            // `<home>/profiles/<name>/.env` + hydrated external sources,
+            // installed around every `/p/<name>/...` request.
+            ulnclaw::secret_scope::build_profile_secret_scope(
+                &scope_base.join("profiles").join(name),
+            )
+        });
         ulnclaw::gateway::ProfileHub::new(
             multiplex,
             profiles,
             ulnclaw::gateway::router(state.clone()),
             builder,
+            Some(scope_builder),
         )
     };
 

@@ -187,7 +187,10 @@ host = "127.0.0.1"
 port = 8642
 # key = "sk-..."        # bearer token; env ULNCLAW_GATEWAY_KEY overrides
 # multiplex_profiles = false  # true = serve /p/<profile>/... mirrors, each
-                              # backed by its [profiles.<name>] override
+                              # backed by its [profiles.<name>] override and
+                              # its own fail-closed secret scope
+                              # (profiles/<name>/.env; unscoped credential
+                              # reads error instead of leaking across profiles)
 
 # [terminal]
 # backend = "docker"    # "local" (default) | "docker" | "ssh"

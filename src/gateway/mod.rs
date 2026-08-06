@@ -1244,6 +1244,20 @@ pub type ProfileRouterBuilder = Arc<
         + Sync,
 >;
 
+/// Factory for per-profile secret scopes (hermes `_profile_runtime_scope`
+/// parity). Builds the profile's `.env` + external-source secret mapping;
+/// [`profile_dispatch`] installs it around every `/p/<profile>/...`
+/// request so scoped credential reads resolve against the right profile.
+pub type ProfileScopeBuilder =
+    Arc<dyn Fn(&str) -> std::collections::HashMap<String, String> + Send + Sync>;
+
+/// What a resolved `/p/<profile>` request gets: router + secret scope.
+#[derive(Clone)]
+struct ResolvedProfile {
+    router: Router,
+    scope: Option<std::sync::Arc<std::collections::HashMap<String, String>>>,
+}
+
 /// Multiplex hub: default router + per-profile router cache + policy.
 pub struct ProfileHub {
     /// `[gateway] multiplex_profiles`.
@@ -1253,9 +1267,10 @@ pub struct ProfileHub {
     /// Default-profile router (serves `/p/*` requests while multiplexing is
     /// off, mirroring hermes' ignore-the-prefix behavior).
     default_router: Router,
-    /// Lazily-built per-profile routers.
-    cache: tokio::sync::Mutex<HashMap<String, Router>>,
+    /// Lazily-built per-profile routers (+ secret scopes).
+    cache: tokio::sync::Mutex<HashMap<String, ResolvedProfile>>,
     builder: ProfileRouterBuilder,
+    scope_builder: Option<ProfileScopeBuilder>,
 }
 
 impl ProfileHub {
@@ -1264,6 +1279,7 @@ impl ProfileHub {
         profiles: std::collections::HashSet<String>,
         default_router: Router,
         builder: ProfileRouterBuilder,
+        scope_builder: Option<ProfileScopeBuilder>,
     ) -> Arc<Self> {
         Arc::new(Self {
             multiplex,
@@ -1271,28 +1287,47 @@ impl ProfileHub {
             default_router,
             cache: tokio::sync::Mutex::new(HashMap::new()),
             builder,
+            scope_builder,
         })
     }
 
-    /// Resolve the router for a `/p/<profile>` request. `None` = unknown
-    /// profile while multiplexing is on (caller 404s).
-    async fn resolve(&self, profile: &str) -> Option<Router> {
+    /// Whether `[gateway] multiplex_profiles` is on.
+    pub fn multiplex_enabled(&self) -> bool {
+        self.multiplex
+    }
+
+    /// Resolve the router (and secret scope) for a `/p/<profile>` request.
+    /// `None` = unknown profile while multiplexing is on (caller 404s).
+    async fn resolve(&self, profile: &str) -> Option<ResolvedProfile> {
         if !self.multiplex {
-            return Some(self.default_router.clone());
+            return Some(ResolvedProfile {
+                router: self.default_router.clone(),
+                scope: None,
+            });
         }
         if !self.profiles.contains(profile) {
             return None;
         }
         {
             let cache = self.cache.lock().await;
-            if let Some(router) = cache.get(profile) {
-                return Some(router.clone());
+            if let Some(resolved) = cache.get(profile) {
+                return Some(resolved.clone());
             }
         }
         let built = (self.builder)(profile.to_string()).await.ok()?;
+        let scope = self
+            .scope_builder
+            .as_ref()
+            .map(|build| std::sync::Arc::new(build(profile)));
+        let resolved = ResolvedProfile {
+            router: built,
+            scope,
+        };
         let mut cache = self.cache.lock().await;
-        cache.insert(profile.to_string(), built.clone());
-        Some(built)
+        cache
+            .entry(profile.to_string())
+            .or_insert_with(|| resolved.clone());
+        Some(resolved)
     }
 }
 
@@ -1304,7 +1339,7 @@ async fn profile_dispatch(
     Path((profile, rest)): Path<(String, String)>,
     mut request: axum::extract::Request,
 ) -> Response {
-    let Some(target) = hub.resolve(&profile).await else {
+    let Some(resolved) = hub.resolve(&profile).await else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "Unknown or unconfigured profile"})),
@@ -1322,7 +1357,16 @@ async fn profile_dispatch(
                 .into_response()
         }
     };
-    match tower::ServiceExt::oneshot(target, request).await {
+    // Install the profile's secret scope around the dispatched request
+    // (hermes `_profile_runtime_scope` parity): scoped credential reads
+    // inside the request resolve against this profile's `.env`, never
+    // against another profile's process-env residue.
+    let dispatch = tower::ServiceExt::oneshot(resolved.router, request);
+    let outcome = match resolved.scope {
+        Some(scope) => crate::secret_scope::scope_secrets(scope, dispatch).await,
+        None => dispatch.await,
+    };
+    match outcome {
         Ok(response) => response,
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1344,6 +1388,13 @@ pub async fn serve_multiplex(
     host: &str,
     port: u16,
 ) -> Result<()> {
+    // Fail-closed secret resolution while multiplexing (hermes
+    // `set_multiplex_active` at gateway startup): with multiplexing on,
+    // any credential read outside a profile scope errors loudly instead
+    // of leaking another profile's process-env value.
+    crate::secret_scope::set_multiplex_active(
+        hub.as_ref().map(|hub| hub.multiplex_enabled()).unwrap_or(false),
+    );
     let mut app = router(state.clone());
     if let Some(hub) = hub {
         // Register the mirror for ALL methods the native table uses.
@@ -4701,7 +4752,7 @@ pub fn spawn_cron_scheduler(state: Arc<GatewayState>, poll_secs: u64) -> Option<
         poll_secs,
         move |job| {
             let state = state.clone();
-            async move {
+            let run = async move {
                 if job.prompt.trim().is_empty() {
                     return Err(crate::error::AgentError::config("job has no prompt to run"));
                 }
@@ -4714,7 +4765,15 @@ pub fn spawn_cron_scheduler(state: Arc<GatewayState>, poll_secs: u64) -> Option<
                     Some(run_id) => Ok(format!("running (run {})", run_id)),
                     None => Err(crate::error::AgentError::config("failed to start job run")),
                 }
-            }
+            };
+            // Hermes parity: the scheduler installs a profile secret scope
+            // around every job run, so scoped credential reads inside the
+            // job resolve against the gateway home's `.env` overlay.
+            let home = crate::config::ulnclaw_home();
+            crate::secret_scope::scope_secrets(
+                std::sync::Arc::new(crate::secret_scope::build_profile_secret_scope(&home)),
+                run,
+            )
         },
     )))
 }
@@ -4859,7 +4918,7 @@ fn spawn_tracked_run(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let runner = state.clone();
     let spawn_run_id = run_id.clone();
-    tokio::spawn(RUN_ID.scope(
+    let run_future = RUN_ID.scope(
         run_id.clone(),
         crate::agent::cron_scope(cron, async move {
         let history = runner
@@ -4904,7 +4963,12 @@ fn spawn_tracked_run(
         drop(runs);
         runner.router.unregister(&spawn_run_id);
         }),
-    ));
+    );
+    // Profile secret scope inheritance (hermes copy_context parity): a
+    // mirrored `/p/<profile>/...` request dispatches with that profile's
+    // scope installed; the run task must keep resolving credentials
+    // against it, so re-install the captured scope inside the spawn.
+    crate::secret_scope::spawn_scoped(run_future);
 }
 
 async fn list_runs(State(state): State<Arc<GatewayState>>) -> Json<Value> {
@@ -7138,6 +7202,7 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             profiles.iter().map(|s| s.to_string()).collect(),
             default_router,
             builder,
+            None,
         );
         let mirror = Router::new()
             .route(
@@ -7194,6 +7259,69 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (status, body) = get_json(app, "/health", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_multiplex_mirror_installs_secret_scope() {
+        // Pin the process-global multiplex flag for this test (other
+        // suites toggle it; native /probe here must take the lenient path).
+        let _multiplex_guard = crate::secret_scope::test_multiplex_lock();
+        crate::secret_scope::set_multiplex_active(false);
+        // Probe route reports the scoped resolution of a probe variable.
+        async fn probe() -> String {
+            match crate::secret_scope::get_secret("ULNCLAW_SS_MIRROR_PROBE") {
+                Ok(Some(value)) => value,
+                Ok(None) => "absent".to_string(),
+                Err(_) => "unscoped-error".to_string(),
+            }
+        }
+        let probe_router = Router::new().route("/probe", get(probe));
+        let builder: ProfileRouterBuilder = Arc::new(|_name: String| {
+            Box::pin(async move { Ok(Router::new().route("/probe", get(probe))) })
+        });
+        let mut scope_map = std::collections::HashMap::new();
+        scope_map.insert(
+            "ULNCLAW_SS_MIRROR_PROBE".to_string(),
+            "scoped".to_string(),
+        );
+        let hub = ProfileHub::new(
+            true,
+            ["work"].iter().map(|s| s.to_string()).collect(),
+            probe_router.clone(),
+            builder,
+            Some(Arc::new(move |_name: &str| scope_map.clone())),
+        );
+        let mirror = Router::new()
+            .route(
+                "/p/:profile/*rest",
+                get(profile_dispatch).post(profile_dispatch),
+            )
+            .with_state(hub);
+        let app = probe_router.merge(mirror);
+
+        // Native route: no scope installed -> process env (unset) -> absent.
+        let request = axum::http::Request::builder()
+            .uri("/probe")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(std::str::from_utf8(&bytes).unwrap(), "absent");
+
+        // Mirror: profile scope installed around the request -> scoped wins.
+        let request = axum::http::Request::builder()
+            .uri("/p/work/probe")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(std::str::from_utf8(&bytes).unwrap(), "scoped");
     }
 
     #[tokio::test]
