@@ -182,6 +182,9 @@ mod tests {
 
     #[test]
     fn scrubbing_strips_credentials_and_venv_markers() {
+        // Serialize with other env-mutating tests — OPENAI_API_KEY churn
+        // here races env-sensitive provider resolution tests.
+        let _guard = crate::models_dev::test_env_lock();
         // Use uniquely-named vars so parallel tests don't interfere.
         std::env::set_var("OPENAI_API_KEY", "secret-abc");
         std::env::set_var("VIRTUAL_ENV", "/some/venv");

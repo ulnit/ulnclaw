@@ -31,11 +31,18 @@
 //! `_do_without_validation`), acknowledging each frame with a
 //! `{"code":200}` payload + `biz_rt` header.
 //!
-//! Known differences: post/card deep-normalization, reactions/card-
-//! action routing, read receipts, per-chat serial queues, and the
-//! webhook anomaly tracker are not ported — text/image/file/audio
-//! messages flow through the same allowlist∪pairing gate as the other
-//! adapters.
+//! Reactions are ported (hermes processing-status reactions +
+//! reaction-event routing): a `Typing` badge lands on the inbound
+//! message while the agent works and is removed on completion
+//! (`CrossMark` replaces it when the turn fails; `FEISHU_REACTIONS`,
+//! default on), and user reactions on the bot's own messages route to
+//! the agent as `reaction:<added|removed>:<emoji>` synthetic text
+//! (`im.message.reaction.created_v1` / `deleted_v1`, bot/app-origin
+//! reactions dropped to break the lifecycle feedback loop). Known
+//! differences: post/card deep-normalization, card-action routing, read
+//! receipts, per-chat serial queues, and the webhook anomaly tracker
+//! are not ported — text/image/file/audio messages flow through the
+//! same allowlist∪pairing gate as the other adapters.
 
 use crate::messaging::{Dispatcher, MediaAttachment, MessageEvent};
 use serde::{Deserialize, Serialize};
@@ -53,6 +60,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DEDUP_MAX_SIZE: usize = 2000;
 /// Tenant tokens live ~2 h; refresh early.
 const TOKEN_REFRESH_SECS: u64 = 6600;
+/// hermes `_FEISHU_REACTION_IN_PROGRESS` / `_FEISHU_REACTION_FAILURE` —
+/// Feishu reaction badges are prominent, so only start (Typing) and
+/// failure (CrossMark) are marked; the reply itself signals success.
+const REACTION_IN_PROGRESS: &str = "Typing";
+const REACTION_FAILURE: &str = "CrossMark";
 
 /// `[messaging.feishu]` — Feishu webhook adapter (hermes
 /// `platforms.feishu` plugin config + `FEISHU_*` env vars).
@@ -106,6 +118,31 @@ fn env_trim(name: &str) -> Option<String> {
 
 fn env_bool_default_true(name: &str) -> Option<bool> {
     env_trim(name).map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no"))
+}
+
+/// hermes `_reactions_enabled` (`FEISHU_REACTIONS`, default true).
+pub fn reactions_enabled() -> bool {
+    env_bool_default_true("FEISHU_REACTIONS").unwrap_or(true)
+}
+
+/// hermes `_on_reaction_event` action mapping: created → added.
+pub fn reaction_action_from_event_type(event_type: &str) -> &'static str {
+    if event_type.contains("created") {
+        "added"
+    } else {
+        "removed"
+    }
+}
+
+/// hermes `_on_reaction_event` loop breaker: drop bot/app-origin
+/// reactions (our own lifecycle badges), keep human ones.
+pub fn should_drop_reaction_operator(operator_type: &str) -> bool {
+    matches!(operator_type, "bot" | "app")
+}
+
+/// hermes synthetic reaction text (`reaction:<action>:<emoji>`).
+pub fn reaction_synthetic_text(action: &str, emoji_type: &str) -> String {
+    format!("reaction:{action}:{emoji_type}")
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +373,88 @@ impl FeishuApi {
             }
         }
         Ok(())
+    }
+
+    /// hermes `_add_reaction`: `POST
+    /// /open-apis/im/v1/messages/<id>/reactions`. Returns the opaque
+    /// `reaction_id` needed for deletion, or None.
+    pub(crate) async fn add_reaction(&self, message_id: &str, emoji_type: &str) -> Option<String> {
+        if message_id.is_empty() || emoji_type.is_empty() {
+            return None;
+        }
+        let token = self.tenant_access_token().await.ok()?;
+        let resp = self
+            .client
+            .post(format!(
+                "{OPEN_API_BASE}/open-apis/im/v1/messages/{message_id}/reactions"
+            ))
+            .bearer_auth(&token)
+            .json(&json!({"reaction_type": {"emoji_type": emoji_type}}))
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+            .ok()?;
+        let value: Value = resp.json().await.ok()?;
+        if value.get("code").and_then(|v| v.as_i64()).unwrap_or(-1) != 0 {
+            return None;
+        }
+        value
+            .pointer("/data/reaction_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// hermes `_remove_reaction`: `DELETE
+    /// /open-apis/im/v1/messages/<id>/reactions/<reaction_id>`.
+    pub(crate) async fn remove_reaction(&self, message_id: &str, reaction_id: &str) -> bool {
+        if message_id.is_empty() || reaction_id.is_empty() {
+            return false;
+        }
+        let Ok(token) = self.tenant_access_token().await else {
+            return false;
+        };
+        let Ok(resp) = self
+            .client
+            .delete(format!(
+                "{OPEN_API_BASE}/open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}"
+            ))
+            .bearer_auth(&token)
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+        else {
+            return false;
+        };
+        let Ok(value) = resp.json::<Value>().await else {
+            return false;
+        };
+        value.get("code").and_then(|v| v.as_i64()).unwrap_or(-1) == 0
+    }
+
+    /// hermes reaction-routing message fetch (`im.v1.message.get`):
+    /// returns `(sender_id, chat_id)` of the reacted-to message. GET
+    /// returns `sender.id = app_id` for bot messages, which is how the
+    /// bot-authorship check works.
+    async fn get_message_context(&self, message_id: &str) -> Option<(String, String)> {
+        let token = self.tenant_access_token().await.ok()?;
+        let resp = self
+            .client
+            .get(format!(
+                "{OPEN_API_BASE}/open-apis/im/v1/messages/{message_id}"
+            ))
+            .bearer_auth(&token)
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+            .ok()?;
+        let value: Value = resp.json().await.ok()?;
+        if value.get("code").and_then(|v| v.as_i64()).unwrap_or(-1) != 0 {
+            return None;
+        }
+        let msg = value.pointer("/data/items/0")?;
+        let sender = msg.pointer("/sender/id").and_then(|v| v.as_str())?.to_string();
+        let chat_id = msg.get("chat_id").and_then(|v| v.as_str())?.to_string();
+        Some((sender, chat_id))
     }
 
     /// Download a message resource (image/file/audio) into the media
@@ -698,6 +817,24 @@ pub async fn feishu_handle_webhook(
             });
         }
     }
+    if event_type == "im.message.reaction.created_v1"
+        || event_type == "im.message.reaction.deleted_v1"
+    {
+        let event_id = payload
+            .pointer("/header/event_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if event_id.is_empty() || remember_event_id(&event_id) {
+            let cfg_clone = cfg.clone();
+            let dispatcher = dispatcher.clone();
+            let payload = payload.clone();
+            let event_type = event_type.to_string();
+            tokio::spawn(async move {
+                handle_reaction_event(&cfg_clone, &dispatcher, &payload, &event_type).await;
+            });
+        }
+    }
     if event_type == "drive.notice.comment_add_v1" || event_type == "vc.bot.meeting_invited_v1" {
         let cfg_clone = cfg.clone();
         let dispatcher = dispatcher.clone();
@@ -882,12 +1019,23 @@ pub(crate) async fn handle_message_event(
     if !crate::messaging::pre_gateway_dispatch_gate_public(&mut msg_event).await {
         return;
     }
+    // hermes `on_processing_start`: Typing badge while the agent works
+    // (`FEISHU_REACTIONS`, default on).
+    let processing_reaction = if reactions_enabled() {
+        api.add_reaction(&message_id, REACTION_IN_PROGRESS).await
+    } else {
+        None
+    };
+    let mut dispatch_failed = false;
     let outcome = match dispatcher.handle_event(msg_event).await {
         Ok(o) => o,
-        Err(e) => crate::messaging::DispatchOutcome {
-            reply: format!("error: {e}"),
-            transcript_echoes: Vec::new(),
-        },
+        Err(e) => {
+            dispatch_failed = true;
+            crate::messaging::DispatchOutcome {
+                reply: format!("error: {e}"),
+                transcript_echoes: Vec::new(),
+            }
+        }
     };
     let mut full = String::new();
     for echo in &outcome.transcript_echoes {
@@ -910,6 +1058,106 @@ pub(crate) async fn handle_message_event(
     if !reply_text.trim().is_empty() {
         if let Err(e) = api.send_text(&chat_id, &reply_text).await {
             eprintln!("[feishu] reply failed: {e}");
+        }
+    }
+
+    // hermes `on_processing_complete`: remove the Typing badge; on
+    // failure swap it for CrossMark. If the removal itself fails, keep
+    // the single badge (hermes: don't stack success/failure on top of a
+    // Typing that could not be removed).
+    if let Some(reaction_id) = processing_reaction {
+        if api.remove_reaction(&message_id, &reaction_id).await && dispatch_failed {
+            api.add_reaction(&message_id, REACTION_FAILURE).await;
+        }
+    }
+}
+
+/// hermes `_on_reaction_event` + `_handle_reaction_event`: user
+/// reactions on this bot's own messages route to the agent as synthetic
+/// `reaction:<action>:<emoji>` text events. Bot/app-origin reactions
+/// are dropped to break the feedback loop with our own lifecycle
+/// badges. The synthetic event rides the webhook `event_id` as its
+/// message id so multiple reactions on the same target message stay
+/// distinct.
+pub(crate) async fn handle_reaction_event(
+    cfg: &FeishuConfig,
+    dispatcher: &Arc<Dispatcher>,
+    payload: &Value,
+    event_type: &str,
+) {
+    let event = payload.get("event").cloned().unwrap_or(json!({}));
+    let message_id = event
+        .get("message_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let operator_type = event
+        .get("operator_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let emoji_type = event
+        .pointer("/reaction_type/emoji_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if message_id.is_empty()
+        || emoji_type.is_empty()
+        || should_drop_reaction_operator(&operator_type)
+    {
+        return;
+    }
+    let api = feishu_api(cfg);
+    let Some((sender, chat_id)) = api.get_message_context(&message_id).await else {
+        return;
+    };
+    let resolved = cfg.resolve();
+    // Only route reactions on this bot's own messages (hermes:
+    // sender.id == app_id for bot messages).
+    if sender != resolved.app_id || chat_id.is_empty() {
+        return;
+    }
+    let operator_id = event
+        .pointer("/user_id/open_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let synthetic = reaction_synthetic_text(reaction_action_from_event_type(event_type), &emoji_type);
+    let event_id = payload
+        .pointer("/header/event_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| message_id.clone());
+    let mut msg_event = MessageEvent {
+        platform: "feishu".into(),
+        chat_id: chat_id.clone(),
+        sender_id: operator_id.clone(),
+        sender_name: operator_id,
+        text: synthetic,
+        message_id: event_id,
+        attachments: Vec::new(),
+    };
+    if !crate::messaging::pre_gateway_dispatch_gate_public(&mut msg_event).await {
+        return;
+    }
+    let outcome = match dispatcher.handle_event(msg_event).await {
+        Ok(o) => o,
+        Err(e) => crate::messaging::DispatchOutcome {
+            reply: format!("error: {e}"),
+            transcript_echoes: Vec::new(),
+        },
+    };
+    let mut full = String::new();
+    for echo in &outcome.transcript_echoes {
+        full.push_str(echo);
+        full.push('\n');
+    }
+    full.push_str(&outcome.reply);
+    let (reply_text, _media_paths) = crate::messaging::extract_media_tags(&full);
+    if !reply_text.trim().is_empty() {
+        if let Err(e) = api.send_text(&chat_id, &reply_text).await {
+            eprintln!("[feishu] reaction reply failed: {e}");
         }
     }
 }
@@ -1040,5 +1288,53 @@ mod tests {
         );
         let agent = Agent::new(provider, ToolRegistry::new()).with_store(store.clone());
         Dispatcher::new(StdArc::new(agent), store)
+    }
+
+    #[test]
+    fn reactions_enabled_default_and_env() {
+        let _guard = crate::models_dev::test_env_lock();
+        std::env::remove_var("FEISHU_REACTIONS");
+        assert!(reactions_enabled());
+        std::env::set_var("FEISHU_REACTIONS", "false");
+        assert!(!reactions_enabled());
+        std::env::set_var("FEISHU_REACTIONS", "0");
+        assert!(!reactions_enabled());
+        std::env::set_var("FEISHU_REACTIONS", "true");
+        assert!(reactions_enabled());
+        std::env::remove_var("FEISHU_REACTIONS");
+    }
+
+    #[test]
+    fn reaction_action_mapping() {
+        assert_eq!(
+            reaction_action_from_event_type("im.message.reaction.created_v1"),
+            "added"
+        );
+        assert_eq!(
+            reaction_action_from_event_type("im.message.reaction.deleted_v1"),
+            "removed"
+        );
+    }
+
+    #[test]
+    fn reaction_operator_drop_rules() {
+        // hermes loop breaker: bot/app-origin reactions are dropped,
+        // human reaction operators pass.
+        assert!(should_drop_reaction_operator("bot"));
+        assert!(should_drop_reaction_operator("app"));
+        assert!(!should_drop_reaction_operator("user"));
+        assert!(!should_drop_reaction_operator(""));
+    }
+
+    #[test]
+    fn reaction_synthetic_text_format() {
+        assert_eq!(
+            reaction_synthetic_text("added", "ThumbsUp"),
+            "reaction:added:ThumbsUp"
+        );
+        assert_eq!(
+            reaction_synthetic_text("removed", "Typing"),
+            "reaction:removed:Typing"
+        );
     }
 }

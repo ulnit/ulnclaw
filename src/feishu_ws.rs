@@ -713,6 +713,26 @@ fn dispatch_event_envelope(
         });
         return;
     }
+    if event_type == "im.message.reaction.created_v1"
+        || event_type == "im.message.reaction.deleted_v1"
+    {
+        let event_id = envelope
+            .pointer("/header/event_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if event_id.is_empty() || crate::feishu::remember_event_id(&event_id) {
+            let cfg = cfg.clone();
+            let dispatcher = dispatcher.clone();
+            let envelope = envelope.clone();
+            let event_type = event_type.to_string();
+            tokio::spawn(async move {
+                crate::feishu::handle_reaction_event(&cfg, &dispatcher, &envelope, &event_type)
+                    .await;
+            });
+        }
+        return;
+    }
     if event_type != "im.message.receive_v1" {
         return;
     }
