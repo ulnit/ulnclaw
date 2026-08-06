@@ -7,19 +7,24 @@
 //! responsible for Raft message cursors and body materialization; the
 //! agent uses the Raft CLI per the Raft manual.
 //!
-//! hermes spawns the bridge itself; ulnclaw mounts the wake endpoint on
-//! the gateway (`/webhooks/raft/wake`) and expects the operator to run
-//! `raft agent bridge` pointed at it (documented divergence — same
-//! external-process pattern as the WhatsApp Baileys bridge). The token
-//! defaults to an auto-generated value surfaced at startup; requests
-//! must carry it in `x-raft-bridge-token` (hermes header), bodies are
-//! capped at 16 KiB, and wake events dispatch as
-//! `raft-activity`-schema messages on a per-session chat id.
+//! The wake endpoint rides the gateway at `/webhooks/raft/wake`; when
+//! the gateway starts it also spawns the bridge itself (hermes
+//! `_spawn_bridge`): `raft --profile $RAFT_PROFILE agent bridge
+//! --wake-adapter wake-channel --wake-channel-endpoint <wake url>` with
+//! `RAFT_CHANNEL_TOKEN` set to the bridge token, stdin devnull, SIGTERM
+//! + 5 s grace + SIGKILL on shutdown. Missing `raft` binary or
+//! `RAFT_PROFILE` degrades to wake-only mode (operator-run bridge),
+//! exactly like hermes. The token defaults to an auto-generated value
+//! surfaced at startup; requests must carry it in `x-raft-bridge-token`
+//! (hermes header), bodies are capped at 16 KiB, and wake events
+//! dispatch as `raft-activity`-schema messages on a per-session chat
+//! id.
 
 use crate::messaging::Dispatcher;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// hermes `DEFAULT_MAX_BODY_BYTES`.
 const MAX_BODY_BYTES: usize = 16_384;
@@ -112,6 +117,127 @@ pub fn content_string(value: &Value) -> Option<(String, bool)> {
     None
 }
 
+static EFFECTIVE_BRIDGE_TOKEN: OnceLock<String> = OnceLock::new();
+
+fn random_hex(bytes: usize) -> String {
+    let mut buf = vec![0u8; bytes];
+    crate::feishu::fill_random_bytes(&mut buf);
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Process-wide bridge token: configured value, or an auto-generated
+/// 32-byte hex token on first use (hermes `secrets.token_hex(32)` in
+/// `connect`). Both the wake route and the spawned bridge share it.
+pub fn effective_bridge_token(cfg: &RaftConfig) -> String {
+    EFFECTIVE_BRIDGE_TOKEN
+        .get_or_init(|| {
+            let resolved = cfg.resolve();
+            if !resolved.bridge_token.is_empty() {
+                resolved.bridge_token
+            } else {
+                let token = random_hex(32);
+                eprintln!("[raft] auto-generated bridge token (set RAFT_BRIDGE_TOKEN to pin)");
+                token
+            }
+        })
+        .clone()
+}
+
+// ---------------------------------------------------------------------------
+// Bridge process lifecycle (hermes `_spawn_bridge` / `_stop_bridge`)
+// ---------------------------------------------------------------------------
+
+/// Handle to the spawned `raft agent bridge` child.
+pub struct BridgeHandle {
+    child: tokio::process::Child,
+}
+
+/// Locate the `raft` CLI on PATH (hermes `shutil.which("raft")`).
+pub fn resolve_raft_binary() -> Option<std::path::PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join("raft");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Build the bridge command (hermes argv + `RAFT_CHANNEL_TOKEN` env).
+pub fn build_bridge_command(
+    raft_bin: &std::path::Path,
+    profile: &str,
+    endpoint: &str,
+    token: &str,
+) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(raft_bin);
+    cmd.args([
+        "--profile",
+        profile,
+        "agent",
+        "bridge",
+        "--wake-adapter",
+        "wake-channel",
+        "--wake-channel-endpoint",
+        endpoint,
+    ]);
+    cmd.env("RAFT_CHANNEL_TOKEN", token);
+    cmd.stdin(std::process::Stdio::null());
+    cmd
+}
+
+/// Spawn the bridge child (hermes `_spawn_bridge`): requires the raft
+/// CLI on PATH and `RAFT_PROFILE`; otherwise logs and returns `None`
+/// (wake-only polling mode).
+pub fn spawn_bridge(cfg: &RaftConfig, endpoint: &str) -> Option<BridgeHandle> {
+    let Some(raft_bin) = resolve_raft_binary() else {
+        eprintln!("[raft] raft CLI not found in PATH; bridge not spawned — wake-only polling mode");
+        return None;
+    };
+    let profile = std::env::var("RAFT_PROFILE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let Some(profile) = profile else {
+        eprintln!("[raft] RAFT_PROFILE not set; bridge not spawned");
+        return None;
+    };
+    let token = effective_bridge_token(cfg);
+    let mut cmd = build_bridge_command(&raft_bin, &profile, endpoint, &token);
+    match cmd.spawn() {
+        Ok(child) => {
+            let pid = child.id().unwrap_or(0);
+            eprintln!("[raft] spawned bridge pid={pid} profile={profile} endpoint={endpoint}");
+            Some(BridgeHandle { child })
+        }
+        Err(e) => {
+            eprintln!("[raft] failed to spawn bridge: {e}");
+            None
+        }
+    }
+}
+
+/// Stop the bridge child (hermes `_stop_bridge`): SIGTERM, 5 s grace,
+/// then SIGKILL.
+pub async fn stop_bridge(mut handle: BridgeHandle) {
+    let pid = handle.child.id().unwrap_or(0);
+    if pid != 0 {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+    }
+    match tokio::time::timeout(Duration::from_secs(5), handle.child.wait()).await {
+        Ok(status) => {
+            eprintln!("[raft] bridge process terminated (pid={pid}, status={status:?})");
+        }
+        Err(_) => {
+            let _ = handle.child.start_kill();
+            eprintln!("[raft] bridge process killed after timeout (pid={pid})");
+        }
+    }
+}
+
 /// Webhook response handed back to the gateway route.
 pub struct RaftWebhookResponse {
     pub status: u16,
@@ -132,12 +258,13 @@ pub async fn raft_handle_wake(
         };
     }
     let resolved = cfg.resolve();
+    let expected = effective_bridge_token(cfg);
     let token = headers
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(BRIDGE_TOKEN_HEADER))
         .map(|(_, v)| v.trim().to_string())
         .unwrap_or_default();
-    if resolved.bridge_token.is_empty() || token != resolved.bridge_token {
+    if token.is_empty() || token != expected {
         return RaftWebhookResponse {
             status: 401,
             body: json!({ "error": "invalid bridge token" }),
@@ -277,5 +404,108 @@ mod tests {
         assert_eq!(ACTIVITY_CONTENT_CAP, 4096);
         assert_eq!(BRIDGE_TOKEN_HEADER, "x-raft-bridge-token");
         assert_eq!(ACTIVITY_EVENT_SCHEMA, "raft-activity.v1");
+    }
+
+    #[test]
+    fn random_hex_shape() {
+        let token = random_hex(32);
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+        // Random draws differ.
+        assert_ne!(token, random_hex(32));
+    }
+
+    #[test]
+    fn effective_token_is_stable_and_nonempty() {
+        let cfg = RaftConfig::default();
+        let first = effective_bridge_token(&cfg);
+        assert!(!first.is_empty());
+        assert_eq!(first, effective_bridge_token(&cfg));
+    }
+
+    #[test]
+    fn bridge_command_matches_hermes_argv() {
+        let mut cmd = build_bridge_command(
+            std::path::Path::new("/usr/local/bin/raft"),
+            "work",
+            "http://127.0.0.1:8080/webhooks/raft/wake",
+            "tok123",
+        );
+        let std_cmd = cmd.as_std();
+        let args: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "--profile", "work",
+                "agent", "bridge",
+                "--wake-adapter", "wake-channel",
+                "--wake-channel-endpoint", "http://127.0.0.1:8080/webhooks/raft/wake",
+            ]
+        );
+        let env_token = std_cmd
+            .get_envs()
+            .find(|(k, _)| *k == "RAFT_CHANNEL_TOKEN")
+            .and_then(|(_, v)| v.map(|s| s.to_string_lossy().to_string()));
+        assert_eq!(env_token.as_deref(), Some("tok123"));
+    }
+
+    #[test]
+    fn resolve_raft_binary_walks_path() {
+        let _guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin = temp.path().join("raft");
+        std::fs::write(&bin, "#!/bin/sh\n").expect("write fake raft");
+        let saved = std::env::var_os("PATH");
+        std::env::set_var("PATH", temp.path());
+        assert_eq!(resolve_raft_binary(), Some(bin));
+        // Empty PATH → nothing found.
+        std::env::set_var("PATH", temp.path().join("empty"));
+        assert!(resolve_raft_binary().is_none());
+        match saved {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_bridge_requires_profile() {
+        let _guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin = temp.path().join("raft");
+        std::fs::write(&bin, "#!/bin/sh\nsleep 30\n").expect("write fake raft");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let saved_path = std::env::var_os("PATH");
+        let saved_profile = std::env::var_os("RAFT_PROFILE");
+        std::env::set_var("PATH", temp.path());
+        std::env::remove_var("RAFT_PROFILE");
+        let cfg = RaftConfig {
+            bridge_token: "tok".into(),
+            ..Default::default()
+        };
+        // No RAFT_PROFILE → no spawn.
+        assert!(spawn_bridge(&cfg, "http://127.0.0.1:1/webhooks/raft/wake").is_none());
+        // With profile the fake binary spawns (sleep 30) and stops on
+        // SIGTERM within the grace window.
+        std::env::set_var("RAFT_PROFILE", "test-profile");
+        let handle = spawn_bridge(&cfg, "http://127.0.0.1:1/webhooks/raft/wake");
+        assert!(handle.is_some());
+        if let Some(handle) = handle {
+            stop_bridge(handle).await;
+        }
+        match saved_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        match saved_profile {
+            Some(p) => std::env::set_var("RAFT_PROFILE", p),
+            None => std::env::remove_var("RAFT_PROFILE"),
+        }
     }
 }

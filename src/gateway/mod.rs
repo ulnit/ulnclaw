@@ -1364,9 +1364,27 @@ pub async fn serve_multiplex(
         addr,
         if state.key.is_some() { "bearer token" } else { "none" }
     );
-    axum::serve(listener, app)
+    // Raft bridge spawn (hermes `_spawn_bridge`) — the wake endpoint
+    // rides this listener, so the bridge gets its URL from the bound
+    // address.
+    let raft_bridge = if state.agent.context().config.messaging.raft.enabled {
+        let endpoint_host = if host == "0.0.0.0" || host == "::" || host.is_empty() {
+            "127.0.0.1".to_string()
+        } else {
+            host.to_string()
+        };
+        let endpoint = format!("http://{endpoint_host}:{port}/webhooks/raft/wake");
+        crate::raft::spawn_bridge(&state.agent.context().config.messaging.raft, &endpoint)
+    } else {
+        None
+    };
+    let serve_result = axum::serve(listener, app)
         .await
-        .map_err(|e| AgentError::config(format!("gateway serve: {}", e)))
+        .map_err(|e| AgentError::config(format!("gateway serve: {}", e)));
+    if let Some(handle) = raft_bridge {
+        crate::raft::stop_bridge(handle).await;
+    }
+    serve_result
 }
 
 // ---------------------------------------------------------------------------
