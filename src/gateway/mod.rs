@@ -718,6 +718,10 @@ fn attach_webhook_routes(
         router = router.route("/webhooks/line", post(line_webhook_route));
         tracing::info!("gateway webhook route mounted: /webhooks/line");
     }
+    if config.messaging.google_chat.enabled {
+        router = router.route("/webhooks/googlechat", post(google_chat_webhook_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/googlechat");
+    }
     router
 }
 
@@ -1001,6 +1005,33 @@ async fn line_webhook_route(
     let result =
         crate::line::line_handle_webhook(&dispatcher, pairing.as_ref(), &body, &header_pairs)
             .await;
+    let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, axum::Json(result.body)).into_response()
+}
+
+async fn google_chat_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let header_pairs: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let pairing = if config.messaging.pairing {
+        Some(crate::pairing::PairingStore::open(&crate::config::ulnclaw_home()))
+    } else {
+        None
+    };
+    let result = crate::google_chat::google_chat_handle_webhook(
+        &dispatcher,
+        pairing.as_ref(),
+        &body,
+        &header_pairs,
+    )
+    .await;
     let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, axum::Json(result.body)).into_response()
 }

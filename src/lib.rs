@@ -112,6 +112,7 @@ pub mod gateway;
 pub mod gateway_pidfile;
 pub mod git_diff;
 pub mod goals;
+pub mod google_chat;
 pub mod hermes_time;
 pub mod homeassistant;
 pub mod insights;

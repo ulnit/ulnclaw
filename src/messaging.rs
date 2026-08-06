@@ -118,6 +118,10 @@ pub struct MessagingConfig {
     /// plugin).
     #[serde(default)]
     pub line: crate::line::LineConfig,
+    /// Google Chat via HTTP-callback events + Chat REST API (hermes
+    /// `platforms.google_chat` plugin), mounted on the gateway router.
+    #[serde(default)]
+    pub google_chat: crate::google_chat::GoogleChatConfig,
 }
 
 fn default_pairing() -> bool {
@@ -883,8 +887,11 @@ pub async fn run_messaging(
     if msg.line.enabled {
         crate::line::register(&msg.line);
     }
+    if msg.google_chat.enabled {
+        crate::google_chat::register(&msg.google_chat);
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex] enabled = true (sms/teams/line ride gateway webhook routes))");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex] enabled = true (sms/teams/line/google_chat ride gateway webhook routes))");
         return;
     }
     for task in tasks {
