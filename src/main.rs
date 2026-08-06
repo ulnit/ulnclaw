@@ -207,6 +207,12 @@ enum Commands {
         #[command(subcommand)]
         action: Option<SyncAction>,
     },
+    /// Local OpenAI-compatible proxy attaching stored OAuth credentials:
+    /// start/status/providers (hermes proxy)
+    Proxy {
+        #[command(subcommand)]
+        action: Option<ProxyAction>,
+    },
     /// Skill library curation — pin/archive/restore/prune/usage reports
     /// (hermes `hermes curator`)
     Curator {
@@ -1551,6 +1557,23 @@ enum PluginsAction {
 }
 
 #[derive(Subcommand)]
+enum ProxyAction {
+    /// Run the proxy in the foreground (Ctrl+C stops)
+    Start {
+        /// Bind host (default 127.0.0.1, [proxy] host)
+        #[arg(long)]
+        host: Option<String>,
+        /// Bind port (default 8645, [proxy] port)
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Show whether the OAuth upstream adapter is ready
+    Status,
+    /// List available upstream providers
+    Providers,
+}
+
+#[derive(Subcommand)]
 enum PairingAction {
     /// Show pending pairing requests and approved users
     List,
@@ -2123,6 +2146,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Pairing { action } => pairing_cmd(action).await,
         Commands::Auth { action } => auth_cmd(&config, action.unwrap_or(AuthAction::Status)).await,
         Commands::Sync { action } => sync_cmd(&config, action.unwrap_or(SyncAction::Status)).await,
+        Commands::Proxy { action } => proxy_cmd(&config, action).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
         Commands::Weixin { action } => weixin_cmd(action).await,
@@ -3873,6 +3897,80 @@ async fn auth_cmd(config: &UlncLawConfig, action: AuthAction) -> Result<(), Stri
                 return Err("no [oauth] portal_url configured".to_string());
             }
             println!("{}", cfg.portal_url);
+        }
+    }
+    Ok(())
+}
+
+async fn proxy_cmd(config: &UlncLawConfig, action: Option<ProxyAction>) -> Result<(), String> {
+    use ulnclaw::proxy_cmd;
+    let home = ulnclaw::config::ulnclaw_home();
+    match action {
+        None => {
+            println!("ulnclaw proxy — local OpenAI-compatible proxy that attaches your");
+            println!("stored OAuth credentials to outbound requests.");
+            println!();
+            println!("Subcommands:");
+            println!("  ulnclaw proxy start [--host 127.0.0.1] [--port 8645]");
+            println!("      Run the proxy in the foreground.");
+            println!("  ulnclaw proxy status");
+            println!("      Show whether the upstream adapter is ready.");
+            println!("  ulnclaw proxy providers");
+            println!("      List available upstream providers.");
+        }
+        Some(ProxyAction::Status) => {
+            let logged_in = proxy_cmd::is_authenticated(&home);
+            let tokens = ulnclaw::oauth::load_tokens(&home);
+            let expiry = if tokens.expires_at > 0 {
+                chrono::DateTime::from_timestamp(tokens.expires_at as i64, 0)
+                    .map(|dt| format!(" (bearer expires {})", dt.to_rfc3339()))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            println!("ulnclaw proxy upstream adapters\n");
+            if logged_in {
+                println!("  [oauth   ] Stored OAuth token — ready{expiry}");
+            } else {
+                println!("  [oauth   ] Stored OAuth token — not logged in");
+            }
+            let upstream = config.proxy.upstream_url.trim();
+            if upstream.is_empty() {
+                println!("\n  upstream: not configured — set [proxy] upstream_url");
+            } else {
+                println!("\n  upstream: {upstream}");
+            }
+            println!("\nStart the proxy with: ulnclaw proxy start");
+        }
+        Some(ProxyAction::Providers) => {
+            println!("Available proxy upstream providers:");
+            println!("  oauth  — stored OAuth device-flow token ([oauth] config)");
+        }
+        Some(ProxyAction::Start { host, port }) => {
+            let mut proxy_cfg = config.proxy.clone();
+            if let Some(h) = host {
+                proxy_cfg.host = h;
+            }
+            if let Some(p) = port {
+                proxy_cfg.port = p;
+            }
+            if proxy_cfg.upstream_url.trim().is_empty() {
+                return Err(
+                    "no upstream configured — set [proxy] upstream_url in config.toml"
+                        .to_string(),
+                );
+            }
+            if !proxy_cmd::is_authenticated(&home) {
+                return Err("not logged into the OAuth provider. Run `ulnclaw auth login` first."
+                    .to_string());
+            }
+            println!(
+                "Starting ulnclaw proxy for stored OAuth credentials\n  Listening on:  http://{}:{}/v1\n  Forwarding to: {}\n  Use any bearer token in the client — the proxy attaches your real credential.\n\nPress Ctrl+C to stop.",
+                proxy_cfg.host, proxy_cfg.port, proxy_cfg.upstream_url
+            );
+            proxy_cmd::run_server(config.oauth.clone(), proxy_cfg, home)
+                .await
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())

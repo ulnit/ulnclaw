@@ -148,6 +148,7 @@ pub mod prompt_size;
 pub mod plugins;
 pub mod prompt_stash;
 pub mod provider;
+pub mod proxy_cmd;
 pub mod raft;
 pub mod redact;
 pub mod secrets;

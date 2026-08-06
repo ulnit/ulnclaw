@@ -842,6 +842,10 @@ pub struct UlncLawConfig {
     /// OAuth device-flow login (hermes portal auth, service-agnostic).
     #[serde(default)]
     pub oauth: crate::oauth::OAuthConfig,
+    /// Local OpenAI-compatible proxy to OAuth upstreams (hermes
+    /// `hermes proxy`).
+    #[serde(default)]
+    pub proxy: crate::proxy_cmd::ProxyConfig,
     /// Skill sync across devices (hermes `hermes sync`).
     #[serde(default)]
     pub sync: crate::skills_sync::SyncConfig,
