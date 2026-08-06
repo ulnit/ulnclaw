@@ -38,9 +38,20 @@
 //! default on), and user reactions on the bot's own messages route to
 //! the agent as `reaction:<added|removed>:<emoji>` synthetic text
 //! (`im.message.reaction.created_v1` / `deleted_v1`, bot/app-origin
-//! reactions dropped to break the lifecycle feedback loop). Known
-//! differences: post/card deep-normalization, card-action routing, read
-//! receipts, per-chat serial queues, and the webhook anomaly tracker
+//! reactions dropped to break the lifecycle feedback loop).
+//!
+//! Interactive cards are ported (hermes `send_exec_approval` /
+//! `send_update_prompt` + `_on_card_action_trigger`): approval cards
+//! with Allow Once / Session / Always / Deny buttons ride the
+//! `send_exec_approval` contract, webhook card callbacks resolve them
+//! through the approval gateway (operator gate: allowlist ∪ pairing,
+//! callback-chat match) and answer with the inline resolved card —
+//! stateless `approve:<session>:<decision>` button payloads instead of
+//! hermes in-memory approval state. Read receipts
+//! (`im.message.message_read_v1`) are explicitly ignored (hermes
+//! `_on_message_read_event`). Known differences: post/card
+//! deep-normalization, non-approval card actions (synthetic COMMAND
+//! routing), per-chat serial queues, and the webhook anomaly tracker
 //! are not ported — text/image/file/audio messages flow through the
 //! same allowlist∪pairing gate as the other adapters.
 
@@ -338,13 +349,7 @@ impl FeishuApi {
     /// shape, hermes send-path parity).
     pub(crate) async fn send_text(&self, chat_id: &str, text: &str) -> Result<(), String> {
         let token = self.tenant_access_token().await?;
-        let (receive_id, receive_id_type) = if let Some(open_id) = chat_id.strip_prefix("ou_") {
-            (format!("ou_{open_id}"), "open_id")
-        } else if let Some(user_id) = chat_id.strip_prefix("feishu_user_id:") {
-            (user_id.to_string(), "user_id")
-        } else {
-            (chat_id.to_string(), "chat_id")
-        };
+        let (receive_id, receive_id_type) = receive_id_parts(chat_id);
         for chunk in crate::messaging::chunk_text(text, MAX_MESSAGE_LENGTH) {
             let content = serde_json::to_string(&json!({"text": chunk}))
                 .map_err(|e| e.to_string())?;
@@ -371,6 +376,38 @@ impl FeishuApi {
                     value.get("msg").and_then(|v| v.as_str()).unwrap_or("unknown")
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// Send an interactive card (hermes send path with `msg_type =
+    /// "interactive"`; `receive_id_type` resolved from the target shape).
+    pub(crate) async fn send_card(&self, chat_id: &str, card: &Value) -> Result<(), String> {
+        let token = self.tenant_access_token().await?;
+        let (receive_id, receive_id_type) = receive_id_parts(chat_id);
+        let content = serde_json::to_string(card).map_err(|e| e.to_string())?;
+        let resp = self
+            .client
+            .post(format!(
+                "{OPEN_API_BASE}/open-apis/im/v1/messages?receive_id_type={receive_id_type}"
+            ))
+            .bearer_auth(&token)
+            .json(&json!({
+                "receive_id": receive_id,
+                "msg_type": "interactive",
+                "content": content,
+            }))
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| format!("feishu card send: {e}"))?;
+        let value: Value = resp.json().await.map_err(|e| format!("card send JSON: {e}"))?;
+        let code = value.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 0 {
+            return Err(format!(
+                "feishu card send error: {}",
+                value.get("msg").and_then(|v| v.as_str()).unwrap_or("unknown")
+            ));
         }
         Ok(())
     }
@@ -790,10 +827,28 @@ pub async fn feishu_handle_webhook(
         };
     }
 
+    // Card action callback (hermes `CardActionHandler`): top-level
+    // `action` + `operator` (token-gated above). Handled inline so the
+    // response body can carry the resolved card (all clients update).
+    if payload.get("action").map(|v| v.is_object()).unwrap_or(false) {
+        let response = handle_card_action(cfg, pairing, &payload).await;
+        return FeishuWebhookResponse {
+            status: 200,
+            body: response,
+        };
+    }
+
     let event_type = payload
         .pointer("/header/event_type")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    if event_type == "im.message.message_read_v1" {
+        // hermes `_on_message_read_event`: read receipts are ignored.
+        return FeishuWebhookResponse {
+            status: 200,
+            body: json!({"code": 0, "msg": "ok"}),
+        };
+    }
     if event_type == "im.message.receive_v1" {
         let event_id = payload
             .pointer("/header/event_id")
@@ -1162,6 +1217,329 @@ pub(crate) async fn handle_reaction_event(
     }
 }
 
+/// hermes send-path `receive_id_type` resolution from the target shape.
+fn receive_id_parts(chat_id: &str) -> (String, &'static str) {
+    if let Some(open_id) = chat_id.strip_prefix("ou_") {
+        (format!("ou_{open_id}"), "open_id")
+    } else if let Some(user_id) = chat_id.strip_prefix("feishu_user_id:") {
+        (user_id.to_string(), "user_id")
+    } else {
+        (chat_id.to_string(), "chat_id")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Interactive cards (hermes `send_exec_approval` / `send_update_prompt` +
+// `_on_card_action_trigger` approval routing)
+// ---------------------------------------------------------------------------
+
+/// hermes `_APPROVAL_CHOICE_MAP` (button decision → gateway choice).
+const APPROVAL_CHOICE_MAP: &[(&str, &str)] = &[
+    ("allow-once", crate::approval_gateway::CHOICE_ONCE),
+    ("allow-session", crate::approval_gateway::CHOICE_SESSION),
+    ("allow-always", crate::approval_gateway::CHOICE_ALWAYS),
+    ("deny", crate::approval_gateway::CHOICE_DENY),
+];
+
+/// hermes `_APPROVAL_LABEL_MAP`.
+fn approval_choice_label(choice: &str) -> &'static str {
+    match choice {
+        "once" => "Approved once",
+        "session" => "Approved for session",
+        "always" => "Approved permanently",
+        "deny" => "Denied",
+        _ => "Resolved",
+    }
+}
+
+/// hermes `_format_exec_approval` with the Feishu template attrs:
+/// empty header, fenced command preview (3000-char budget), `**Reason:**`
+/// label, smart-deny line.
+pub fn format_exec_approval_markdown(
+    command: &str,
+    description: &str,
+    smart_denied: bool,
+) -> String {
+    const CMD_BUDGET: usize = 3000;
+    let preview: String = if command.chars().count() > CMD_BUDGET {
+        let mut truncated: String = command.chars().take(CMD_BUDGET).collect();
+        truncated.push_str("...");
+        truncated
+    } else {
+        command.to_string()
+    };
+    let mut text = format!("```\n{preview}\n```\n**Reason:** {description}");
+    if smart_denied {
+        text.push_str("\n\n**Smart DENY:** owner override applies to this one operation only.");
+    }
+    text
+}
+
+fn card_button(label: &str, value: Value, btn_type: &str) -> Value {
+    json!({
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": label},
+        "type": btn_type,
+        "value": value,
+    })
+}
+
+/// hermes feishu approval card: orange header, markdown body, up to
+/// four buttons. Adaptation: the button value carries the stateless
+/// `approve:<session_key>:<decision>` payload (QQ P199 convention)
+/// instead of hermes in-memory `approval_id` state.
+pub fn build_exec_approval_card(
+    command: &str,
+    description: &str,
+    session_key: &str,
+    allow_permanent: bool,
+    allow_session: bool,
+    smart_denied: bool,
+) -> Value {
+    let mut actions = vec![card_button(
+        "✅ Allow Once",
+        json!({"ulnclaw_approval": format!("approve:{session_key}:allow-once")}),
+        "primary",
+    )];
+    if !smart_denied && allow_session {
+        actions.push(card_button(
+            "✅ Session",
+            json!({"ulnclaw_approval": format!("approve:{session_key}:allow-session")}),
+            "default",
+        ));
+        if allow_permanent {
+            actions.push(card_button(
+                "✅ Always",
+                json!({"ulnclaw_approval": format!("approve:{session_key}:allow-always")}),
+                "default",
+            ));
+        }
+    }
+    actions.push(card_button(
+        "❌ Deny",
+        json!({"ulnclaw_approval": format!("approve:{session_key}:deny")}),
+        "danger",
+    ));
+    json!({
+        "config": {"wide_screen_mode": true},
+        "header": {
+            "title": {"content": "⚠️ Command Approval Required", "tag": "plain_text"},
+            "template": "orange",
+        },
+        "elements": [
+            {
+                "tag": "markdown",
+                "content": format_exec_approval_markdown(command, description, smart_denied),
+            },
+            {"tag": "action", "actions": actions},
+        ],
+    })
+}
+
+/// hermes `_build_update_prompt_card`: ✓ Yes / ✗ No buttons carrying
+/// `update_prompt:<y|n>` payloads.
+pub fn build_update_prompt_card(prompt: &str, default: &str) -> Value {
+    let mut content = prompt.to_string();
+    if !default.is_empty() {
+        content.push_str(&format!("\n\nDefault: `{default}`"));
+    }
+    json!({
+        "config": {"wide_screen_mode": true},
+        "header": {
+            "title": {"content": "⚕ Update Needs Your Input", "tag": "plain_text"},
+            "template": "orange",
+        },
+        "elements": [
+            {"tag": "markdown", "content": content},
+            {
+                "tag": "action",
+                "actions": [
+                    card_button("✓ Yes", json!({"ulnclaw_update_prompt": "update_prompt:y"}), "primary"),
+                    card_button("✗ No", json!({"ulnclaw_update_prompt": "update_prompt:n"}), "danger"),
+                ],
+            },
+        ],
+    })
+}
+
+/// hermes `_build_resolved_approval_card` — inline card response that
+/// replaces the approval card once resolved.
+pub fn build_resolved_approval_card(choice: &str, user_name: &str) -> Value {
+    let icon = if choice == crate::approval_gateway::CHOICE_DENY { "❌" } else { "✅" };
+    let label = approval_choice_label(choice);
+    json!({
+        "config": {"wide_screen_mode": true},
+        "header": {
+            "title": {"content": format!("{icon} {label}"), "tag": "plain_text"},
+            "template": if choice == crate::approval_gateway::CHOICE_DENY { "red" } else { "green" },
+        },
+        "elements": [
+            {"tag": "markdown", "content": format!("{icon} **{label}** by {user_name}")},
+        ],
+    })
+}
+
+/// hermes `_build_resolved_update_prompt_card`.
+pub fn build_resolved_update_prompt_card(answer: &str, user_name: &str) -> Value {
+    let yes = answer == "y";
+    let label = if yes { "Yes" } else { "No" };
+    json!({
+        "config": {"wide_screen_mode": true},
+        "header": {
+            "title": {
+                "content": format!("{} Update prompt answered: {label}", if yes { "✅" } else { "❌" }),
+                "tag": "plain_text",
+            },
+            "template": if yes { "green" } else { "red" },
+        },
+        "elements": [
+            {"tag": "markdown", "content": format!("Answered by **{user_name}**")},
+        ],
+    })
+}
+
+/// Extract the ulnclaw chat id from a `platform-feishu-<chat>` session
+/// key (mirrors the qqbot helper).
+fn feishu_session_chat_id(session_key: &str) -> Option<&str> {
+    let chat_id = session_key.strip_prefix("platform-feishu-")?;
+    if chat_id.is_empty() {
+        return None;
+    }
+    Some(chat_id)
+}
+
+/// hermes `_allow_group_message` + `_is_interactive_operator_authorized`,
+/// adapted to the ulnclaw intake gate (allowlist ∪ pairing): the
+/// operator must pass the same gate as inbound messages, and the
+/// callback chat must match the session chat when both are known.
+fn card_action_authorized(
+    cfg: &FeishuConfig,
+    pairing: Option<&crate::pairing::PairingStore>,
+    operator: &str,
+    session_key: &str,
+    callback_chat_id: &str,
+) -> bool {
+    if operator.is_empty() {
+        return false;
+    }
+    let Some(chat_id) = feishu_session_chat_id(session_key) else {
+        return false;
+    };
+    if !callback_chat_id.is_empty() && callback_chat_id != chat_id {
+        return false;
+    }
+    let resolved = cfg.resolve();
+    if resolved.allowed_users.iter().any(|u| u == "*" || u == operator) {
+        return true;
+    }
+    pairing
+        .map(|store| store.is_approved("feishu", operator))
+        .unwrap_or(false)
+}
+
+/// hermes `_write_update_prompt_response` (shared with the qqbot port):
+/// atomically persist the update-prompt answer for the detached update
+/// watcher via tmp + rename.
+fn write_update_response(answer: &str, operator: &str) {
+    let home = crate::config::ulnclaw_home();
+    let response_path = home.join(".update_response");
+    let tmp_path = home.join(".update_response.tmp");
+    match std::fs::write(&tmp_path, answer).and_then(|_| std::fs::rename(&tmp_path, &response_path))
+    {
+        Ok(()) => eprintln!("[feishu] update prompt answered {answer:?} by {operator}"),
+        Err(e) => eprintln!("[feishu] failed to write update response: {e}"),
+    }
+}
+
+/// hermes `_on_card_action_trigger` + `_handle_approval_card_action` /
+/// `_handle_update_prompt_card_action`. Webhook transport only — the
+/// lark SDK WebSocket client drops CARD frames, so card actions cannot
+/// fire in `connection_mode = "websocket"` (hermes parity). Returns the
+/// inline response body (hermes `P2CardActionTriggerResponse` JSON): a
+/// resolved card for handled clicks, `{}` otherwise.
+pub(crate) async fn handle_card_action(
+    cfg: &FeishuConfig,
+    pairing: Option<&crate::pairing::PairingStore>,
+    payload: &Value,
+) -> Value {
+    let action_value = payload.pointer("/action/value").cloned().unwrap_or(json!({}));
+    let operator = payload
+        .pointer("/operator/open_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let callback_chat_id = payload
+        .pointer("/context/open_chat_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if let Some(button_data) = action_value.get("ulnclaw_approval").and_then(|v| v.as_str()) {
+        let Some((session_key, decision)) = crate::qqbot::parse_approval_button_data(button_data)
+        else {
+            eprintln!("[feishu] card action with unparsable approval data {button_data:?}");
+            return json!({});
+        };
+        let Some(choice) = APPROVAL_CHOICE_MAP
+            .iter()
+            .find(|(candidate, _)| *candidate == decision.as_str())
+            .map(|(_, choice)| *choice)
+        else {
+            eprintln!("[feishu] unknown approval decision {decision:?} (session={session_key})");
+            return json!({});
+        };
+        if !card_action_authorized(cfg, pairing, &operator, &session_key, &callback_chat_id) {
+            eprintln!(
+                "[feishu] rejected unauthorized approval click for session {session_key} (operator={operator})"
+            );
+            return json!({});
+        };
+        let user_name = operator.clone();
+        if crate::approval_gateway::resolve(&session_key, choice) {
+            eprintln!(
+                "[feishu] card resolved approval for session {session_key} (choice={choice}, operator={operator})"
+            );
+        } else {
+            eprintln!("[feishu] approval already resolved or expired for session {session_key}");
+        }
+        return json!({
+            "card": {
+                "type": "raw",
+                "data": build_resolved_approval_card(choice, &user_name),
+            },
+        });
+    }
+
+    if let Some(button_data) = action_value
+        .get("ulnclaw_update_prompt")
+        .and_then(|v| v.as_str())
+    {
+        let Some(answer) = crate::qqbot::parse_update_prompt_button_data(button_data) else {
+            eprintln!("[feishu] card action with unparsable update prompt data {button_data:?}");
+            return json!({});
+        };
+        // Stateless adaptation: hermes carries the session key in
+        // `_update_prompt_state`; ulnclaw derives it from the callback
+        // chat (one session per chat, QQ P199 convention).
+        let session_key = format!("platform-feishu-{callback_chat_id}");
+        if !card_action_authorized(cfg, pairing, &operator, &session_key, &callback_chat_id) {
+            eprintln!("[feishu] rejected unauthorized update prompt click (operator={operator})");
+            return json!({});
+        }
+        write_update_response(&answer, &operator);
+        return json!({
+            "card": {
+                "type": "raw",
+                "data": build_resolved_update_prompt_card(&answer, &operator),
+            },
+        });
+    }
+
+    // Non-approval card actions: hermes routes them as synthetic COMMAND
+    // events (`_handle_card_action_event`) — not ported.
+    json!({})
+}
+
 struct FeishuSender {
     api: Arc<FeishuApi>,
 }
@@ -1171,6 +1549,38 @@ impl crate::messaging::PlatformSender for FeishuSender {
     async fn send_text(&self, chat_id: &str, text: &str) {
         if let Err(e) = self.api.send_text(chat_id, text).await {
             eprintln!("[feishu] send_text to {chat_id} failed: {e}");
+        }
+    }
+
+    /// hermes feishu `send_exec_approval`: interactive card with
+    /// Allow Once / Session / Always / Deny buttons (the session tier
+    /// hides under smart-deny). Returns false on send failure so the
+    /// caller falls back to `/approve` text.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_exec_approval(
+        &self,
+        chat_id: &str,
+        command: &str,
+        session_key: &str,
+        description: &str,
+        allow_permanent: bool,
+        allow_session: bool,
+        smart_denied: bool,
+    ) -> bool {
+        let card = build_exec_approval_card(
+            command,
+            description,
+            session_key,
+            allow_permanent,
+            allow_session,
+            smart_denied,
+        );
+        match self.api.send_card(chat_id, &card).await {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[feishu] send_exec_approval to {chat_id} failed: {e}");
+                false
+            }
         }
     }
 }
@@ -1336,5 +1746,179 @@ mod tests {
             reaction_synthetic_text("removed", "Typing"),
             "reaction:removed:Typing"
         );
+    }
+
+    #[test]
+    fn exec_approval_card_hermes_layout() {
+        let card = build_exec_approval_card(
+            "rm -rf /tmp/x",
+            "dangerous command",
+            "platform-feishu-oc_1",
+            true,
+            true,
+            false,
+        );
+        assert_eq!(card["header"]["title"]["content"], "⚠️ Command Approval Required");
+        assert_eq!(card["header"]["template"], "orange");
+        let markdown = card["elements"][0]["content"].as_str().unwrap();
+        assert!(markdown.contains("```\nrm -rf /tmp/x\n```"));
+        assert!(markdown.contains("**Reason:** dangerous command"));
+        let actions = card["elements"][1]["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 4);
+        assert_eq!(actions[0]["text"]["content"], "✅ Allow Once");
+        assert_eq!(actions[0]["type"], "primary");
+        assert_eq!(
+            actions[0]["value"]["ulnclaw_approval"],
+            "approve:platform-feishu-oc_1:allow-once"
+        );
+        assert_eq!(actions[1]["text"]["content"], "✅ Session");
+        assert_eq!(
+            actions[1]["value"]["ulnclaw_approval"],
+            "approve:platform-feishu-oc_1:allow-session"
+        );
+        assert_eq!(actions[2]["text"]["content"], "✅ Always");
+        assert_eq!(actions[3]["text"]["content"], "❌ Deny");
+        assert_eq!(actions[3]["type"], "danger");
+    }
+
+    #[test]
+    fn exec_approval_card_smart_deny_hides_session_tiers() {
+        let card = build_exec_approval_card("cmd", "d", "platform-feishu-oc_1", true, true, true);
+        let actions = card["elements"][1]["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0]["text"]["content"], "✅ Allow Once");
+        assert_eq!(actions[1]["text"]["content"], "❌ Deny");
+        let markdown = card["elements"][0]["content"].as_str().unwrap();
+        assert!(markdown.contains("**Smart DENY:**"));
+        // allow_session=false also collapses the tiers.
+        let card = build_exec_approval_card("cmd", "d", "platform-feishu-oc_1", true, false, false);
+        assert_eq!(card["elements"][1]["actions"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn format_exec_approval_markdown_truncates_long_commands() {
+        let command = "x".repeat(3001);
+        let markdown = format_exec_approval_markdown(&command, "d", false);
+        assert!(markdown.contains(&format!("{}...\n```", "x".repeat(3000))));
+        assert!(!markdown.contains(&"x".repeat(3001)));
+    }
+
+    #[test]
+    fn update_prompt_card_layout() {
+        let card = build_update_prompt_card("Upgrade now?", "yes");
+        assert_eq!(card["header"]["title"]["content"], "⚕ Update Needs Your Input");
+        let markdown = card["elements"][0]["content"].as_str().unwrap();
+        assert!(markdown.contains("Upgrade now?"));
+        assert!(markdown.contains("Default: `yes`"));
+        let actions = card["elements"][1]["actions"].as_array().unwrap();
+        assert_eq!(actions[0]["value"]["ulnclaw_update_prompt"], "update_prompt:y");
+        assert_eq!(actions[1]["value"]["ulnclaw_update_prompt"], "update_prompt:n");
+        assert_eq!(actions[1]["type"], "danger");
+    }
+
+    #[test]
+    fn resolved_cards_layout() {
+        let approved = build_resolved_approval_card("always", "ou_admin");
+        assert_eq!(approved["header"]["title"]["content"], "✅ Approved permanently");
+        assert_eq!(approved["header"]["template"], "green");
+        assert_eq!(
+            approved["elements"][0]["content"],
+            "✅ **Approved permanently** by ou_admin"
+        );
+        let denied = build_resolved_approval_card("deny", "ou_admin");
+        assert_eq!(denied["header"]["title"]["content"], "❌ Denied");
+        assert_eq!(denied["header"]["template"], "red");
+        let answered = build_resolved_update_prompt_card("y", "ou_admin");
+        assert_eq!(
+            answered["header"]["title"]["content"],
+            "✅ Update prompt answered: Yes"
+        );
+        assert_eq!(answered["elements"][0]["content"], "Answered by **ou_admin**");
+    }
+
+    #[test]
+    fn card_action_authorization_gate() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = crate::pairing::PairingStore::open(temp.path());
+        let cfg = FeishuConfig {
+            allowed_users: vec!["ou_admin".into()],
+            ..Default::default()
+        };
+        let session = "platform-feishu-oc_1";
+        // Allowlisted operator passes; chat mismatch and strangers fail.
+        assert!(card_action_authorized(&cfg, Some(&store), "ou_admin", session, "oc_1"));
+        assert!(card_action_authorized(&cfg, Some(&store), "ou_admin", session, ""));
+        assert!(!card_action_authorized(&cfg, Some(&store), "ou_admin", session, "oc_other"));
+        assert!(!card_action_authorized(&cfg, Some(&store), "ou_stranger", session, "oc_1"));
+        assert!(!card_action_authorized(&cfg, Some(&store), "", session, "oc_1"));
+        // Wildcard allowlist.
+        let wildcard = FeishuConfig {
+            allowed_users: vec!["*".into()],
+            ..Default::default()
+        };
+        assert!(card_action_authorized(&wildcard, Some(&store), "ou_anyone", session, "oc_1"));
+        // Pairing approval passes the gate.
+        let code = store.generate_code("feishu", "ou_paired", "Paired").unwrap();
+        store.approve_code("feishu", &code);
+        assert!(card_action_authorized(&cfg, Some(&store), "ou_paired", session, "oc_1"));
+    }
+
+    #[tokio::test]
+    async fn webhook_card_action_resolves_approval() {
+        let cfg = FeishuConfig {
+            allowed_users: vec!["ou_admin".into()],
+            ..Default::default()
+        };
+        let session = "platform-feishu-oc_cardtest";
+        let _handle = crate::approval_gateway::register(session, "ls", "d", false, true, true);
+        assert_eq!(crate::approval_gateway::pending_count(session), 1);
+        let body = serde_json::to_vec(&json!({
+            "operator": {"open_id": "ou_admin"},
+            "context": {"open_chat_id": "oc_cardtest"},
+            "action": {
+                "tag": "button",
+                "value": {"ulnclaw_approval": format!("approve:{session}:allow-once")},
+            },
+        }))
+        .unwrap();
+        let resp = feishu_handle_webhook(&cfg, &dummy_dispatcher().await, None, &body, &[]).await;
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body["card"]["type"], "raw");
+        assert_eq!(resp.body["card"]["data"]["header"]["title"]["content"], "✅ Approved once");
+        assert_eq!(crate::approval_gateway::pending_count(session), 0);
+    }
+
+    #[tokio::test]
+    async fn webhook_unauthorized_card_action_leaves_approval_pending() {
+        let cfg = FeishuConfig {
+            allowed_users: vec!["ou_admin".into()],
+            ..Default::default()
+        };
+        let session = "platform-feishu-oc_cardtest2";
+        let _handle = crate::approval_gateway::register(session, "ls", "d", false, true, true);
+        let body = serde_json::to_vec(&json!({
+            "operator": {"open_id": "ou_intruder"},
+            "context": {"open_chat_id": "oc_cardtest2"},
+            "action": {
+                "tag": "button",
+                "value": {"ulnclaw_approval": format!("approve:{session}:deny")},
+            },
+        }))
+        .unwrap();
+        let resp = feishu_handle_webhook(&cfg, &dummy_dispatcher().await, None, &body, &[]).await;
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, json!({}));
+        assert_eq!(crate::approval_gateway::pending_count(session), 1);
+        // Clean up the pending entry so later tests start fresh.
+        crate::approval_gateway::resolve(session, crate::approval_gateway::CHOICE_DENY);
+    }
+
+    #[tokio::test]
+    async fn webhook_read_receipt_ignored() {
+        let cfg = FeishuConfig::default();
+        let body = br#"{"header":{"event_type":"im.message.message_read_v1","event_id":"r1"},"event":{}}"#;
+        let resp = feishu_handle_webhook(&cfg, &dummy_dispatcher().await, None, body, &[]).await;
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body["code"], 0);
     }
 }

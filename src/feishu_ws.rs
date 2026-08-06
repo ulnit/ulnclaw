@@ -653,7 +653,10 @@ async fn run_once(
                             frame.payload.clone()
                         };
                         if msg_type != MSG_TYPE_EVENT {
-                            // card and other data frames are not handled.
+                            // hermes parity: the lark SDK WebSocket client
+                            // drops CARD frames (card actions only work in
+                            // webhook mode), so non-event frames are
+                            // skipped without an ack.
                             continue;
                         }
                         let trace_id = frame
@@ -731,6 +734,10 @@ fn dispatch_event_envelope(
                     .await;
             });
         }
+        return;
+    }
+    if event_type == "im.message.message_read_v1" {
+        // hermes `_on_message_read_event`: read receipts are ignored.
         return;
     }
     if event_type != "im.message.receive_v1" {
