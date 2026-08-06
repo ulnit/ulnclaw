@@ -3218,6 +3218,19 @@ pub mod slack {
         async fn send_text(&self, chat_id: &str, text: &str) {
             post_message(&self.bot_token, chat_id, text).await;
         }
+
+        /// Block Kit clarify buttons (hermes Slack `send_clarify`).
+        /// Returns false on API failure so the numbered-text fallback still
+        /// goes out.
+        async fn send_clarify(
+            &self,
+            chat_id: &str,
+            clarify_id: &str,
+            question: &str,
+            choices: &[String],
+        ) -> bool {
+            send_clarify_message(&self.bot_token, chat_id, clarify_id, question, choices).await
+        }
     }
 
     pub async fn run(cfg: SlackConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
@@ -3292,6 +3305,18 @@ pub mod slack {
             if !envelope_id.is_empty() {
                 let ack = json!({"envelope_id": envelope_id});
                 sink.send(WsMessage::Text(ack.to_string())).await.ok();
+            }
+            // Clarify button clicks arrive as `interactive` envelopes with
+            // a block_actions payload (hermes `_handle_clarify_action`).
+            if envelope_type == "interactive" {
+                handle_interactive_payload(
+                    cfg,
+                    bot_token,
+                    envelope.get("payload").cloned().unwrap_or(json!({})),
+                    pairing.as_deref(),
+                )
+                .await;
+                continue;
             }
             if envelope_type != "events_api" {
                 continue;
@@ -3686,6 +3711,609 @@ pub mod slack {
             set_thread_status(&bot_token, &channel, &thread_ts, ""),
         )
         .await;
+    }
+
+    // -- Clarify Block Kit buttons — hermes Slack send_clarify parity ------
+
+    /// Slack mrkdwn control-char escape — hermes send_clarify escapes &,
+    /// <, > so questions render literally instead of markup/mentions.
+    fn mrkdwn_escape(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+
+    /// Send a clarify prompt as Block Kit buttons (hermes Slack
+    /// `send_clarify`): one button per choice (`hermes_clarify_choice_<idx>`
+    /// action_id, value packs `<clarify_id>|<idx>`, label capped at 75
+    /// chars) plus a final ✏️ Other… button (`hermes_clarify_other`).
+    /// Returns false with no choices (open-ended prompts ride the
+    /// numbered-text path) or on API failure so the caller falls back.
+    pub async fn send_clarify_message(
+        bot_token: &str,
+        channel: &str,
+        clarify_id: &str,
+        question: &str,
+        choices: &[String],
+    ) -> bool {
+        if choices.is_empty() {
+            return false;
+        }
+        // Section text caps at 3000 chars — budget the question so the
+        // wrapper never pushes the block over the limit (overflow →
+        // invalid_blocks → no buttons).
+        let mut body = format!("❓ {}", mrkdwn_escape(question));
+        let budget = 3000 - 3;
+        if body.chars().count() > budget {
+            let kept: String = body.chars().take(budget).collect();
+            body = format!("{kept}...");
+        }
+        let mut elements: Vec<Value> = choices
+            .iter()
+            .enumerate()
+            .map(|(idx, choice)| {
+                let label = choice.trim();
+                let label = if label.is_empty() {
+                    format!("Option {}", idx + 1)
+                } else {
+                    label.chars().take(75).collect::<String>()
+                };
+                json!({
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": label, "emoji": true},
+                    "action_id": format!("hermes_clarify_choice_{idx}"),
+                    "value": format!("{clarify_id}|{idx}"),
+                })
+            })
+            .collect();
+        elements.push(json!({
+            "type": "button",
+            "text": {"type": "plain_text", "text": "✏️ Other…", "emoji": true},
+            "action_id": "hermes_clarify_other",
+            "value": format!("{clarify_id}|other"),
+        }));
+        let mut blocks: Vec<Value> = vec![json!({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": body},
+        })];
+        // Slack caps an actions block at 5 elements; chunk so a larger
+        // choice list degrades gracefully instead of 400ing.
+        for chunk in elements.chunks(5) {
+            blocks.push(json!({"type": "actions", "elements": chunk}));
+        }
+        let params = json!({"channel": channel, "text": body, "blocks": blocks});
+        let response = reqwest::Client::new()
+            .post(format!("{}/chat.postMessage", slack_api_base()))
+            .header("Authorization", format!("Bearer {bot_token}"))
+            .json(&params)
+            .send()
+            .await;
+        match response {
+            Ok(resp) => match resp.json::<Value>().await {
+                Ok(value) if value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) => true,
+                Ok(value) => {
+                    eprintln!(
+                        "[slack] send_clarify failed: {}",
+                        value.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
+                    );
+                    false
+                }
+                Err(e) => {
+                    eprintln!("[slack] send_clarify parse failed: {e}");
+                    false
+                }
+            },
+            Err(e) => {
+                eprintln!("[slack] send_clarify failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// hermes `_clarify_resolved` cap.
+    const CLARIFY_RESOLVED_MAX: usize = 1000;
+
+    fn clarify_resolved_ledger() -> &'static std::sync::Mutex<std::collections::VecDeque<String>> {
+        static LEDGER: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<String>>> =
+            std::sync::OnceLock::new();
+        LEDGER.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()))
+    }
+
+    /// Double-click guard (hermes `_clarify_resolved.pop(msg_ts, True)`):
+    /// the first click on a prompt message proceeds, later clicks bail.
+    fn clarify_click_claimed(msg_ts: &str) -> bool {
+        let mut ledger = clarify_resolved_ledger().lock().unwrap();
+        if ledger.contains(&msg_ts.to_string()) {
+            return false;
+        }
+        ledger.push_back(msg_ts.to_string());
+        if ledger.len() > CLARIFY_RESOLVED_MAX {
+            ledger.pop_front();
+        }
+        true
+    }
+
+    #[cfg(test)]
+    fn reset_clarify_ledger_for_tests() {
+        clarify_resolved_ledger().lock().unwrap().clear();
+    }
+
+    /// Route a block_actions clarify click (hermes `_handle_clarify_action`):
+    /// authorized union (allowlist ∪ pairing) first, then the double-click
+    /// guard, then Other → text-capture / numeric → resolve, rewriting the
+    /// prompt message with the outcome either way.
+    async fn handle_interactive_payload(
+        cfg: &SlackConfig,
+        bot_token: &str,
+        payload: Value,
+        pairing: Option<&crate::pairing::PairingStore>,
+    ) {
+        if payload.get("type").and_then(|v| v.as_str()).unwrap_or("") != "block_actions" {
+            return;
+        }
+        let action = payload
+            .get("actions")
+            .and_then(|v| v.as_array())
+            .and_then(|rows| rows.first())
+            .cloned()
+            .unwrap_or(json!({}));
+        let action_id = action.get("action_id").and_then(|v| v.as_str()).unwrap_or("");
+        if !action_id.starts_with("hermes_clarify_choice_") && action_id != "hermes_clarify_other"
+        {
+            return;
+        }
+        let value = action.get("value").and_then(|v| v.as_str()).unwrap_or("");
+        let user_id = payload
+            .pointer("/user/id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let user_name = payload
+            .pointer("/user/name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let channel_id = payload
+            .pointer("/channel/id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let msg_ts = payload
+            .pointer("/message/ts")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Same union as inbound messages (hermes
+        // `_is_interactive_user_authorized` → runner auth).
+        let authorized = allowlisted(&cfg.allowed_channel_ids, &channel_id)
+            || pairing
+                .map(|store| store.is_approved("slack", &user_id))
+                .unwrap_or(false);
+        if !authorized {
+            eprintln!("[slack] unauthorized clarify click by {user_name} ({user_id}) — ignoring");
+            return;
+        }
+
+        // value packs `clarify_id|<idx|other>`.
+        let Some((clarify_id, token)) = value.split_once('|') else {
+            eprintln!("[slack] malformed clarify value: {value}");
+            return;
+        };
+        // Double-click guard — the first click proceeds, later ones bail.
+        if !clarify_click_claimed(&msg_ts) {
+            return;
+        }
+
+        // Keep the original question so the resolved message keeps context
+        // (first section block; Slack re-escapes entities in the payload,
+        // so cap at the 3000-char section limit like hermes).
+        let mut original_text = String::new();
+        if let Some(blocks) = payload.pointer("/message/blocks").and_then(|v| v.as_array()) {
+            for block in blocks {
+                if block.get("type").and_then(|v| v.as_str()) == Some("section") {
+                    original_text = block
+                        .pointer("/text/text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .chars()
+                        .take(3000)
+                        .collect();
+                    break;
+                }
+            }
+        }
+
+        if action_id == "hermes_clarify_other" || token == "other" {
+            if !crate::clarify_gateway::mark_awaiting_text(clarify_id) {
+                update_clarify_message(
+                    bot_token,
+                    &channel_id,
+                    &msg_ts,
+                    &original_text,
+                    &format!(
+                        "⏳ This prompt expired — please send a new request. (by {user_name})"
+                    ),
+                )
+                .await;
+                return;
+            }
+            update_clarify_message(
+                bot_token,
+                &channel_id,
+                &msg_ts,
+                &original_text,
+                &format!("✏️ Awaiting typed answer from {user_name}…"),
+            )
+            .await;
+            return;
+        }
+
+        let Ok(idx) = token.parse::<usize>() else {
+            eprintln!("[slack] invalid clarify choice token: {token}");
+            return;
+        };
+        // Canonical choice text from the registry (hermes `_entries`
+        // lookup); fall back to a positional label on a race.
+        let resolved_text = crate::clarify_gateway::peek_choice(clarify_id, token)
+            .unwrap_or_else(|| format!("choice {}", idx + 1));
+        if crate::clarify_gateway::resolve(clarify_id, &resolved_text) {
+            update_clarify_message(
+                bot_token,
+                &channel_id,
+                &msg_ts,
+                &original_text,
+                &format!("✅ {user_name}: {resolved_text}"),
+            )
+            .await;
+        } else {
+            // Entry evicted / gateway restarted — surface expiry instead of
+            // a misleading ✓ on a button the agent will never receive.
+            update_clarify_message(
+                bot_token,
+                &channel_id,
+                &msg_ts,
+                &original_text,
+                &format!(
+                    "⏳ This prompt expired — please send a new request. (by {user_name})"
+                ),
+            )
+            .await;
+        }
+    }
+
+    /// Rewrite a clarify message to show the outcome and drop the buttons
+    /// (hermes `_update_clarify_message` — section + context blocks).
+    async fn update_clarify_message(
+        bot_token: &str,
+        channel: &str,
+        msg_ts: &str,
+        question_text: &str,
+        decision_text: &str,
+    ) {
+        let section_text = if question_text.is_empty() {
+            "Clarification"
+        } else {
+            question_text
+        };
+        let params = json!({
+            "channel": channel,
+            "ts": msg_ts,
+            "text": decision_text,
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": section_text},
+                },
+                {
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": decision_text}],
+                }
+            ],
+        });
+        let response = reqwest::Client::new()
+            .post(format!("{}/chat.update", slack_api_base()))
+            .header("Authorization", format!("Bearer {bot_token}"))
+            .json(&params)
+            .send()
+            .await;
+        match response {
+            Ok(resp) => match resp.json::<Value>().await {
+                Ok(value) if !value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) => {
+                    eprintln!(
+                        "[slack] chat.update failed: {}",
+                        value.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("[slack] chat.update parse failed: {e}"),
+            },
+            Err(e) => eprintln!("[slack] chat.update failed: {e}"),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// axum mock of the Slack Web API — logs (method, body) per call.
+        async fn spawn_slack_clarify_api(
+            log: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+            response_ok: bool,
+        ) -> String {
+            use axum::extract::State;
+            use axum::routing::post;
+            type Log = Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+            let app = axum::Router::new()
+                .route(
+                    "/chat.postMessage",
+                    post(
+                        move |State(log): State<Log>, axum::Json(body): axum::Json<Value>| async move {
+                            log.lock().unwrap().push(("chat.postMessage".into(), body));
+                            axum::Json(json!({"ok": response_ok, "ts": "111.222"}))
+                        },
+                    ),
+                )
+                .route(
+                    "/chat.update",
+                    post(
+                        move |State(log): State<Log>, axum::Json(body): axum::Json<Value>| async move {
+                            log.lock().unwrap().push(("chat.update".into(), body));
+                            axum::Json(json!({"ok": response_ok}))
+                        },
+                    ),
+                )
+                .with_state(log);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            format!("http://{addr}")
+        }
+
+        fn block_actions_payload(clarify_id: &str, token: &str, action_id: &str) -> Value {
+            json!({
+                "type": "block_actions",
+                "user": {"id": "U7", "name": "ann"},
+                "channel": {"id": "C42"},
+                "message": {
+                    "ts": "111.222",
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": "❓ Pick"},
+                    }],
+                },
+                "actions": [{
+                    "action_id": action_id,
+                    "value": format!("{clarify_id}|{token}"),
+                }],
+            })
+        }
+
+        fn authorized_cfg() -> SlackConfig {
+            SlackConfig {
+                allowed_channel_ids: vec!["C42".into()],
+                ..Default::default()
+            }
+        }
+
+        #[tokio::test]
+        async fn slack_send_clarify_posts_block_kit_buttons() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_slack_clarify_api(log.clone(), true).await;
+            std::env::set_var("SLACK_API_BASE", &base);
+            let ok = send_clarify_message(
+                "xoxb-TEST",
+                "C42",
+                "abc123def456",
+                "Pick <one> & more",
+                &["Alpha".into(), "Beta".into()],
+            )
+            .await;
+            std::env::remove_var("SLACK_API_BASE");
+            assert!(ok);
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            let (method, body) = &reqs[0];
+            assert_eq!(method, "chat.postMessage");
+            // mrkdwn control chars escaped; fallback text = the body.
+            let section = &body["blocks"][0];
+            assert_eq!(section["type"], "section");
+            assert_eq!(section["text"]["text"], "❓ Pick &lt;one&gt; &amp; more");
+            assert_eq!(body["text"], "❓ Pick &lt;one&gt; &amp; more");
+            // One actions block: per-choice buttons + Other.
+            let actions = &body["blocks"][1];
+            assert_eq!(actions["type"], "actions");
+            let elements = actions["elements"].as_array().unwrap();
+            assert_eq!(elements.len(), 3);
+            assert_eq!(elements[0]["text"]["text"], "Alpha");
+            assert_eq!(elements[0]["action_id"], "hermes_clarify_choice_0");
+            assert_eq!(elements[0]["value"], "abc123def456|0");
+            assert_eq!(elements[1]["action_id"], "hermes_clarify_choice_1");
+            assert_eq!(elements[1]["value"], "abc123def456|1");
+            assert_eq!(elements[2]["text"]["text"], "✏️ Other…");
+            assert_eq!(elements[2]["action_id"], "hermes_clarify_other");
+            assert_eq!(elements[2]["value"], "abc123def456|other");
+        }
+
+        #[tokio::test]
+        async fn slack_send_clarify_api_failure_returns_false() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_slack_clarify_api(log.clone(), false).await;
+            std::env::set_var("SLACK_API_BASE", &base);
+            let ok = send_clarify_message(
+                "xoxb-TEST",
+                "C42",
+                "abc123def456",
+                "Pick",
+                &["Alpha".into()],
+            )
+            .await;
+            std::env::remove_var("SLACK_API_BASE");
+            // False → messaging_clarify_fn sends the numbered-text fallback.
+            assert!(!ok);
+        }
+
+        #[tokio::test]
+        async fn slack_interactive_numeric_choice_resolves() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            reset_clarify_ledger_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_slack_clarify_api(log.clone(), true).await;
+            std::env::set_var("SLACK_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-slack-C42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let payload = block_actions_payload(
+                &clarify_id,
+                "1",
+                &format!("hermes_clarify_choice_1"),
+            );
+            handle_interactive_payload(&authorized_cfg(), "xoxb-TEST", payload, None).await;
+            std::env::remove_var("SLACK_API_BASE");
+            assert_eq!(handle.rx.await.unwrap(), "Beta");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            let (method, body) = &reqs[0];
+            assert_eq!(method, "chat.update");
+            assert_eq!(body["channel"], "C42");
+            assert_eq!(body["ts"], "111.222");
+            assert_eq!(body["text"], "✅ ann: Beta");
+            // Buttons dropped: section (original question) + context only.
+            let blocks = body["blocks"].as_array().unwrap();
+            assert_eq!(blocks.len(), 2);
+            assert_eq!(blocks[0]["type"], "section");
+            assert_eq!(blocks[0]["text"]["text"], "❓ Pick");
+            assert_eq!(blocks[1]["type"], "context");
+            assert_eq!(blocks[1]["elements"][0]["text"], "✅ ann: Beta");
+        }
+
+        #[tokio::test]
+        async fn slack_interactive_other_flips_text_capture() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            reset_clarify_ledger_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_slack_clarify_api(log.clone(), true).await;
+            std::env::set_var("SLACK_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-slack-C42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let payload = block_actions_payload(&clarify_id, "other", "hermes_clarify_other");
+            handle_interactive_payload(&authorized_cfg(), "xoxb-TEST", payload, None).await;
+            std::env::remove_var("SLACK_API_BASE");
+            // Entry survives in text-capture mode; the next typed message in
+            // the session resolves it.
+            let pending = crate::clarify_gateway::pending_for_session("platform-slack-C42")
+                .expect("entry must survive the Other click");
+            assert!(pending.awaiting_text);
+            assert!(crate::clarify_gateway::resolve(&clarify_id, "typed answer"));
+            assert_eq!(handle.rx.await.unwrap(), "typed answer");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].1["text"], "✏️ Awaiting typed answer from ann…");
+        }
+
+        #[tokio::test]
+        async fn slack_interactive_double_click_guarded() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            reset_clarify_ledger_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_slack_clarify_api(log.clone(), true).await;
+            std::env::set_var("SLACK_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-slack-C42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let first = block_actions_payload(&clarify_id, "0", "hermes_clarify_choice_0");
+            handle_interactive_payload(&authorized_cfg(), "xoxb-TEST", first, None).await;
+            // Second click on the same prompt message bails silently
+            // (hermes `_clarify_resolved` atomic pop).
+            let second = block_actions_payload(&clarify_id, "1", "hermes_clarify_choice_1");
+            handle_interactive_payload(&authorized_cfg(), "xoxb-TEST", second, None).await;
+            std::env::remove_var("SLACK_API_BASE");
+            assert_eq!(handle.rx.await.unwrap(), "Alpha");
+            assert_eq!(log.lock().unwrap().len(), 1);
+        }
+
+        #[tokio::test]
+        async fn slack_interactive_unauthorized_ignored() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            reset_clarify_ledger_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_slack_clarify_api(log.clone(), true).await;
+            std::env::set_var("SLACK_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-slack-C42",
+                "Pick",
+                &["Alpha".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            let payload = block_actions_payload(&clarify_id, "0", "hermes_clarify_choice_0");
+            // Channel C42 is not allowlisted and no pairing store exists.
+            let cfg = SlackConfig {
+                allowed_channel_ids: vec!["C999".into()],
+                ..Default::default()
+            };
+            handle_interactive_payload(&cfg, "xoxb-TEST", payload, None).await;
+            std::env::remove_var("SLACK_API_BASE");
+            assert!(log.lock().unwrap().is_empty());
+            // The waiter is untouched — the legitimate user can still answer.
+            assert!(crate::clarify_gateway::contains(&clarify_id));
+            assert!(crate::clarify_gateway::resolve(&clarify_id, "Alpha"));
+        }
+
+        #[tokio::test]
+        async fn slack_interactive_expired_prompt_updates_message() {
+            let _env_guard = crate::models_dev::test_env_lock();
+            let _clarify_guard = crate::clarify_gateway::test_lock().lock().unwrap();
+            crate::clarify_gateway::reset_for_tests();
+            reset_clarify_ledger_for_tests();
+            let log = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+            let base = spawn_slack_clarify_api(log.clone(), true).await;
+            std::env::set_var("SLACK_API_BASE", &base);
+            let handle = crate::clarify_gateway::register(
+                "platform-slack-C42",
+                "Pick",
+                &["Alpha".into(), "Beta".into()],
+                false,
+            );
+            let clarify_id = handle.clarify_id.clone();
+            // The clarify tool gave up (receiver dropped) before the click.
+            drop(handle.rx);
+            let payload = block_actions_payload(&clarify_id, "1", "hermes_clarify_choice_1");
+            handle_interactive_payload(&authorized_cfg(), "xoxb-TEST", payload, None).await;
+            std::env::remove_var("SLACK_API_BASE");
+            let reqs = log.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "chat.update");
+            assert_eq!(
+                reqs[0].1["text"],
+                "⏳ This prompt expired — please send a new request. (by ann)"
+            );
+        }
     }
 }
 
