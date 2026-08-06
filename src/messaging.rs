@@ -65,6 +65,17 @@ pub struct MessagingConfig {
     /// Yuanbao WS-gateway adapter (hermes `platforms.yuanbao`).
     #[serde(default)]
     pub yuanbao: crate::yuanbao::YuanbaoConfig,
+    /// Email via IMAP/SMTP (hermes `platforms.email` plugin).
+    #[serde(default)]
+    pub email: crate::email_platform::EmailConfig,
+    /// Mattermost via REST v4 + WebSocket (hermes `platforms.mattermost`
+    /// plugin).
+    #[serde(default)]
+    pub mattermost: crate::mattermost::MattermostConfig,
+    /// Matrix via the Client-Server API (hermes `platforms.matrix`
+    /// plugin, sans E2EE).
+    #[serde(default)]
+    pub matrix: crate::matrix::MatrixConfig,
 }
 
 fn default_pairing() -> bool {
@@ -743,8 +754,32 @@ pub async fn run_messaging(
             crate::yuanbao::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.email.enabled {
+        let cfg = msg.email.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::email_platform::run(cfg, dispatcher, pairing).await;
+        }));
+    }
+    if msg.mattermost.enabled {
+        let cfg = msg.mattermost.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::mattermost::run(cfg, dispatcher, pairing).await;
+        }));
+    }
+    if msg.matrix.enabled {
+        let cfg = msg.matrix.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::matrix::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao] enabled = true)");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix] enabled = true)");
         return;
     }
     for task in tasks {
