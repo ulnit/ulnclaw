@@ -1719,7 +1719,22 @@ fn load_config(cli: &Cli) -> UlncLawConfig {
     config
 }
 
-fn build_provider(config: &UlncLawConfig) -> Result<Arc<dyn ulnclaw::provider::Provider>, String> {
+fn build_provider(
+    config: &UlncLawConfig,
+    session_id: Option<&str>,
+) -> Result<Arc<dyn ulnclaw::provider::Provider>, String> {
+    // Persistent MoA facade (hermes build_moa_facade): `[model] provider
+    // = "moa"` runs the whole agent loop on the preset — `model` selects
+    // the preset. Slot keys resolve per preset, no main key required.
+    if config.model.provider.trim().eq_ignore_ascii_case("moa") {
+        let facade = ulnclaw::moa::MoaProvider::new(
+            config.clone(),
+            session_id.map(str::to_string),
+        )
+        .map_err(|e| e.to_string())?;
+        eprintln!("🤖 AI Agent initialized with MoA preset: {}", facade.preset_name());
+        return Ok(Arc::new(facade));
+    }
     let api_key = config.resolve_api_key();
     let keyless = matches!(
         config.model.provider.as_str(),
@@ -1832,7 +1847,7 @@ async fn build_gateway_stack(
         let provider_factory: ulnclaw::gateway::DispatcherProviderFactory =
             std::sync::Arc::new(|| {
                 let live = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
-                build_provider(&live)
+                build_provider(&live, None)
             });
         ulnclaw::gateway::spawn_kanban_dispatcher(
             config.kanban.dispatch_interval_secs,
@@ -2453,7 +2468,7 @@ async fn make_agent_in(
     home: &std::path::Path,
     session_id: Option<String>,
 ) -> Result<Arc<Agent>, String> {
-    let provider = build_provider(config)?;
+    let provider = build_provider(config, session_id.as_deref())?;
     let mut registry = ToolRegistry::new();
     register_builtin_tools(&mut registry);
 
@@ -5351,7 +5366,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                             .to_string();
                         let config =
                             ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
-                        let gate = match build_provider(&config) {
+                        let gate = match build_provider(&config, None) {
                             Ok(provider) => {
                                 ulnclaw::goals::goal_completion_gate(
                                     &config,
@@ -5649,7 +5664,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
         KanbanAction::Specify { id, all } => {
             let ids = triage_targets(&store, id.as_deref(), all, "specify")?;
             let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
-            let provider = build_provider(&config)?;
+            let provider = build_provider(&config, None)?;
             for task_id in ids {
                 let outcome = ulnclaw::kanban_triage::specify_task(
                     &store,
@@ -5673,7 +5688,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
         KanbanAction::Decompose { id, all } => {
             let ids = triage_targets(&store, id.as_deref(), all, "decompose")?;
             let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
-            let provider = build_provider(&config)?;
+            let provider = build_provider(&config, None)?;
             for task_id in ids {
                 let outcome = ulnclaw::kanban_triage::decompose_task(
                     &store,
@@ -6762,7 +6777,7 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                 rows.len(),
                 if apply { "" } else { " (dry run — pass --apply to write)" }
             );
-            let provider = build_provider(config)?;
+            let provider = build_provider(config, None)?;
             let mut changed = 0usize;
             for row in &rows {
                 let typed = ulnclaw::session::retitle::describe_skill_invocation(&row.content)

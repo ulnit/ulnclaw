@@ -597,6 +597,55 @@ pub struct MoaConfig {
     /// Named presets.
     #[serde(default)]
     pub presets: HashMap<String, MoaPreset>,
+    /// Persist one JSONL record per MoA turn under `<home>/moa-traces/`
+    /// (hermes `moa.save_traces`).
+    #[serde(default)]
+    pub save_traces: bool,
+    /// Override the trace directory (hermes `moa.trace_dir`).
+    #[serde(default)]
+    pub trace_dir: Option<String>,
+    /// PII filter for reference outputs (hermes `moa.privacy_filter`):
+    /// off (default) | `display` (redact user-visible surfaces) | `full`
+    /// (also redact the text injected into the aggregator prompt).
+    #[serde(default)]
+    pub privacy_filter: Option<MoaPrivacyFilter>,
+}
+
+/// `moa.privacy_filter` value: tolerant read (hermes `coerce_privacy_filter`
+/// contract) — booleans and unknown strings degrade instead of failing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MoaPrivacyFilter {
+    Flag(bool),
+    Mode(String),
+}
+
+impl MoaPrivacyFilter {
+    /// Normalize to `""` (off), `"display"`, or `"full"`.
+    pub fn mode(&self) -> &'static str {
+        match self {
+            MoaPrivacyFilter::Flag(true) => "full",
+            MoaPrivacyFilter::Flag(false) => "",
+            MoaPrivacyFilter::Mode(raw) => {
+                let mode = raw.trim().to_lowercase();
+                match mode.as_str() {
+                    "display" | "full" => match mode.as_str() {
+                        "display" => "display",
+                        _ => "full",
+                    },
+                    "true" | "on" | "yes" | "1" => "full",
+                    _ => "",
+                }
+            }
+        }
+    }
+}
+
+impl MoaConfig {
+    /// Resolved privacy-filter mode ("" | "display" | "full").
+    pub fn privacy_mode(&self) -> &'static str {
+        self.privacy_filter.as_ref().map(|v| v.mode()).unwrap_or("")
+    }
 }
 
 impl MoaConfig {

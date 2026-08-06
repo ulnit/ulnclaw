@@ -98,6 +98,8 @@ pub struct InventoryInput {
     /// `[providers.<slug>]` entries, sorted by slug for determinism.
     pub providers: Vec<(String, CustomProviderConfig)>,
     pub excluded_providers: Vec<String>,
+    /// `[moa] presets` names — surface the virtual `moa` provider row.
+    pub moa_presets: Vec<String>,
 }
 
 impl InventoryInput {
@@ -130,6 +132,11 @@ impl InventoryInput {
                 .map(|s| s.trim().to_lowercase())
                 .filter(|s| !s.is_empty())
                 .collect(),
+            moa_presets: {
+                let mut names: Vec<String> = cfg.moa.presets.keys().cloned().collect();
+                names.sort();
+                names
+            },
         }
     }
 }
@@ -455,6 +462,17 @@ pub fn build_model_options_payload(input: &InventoryInput, opts: &InventoryOptio
         rows.push(row);
     }
 
+    // Virtual MoA row (hermes `_moa_provider_row`): preset names as the
+    // model list, present whenever the user configured presets.
+    if !input.moa_presets.is_empty() && !seen.contains("moa") {
+        let mut row = Row::new("moa", "config");
+        row.name = "Mixture of Agents".to_string();
+        row.authenticated = true;
+        row.models = input.moa_presets.clone();
+        seen.insert("moa".to_string());
+        rows.push(row);
+    }
+
     // 3. Canonical providers authenticated by their env key.
     for canon in CANONICAL_PROVIDERS {
         let slug = canon.slug.to_string();
@@ -509,7 +527,9 @@ pub fn build_model_options_payload(input: &InventoryInput, opts: &InventoryOptio
 
     // Explicit-only: keep rows backed by explicit user configuration.
     if opts.explicit_only {
-        rows.retain(|r| r.is_user_defined || r.is_current || r.source == "env");
+        rows.retain(|r| {
+            r.is_user_defined || r.is_current || r.source == "env" || r.slug == "moa"
+        });
     }
 
     // Canonical declaration order first, custom rows last (hermes
@@ -520,6 +540,11 @@ pub fn build_model_options_payload(input: &InventoryInput, opts: &InventoryOptio
         .map(|(i, p)| (p.slug, i))
         .collect();
     rows.sort_by_key(|r| order.get(r.slug.as_str()).copied().unwrap_or(usize::MAX));
+    // hermes puts the MoA row first when present.
+    if let Some(pos) = rows.iter().position(|r| r.slug == "moa") {
+        let moa = rows.remove(pos);
+        rows.insert(0, moa);
+    }
 
     let providers: Vec<Value> = rows
         .iter()
@@ -657,6 +682,7 @@ mod tests {
             current_base_url: "https://openrouter.ai/api/v1".to_string(),
             current_api_key: None,
             current_base_url_explicit: false,
+            moa_presets: Vec::new(),
             providers: Vec::new(),
             excluded_providers: Vec::new(),
         }
@@ -812,6 +838,33 @@ mod tests {
         assert_eq!(local["authenticated"], true);
         assert_eq!(local["base_url"], "http://127.0.0.1:9999/v1");
         assert_eq!(local["models"], json!(["my-model"]));
+
+        std::env::remove_var(crate::models_dev::MODELS_DEV_URL_ENV);
+        std::env::remove_var(crate::models_dev::MODELS_DEV_CACHE_ENV);
+        crate::models_dev::reset_cache_for_tests();
+    }
+
+    #[test]
+    fn test_moa_virtual_row_first_and_explicit() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let _scrub = EnvScrub::new(dir.path());
+        fixture_registry(dir.path());
+
+        let mut input = base_input();
+        input.moa_presets = vec!["default".to_string(), "fast".to_string()];
+
+        let payload = build_model_options_payload(
+            &input,
+            &InventoryOptions {
+                explicit_only: true,
+                ..Default::default()
+            },
+        );
+        let providers = payload["providers"].as_array().unwrap();
+        assert_eq!(providers[0]["slug"], "moa");
+        assert_eq!(providers[0]["name"], "Mixture of Agents");
+        assert_eq!(providers[0]["models"], json!(["default", "fast"]));
 
         std::env::remove_var(crate::models_dev::MODELS_DEV_URL_ENV);
         std::env::remove_var(crate::models_dev::MODELS_DEV_CACHE_ENV);

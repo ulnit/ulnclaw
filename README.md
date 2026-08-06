@@ -26,7 +26,7 @@ skill sync, and a Tauri desktop GUI (`desktop/`).
 - **💾 SQLite state** — sessions/messages with FTS5 full-text search, lineage (parent/child sessions), cron jobs, kanban board; offline non-destructive `sessions recover` for damaged databases (rowid salvage, orphan-session reconstruction, FTS rebuild)
 - **🗜️ Context compression** — budget-triggered middle-turn summarization via a secondary model call
 - **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits; top-level delegations run fire-and-forget in the background (live transcripts under `cache/delegation/live/`) and one consolidated result re-enters the conversation when the batch finishes; dispatches and results persist in the SQLite delegation registry, so finished work survives restarts (rows still running after a crash recover as terminal "outcome unknown" reports)
-- **🧬 Mixture of Agents** — `[moa]` presets fan a prompt out to reference models in parallel and synthesize their answers via an aggregator (`ulnclaw moa run/list/delete`, REPL `/moa`)
+- **🧬 Mixture of Agents** — `[moa]` presets fan a prompt out to reference models in parallel and synthesize their answers via an aggregator (`ulnclaw moa run/list/delete`, REPL `/moa`); set `[model] provider = "moa"` to run the entire agent loop on a preset (persistent facade with per-turn reference caching, `save_traces` JSONL traces, `privacy_filter` PII redaction)
 - **🗺️ Model catalog** — models.dev-backed multi-provider inventory with a three-tier cache (memory → disk → network with 5-min failure backoff): `ulnclaw models providers|list|info|refresh`, gateway `/api/model/options` multi-provider picker inventory + `?refresh=true`, `ULNCLAW_MODELS_DEV_URL` mirror override
 - **⏰ Cron** — `30m` / `every 2h` / `0 9 * * *` / ISO one-shot schedules with a poll scheduler
 - **📐 Blueprints** — skills with a `metadata.hermes.blueprint.schedule` frontmatter become cron jobs (`skills blueprints`, `skills schedule/unschedule`)
@@ -290,7 +290,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **💾 SQLite 状态库** —— 会话/消息 FTS5 全文检索、会话血缘（父子会话）、定时任务、kanban 看板；受损数据库的离线非破坏性 `sessions recover`（rowid 抢救、孤儿会话重建、FTS 重建）
 - **🗜️ 上下文压缩** —— 预算触发，中段对话经二次模型调用摘要
 - **🤝 委派** —— 并行子代理，隔离上下文，深度限制；顶层委派后台即发即忘（实时记录在 `cache/delegation/live/`），整批完成后以单条汇总结果重回会话；派发与结果持久化于 SQLite 委派登记表，完成的工作可跨重启保留（崩溃后仍在运行的委派以终态 "outcome unknown" 报告恢复投递）
-- **🧬 混合智能体（MoA）** —— `[moa]` 预设将提示词并行扇出给参考模型，经聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa`）
+- **🧬 混合智能体（MoA）** —— `[moa]` 预设将提示词并行扇出给参考模型，经聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa`）；设置 `[model] provider = "moa"` 可让整个 agent 循环跑在预设上（持久门面：按轮参考缓存、`save_traces` JSONL trace、`privacy_filter` PII 脱敏）
 - **🗺️ 模型目录** —— models.dev 多 provider 清单，三级缓存（内存 → 磁盘 → 网络失败退避 5 分钟）：`ulnclaw models providers|list|info|refresh`、网关 `/api/model/options` 多 provider 选择器清单 + `?refresh=true`、`ULNCLAW_MODELS_DEV_URL` 镜像覆盖
 - **⏰ 定时任务** —— `30m` / `every 2h` / `0 9 * * *` / ISO 一次性计划 + 轮询调度器
 - **📐 蓝图（Blueprints）** —— frontmatter 声明 `metadata.hermes.blueprint.schedule` 的技能可排程（`skills blueprints`、`skills schedule/unschedule`）
