@@ -129,6 +129,7 @@ pub mod learning_mutations;
 pub mod logs;
 pub mod models_dev;
 pub mod projects_db;
+pub mod projects_scan;
 pub mod prompt_size;
 pub mod plugins;
 pub mod prompt_stash;

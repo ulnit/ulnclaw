@@ -107,6 +107,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw plugins list      # plugins + shell hooks (enable/disable/accept-hooks)
 ./ulnclaw kanban list       # kanban task engine (init/boards/create [--max-runtime 30s|5m|2h|1d --max-retries N --workspace KIND --branch B --goal --initial-status blocked --model M --provider P --project P]/claim/done/review/block/comment/swarm/specify/decompose/diagnostics/schedule/promote/reclaim/reassign/edit/set-model [--provider P]/attach/tail/log/runs/context/repair/assignees/notify-subscribe/stats/...)
 ./ulnclaw project list     # first-class project registry (create/show/add-folder/remove-folder/rename/set-primary/use/archive/restore/bind-board; kanban create --project anchors the worktree)
+./ulnclaw project scan     # git-repo discovery into the cache (scan [--root P --max-depth N]/repos [--clear])
 ./ulnclaw hooks doctor      # probe every consented hook (list/test/revoke)
 ./ulnclaw pairing list      # DM pairing codes for unknown senders (approve/revoke/clear-pending)
 ./ulnclaw weixin login      # WeChat iLink QR-scan login for [messaging.weixin]
@@ -368,6 +369,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw plugins list      # 插件与 shell 钩子（enable/disable/accept-hooks）
 ./ulnclaw kanban list       # kanban 任务引擎（init/boards/create [--max-runtime 30s|5m|2h|1d --max-retries N --workspace KIND --branch B --goal --initial-status blocked --model M --provider P --project P]/claim/done/review/block/comment/swarm/specify/decompose/diagnostics/schedule/promote/reclaim/reassign/edit/set-model [--provider P]/attach/tail/log/runs/context/repair/assignees/notify-subscribe/stats/...）
 ./ulnclaw project list     # 一等项目登记簿（create/show/add-folder/remove-folder/rename/set-primary/use/archive/restore/bind-board；kanban create --project 锚定 worktree）
+./ulnclaw project scan     # git 仓库发现缓存（scan [--root P --max-depth N]/repos [--clear]）
 ./ulnclaw hooks doctor      # 逐个探测已同意的钩子（list/test/revoke）
 ./ulnclaw pairing list      # 陌生发送者的 DM 配对码（approve/revoke/clear-pending）
 ./ulnclaw weixin login      # 微信 iLink 扫码登录（[messaging.weixin]）

@@ -618,6 +618,21 @@ enum ProjectsAction {
         /// Board slug
         board: Option<String>,
     },
+    /// Scan the filesystem for git repos into the discovery cache
+    Scan {
+        /// Roots to scan (repeatable; default: home directory)
+        #[arg(long = "root")]
+        roots: Vec<String>,
+        /// Max levels below each root to descend
+        #[arg(long, default_value_t = ulnclaw::projects_scan::DEFAULT_MAX_DEPTH)]
+        max_depth: usize,
+    },
+    /// List the cached discovered repos (or clear the cache)
+    Repos {
+        /// Clear the cache instead of listing
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -4902,6 +4917,59 @@ fn projects_cmd(action: ProjectsAction) -> Result<(), String> {
             } else {
                 println!("Bound {} -> board {}", proj.slug, board_arg.trim());
                 sync_board_default_workdir(&proj, board_arg.trim());
+            }
+        }
+        ProjectsAction::Scan { roots, max_depth } => {
+            let roots: Vec<std::path::PathBuf> = if roots.is_empty() {
+                let home = dirs::home_dir().ok_or_else(|| {
+                    "project scan: cannot determine the home directory; pass --root PATH".to_string()
+                })?;
+                vec![home]
+            } else {
+                roots.iter().map(std::path::PathBuf::from).collect()
+            };
+            println!(
+                "Scanning {} root(s), max depth {} ...",
+                roots.len(),
+                max_depth
+            );
+            let repos = ulnclaw::projects_scan::scan_for_repos(&roots, max_depth);
+            let pairs: Vec<(String, Option<String>)> = repos
+                .iter()
+                .map(|r| (r.root.clone(), Some(r.label.clone())))
+                .collect();
+            let recorded = pdb::record_discovered_repos(
+                &conn,
+                &pairs,
+                true,
+                Some(ulnclaw::projects_scan::CLI_SCAN_POLICY_KEY),
+            )
+            .map_err(|e| e.to_string())?;
+            if recorded == 0 {
+                println!("No git repos found.");
+            } else {
+                println!("Recorded {recorded} repo(s):");
+                for repo in &repos {
+                    println!("  {:<24} {}", repo.label, repo.root);
+                }
+            }
+        }
+        ProjectsAction::Repos { clear } => {
+            if clear {
+                pdb::clear_discovered_repos(&conn, None).map_err(|e| e.to_string())?;
+                println!("Cleared the discovered-repos cache.");
+                return Ok(());
+            }
+            let rows = pdb::list_discovered_repos(&conn).map_err(|e| e.to_string())?;
+            if rows.is_empty() {
+                println!("No discovered repos cached. Run `ulnclaw project scan`.");
+                return Ok(());
+            }
+            for row in &rows {
+                let root = row["root"].as_str().unwrap_or_default();
+                let label = row["label"].as_str().unwrap_or_default();
+                let last_seen = row["last_seen"].as_i64().unwrap_or(0);
+                println!("{label:<24} {root}  (seen {})", ulnclaw::status::relative_time(last_seen as f64));
             }
         }
     }
