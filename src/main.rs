@@ -4722,6 +4722,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     metadata_value.as_ref(),
                     &artifact,
                     &created_card,
+                    ulnclaw::kanban::worker_run_id_for(&resolved),
                 ) {
                     Ok(task) => {
                         ulnclaw::plugins::fire_session_event(
@@ -4798,7 +4799,12 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                         )
                         .ok();
                 }
-                match store.block_task_kind(&resolved, &reason, kind.as_deref()) {
+                match store.block_task_guarded(
+                    &resolved,
+                    &reason,
+                    kind.as_deref(),
+                    ulnclaw::kanban::worker_run_id_for(&resolved),
+                ) {
                     Ok(task) => {
                         ulnclaw::plugins::fire_session_event(
                             "kanban_task_blocked",

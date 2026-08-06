@@ -461,7 +461,16 @@ performance and a single static binary.
   worker_log_rotate_bytes` (default 2 MiB), keep one `.log.1` backup
   generation, and append within a generation so re-spawned attempts
   no longer truncate earlier output (hermes
-  `worker_log_rotation_config`).
+  `worker_log_rotation_config`). P153 closed the stale-worker race:
+  dispatch now claims BEFORE spawning (hermes order) so the run row
+  exists at spawn time; workers carry `ULNCLAW_KANBAN_RUN_ID` (hermes
+  `HERMES_KANBAN_RUN_ID`) and their completions/blocks pass it as
+  `expected_run_id` — an atomic `current_run_id` guard refuses a
+  reclaimed attempt instead of clobbering the fresh one (CLI Done/
+  Block, the `kanban_complete`/`kanban_block` tools and the gateway
+  complete/block APIs all thread it). Spawn/workspace failures of a
+  claimed attempt now end the run, release the claim back to ready
+  and count the failure (hermes `_record_spawn_failure`).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

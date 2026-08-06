@@ -46,6 +46,21 @@ pub const DEFAULT_FAILURE_LIMIT: i64 = 2;
 /// workspace (hermes `KANBAN_ATTACHMENT_MAX_BYTES`).
 pub const KANBAN_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
 
+/// Run id the current process was spawned under (hermes
+/// `_worker_run_id_for`): only meaningful when `ULNCLAW_KANBAN_TASK`
+/// matches the task being acted on — guards completions/blocks from a
+/// reclaimed attempt.
+pub fn worker_run_id_for(task_id: &str) -> Option<i64> {
+    let env_task = std::env::var("ULNCLAW_KANBAN_TASK").ok()?;
+    if env_task != task_id {
+        return None;
+    }
+    std::env::var("ULNCLAW_KANBAN_RUN_ID")
+        .ok()?
+        .parse()
+        .ok()
+}
+
 /// Default per-task worker log rotation threshold — rotate at 2 MiB
 /// and keep one backup generation (hermes
 /// `DEFAULT_LOG_ROTATE_BYTES`).
@@ -193,6 +208,9 @@ pub struct Task {
     /// gateway notifier wakes this session when the task reaches a
     /// wake-eligible terminal event.
     pub session_id: Option<String>,
+    /// Active attempt's run row (hermes `current_run_id`); workers
+    /// carry it so completions from a reclaimed attempt are refused.
+    pub current_run_id: Option<i64>,
     /// Typed block reason (hermes `block_kind`, one of
     /// [`VALID_BLOCK_KINDS`]) or None for legacy untyped blocks.
     pub block_kind: Option<String>,
@@ -502,6 +520,11 @@ pub fn spawn_worker(
         cmd.arg("--profile").arg(assignee);
     }
     cmd.env("ULNCLAW_KANBAN_TASK", &task.id);
+    // Stale-run guard (hermes HERMES_KANBAN_RUN_ID): completions from
+    // this worker carry the run id they were spawned under.
+    if let Some(run_id) = task.current_run_id {
+        cmd.env("ULNCLAW_KANBAN_RUN_ID", run_id.to_string());
+    }
     if let Some(workdir) = workdir {
         cmd.current_dir(workdir);
     }
@@ -2981,6 +3004,7 @@ impl KanbanStore {
             workspace_path: row.get("workspace_path")?,
             branch_name: row.get("branch_name")?,
             session_id: row.get("session_id")?,
+            current_run_id: row.get("current_run_id")?,
             block_kind: row.get("block_kind")?,
             block_recurrences: row.get("block_recurrences")?,
         })
@@ -2991,7 +3015,7 @@ impl KanbanStore {
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
         last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, \
-        session_id, block_kind, block_recurrences";
+        session_id, current_run_id, block_kind, block_recurrences";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -3090,6 +3114,33 @@ impl KanbanStore {
         extra_sets: &str,
         extra_params: Vec<Box<dyn rusqlite::types::ToSql>>,
     ) -> Result<Task> {
+        self.transition_guarded(
+            id,
+            from,
+            to,
+            event_kind,
+            payload,
+            extra_sets,
+            extra_params,
+            None,
+        )
+    }
+
+    /// [`Self::transition`] with a stale-run guard (hermes
+    /// `expected_run_id`): when `run_guard` is Some, the UPDATE only
+    /// matches if `current_run_id` still equals it — a worker whose
+    /// attempt was reclaimed cannot complete/block the fresh attempt.
+    fn transition_guarded(
+        &self,
+        id: &str,
+        from: &[&str],
+        to: &str,
+        event_kind: &str,
+        payload: Value,
+        extra_sets: &str,
+        extra_params: Vec<Box<dyn rusqlite::types::ToSql>>,
+        run_guard: Option<i64>,
+    ) -> Result<Task> {
         let conn = self.conn.lock().unwrap();
         // extra_sets placeholders occupy ?3.. first; the status IN-list
         // continues after them.
@@ -3097,10 +3148,18 @@ impl KanbanStore {
         let placeholders: Vec<String> = (0..from.len())
             .map(|i| format!("?{}", 3 + n_extra + i))
             .collect();
+        let mut status_clause = format!("status IN ({})", placeholders.join(", "));
+        let mut guard_index = 3 + n_extra + from.len();
+        if run_guard.is_some() {
+            status_clause.push_str(&format!(
+                " AND (?{guard_index} IS NULL OR current_run_id = ?{guard_index})"
+            ));
+            guard_index += 1;
+        }
+        let _ = guard_index;
         let sql = format!(
-            "UPDATE tasks SET status = ?2 {} WHERE id = ?1 AND status IN ({})",
-            extra_sets,
-            placeholders.join(", ")
+            "UPDATE tasks SET status = ?2 {} WHERE id = ?1 AND {status_clause}",
+            extra_sets
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
             Box::new(id.to_string()),
@@ -3109,6 +3168,9 @@ impl KanbanStore {
         params.extend(extra_params);
         for status in from {
             params.push(Box::new(status.to_string()));
+        }
+        if let Some(run_id) = run_guard {
+            params.push(Box::new(run_id));
         }
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
         let updated = conn
@@ -3400,6 +3462,40 @@ impl KanbanStore {
         summary: Option<&str>,
         metadata: Option<&Value>,
     ) -> Result<Task> {
+        self.complete_task_guarded(id, result, summary, metadata, None)
+    }
+
+    /// [`Self::complete_task_with`] with the stale-run guard (hermes
+    /// `expected_run_id`): when the worker passes the run id it was
+    /// spawned under, a completion from a reclaimed attempt is refused
+    /// instead of clobbering the fresh attempt.
+    pub fn complete_task_guarded(
+        &self,
+        id: &str,
+        result: Option<&str>,
+        summary: Option<&str>,
+        metadata: Option<&Value>,
+        expected_run_id: Option<i64>,
+    ) -> Result<Task> {
+        if let Some(expected) = expected_run_id {
+            let current = {
+                let conn = self.conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT current_run_id FROM tasks WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .optional()
+                .map_err(db_error("run guard"))?
+            };
+            let matched = matches!(current, Some(Some(run)) if run == expected);
+            if !matched {
+                return Err(AgentError::session(format!(
+                    "kanban: completion refused — run #{expected} was replaced                      (current run {:?}); the task was reclaimed and a fresh                      attempt owns it now",
+                    current.flatten()
+                )));
+            }
+        }
         let handoff = summary.or(result);
         let event_summary = handoff
             .map(|raw| {
@@ -3461,7 +3557,7 @@ impl KanbanStore {
         if let Some(list) = &verified_cards {
             payload["verified_cards"] = serde_json::json!(list);
         }
-        let task = self.transition(
+        let task = self.transition_guarded(
             id,
             &["todo", "ready", "running", "scheduled", "blocked"],
             "done",
@@ -3471,6 +3567,7 @@ impl KanbanStore {
              consecutive_failures = 0, last_failure_error = NULL, \
              block_kind = NULL, block_recurrences = 0",
             vec![Box::new(now), Box::new(result.map(|r| r.to_string()))],
+            expected_run_id,
         )?;
         let metadata_json = metadata.map(serde_json::to_string).transpose()
             .map_err(|e| AgentError::session(format!("kanban: metadata: {e}")))?;
@@ -3528,6 +3625,7 @@ impl KanbanStore {
         metadata: Option<&Value>,
         artifacts: &[String],
         created_cards: &[String],
+        expected_run_id: Option<i64>,
     ) -> Result<Task> {
         let task = self
             .get_task(id)?
@@ -3713,7 +3811,13 @@ impl KanbanStore {
                 }
                 Some(md)
             };
-        match self.complete_task_with(id, result, summary, final_metadata.as_ref()) {
+        match self.complete_task_guarded(
+            id,
+            result,
+            summary,
+            final_metadata.as_ref(),
+            expected_run_id,
+        ) {
             Ok(task) => {
                 // Advisory prose scan (hermes): flag t_<hex> references
                 // in the handoff that resolve to no task — never blocks.
@@ -3767,6 +3871,18 @@ impl KanbanStore {
         reason: &str,
         kind: Option<&str>,
     ) -> Result<Task> {
+        self.block_task_guarded(id, reason, kind, None)
+    }
+
+    /// [`Self::block_task_kind`] with the stale-run guard (hermes
+    /// `expected_run_id` on block).
+    pub fn block_task_guarded(
+        &self,
+        id: &str,
+        reason: &str,
+        kind: Option<&str>,
+        expected_run_id: Option<i64>,
+    ) -> Result<Task> {
         if let Some(kind) = kind {
             if !VALID_BLOCK_KINDS.contains(&kind) {
                 return Err(AgentError::session(format!(
@@ -3776,7 +3892,7 @@ impl KanbanStore {
             }
         }
         if kind == Some("dependency") {
-            let task = self.transition(
+            let task = self.transition_guarded(
                 id,
                 &["todo", "ready", "running", "scheduled"],
                 "todo",
@@ -3785,6 +3901,7 @@ impl KanbanStore {
                 ", claim_lock = NULL, claim_expires = NULL, worker_pid = NULL, \
                  block_kind = ?3",
                 vec![Box::new(kind.map(str::to_string))],
+                expected_run_id,
             )?;
             self.close_active_run(id, "blocked", "blocked", None, Some(reason))?;
             return Ok(task);
@@ -3806,7 +3923,7 @@ impl KanbanStore {
         let same_cause = prev_kind.as_deref() == kind;
         let recurrences = if same_cause { prev_recurrences + 1 } else { 1 };
         let task = if recurrences >= BLOCK_RECURRENCE_LIMIT {
-            self.transition(
+            self.transition_guarded(
                 id,
                 &["todo", "ready", "running", "scheduled"],
                 "triage",
@@ -3823,9 +3940,10 @@ impl KanbanStore {
                     Box::new(kind.map(str::to_string)),
                     Box::new(recurrences),
                 ],
+                expected_run_id,
             )?
         } else {
-            self.transition(
+            self.transition_guarded(
                 id,
                 &["todo", "ready", "running", "scheduled"],
                 "blocked",
@@ -3841,6 +3959,7 @@ impl KanbanStore {
                     Box::new(kind.map(str::to_string)),
                     Box::new(recurrences),
                 ],
+                expected_run_id,
             )?
         };
         self.close_active_run(id, "blocked", "blocked", None, Some(reason))?;
@@ -5652,6 +5771,31 @@ impl KanbanStore {
         outcome: &str,
         failure_limit: i64,
     ) -> Result<bool> {
+        self.record_task_failure_inner(task_id, error, outcome, failure_limit, false)
+    }
+
+    /// [`Self::record_task_failure`] for failures of a CLAIMED attempt
+    /// (hermes `_record_task_failure(release_claim=True)`): when the
+    /// breaker does not trip, the claim is released back to `ready`
+    /// for the next attempt.
+    pub fn record_task_failure_with_release(
+        &self,
+        task_id: &str,
+        error: &str,
+        outcome: &str,
+        failure_limit: i64,
+    ) -> Result<bool> {
+        self.record_task_failure_inner(task_id, error, outcome, failure_limit, true)
+    }
+
+    fn record_task_failure_inner(
+        &self,
+        task_id: &str,
+        error: &str,
+        outcome: &str,
+        failure_limit: i64,
+        release_claim: bool,
+    ) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let row: Option<(i64, String, Option<i64>)> = conn
             .query_row(
@@ -5674,7 +5818,8 @@ impl KanbanStore {
             // Trip the breaker: ready/running → blocked + gave_up event.
             conn.execute(
                 "UPDATE tasks SET status = 'blocked', consecutive_failures = ?2, \
-                 last_failure_error = ?3 WHERE id = ?1 AND status IN ('ready', 'running')",
+                 last_failure_error = ?3, claim_lock = NULL, claim_expires = NULL, \
+                 worker_pid = NULL WHERE id = ?1 AND status IN ('ready', 'running')",
                 params![task_id, failures, err_capped],
             )
             .map_err(db_error("record failure trip"))?;
@@ -5691,6 +5836,15 @@ impl KanbanStore {
                 }),
             )?;
             Ok(true)
+        } else if release_claim {
+            conn.execute(
+                "UPDATE tasks SET consecutive_failures = ?2, last_failure_error = ?3, \
+                 status = 'ready', claim_lock = NULL, claim_expires = NULL, \
+                 worker_pid = NULL WHERE id = ?1",
+                params![task_id, failures, err_capped],
+            )
+            .map_err(db_error("record failure release"))?;
+            Ok(false)
         } else {
             conn.execute(
                 "UPDATE tasks SET consecutive_failures = ?2, last_failure_error = ?3 \
@@ -5700,6 +5854,32 @@ impl KanbanStore {
             .map_err(db_error("record failure count"))?;
             Ok(false)
         }
+    }
+
+    /// Spawn/workspace failure accounting for a claimed task (hermes
+    /// `_record_spawn_failure`): close the claim's run, then count the
+    /// failure and release the claim back to ready (or trip the
+    /// breaker).
+    pub fn record_spawn_failure(
+        &self,
+        task_id: &str,
+        error: &str,
+        failure_limit: i64,
+    ) -> Result<bool> {
+        let err_capped: String = error.chars().take(500).collect();
+        self.close_active_run(
+            task_id,
+            "spawn_failed",
+            "spawn_failed",
+            None,
+            Some(&err_capped),
+        )?;
+        self.record_task_failure_with_release(
+            task_id,
+            error,
+            "spawn_failed",
+            failure_limit,
+        )
     }
 
     /// Record the pid of a dispatcher-spawned worker.
@@ -5996,6 +6176,18 @@ impl KanbanStore {
             } else {
                 &task
             };
+            // Claim BEFORE spawn (hermes order): the run row exists at
+            // spawn time, so the worker carries ULNCLAW_KANBAN_RUN_ID
+            // and completions from a reclaimed attempt are refused via
+            // the expected_run_id guard.
+            let claimed = match self.claim_task(
+                &id,
+                &KanbanStore::claimer_id(),
+                DEFAULT_CLAIM_TTL_SECS,
+            ) {
+                Ok(claimed) => claimed,
+                Err(_) => continue, // lost a claim race this tick
+            };
             // Resolve the workspace BEFORE spawn (hermes dispatch); the
             // resolved path is persisted so retries reuse it.
             let spawn_outcome = match self.resolve_workspace(home, effective) {
@@ -6004,17 +6196,19 @@ impl KanbanStore {
                     if let Some(branch) = &branch {
                         let _ = self.set_branch_name(&id, branch);
                     }
-                    spawn(effective, Some(workspace.as_path()))
+                    // Re-read the claimed row so the worker prompt +
+                    // env see the fresh run id.
+                    let mut spawn_task =
+                        self.get_task(&id)?.unwrap_or_else(|| claimed.clone());
+                    if effective.workspace_kind != spawn_task.workspace_kind {
+                        spawn_task.workspace_kind = effective.workspace_kind.clone();
+                    }
+                    spawn(&spawn_task, Some(workspace.as_path()))
                 }
                 Err(err) => Err(format!("workspace: {err}")),
             };
             match spawn_outcome {
                 Ok(pid) => {
-                    let claimed = self.claim_task(
-                        &id,
-                        &KanbanStore::claimer_id(),
-                        DEFAULT_CLAIM_TTL_SECS,
-                    )?;
                     self.set_worker_pid(&id, pid)?;
                     self.append_event(
                         &id,
@@ -6035,11 +6229,9 @@ impl KanbanStore {
                         "spawn_failed",
                         serde_json::json!({ "error": err }),
                     )?;
-                    self.synthesize_closed_run(&id, "spawn_failed", None, Some(&err))?;
-                    let gave_up = self.record_task_failure(
+                    let gave_up = self.record_spawn_failure(
                         &id,
                         &err,
-                        "spawn_failed",
                         failure_limit as i64,
                     )?;
                     if gave_up {
@@ -6147,11 +6339,9 @@ impl KanbanStore {
                         "spawn_failed",
                         serde_json::json!({ "error": err }),
                     )?;
-                    self.synthesize_closed_run(&id, "spawn_failed", None, Some(&err))?;
-                    let gave_up = self.record_task_failure(
+                    let gave_up = self.record_spawn_failure(
                         &id,
                         &err,
-                        "spawn_failed",
                         failure_limit as i64,
                     )?;
                     if gave_up {
@@ -6631,6 +6821,7 @@ mod tests {
                 None,
                 &[artifact],
                 &[],
+                None,
             )
             .unwrap();
         assert_eq!(done.status, "done");
@@ -6674,7 +6865,7 @@ mod tests {
         let missing = workspace.join("missing.txt").to_string_lossy().to_string();
         let keep = workspace.join("keep.md").to_string_lossy().to_string();
         let err = store
-            .complete_task_with_artifacts(dir.path(), &task.id, None, None, None, &[keep, missing], &[])
+            .complete_task_with_artifacts(dir.path(), &task.id, None, None, None, &[keep, missing], &[], None)
             .unwrap_err();
         assert!(err.to_string().contains("unavailable"), "{err}");
         assert_eq!(
@@ -6703,6 +6894,7 @@ mod tests {
                 None,
                 &[outside.to_string_lossy().to_string()],
                 &[],
+                None,
             )
             .unwrap();
         assert_eq!(done.status, "done");
@@ -6730,7 +6922,7 @@ mod tests {
 
         let summary = format!("Deliverable: {}.", workspace.join("out.csv").display());
         let done = store
-            .complete_task_with_artifacts(dir.path(), &task.id, None, Some(&summary), None, &[], &[])
+            .complete_task_with_artifacts(dir.path(), &task.id, None, Some(&summary), None, &[], &[], None)
             .unwrap();
         assert_eq!(done.status, "done");
         let staged_path = task_attachments_dir(dir.path(), &task.id).join("out.csv");
@@ -7019,6 +7211,122 @@ mod tests {
     }
 
     #[test]
+    fn completion_from_reclaimed_run_is_refused() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "race".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+
+        // Attempt 1 claims the task (run #1).
+        let first = store
+            .claim_task(&task.id, "host:a", DEFAULT_CLAIM_TTL_SECS)
+            .unwrap();
+        let first_run = first.current_run_id.expect("run row on claim");
+
+        // Stale takeover: expire the claim, reclaim, attempt 2 (run #2).
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE tasks SET claim_expires = 1 WHERE id = ?1",
+                params![task.id],
+            )
+            .unwrap();
+        }
+        assert_eq!(store.release_stale_claims().unwrap(), vec![task.id.clone()]);
+        let second = store
+            .claim_task(&task.id, "host:b", DEFAULT_CLAIM_TTL_SECS)
+            .unwrap();
+        let second_run = second.current_run_id.expect("run row on re-claim");
+        assert_ne!(first_run, second_run);
+
+        // The stale worker's completion is refused...
+        let err = store
+            .complete_task_guarded(&task.id, Some("stale"), None, None, Some(first_run))
+            .unwrap_err();
+        assert!(err.to_string().contains("completion refused"), "{err}");
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "running");
+
+        // ...while the fresh attempt completes fine.
+        let done = store
+            .complete_task_guarded(&task.id, Some("fresh"), None, None, Some(second_run))
+            .unwrap();
+        assert_eq!(done.status, "done");
+    }
+
+    #[test]
+    fn block_from_reclaimed_run_is_refused() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "block race".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        let first = store
+            .claim_task(&task.id, "host:a", DEFAULT_CLAIM_TTL_SECS)
+            .unwrap();
+        let first_run = first.current_run_id.expect("run row on claim");
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE tasks SET claim_expires = 1 WHERE id = ?1",
+                params![task.id],
+            )
+            .unwrap();
+        }
+        store.release_stale_claims().unwrap();
+        let second = store
+            .claim_task(&task.id, "host:b", DEFAULT_CLAIM_TTL_SECS)
+            .unwrap();
+
+        let err = store
+            .block_task_guarded(&task.id, "stale block", None, Some(first_run))
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot move to 'blocked'"), "{err}");
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "running");
+        let blocked = store
+            .block_task_guarded(&task.id, "fresh block", None, second.current_run_id)
+            .unwrap();
+        assert_eq!(blocked.status, "blocked");
+    }
+
+    #[test]
+    fn dispatch_spawn_carries_current_run_id() {
+        let (dir, store) = temp_store();
+        let task = make_task(&store, "env run id");
+        store.ready_task(&task.id).unwrap();
+        let seen_run = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let capture = seen_run.clone();
+        store
+            .dispatch_once(
+                dir.path(),
+                false,
+                move |task, _| {
+                    *capture.borrow_mut() = Some(task.current_run_id);
+                    Ok(Some(3))
+                },
+                None,
+                false,
+                2,
+                0,
+                None,
+                None,
+            )
+            .unwrap();
+        let run = seen_run.borrow().clone();
+        assert!(run.flatten().is_some(), "spawn must see the claimed run id");
+    }
+
+    #[test]
     fn worker_log_rotation_keeps_one_backup() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("t_abc123.log");
@@ -7089,6 +7397,7 @@ mod tests {
                 None,
                 &[],
                 &["t_deadbeef00".to_string()],
+                None,
             )
             .unwrap_err();
         assert!(err.to_string().contains("completion blocked"), "{err}");
@@ -7121,6 +7430,7 @@ mod tests {
                 None,
                 &[],
                 &[foreign.id.clone()],
+                None,
             )
             .is_err());
 
@@ -7142,6 +7452,7 @@ mod tests {
                 None,
                 &[],
                 &[own.id.clone(), foreign.id.clone()],
+                None,
             )
             .unwrap();
         assert_eq!(done.status, "done");
@@ -7164,7 +7475,7 @@ mod tests {
         store.ready_task(&task.id).unwrap();
         let summary = "Follow-up tracked in t_cafebabe42 (created earlier).";
         let done = store
-            .complete_task_with_artifacts(dir.path(), &task.id, None, Some(summary), None, &[], &[])
+            .complete_task_with_artifacts(dir.path(), &task.id, None, Some(summary), None, &[], &[], None)
             .unwrap();
         assert_eq!(done.status, "done");
         let flagged = store
@@ -7485,6 +7796,7 @@ mod tests {
             workspace_path: None,
             branch_name: None,
             session_id: None,
+            current_run_id: None,
             block_kind: None,
             block_recurrences: 0,};
         let prompt = worker_prompt(home, &task);

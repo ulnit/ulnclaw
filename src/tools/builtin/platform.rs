@@ -626,6 +626,7 @@ fn register_kanban(registry: &mut ToolRegistry) {
                             metadata,
                             &artifacts,
                             &created_cards,
+                            crate::kanban::worker_run_id_for(&id),
                         )
                     } else {
                         match result.filter(|s| !s.is_empty()) {
@@ -635,7 +636,12 @@ fn register_kanban(registry: &mut ToolRegistry) {
                                     .and_then(|v| v.as_str())
                                     .map(str::trim)
                                     .filter(|k| !k.is_empty());
-                                store.block_task_kind(&id, reason, kind)
+                                store.block_task_guarded(
+                                    &id,
+                                    reason,
+                                    kind,
+                                    crate::kanban::worker_run_id_for(&id),
+                                )
                             }
                             None => return Ok(kanban_error("kanban_block: 'result' (the blocking reason) is required")),
                         }

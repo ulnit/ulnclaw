@@ -404,7 +404,15 @@
   加 worker 日志轮转：`kanban/worker-logs/` 下的按任务日志在达到
   `[kanban] worker_log_rotate_bytes`（默认 2 MiB）时轮转，保留一份
   `.log.1` 备份代，同一代内追加写入 —— 重生 attempt 不再截断先前输
-  出（hermes `worker_log_rotation_config`）。
+  出（hermes `worker_log_rotation_config`）。P153 封死过期 worker
+  竞态：调度改为先认领再 spawn（hermes 顺序），spawn 时 run 行已存
+  在；worker 携带 `ULNCLAW_KANBAN_RUN_ID`（hermes
+  `HERMES_KANBAN_RUN_ID`），其完成/阻塞以 `expected_run_id` 提交 ——
+  原子的 `current_run_id` 守卫拒绝已被回收的 attempt，绝不覆盖新
+  attempt（CLI Done/Block、`kanban_complete`/`kanban_block` 工具与
+  网关 complete/block API 全链路透传）。已认领 attempt 的 spawn/工作
+  区失败现在收尾 run、释放认领回 ready 并计入失败（hermes
+  `_record_spawn_failure`）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

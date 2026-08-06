@@ -353,6 +353,10 @@ pub struct CompleteBody {
     /// completion, phantom ids block it (hermes created_cards).
     #[serde(default)]
     pub created_cards: Option<Vec<String>>,
+    /// Run id the caller was spawned under; completions from a
+    /// reclaimed attempt are refused (hermes expected_run_id).
+    #[serde(default)]
+    pub expected_run_id: Option<i64>,
 }
 
 /// `POST /api/kanban/tasks/:id/complete` — mark done.
@@ -398,6 +402,7 @@ pub async fn complete_task(Path(id): Path<String>, Json(body): Json<CompleteBody
         metadata,
         &artifacts,
         &created_cards,
+        body.expected_run_id,
     ) {
         Ok(task) => Json(json!({"object": "ulnclaw.kanban.task", "task": task_json(&store, &task)})).into_response(),
         Err(e) => super::bad_request(&e.to_string(), None),
@@ -411,6 +416,9 @@ pub struct BlockBody {
     /// needs_input | capability | transient.
     #[serde(default)]
     pub kind: Option<String>,
+    /// Run id the caller was spawned under (hermes expected_run_id).
+    #[serde(default)]
+    pub expected_run_id: Option<i64>,
 }
 
 /// `POST /api/kanban/tasks/:id/block` — mark blocked (reason required).
@@ -426,13 +434,14 @@ pub async fn block_task(Path(id): Path<String>, Json(body): Json<BlockBody>) -> 
         Ok(id) => id,
         Err(e) => return e,
     };
-    match store.block_task_kind(
+    match store.block_task_guarded(
         &id,
         body.reason.trim(),
         body.kind
             .as_deref()
             .map(str::trim)
             .filter(|kind| !kind.is_empty()),
+        body.expected_run_id,
     ) {
         Ok(task) => Json(json!({"object": "ulnclaw.kanban.task", "task": task_json(&store, &task)})).into_response(),
         Err(e) => super::bad_request(&e.to_string(), None),
