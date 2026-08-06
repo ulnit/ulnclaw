@@ -450,7 +450,13 @@ performance and a single static binary.
   verified ids ride on the `completed` event, and unresolved
   `t_<hex>` references in summary/result prose are flagged after a
   successful completion via `suspected_hallucinated_references`
-  (advisory, hermes `_scan_prose_for_phantom_ids`).
+  (advisory, hermes `_scan_prose_for_phantom_ids`). P151 added the
+  per-tick dispatch lock (#35240): every `dispatch_once` tick runs
+  under a non-blocking `flock` on `<kanban.db>.dispatch.lock`; a
+  losing dispatcher (e.g. an orphan escaped a service restart)
+  returns `skipped_locked = true` with zero DB writes and retries
+  next interval — surfaced in the CLI (`dispatch: skipped …`) and the
+  dispatch API JSON.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

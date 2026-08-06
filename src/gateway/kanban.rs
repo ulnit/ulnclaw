@@ -555,6 +555,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
         Ok(Ok(result)) => Json(json!({
             "object": "ulnclaw.kanban.dispatch",
             "dry_run": dry_run,
+            "skipped_locked": result.skipped_locked,
             "reclaimed": result.reclaimed,
             "promoted": result.promoted,
             "spawned": result.spawned,

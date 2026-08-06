@@ -336,6 +336,10 @@ pub struct DispatchResult {
     /// `max_in_progress_per_profile` tasks running — (id, assignee,
     /// in-flight count) (hermes #21582).
     pub skipped_per_profile_capped: Vec<(String, String, usize)>,
+    /// True when another dispatcher held the board's per-tick lock —
+    /// this tick performed no DB writes (hermes `skipped_locked`,
+    /// #35240).
+    pub skipped_locked: bool,
 }
 
 /// Worker brief for a dispatcher-spawned task (hermes spawns
@@ -5738,6 +5742,29 @@ impl KanbanStore {
         }))
     }
 
+    /// Non-blocking single-writer guard for one dispatcher tick
+    /// (hermes `_dispatch_tick_lock`, #35240): two dispatchers on the
+    /// same `kanban.db` can never run reclaim/spawn/write ticks
+    /// concurrently — the loser skips the tick and retries next
+    /// interval. Dropping the returned handle releases the lock.
+    pub fn try_acquire_dispatch_tick_lock(db_path: &Path) -> Option<std::fs::File> {
+        use std::os::unix::io::AsRawFd;
+        let name = db_path.file_name()?.to_string_lossy().to_string();
+        let lock_path = db_path.with_file_name(format!("{name}.dispatch.lock"));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&lock_path)
+            .ok()?;
+        let acquired = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }
+            == 0;
+        if acquired {
+            Some(file)
+        } else {
+            None
+        }
+    }
+
     /// Run one dispatcher tick (hermes `dispatch_once`, scoped port):
     /// 1. reclaim stale claims, 2. promote parent-done todos (and
     ///    auto-recover non-sticky blocked tasks under the failure
@@ -5759,7 +5786,9 @@ impl KanbanStore {
     /// `kanban claim` that must never auto-spawn; `None` keeps the
     /// legacy spawn-everything behaviour. `per_profile_cap` limits
     /// in-flight tasks per assignee (hermes #21582); `None`/0
-    /// disables the cap.
+    /// disables the cap. The whole tick runs under the board's
+    /// non-blocking `.dispatch.lock` (#35240); a locked tick returns
+    /// `skipped_locked = true` with no DB writes.
     pub fn dispatch_once<F>(
         &self,
         home: &Path,
@@ -5776,6 +5805,16 @@ impl KanbanStore {
         F: FnMut(&Task, Option<&Path>) -> std::result::Result<Option<i64>, String>,
     {
         let mut result = DispatchResult::default();
+        // Per-tick single-writer guard (hermes #35240): a losing
+        // dispatcher skips the tick entirely — no DB writes — while
+        // the holder makes progress on the same board.
+        let _tick_lock = match Self::try_acquire_dispatch_tick_lock(&self.path) {
+            Some(handle) => handle,
+            None => {
+                result.skipped_locked = true;
+                return Ok(result);
+            }
+        };
         result.reaped = self.reap_timed_out()?;
         result.reclaimed = self.release_stale_claims()?;
         result.stale = self.detect_stale_running(stale_timeout_seconds)?;
@@ -6936,6 +6975,32 @@ mod tests {
         // The would-be spawn counts against the cap for the second task.
         assert_eq!(result.would_spawn.len(), 1);
         assert_eq!(result.skipped_per_profile_capped.len(), 1);
+    }
+
+    #[test]
+    fn dispatch_tick_lock_skips_losing_dispatcher() {
+        let (dir, store) = temp_store();
+        let db_path = dir.path().join("kanban.db");
+        let task = make_task(&store, "locked out");
+        store.ready_task(&task.id).unwrap();
+
+        // Hold the tick lock from a separate handle — the dispatcher
+        // must skip the tick with zero writes.
+        let held = KanbanStore::try_acquire_dispatch_tick_lock(&db_path).unwrap();
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None)
+            .unwrap();
+        assert!(result.skipped_locked);
+        assert!(result.spawned.is_empty());
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "ready");
+
+        // Released → the next tick proceeds.
+        drop(held);
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1)), None, false, 2, 0, None, None)
+            .unwrap();
+        assert!(!result.skipped_locked);
+        assert_eq!(result.spawned.len(), 1);
     }
 
     #[test]

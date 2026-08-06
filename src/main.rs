@@ -5800,6 +5800,10 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 );
                 return Ok(());
             }
+            if result.skipped_locked {
+                println!("dispatch: skipped — another dispatcher holds the board's tick lock");
+                return Ok(());
+            }
             if dry_run {
                 println!("dry run — would spawn {} task(s)", result.would_spawn.len());
                 for id in &result.would_spawn {

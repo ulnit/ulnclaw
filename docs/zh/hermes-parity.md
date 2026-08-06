@@ -396,7 +396,11 @@
   （hermes `HallucinatedCardsError`）；核验通过的 id 随 `completed`
   事件下发，summary/result 文本中无法解析的 `t_<hex>` 引用在成功完成
   后以 `suspected_hallucinated_references` 事件提示（仅告警，hermes
-  `_scan_prose_for_phantom_ids`）。
+  `_scan_prose_for_phantom_ids`）。P151 增加按 tick 的调度锁
+  （#35240）：每次 `dispatch_once` 都在 `<kanban.db>.dispatch.lock`
+  的非阻塞 `flock` 下进行；失败的调度器（例如逃出服务重启的孤儿进
+  程）返回 `skipped_locked = true` 且零数据库写入，下一间隔再试 ——
+  CLI（`dispatch: skipped …`）与 dispatch API JSON 均可见。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider
