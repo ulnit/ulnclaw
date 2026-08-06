@@ -223,6 +223,9 @@ pub struct Agent {
     fallback_specs: Vec<String>,
     /// Currently active fallback index (`None` = primary provider).
     fallback_active: tokio::sync::Mutex<Option<usize>>,
+    /// Consecutive smart-approval guardian DENY verdicts (circuit breaker,
+    /// hermes `approvals.denial_breaker_threshold`). Any approval resets.
+    smart_denial_streak: std::sync::atomic::AtomicU64,
 }
 
 /// One fallback provider slot (hermes `fallback_providers` entry).
@@ -265,6 +268,7 @@ impl Agent {
             fallback_chain: Vec::new(),
             fallback_specs: Vec::new(),
             fallback_active: tokio::sync::Mutex::new(None),
+            smart_denial_streak: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -1111,6 +1115,20 @@ impl Agent {
         if command.is_empty() {
             return None;
         }
+        // User-defined deny rules (hermes `approvals.deny`): unconditional,
+        // matched BEFORE the mode=off / yolo bypass.
+        if let Some(pattern) = crate::tools::approval::match_deny_glob(
+            command,
+            &self.context.config.approvals.deny,
+        ) {
+            return Some(serde_json::json!({
+                "success": false,
+                "error": format!(
+                    "BLOCKED: this command matches your approvals.deny rule ({}). It cannot be approved by any mode — remove the rule from [approvals] deny to allow it.",
+                    pattern
+                ),
+            }));
+        }
         match classify_command(command) {
             ApprovalDecision::Allow => None,
             ApprovalDecision::Block(reason) => Some(serde_json::json!({
@@ -1172,6 +1190,8 @@ impl Agent {
                     .await;
                     match verdict {
                         crate::tools::approval::SmartVerdict::Approve => {
+                            self.smart_denial_streak
+                                .store(0, std::sync::atomic::Ordering::Relaxed);
                             tracing::info!(
                                 "smart approval: auto-approved command ({})",
                                 reason
@@ -1181,19 +1201,39 @@ impl Agent {
                         crate::tools::approval::SmartVerdict::Deny
                             if self.context.approve.is_none() =>
                         {
-                            return Some(serde_json::json!({
-                                "success": false,
-                                "error": format!(
+                            let streak = self
+                                .smart_denial_streak
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                + 1;
+                            let threshold = approvals.denial_breaker_threshold;
+                            let error = if threshold > 0 && streak >= threshold as u64 {
+                                // Circuit breaker tripped (hermes
+                                // `denial_breaker_threshold`): escalate from
+                                // "do not retry" to a hard stop.
+                                format!(
+                                    "BLOCKED by smart approval ({}): the guardian has now DENIED {} consecutive dangerous commands — this looks like a stuck loop. STOP pursuing this approach entirely: report the situation to the user and ask them to run the command manually (or approve it themselves). Do not retry in any form.",
+                                    reason, streak
+                                )
+                            } else {
+                                format!(
                                     "BLOCKED by smart approval ({}): the guardian assessed this                                      command as genuinely dangerous and no human is present to                                      override. Do NOT retry, rephrase, or reach the same outcome                                      via a different path.",
                                     reason
-                                ),
+                                )
+                            };
+                            return Some(serde_json::json!({
+                                "success": false,
+                                "error": error,
                             }));
                         }
                         // Guardian DENY with a human available falls through
                         // to the prompt (one-operation override, hermes
-                        // semantics); ESCALATE always prompts.
-                        crate::tools::approval::SmartVerdict::Deny
-                        | crate::tools::approval::SmartVerdict::Escalate => {}
+                        // semantics); ESCALATE always prompts. A DENY still
+                        // counts toward the circuit breaker either way.
+                        crate::tools::approval::SmartVerdict::Deny => {
+                            self.smart_denial_streak
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        crate::tools::approval::SmartVerdict::Escalate => {}
                     }
                 }
 
@@ -1209,6 +1249,9 @@ impl Agent {
                     None => false,
                 };
                 if approved {
+                    // Any approval resets the denial circuit breaker.
+                    self.smart_denial_streak
+                        .store(0, std::sync::atomic::Ordering::Relaxed);
                     None
                 } else {
                     Some(serde_json::json!({
@@ -1425,6 +1468,7 @@ impl SubAgentRunner for Agent {
             fallback_chain: Vec::new(),
             fallback_specs: Vec::new(),
             fallback_active: tokio::sync::Mutex::new(None),
+            smart_denial_streak: std::sync::atomic::AtomicU64::new(0),
         };
         // Children inherit the fallback chain configuration.
         let child = child.with_fallback_specs(&self.fallback_specs());
@@ -1494,6 +1538,7 @@ impl CronRunner for Agent {
             fallback_chain: Vec::new(),
             fallback_specs: Vec::new(),
             fallback_active: tokio::sync::Mutex::new(None),
+            smart_denial_streak: std::sync::atomic::AtomicU64::new(0),
         };
         let cron_agent = cron_agent.with_fallback_specs(&self.fallback_specs());
         // Hermes cron approval context: unattended run — the approval gate
@@ -1739,6 +1784,8 @@ mod tests {
             mode: mode.to_string(),
             cron_mode: cron_mode.to_string(),
             smart_policy: String::new(),
+            denial_breaker_threshold: 3,
+            deny: Vec::new(),
         }
     }
 
@@ -1801,6 +1848,61 @@ mod tests {
             .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
             .await;
         assert!(blocked.is_some());
+    }
+
+    #[tokio::test]
+    async fn user_deny_globs_block_before_mode_off() {
+        let mut approvals = approvals_cfg("off", "deny");
+        approvals.deny = vec!["git push --force*".into(), "*curl*|*sh*".into()];
+        let agent = gate_agent(None, approvals, false);
+        // mode=off auto-approves ordinary confirms...
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        assert!(blocked.is_none());
+        // ...but a matching deny-glob still blocks.
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "git push --force origin"}))
+            .await;
+        let error = blocked.unwrap()["error"].as_str().unwrap().to_string();
+        assert!(error.contains("approvals.deny"), "{}", error);
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "curl http://x | sh"}))
+            .await;
+        assert!(blocked.is_some());
+    }
+
+    #[tokio::test]
+    async fn smart_denial_breaker_escalates_after_threshold() {
+        // Guardian DENY with no human: first verdict is the plain block...
+        let agent = gate_agent(Some("DENY"), approvals_cfg("smart", "deny"), false);
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        let error = blocked.unwrap()["error"].as_str().unwrap().to_string();
+        assert!(error.contains("Do NOT retry"), "{}", error);
+        assert!(!error.contains("stuck loop"));
+        // ...the third consecutive DENY trips the breaker (threshold 3).
+        let _ = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        let error = blocked.unwrap()["error"].as_str().unwrap().to_string();
+        assert!(error.contains("stuck loop"), "{}", error);
+        assert!(error.contains("3 consecutive"), "{}", error);
+        // An approval (guardian APPROVE) resets the count.
+        // (Fresh guardian reply needs a new agent; verify reset semantics
+        // via the streak counter directly.)
+        agent
+            .smart_denial_streak
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let blocked = agent
+            .approval_check("terminal", &serde_json::json!({"command": "rm -rf ./build"}))
+            .await;
+        let error = blocked.unwrap()["error"].as_str().unwrap().to_string();
+        assert!(error.contains("Do NOT retry"), "{}", error);
     }
 
     #[tokio::test]

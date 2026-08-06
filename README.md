@@ -171,6 +171,8 @@ environment_probe = true       # one-line Python toolchain note in the system pr
 # mode = "manual"              # manual | smart (aux-LLM guardian) | off
 # cron_mode = "deny"           # deny | approve — unattended cron runs
 # smart_policy = ""            # operator rules for the smart-approval guardian
+# denial_breaker_threshold = 3  # consecutive guardian DENYs before the hard-stop escalation
+# deny = []                     # fnmatch globs that always block (even mode = "off")
 
 [delegation]
 max_concurrent_children = 3

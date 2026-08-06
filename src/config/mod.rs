@@ -1172,6 +1172,21 @@ pub struct ApprovalsConfig {
     /// Operator rules appended to the smart-approval guardian's system
     /// prompt (hermes `approvals.smart_policy`).
     pub smart_policy: String,
+    /// Consecutive-denial circuit breaker for smart approvals: after this
+    /// many guardian DENY verdicts in a row the deny message escalates to
+    /// a hard-stop instruction. Any approval resets the count; 0 disables
+    /// (hermes `approvals.denial_breaker_threshold`, default 3).
+    #[serde(default = "default_denial_breaker_threshold")]
+    pub denial_breaker_threshold: usize,
+    /// User-defined deny rules: fnmatch globs matched against terminal
+    /// commands. A match blocks the command unconditionally — BEFORE the
+    /// mode=off bypass (hermes `approvals.deny`).
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
+fn default_denial_breaker_threshold() -> usize {
+    3
 }
 
 impl Default for ApprovalsConfig {
@@ -1181,6 +1196,8 @@ impl Default for ApprovalsConfig {
             mode: "manual".to_string(),
             cron_mode: "deny".to_string(),
             smart_policy: String::new(),
+            denial_breaker_threshold: default_denial_breaker_threshold(),
+            deny: Vec::new(),
         }
     }
 }
