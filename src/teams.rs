@@ -20,7 +20,11 @@
 //! Bot Framework host allowlist (SSRF/token-exfiltration guard) and
 //! conversation ids against the Bot Framework id character set.
 //!
-//! Known differences: adaptive-card approval buttons and the
+//! Exec approvals render as AdaptiveCard v1.4 prompts with
+//! Action.Execute Allow/Deny buttons (hermes `send_exec_approval`);
+//! button taps arrive as `adaptiveCard/action` invoke activities and
+//! resolve the session's blocking approval with a default-deny
+//! allowlist gate (hermes `_on_card_action`). Known differences: the
 //! summary-writer incoming-webhook/Graph paths are not ported; typing
 //! indicators are best-effort activity posts.
 
@@ -255,6 +259,17 @@ impl Runtime {
     /// POST a message activity to a conversation (hermes send /
     /// standalone send).
     async fn send_activity(&self, conversation_id: &str, text: &str) -> Result<(), String> {
+        let activity = json!({ "type": "message", "text": text, "textFormat": "markdown" });
+        self.send_activity_payload(conversation_id, activity).await
+    }
+
+    /// POST an arbitrary activity payload (message / card / typing) to
+    /// the conversation (hermes `_send_card` rides the same endpoint).
+    async fn send_activity_payload(
+        &self,
+        conversation_id: &str,
+        activity: Value,
+    ) -> Result<(), String> {
         if !valid_conversation_id(conversation_id) {
             return Err("conversation id outside Bot Framework charset".into());
         }
@@ -267,7 +282,6 @@ impl Runtime {
         .ok_or_else(|| "service URL not on Bot Framework allowlist".to_string())?;
         let token = self.access_token().await?;
         let url = format!("{service_url}v3/conversations/{conversation_id}/activities");
-        let activity = json!({ "type": "message", "text": text, "textFormat": "markdown" });
         let resp = self
             .client
             .post(&url)
@@ -373,8 +387,23 @@ pub async fn teams_handle_webhook(
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    if activity_type == "invoke" {
+        // adaptiveCard/action button taps resolve blocking approvals
+        // (hermes `_on_card_action`); other invokes are acked.
+        let name = activity.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if name == "adaptiveCard/action" {
+            return TeamsWebhookResponse {
+                status: 200,
+                body: card_action_response(&runtime.cfg, &activity),
+            };
+        }
+        return TeamsWebhookResponse {
+            status: 200,
+            body: json!({}),
+        };
+    }
     if activity_type != "message" {
-        // conversationUpdate / invoke etc. are acked without dispatch.
+        // conversationUpdate etc. is acked without dispatch.
         return TeamsWebhookResponse {
             status: 200,
             body: json!({}),
@@ -576,6 +605,170 @@ fn cache_into(
     }
 }
 
+/** Char-boundary truncation for card previews (hermes `command[:2000]`
+body / `command[:200]` button-data shapes). */
+fn truncate_for_card(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max_chars).collect();
+    format!("{cut}...")
+}
+
+/** AdaptiveCard v1.4 exec-approval prompt (hermes `send_exec_approval`):
+Allow Once / Allow Session / Always Allow / Deny Action.Execute buttons
+carrying the session key + truncated command in their data payload. */
+pub fn build_approval_card(
+    command: &str,
+    description: &str,
+    session_key: &str,
+    allow_permanent: bool,
+    allow_session: bool,
+    smart_denied: bool,
+) -> Value {
+    let cmd_preview = truncate_for_card(command, 2000);
+    let btn_data_base = json!({
+        "session_key": session_key,
+        "cmd": truncate_for_card(command, 200),
+        "desc": description,
+    });
+    let action = |title: &str, verb_action: &str, style: Option<&str>| {
+        let mut data = btn_data_base.clone();
+        data["hermes_action"] = json!(verb_action);
+        let mut action = json!({
+            "type": "Action.Execute",
+            "title": title,
+            "verb": "hermes_approve",
+            "data": data,
+        });
+        if let Some(style) = style {
+            action["style"] = json!(style);
+        }
+        action
+    };
+    let mut actions = vec![action("Allow Once", "approve_once", Some("positive"))];
+    if !smart_denied && allow_session {
+        actions.push(action("Allow Session", "approve_session", None));
+        if allow_permanent {
+            actions.push(action("Always Allow", "approve_always", None));
+        }
+    }
+    actions.push(action("Deny", "deny", Some("destructive")));
+    let mut body = vec![
+        json!({"type": "TextBlock", "text": "⚠️ Command Approval Required", "wrap": true, "weight": "Bolder"}),
+        json!({"type": "TextBlock", "text": format!("```\n{cmd_preview}\n```"), "wrap": true}),
+        json!({"type": "TextBlock", "text": format!("Reason: {description}"), "wrap": true, "isSubtle": true}),
+    ];
+    if smart_denied {
+        body.push(json!({
+            "type": "TextBlock",
+            "text": "Smart DENY: owner override applies to this one operation only.",
+            "wrap": true
+        }));
+    }
+    json!({
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body,
+        "actions": actions,
+    })
+}
+
+/** Invoke response carrying a text message (hermes
+`AdaptiveCardActionMessageResponse`). */
+fn invoke_message_response(text: &str) -> Value {
+    json!({
+        "statusCode": 200,
+        "type": "application/vnd.microsoft.activity.message",
+        "value": text,
+    })
+}
+
+/** Invoke response replacing the card (hermes
+`AdaptiveCardActionCardResponse`). */
+fn invoke_card_response(card: Value) -> Value {
+    json!({
+        "statusCode": 200,
+        "type": "application/vnd.microsoft.card.adaptive",
+        "value": card,
+    })
+}
+
+/** Handle an `adaptiveCard/action` invoke — port of hermes
+`_on_card_action`: default-deny allowlist gate, choice mapping,
+blocking-approval check, resolution, replacement card. */
+pub fn card_action_response(cfg: &ResolvedTeams, activity: &Value) -> Value {
+    let data = activity.pointer("/value/action/data").cloned().unwrap_or(json!({}));
+    let hermes_action = data.get("hermes_action").and_then(|v| v.as_str()).unwrap_or("");
+    let session_key = data.get("session_key").and_then(|v| v.as_str()).unwrap_or("");
+    if hermes_action.is_empty() || session_key.is_empty() {
+        return invoke_message_response("Unknown action.");
+    }
+    // Default-deny: an empty allowlist means nobody may click approval
+    // buttons (hermes: TEAMS_ALLOWED_USERS not configured → reject).
+    if cfg.allowed_users.is_empty() {
+        eprintln!(
+            "[teams] card action rejected: allowed_users not configured — default deny"
+        );
+        return invoke_message_response(
+            "⛔ Approval buttons require TEAMS_ALLOWED_USERS to be configured.",
+        );
+    }
+    let clicker_id = activity
+        .pointer("/from/aadObjectId")
+        .and_then(|v| v.as_str())
+        .or_else(|| activity.pointer("/from/id").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    if !cfg.allowed_users.iter().any(|u| u == "*" || u == clicker_id) {
+        eprintln!("[teams] unauthorized card action by {clicker_id} — ignoring");
+        return invoke_message_response("⛔ Not authorized.");
+    }
+    let choice = match hermes_action {
+        "approve_once" => crate::approval_gateway::CHOICE_ONCE,
+        "approve_session" => crate::approval_gateway::CHOICE_SESSION,
+        "approve_always" => crate::approval_gateway::CHOICE_ALWAYS,
+        "deny" => crate::approval_gateway::CHOICE_DENY,
+        _ => return invoke_message_response("Unknown action."),
+    };
+    if !crate::approval_gateway::has_blocking(session_key) {
+        return invoke_card_response(json!({
+            "type": "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.4",
+            "body": [{
+                "type": "TextBlock",
+                "text": "⚠️ Approval already resolved or expired.",
+                "wrap": true
+            }],
+        }));
+    }
+    crate::approval_gateway::resolve(session_key, choice);
+    let label = match choice {
+        crate::approval_gateway::CHOICE_ONCE => "✅ Allowed (once)",
+        crate::approval_gateway::CHOICE_SESSION => "✅ Allowed (session)",
+        crate::approval_gateway::CHOICE_ALWAYS => "✅ Always allowed",
+        _ => "❌ Denied",
+    };
+    let cmd = data.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+    let desc = data.get("desc").and_then(|v| v.as_str()).unwrap_or("");
+    let mut body: Vec<Value> = Vec::new();
+    if !cmd.is_empty() {
+        body.push(json!({"type": "TextBlock", "text": "⚠️ Command Approval Required", "wrap": true, "weight": "Bolder"}));
+        body.push(json!({"type": "TextBlock", "text": format!("```\n{cmd}\n```"), "wrap": true}));
+    }
+    if !desc.is_empty() {
+        body.push(json!({"type": "TextBlock", "text": format!("Reason: {desc}"), "wrap": true, "isSubtle": true}));
+    }
+    body.push(json!({"type": "TextBlock", "text": label, "wrap": true, "weight": "Bolder"}));
+    invoke_card_response(json!({
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body,
+    }))
+}
+
 struct TeamsSender {
     runtime: Arc<Runtime>,
 }
@@ -586,6 +779,40 @@ impl crate::messaging::PlatformSender for TeamsSender {
         for chunk in crate::messaging::chunk_text(text, MAX_MESSAGE_LENGTH) {
             if let Err(e) = self.runtime.send_activity(chat_id, &chunk).await {
                 eprintln!("[teams] send_text to {chat_id} failed: {e}");
+            }
+        }
+    }
+
+    async fn send_exec_approval(
+        &self,
+        chat_id: &str,
+        command: &str,
+        session_key: &str,
+        description: &str,
+        allow_permanent: bool,
+        allow_session: bool,
+        smart_denied: bool,
+    ) -> bool {
+        let card = build_approval_card(
+            command,
+            description,
+            session_key,
+            allow_permanent,
+            allow_session,
+            smart_denied,
+        );
+        let activity = json!({
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": card,
+            }],
+        });
+        match self.runtime.send_activity_payload(chat_id, activity).await {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[teams] send_exec_approval to {chat_id} failed: {e}");
+                false
             }
         }
     }
@@ -695,5 +922,125 @@ mod tests {
             && html_mirror.get("contentUrl").is_none();
         assert!(skip_html);
         assert!(ct(&card).starts_with("application/vnd.microsoft.card"));
+    }
+
+    fn resolved_with_users(users: &[&str]) -> ResolvedTeams {
+        ResolvedTeams {
+            client_id: String::new(),
+            client_secret: String::new(),
+            tenant_id: String::new(),
+            service_url: DEFAULT_TEAMS_SERVICE_URL.to_string(),
+            allowed_users: users.iter().map(|s| s.to_string()).collect(),
+            home_channel: String::new(),
+        }
+    }
+
+    fn card_activity(action: &str, session_key: &str, clicker: &str) -> Value {
+        json!({
+            "type": "invoke",
+            "name": "adaptiveCard/action",
+            "from": {"id": clicker, "aadObjectId": clicker},
+            "value": {"action": {"verb": "hermes_approve", "data": {
+                "hermes_action": action,
+                "session_key": session_key,
+                "cmd": "rm -rf /tmp/x",
+                "desc": "dangerous command"
+            }}}
+        })
+    }
+
+    #[test]
+    fn approval_card_shape() {
+        let card = build_approval_card(
+            "rm -rf /tmp/x",
+            "dangerous command",
+            "platform-teams-c1",
+            true,
+            true,
+            false,
+        );
+        assert_eq!(card["version"], "1.4");
+        assert_eq!(card["body"].as_array().unwrap().len(), 3);
+        let actions = card["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 4);
+        assert_eq!(actions[0]["title"], "Allow Once");
+        assert_eq!(actions[0]["style"], "positive");
+        assert_eq!(actions[3]["title"], "Deny");
+        assert_eq!(actions[3]["style"], "destructive");
+        assert_eq!(actions[0]["data"]["session_key"], "platform-teams-c1");
+        assert_eq!(actions[0]["data"]["hermes_action"], "approve_once");
+        assert_eq!(actions[1]["data"]["hermes_action"], "approve_session");
+        assert_eq!(actions[2]["data"]["hermes_action"], "approve_always");
+        // smart_denied collapses to Allow Once + Deny only.
+        let collapsed = build_approval_card("c", "d", "s", true, true, true);
+        assert_eq!(collapsed["actions"].as_array().unwrap().len(), 2);
+        assert_eq!(collapsed["body"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn card_action_auth_gates() {
+        // Empty allowlist: default deny.
+        let resp = card_action_response(
+            &resolved_with_users(&[]),
+            &card_activity("approve_once", "teams-auth-1", "user-1"),
+        );
+        assert!(resp["value"].as_str().unwrap().contains("TEAMS_ALLOWED_USERS"));
+        // Unknown clicker.
+        let resp = card_action_response(
+            &resolved_with_users(&["someone-else"]),
+            &card_activity("approve_once", "teams-auth-2", "user-1"),
+        );
+        assert_eq!(resp["value"], "⛔ Not authorized.");
+        // Unknown verb.
+        let resp = card_action_response(
+            &resolved_with_users(&["user-1"]),
+            &card_activity("bogus", "teams-auth-3", "user-1"),
+        );
+        assert_eq!(resp["value"], "Unknown action.");
+        // Missing session_key.
+        let no_key = json!({
+            "from": {"id": "user-1"},
+            "value": {"action": {"data": {"hermes_action": "approve_once"}}}
+        });
+        let resp = card_action_response(&resolved_with_users(&["user-1"]), &no_key);
+        assert_eq!(resp["value"], "Unknown action.");
+    }
+
+    #[test]
+    fn card_action_resolves_pending_approval() {
+        let session = "teams-card-resolve";
+        let mut handle = crate::approval_gateway::register(
+            session,
+            "rm -rf /tmp/x",
+            "dangerous command",
+            false,
+            true,
+            true,
+        );
+        let resp = card_action_response(
+            &resolved_with_users(&["*"]),
+            &card_activity("approve_session", session, "user-9"),
+        );
+        assert_eq!(handle.rx.try_recv().unwrap(), "session");
+        assert_eq!(resp["type"], "application/vnd.microsoft.card.adaptive");
+        let texts: Vec<&str> = resp["value"]["body"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["text"].as_str().unwrap())
+            .collect();
+        assert!(texts.iter().any(|t| t.contains("Allowed (session)")));
+        // Second tap: already resolved → expiry card.
+        let resp = card_action_response(
+            &resolved_with_users(&["*"]),
+            &card_activity("approve_session", session, "user-9"),
+        );
+        let texts: Vec<&str> = resp["value"]["body"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["text"].as_str().unwrap())
+            .collect();
+        assert!(texts.iter().any(|t| t.contains("already resolved")));
     }
 }

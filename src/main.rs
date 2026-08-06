@@ -1863,6 +1863,9 @@ async fn build_gateway_stack(
     let state_holder: Arc<tokio::sync::OnceCell<Arc<ulnclaw::gateway::GatewayState>>> =
         Arc::new(tokio::sync::OnceCell::new());
     let approve = ulnclaw::gateway::gateway_approve_fn(router.clone(), state_holder.clone());
+    // Messaging turns render approvals in-chat (adaptive cards on Teams,
+    // /approve text elsewhere) instead of the run-based HTTP flow.
+    let approve = ulnclaw::messaging::messaging_aware_approve_fn(approve);
     let agent = make_agent_in(config, false, Some(approve), home, None).await?;
     agent.context().set_async_delivery(true);
     let state = ulnclaw::gateway::GatewayState::new(

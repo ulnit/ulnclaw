@@ -273,6 +273,22 @@ pub trait PlatformSender: Send + Sync {
     ) -> bool {
         false
     }
+    /// Render an exec-approval prompt natively (Teams adaptive-card
+    /// buttons). Returns false when the platform has no native
+    /// interactive support — the caller falls back to `/approve` text.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_exec_approval(
+        &self,
+        _chat_id: &str,
+        _command: &str,
+        _session_key: &str,
+        _description: &str,
+        _allow_permanent: bool,
+        _allow_session: bool,
+        _smart_denied: bool,
+    ) -> bool {
+        false
+    }
 }
 
 fn platform_senders() -> &'static std::sync::Mutex<HashMap<String, Arc<dyn PlatformSender>>> {
@@ -290,6 +306,172 @@ pub fn register_platform_sender(platform: &str, sender: Arc<dyn PlatformSender>)
 
 pub fn platform_sender(platform: &str) -> Option<Arc<dyn PlatformSender>> {
     platform_senders().lock().unwrap().get(platform).cloned()
+}
+
+/// Truncate on a char boundary for approval previews (hermes
+/// `command[:200] + "..."`).
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max_chars).collect();
+    format!("{cut}...")
+}
+
+/// Plain-text exec-approval prompt (hermes
+/// `_format_exec_approval_fallback`): used on platforms without native
+/// approval buttons and as the fallback when a card send fails.
+pub fn format_approval_text(
+    command: &str,
+    description: &str,
+    allow_session: bool,
+    allow_permanent: bool,
+    smart_denied: bool,
+) -> String {
+    let cmd_preview = truncate_chars(command, 200);
+    let heading = if smart_denied {
+        "⚠️ **Smart DENY — owner override for one operation:**"
+    } else {
+        "⚠️ **Dangerous command requires approval:**"
+    };
+    let mut choices: Vec<String> =
+        vec!["Reply `/approve` to execute this one operation".to_string()];
+    if !smart_denied && allow_session {
+        choices.push("`/approve session` to approve this pattern for the session".to_string());
+        if allow_permanent {
+            choices.push("`/approve always` to approve permanently".to_string());
+        }
+    }
+    choices.push("`/deny` to cancel".to_string());
+    let last = choices.pop().expect("choices is never empty");
+    format!(
+        "{heading}\n```\n{cmd_preview}\n```\nReason: {description}\n\n{}, or {last}.",
+        choices.join(", ")
+    )
+}
+
+/// Parsed `/approve` / `/deny` chat command (hermes
+/// `_handle_approve_command` / `_handle_deny_command`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovalCommand {
+    pub approve: bool,
+    pub all: bool,
+    /// `once` | `session` | `always` for approve; `deny` for deny.
+    pub choice: &'static str,
+}
+
+/// Parse a `/approve` / `/deny` message. Accepts the slash form on
+/// every platform (hermes slash-command semantics).
+pub fn parse_approval_command(text: &str) -> Option<ApprovalCommand> {
+    let mut parts = text.trim().split_whitespace();
+    let head = parts.next()?.to_lowercase();
+    let rest: Vec<String> = parts.map(|p| p.to_lowercase()).collect();
+    match head.as_str() {
+        "/approve" => {
+            let all = rest.iter().any(|p| p == "all");
+            let choice = if rest.iter().any(|p| p == "always") {
+                crate::approval_gateway::CHOICE_ALWAYS
+            } else if rest.iter().any(|p| p == "session") {
+                crate::approval_gateway::CHOICE_SESSION
+            } else {
+                crate::approval_gateway::CHOICE_ONCE
+            };
+            Some(ApprovalCommand { approve: true, all, choice })
+        }
+        "/deny" => Some(ApprovalCommand {
+            approve: false,
+            all: rest.iter().any(|p| p == "all"),
+            choice: crate::approval_gateway::CHOICE_DENY,
+        }),
+        _ => None,
+    }
+}
+
+/// Apply a parsed approval command to the session's pending registry;
+/// returns the user-facing confirmation (hermes approve/deny replies).
+/// Returns `None` when nothing is pending and the message should be
+/// treated as normal chat text.
+pub fn apply_approval_command(session_key: &str, cmd: ApprovalCommand) -> String {
+    if !crate::approval_gateway::has_blocking(session_key) {
+        return "No pending approvals.".to_string();
+    }
+    let count = if cmd.all {
+        crate::approval_gateway::resolve_all(session_key, cmd.choice)
+    } else if crate::approval_gateway::resolve(session_key, cmd.choice) {
+        1
+    } else {
+        0
+    };
+    if count == 0 {
+        return "No pending approvals.".to_string();
+    }
+    let plural = if count == 1 { "command" } else { "commands" };
+    let label = if cmd.approve {
+        match cmd.choice {
+            crate::approval_gateway::CHOICE_SESSION => "✅ Allowed (session)",
+            crate::approval_gateway::CHOICE_ALWAYS => "✅ Always allowed",
+            _ => "✅ Allowed (once)",
+        }
+    } else {
+        "❌ Denied"
+    };
+    if count == 1 {
+        label.to_string()
+    } else {
+        format!("{label} — {count} {plural}")
+    }
+}
+
+/// Messaging-aware approve callback (hermes `tools/approval.py`
+/// gateway-notify integration): inside a messaging turn the dangerous
+/// command prompt renders on the platform (adaptive-card buttons where
+/// supported, `/approve` text elsewhere) and blocks the agent until
+/// the user taps or replies. Outside a messaging context the wrapped
+/// callback (gateway run-based flow) decides.
+pub fn messaging_aware_approve_fn(
+    inner: crate::tools::context::ApproveFn,
+) -> crate::tools::context::ApproveFn {
+    Arc::new(move |reason, command| {
+        let inner = inner.clone();
+        Box::pin(async move {
+            let Some(ctx) = current_messaging_ctx() else {
+                return inner(reason, command).await;
+            };
+            // Redact credentials before the command reaches the chat
+            // platform (hermes `_redact_approval_command`).
+            let cmd = crate::redact::redact_sensitive_text(&command, Default::default());
+            let handle = crate::approval_gateway::register(
+                &ctx.session_key,
+                &cmd,
+                &reason,
+                false,
+                true,
+                true,
+            );
+            let rendered = if let Some(sender) = platform_sender(&ctx.platform) {
+                let native = sender
+                    .send_exec_approval(&ctx.chat_id, &cmd, &ctx.session_key, &reason, true, true, false)
+                    .await;
+                if !native {
+                    sender
+                        .send_text(
+                            &ctx.chat_id,
+                            &format_approval_text(&cmd, &reason, true, true, false),
+                        )
+                        .await;
+                }
+                true
+            } else {
+                false
+            };
+            if !rendered {
+                // No outbound channel: fail closed.
+                crate::approval_gateway::resolve(&ctx.session_key, crate::approval_gateway::CHOICE_DENY);
+                return false;
+            }
+            matches!(handle.rx.await, Ok(choice) if choice != crate::approval_gateway::CHOICE_DENY)
+        })
+    })
 }
 
 /// Numbered-text clarify rendering for platforms without native
@@ -381,6 +563,16 @@ impl Dispatcher {
     /// plus transcript echoes (hermes `_echo_pending_stt_transcripts_once`).
     pub async fn handle_event(self: &Arc<Self>, event: MessageEvent) -> Result<DispatchOutcome> {
         let key = Self::session_key(&event);
+        // Exec-approval intercept (hermes `/approve` + `/deny` slash
+        // commands): resolves a pending blocking approval while the
+        // blocked turn holds the busy flag, so it must run before the
+        // busy check below.
+        if let Some(cmd) = parse_approval_command(&event.text) {
+            return Ok(DispatchOutcome {
+                reply: apply_approval_command(&key, cmd),
+                transcript_echoes: Vec::new(),
+            });
+        }
         // Clarify text intercept (hermes `_maybe_intercept_clarify_text`):
         // when a prompt awaits a typed answer, the next message resolves it
         // instead of starting a fresh turn (the blocked clarify tool call
@@ -1903,6 +2095,57 @@ pub(crate) fn chunk_text(text: &str, max: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn approval_command_parsing() {
+        let cmd = parse_approval_command("/approve").unwrap();
+        assert!(cmd.approve && !cmd.all && cmd.choice == crate::approval_gateway::CHOICE_ONCE);
+        let cmd = parse_approval_command("/approve all session").unwrap();
+        assert!(cmd.all && cmd.choice == crate::approval_gateway::CHOICE_SESSION);
+        let cmd = parse_approval_command("/approve always").unwrap();
+        assert_eq!(cmd.choice, crate::approval_gateway::CHOICE_ALWAYS);
+        let cmd = parse_approval_command("/deny all because reasons").unwrap();
+        assert!(!cmd.approve && cmd.all && cmd.choice == crate::approval_gateway::CHOICE_DENY);
+        assert!(parse_approval_command("approve").is_none()); // slash form only
+        assert!(parse_approval_command("/approve2").is_none());
+        assert!(parse_approval_command("hello world").is_none());
+    }
+
+    #[test]
+    fn approval_text_format() {
+        let text = format_approval_text("rm -rf /", "dangerous command", true, true, false);
+        assert!(text.contains("Dangerous command requires approval"));
+        assert!(text.contains("```\nrm -rf /\n```"));
+        assert!(text.contains("Reason: dangerous command"));
+        assert!(text.contains("/approve session"));
+        assert!(text.contains("/approve always"));
+        assert!(text.contains("/deny"));
+        let smart = format_approval_text("c", "d", true, true, true);
+        assert!(smart.contains("Smart DENY"));
+        assert!(!smart.contains("/approve session"));
+        // Long commands truncate to 200 chars + ellipsis.
+        let long = format_approval_text(&"x".repeat(500), "d", true, true, false);
+        assert!(long.contains(&"x".repeat(200)));
+        assert!(!long.contains(&"x".repeat(201)));
+    }
+
+    #[test]
+    fn approval_intercept_flow() {
+        let session = "platform-teams-intercept";
+        // No pending approvals: informational reply.
+        let cmd = parse_approval_command("/approve").unwrap();
+        assert_eq!(apply_approval_command(session, cmd), "No pending approvals.");
+        // Pending approval resolves oldest-first.
+        let mut first = crate::approval_gateway::register(session, "cmd-a", "d", false, true, true);
+        let mut second = crate::approval_gateway::register(session, "cmd-b", "d", false, true, true);
+        let cmd = parse_approval_command("/approve").unwrap();
+        assert_eq!(apply_approval_command(session, cmd), "✅ Allowed (once)");
+        assert_eq!(first.rx.try_recv().unwrap(), "once");
+        assert!(second.rx.try_recv().is_err());
+        let cmd = parse_approval_command("/deny all").unwrap();
+        assert_eq!(apply_approval_command(session, cmd), "❌ Denied");
+        assert_eq!(second.rx.try_recv().unwrap(), "deny");
+    }
+
     use super::*;
 
     #[test]
