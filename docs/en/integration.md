@@ -122,7 +122,8 @@ ulnclaw::gateway::serve(state, "127.0.0.1", 8642).await?;
 
 Endpoints: `/v1/chat/completions` (with `X-Ulnclaw-Session-Id` session
 continuity), `/v1/responses`, `/v1/models`, `/v1/capabilities`,
-`/api/sessions` CRUD + patch/fork + per-session chat, `/api/jobs` cron job
+`/api/sessions` CRUD + patch/fork + per-session chat, `/api/projects`
+registry CRUD + discovery (`scan`/`repos`), `/api/jobs` cron job
 management (CRUD + pause/resume/run), enforced per-session model locks
 (`POST /api/sessions/:id/model`), `/v1/skills` and `/v1/toolsets`
 discovery, `/api/model/options`, and `/v1/runs` async runs with SSE events

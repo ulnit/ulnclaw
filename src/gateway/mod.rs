@@ -18,6 +18,8 @@
 //!     `POST /api/pets/hatch/:id/pick|cancel`,
 //!     `GET /api/pets/hatch/:id/draft/:index` — hatch job pipeline
 //!     for the desktop hatch overlay
+//!   - `GET/POST /api/projects` (+ `/active`, `/repos`, `/scan`,
+//!     `/:id`, `/:id/folders`, `/:id/primary`, `/:id/archive|restore`),
 //!   - `GET/POST /api/kanban/boards`, `POST /api/kanban/boards/:slug/switch`,
 //!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`
@@ -49,6 +51,7 @@ use tokio::sync::Mutex;
 
 mod kanban;
 mod pets;
+mod projects;
 
 use crate::agent::Agent;
 use crate::cron::{CronJob, CronStore};
@@ -607,6 +610,26 @@ pub fn router(state: Arc<GatewayState>) -> Router {
             "/api/pets/hatch/:id/draft/:index",
             get(pets::draft_image),
         )
+        .route(
+            "/api/projects",
+            get(projects::list_projects).post(projects::create_project),
+        )
+        .route("/api/projects/active", post(projects::set_active))
+        .route("/api/projects/repos", get(projects::list_repos))
+        .route("/api/projects/scan", post(projects::scan_repos))
+        .route(
+            "/api/projects/:id",
+            get(projects::get_project)
+                .patch(projects::update_project)
+                .delete(projects::delete_project),
+        )
+        .route(
+            "/api/projects/:id/folders",
+            post(projects::add_folder).delete(projects::remove_folder),
+        )
+        .route("/api/projects/:id/primary", post(projects::set_primary))
+        .route("/api/projects/:id/archive", post(projects::archive_project))
+        .route("/api/projects/:id/restore", post(projects::restore_project))
         .route("/api/kanban/boards", get(kanban::list_boards).post(kanban::create_board))
         .route("/api/kanban/boards/:slug/switch", post(kanban::switch_board))
         .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))
@@ -6346,5 +6369,198 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("HTTP 403"), "{err}");
+    }
+
+    async fn request_json(
+        app: Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+        token: &str,
+    ) -> (StatusCode, Value) {
+        let mut builder = axum::http::Request::builder()
+            .uri(uri)
+            .method(method)
+            .header("authorization", format!("Bearer {}", token));
+        let payload = match body {
+            Some(json) => {
+                builder = builder.header("content-type", "application/json");
+                axum::body::Body::from(json.to_string())
+            }
+            None => axum::body::Body::empty(),
+        };
+        let response = app.oneshot(builder.body(payload).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    #[tokio::test]
+    async fn test_projects_api_crud_lifecycle() {
+        // projects.db resolves through ULNCLAW_HOME — scope it to a temp dir.
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Create (with active flag).
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/projects",
+            Some(r#"{"name":"Demo Project","folders":["/tmp/demo-repo"],"use":true}"#),
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let slug = body["project"]["slug"].as_str().unwrap().to_string();
+        assert_eq!(slug, "demo-project");
+        let pid = body["project"]["id"].as_str().unwrap().to_string();
+
+        // List carries the active pointer.
+        let (status, body) = get_json(app.clone(), "/api/projects", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["projects"].as_array().unwrap().len(), 1);
+        assert_eq!(body["active_id"].as_str().unwrap(), pid);
+
+        // Get by slug; folder inherited as primary.
+        let (status, body) =
+            get_json(app.clone(), &format!("/api/projects/{slug}"), Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["project"]["name"], "Demo Project");
+        assert_eq!(
+            body["project"]["primary_path"].as_str().unwrap(),
+            "/tmp/demo-repo"
+        );
+
+        // Add a second folder, then promote it.
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            &format!("/api/projects/{slug}/folders"),
+            Some(r#"{"path":"/tmp/demo-repo-2"}"#),
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["project"]["folders"].as_array().unwrap().len(), 2);
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            &format!("/api/projects/{slug}/primary"),
+            Some(r#"{"path":"/tmp/demo-repo-2"}"#),
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["project"]["primary_path"].as_str().unwrap(),
+            "/tmp/demo-repo-2"
+        );
+
+        // Patch description; unknown project 404s.
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            &format!("/api/projects/{slug}"),
+            Some(r#"{"description":"patched"}"#),
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["project"]["description"], "patched");
+        let (status, _) =
+            get_json(app.clone(), "/api/projects/no-such-project", Some(token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Archive hides it from the default list, restore brings it back.
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            &format!("/api/projects/{slug}/archive"),
+            None,
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = get_json(app.clone(), "/api/projects", Some(token)).await;
+        assert_eq!(body["projects"].as_array().unwrap().len(), 0);
+        let (_, body) = get_json(app.clone(), "/api/projects?all=true", Some(token)).await;
+        assert_eq!(body["projects"].as_array().unwrap().len(), 1);
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            &format!("/api/projects/{slug}/restore"),
+            None,
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Clear active, then hard-delete.
+        let (status, body) =
+            request_json(app.clone(), "POST", "/api/projects/active", Some(r#"{"id":null}"#), token)
+                .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["active_id"].is_null());
+        let (status, _) = request_json(
+            app.clone(),
+            "DELETE",
+            &format!("/api/projects/{slug}"),
+            None,
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = get_json(app.clone(), "/api/projects", Some(token)).await;
+        assert_eq!(body["projects"].as_array().unwrap().len(), 0);
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_projects_repos_and_scan_endpoints() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Seed a fake git repo under a scan root.
+        let scan_root = tmp.path().join("scan-root");
+        std::fs::create_dir_all(scan_root.join("repo-x/.git")).unwrap();
+
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/projects/scan",
+            Some(&format!(
+                r#"{{"roots":["{}"],"max_depth":3}}"#,
+                scan_root.display()
+            )),
+            token,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["recorded"], 1);
+
+        let (status, body) = get_json(app.clone(), "/api/projects/repos", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let repos = body["repos"].as_array().unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0]["label"], "repo-x");
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 }
