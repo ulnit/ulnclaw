@@ -49,6 +49,9 @@ child process.
 ### Views and widgets
 
 - **Chat** — the session browser + streaming chat surface.
+  The chat-header model badge opens a per-session model picker overlay
+  (`GET /api/model/options` → `POST /api/sessions/:id/model` lock; the
+  gateway-default row resets the lock) — hermes model-picker parity.
 - **Kanban** (tab in the sidebar) — four-column card wall over
   `/api/kanban/*` (same engine + `kanban.db` as the CLI and agent tools):
   quick-add, complete/block/unblock actions, task detail with comments,
@@ -147,6 +150,9 @@ Rust 侧负责托管 `ulnclaw gateway` 子进程。
 ### 视图与挂件
 
 - **聊天** —— 会话浏览 + 流式聊天主界面。
+  聊天头部模型徽章打开按会话模型挑选弹层（`GET /api/model/options` →
+  `POST /api/sessions/:id/model` 锁定；网关默认行重置锁定）—— hermes
+  model-picker 对位。
 - **看板**（侧栏标签页）—— 基于 `/api/kanban/*` 的四列卡片墙（与 CLI、
   agent 工具共用同一引擎和 `kanban.db`）：快速添加、完成/阻塞/解除阻塞、
   带评论的任务详情、看板切换、5 秒轮询。

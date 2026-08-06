@@ -31,6 +31,28 @@ export interface ChatReply {
   session_id: string;
 }
 
+/** One provider row from GET /api/model/options (gateway render_row). */
+export interface ModelOptionRow {
+  slug: string;
+  models: string[];
+  total_models?: number;
+  is_user_defined?: boolean;
+  authenticated?: boolean;
+  source?: string;
+  current?: boolean;
+  name?: string;
+  base_url?: string;
+  mode?: string;
+  probed?: boolean;
+  key_env?: string;
+}
+
+export interface ModelOptionsPayload {
+  providers: ModelOptionRow[];
+  model: string;
+  provider: string;
+}
+
 export interface SkillRow {
   name: string;
   description: string;
@@ -234,6 +256,27 @@ export class GatewayClient {
       return first?.id || "";
     } catch {
       return "";
+    }
+  }
+
+  /** GET /api/model/options — provider/model inventory for the picker. */
+  async modelOptions(): Promise<ModelOptionsPayload> {
+    const response = await fetch(this.endpoint("/api/model/options"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`model options: HTTP ${response.status}`);
+    return (await response.json()) as ModelOptionsPayload;
+  }
+
+  /** POST /api/sessions/:id/model — lock the session to a model. */
+  async lockSessionModel(sessionId: string, model: string, provider?: string): Promise<void> {
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/model`), {
+      method: "POST",
+      headers: { ...this.headers(), "Content-Type": "application/json" },
+      body: JSON.stringify(provider ? { model, provider } : { model }),
+    });
+    if (!response.ok) {
+      throw new Error(`model lock: HTTP ${response.status}`);
     }
   }
 

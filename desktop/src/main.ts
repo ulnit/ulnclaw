@@ -9,6 +9,7 @@ import { ProjectsWidget } from "./projects";
 import { JobsWidget } from "./jobs";
 import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
+import { ModelPickerOverlay } from "./model-picker";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -48,6 +49,7 @@ const state = {
   jobs: null as JobsWidget | null,
   pet: null as PetOverlay | null,
   hatch: null as HatchOverlay | null,
+  picker: null as ModelPickerOverlay | null,
   view: "chat" as "chat" | "kanban" | "projects" | "jobs",
 };
 
@@ -166,6 +168,7 @@ function addMessage(role: string, content: string): HTMLElement {
 async function openSession(session: SessionRow): Promise<void> {
   state.current = session;
   el.chatTitle.textContent = session.title || session.id.slice(0, 8);
+  refreshModelBadge();
   el.messages.innerHTML = "";
   renderSessions();
   try {
@@ -197,6 +200,7 @@ async function sendTurn(): Promise<void> {
       state.current = await state.client.createSession();
       state.sessions.unshift(state.current);
       el.chatTitle.textContent = state.current.title || state.current.id.slice(0, 8);
+      refreshModelBadge();
       renderSessions();
     } catch (error) {
       addMessage("system", `Could not create a session: ${error}`);
@@ -305,6 +309,26 @@ async function sendTurn(): Promise<void> {
   }
 }
 
+/// Gateway default model (last seen via /v1/models) for the badge.
+let gatewayModel = "";
+
+/// Badge shows the session lock (🔒) when it differs from the gateway
+/// default, else the gateway model; clicking opens the model picker.
+function refreshModelBadge(): void {
+  const locked =
+    state.current?.model && state.current.model !== gatewayModel
+      ? state.current.model
+      : null;
+  if (locked) {
+    el.modelBadge.textContent = `\u{1F512} ${locked}`;
+    el.modelBadge.title = "Session model lock — click to change";
+  } else {
+    el.modelBadge.textContent = gatewayModel;
+    el.modelBadge.title = "Gateway default model — click to pick a session model";
+  }
+  el.modelBadge.classList.toggle("locked", !!locked);
+}
+
 async function pollHealth(): Promise<void> {
   if (!state.client) return;
   const ok = await state.client.health();
@@ -312,7 +336,10 @@ async function pollHealth(): Promise<void> {
   el.dot.title = ok ? "gateway reachable" : "gateway unreachable";
   if (ok) {
     const model = await state.client.models();
-    if (model) el.modelBadge.textContent = model;
+    if (model) {
+      gatewayModel = model;
+      refreshModelBadge();
+    }
   }
 }
 
@@ -586,6 +613,28 @@ async function start(): Promise<void> {
   settingsBtn.parentElement!.insertBefore(hatchBtn, settingsBtn);
   state.hatch = new HatchOverlay(() => state.client, () => state.pet?.refresh());
   hatchBtn.onclick = () => state.hatch!.open();
+
+  // Per-session model picker (hermes model-picker parity): the badge
+  // opens the overlay; locks ride POST /api/sessions/:id/model.
+  state.picker = new ModelPickerOverlay(
+    () => state.client,
+    () => state.current?.id ?? null,
+    () => {
+      const m = state.current?.model;
+      return m && m !== gatewayModel ? m : null;
+    },
+    (selection) => {
+      if (state.current) {
+        state.current.model =
+          selection.model === gatewayModel ? null : selection.model;
+        refreshModelBadge();
+      }
+    },
+  );
+  el.modelBadge.addEventListener("click", () => {
+    if (!state.current || !state.picker) return;
+    void state.picker.open();
+  });
 
   await pollHealth();
   await refreshSessions();
