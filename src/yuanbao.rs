@@ -27,9 +27,13 @@
 //!
 //! Known differences: the inbound middleware pipeline collapses into a
 //! direct decode→gate→dispatch path (recall guard, owner commands,
-//! forwarded chat-history parsing, quote/observed-media backfill not
-//! ported); anchor patching matches by resourceId instead of zipping;
-//! the resolve-concurrency config knob is fixed at the hermes default
+//! forwarded chat-history parsing not ported); anchor patching matches
+//! by resourceId instead of zipping; quote/observed-media backfill
+//! reads an adapter-side message-content cache + per-group observed
+//! buffer instead of the hermes transcript store (ulnclaw transcripts
+//! carry no platform message ids); the reply-to pointer skips the
+//! "own message" variant; the resolve-concurrency config knob is fixed
+//! at the hermes default
 //! (6); the slow-response notifier and reply heartbeats are not
 //! ported.
 
@@ -58,6 +62,18 @@ const HEARTBEAT_INTERVAL_SECS: u64 = 30;
 const PONG_TIMEOUT_SECS: u64 = 10;
 const HEARTBEAT_TIMEOUT_THRESHOLD: u32 = 2;
 const DEFAULT_SEND_TIMEOUT_SECS: u64 = 30;
+
+// Observed-media backfill (hermes OBSERVED_MEDIA_BACKFILL_*): how many
+// recent group messages to scan, and the per-turn resolve cap.
+const OBSERVED_MEDIA_BACKFILL_LOOKBACK: usize = 50;
+const OBSERVED_MEDIA_BACKFILL_MAX_RESOLVE_PER_TURN: usize = 12;
+// Adapter-side message-content cache cap (hermes `_msg_content_cache`
+// FIFO trim at 200 entries).
+const MSG_CONTENT_CACHE_MAX: usize = 200;
+// Reply-to pointer snippet length (hermes `reply_to_text[:500]`).
+const QUOTE_SNIPPET_MAX_CHARS: usize = 500;
+// hermes `_RESOLVABLE_MEDIA_KINDS` (voice is never re-resolved).
+const RESOLVABLE_MEDIA_KINDS: &[&str] = &["image", "file", "video"];
 
 /// hermes MAX_TEXT_CHUNK — Yuanbao single-message character limit.
 const MAX_TEXT_CHUNK: usize = 4000;
@@ -766,11 +782,68 @@ async fn handle_inbound_frames(runner: &Arc<Runner>, frames: &[Vec<u8>], out_tx:
     if own_resolved == 0 && SKIPPABLE_PLACEHOLDERS.contains(&raw_text.trim()) {
         return;
     }
-    let text = patch_media_anchors(&raw_text, &media_refs, &resolved);
-    let attachments: Vec<crate::messaging::MediaAttachment> = resolved
+    let mut text = patch_media_anchors(&raw_text, &media_refs, &resolved);
+    let mut attachments: Vec<crate::messaging::MediaAttachment> = resolved
         .iter()
         .filter_map(|entry| entry.clone())
         .collect();
+
+    // hermes QuoteContextMiddleware + MediaResolveMiddleware sources 2/3:
+    // quoted-media backfill (already-local anchors + leftover ybres refs
+    // from the adapter msg-content cache) or, in groups without a quote,
+    // observed-media backfill from the per-group buffer.
+    let (quote_id, quote_text) = extract_quote_context(&push.cloud_custom_data);
+    let mut seen_paths: std::collections::HashSet<String> = attachments
+        .iter()
+        .map(|a| a.path.to_string_lossy().to_string())
+        .collect();
+    let mut seen_rids: std::collections::HashSet<String> = media_refs
+        .iter()
+        .map(|r| parse_resource_id(&r.url))
+        .filter(|rid| !rid.is_empty())
+        .collect();
+    let mut backfill_refs: Vec<(String, String, String)> = Vec::new();
+    if let Some(quoted_id) = quote_id.as_deref() {
+        if let Some(content) = msg_content_cache_get(quoted_id) {
+            for (path, mime) in local_media_from_text(&content) {
+                let key = path.to_string_lossy().to_string();
+                if !seen_paths.insert(key) {
+                    continue;
+                }
+                let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) as u64;
+                let original_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                attachments.push(crate::messaging::MediaAttachment {
+                    path,
+                    mime,
+                    bytes,
+                    original_name,
+                });
+            }
+            backfill_refs.extend(ybres_refs_from_text(&content));
+        }
+    } else if is_group {
+        backfill_refs = collect_observed_refs(&chat_id);
+    }
+    if !backfill_refs.is_empty() {
+        for attachment in resolve_backfill_refs(runner, backfill_refs, &mut seen_rids).await {
+            let key = attachment.path.to_string_lossy().to_string();
+            if seen_paths.insert(key) {
+                attachments.push(attachment);
+            }
+        }
+    }
+    if is_group {
+        record_observed(&chat_id, &media_refs);
+    }
+    if !push.msg_id.is_empty() && !text.trim().is_empty() {
+        msg_content_cache_put(&push.msg_id, &text);
+    }
+    // hermes run.py reply-to pointer: disambiguates which prior message
+    // the user is quoting.
+    text = render_reply_to_prefix(&text, quote_id.as_deref(), quote_text.as_deref());
 
     eprintln!(
         "[yuanbao] inbound from={} {} text_len={}",
@@ -1312,6 +1385,276 @@ fn patch_media_anchors(
         patched = patched.replacen(&anchor, &replacement, 1);
     }
     patched
+}
+
+// ---------------------------------------------------------------------------
+// Quote context + quote/observed-media backfill (hermes
+// QuoteContextMiddleware + MediaResolveMiddleware sources 2/3)
+// ---------------------------------------------------------------------------
+
+/// hermes `_extract_quote_context` — parse the `quote` object out of
+/// `cloud_custom_data` JSON into `(quote_id, quote_text)` where the
+/// text is `"sender: desc"` (or bare `desc` without a sender).
+pub fn extract_quote_context(cloud_custom_data: &str) -> (Option<String>, Option<String>) {
+    let trimmed = cloud_custom_data.trim();
+    if trimmed.is_empty() {
+        return (None, None);
+    }
+    let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
+        return (None, None);
+    };
+    let Some(quote) = parsed.get("quote") else {
+        return (None, None);
+    };
+    if !quote.is_object() {
+        return (None, None);
+    }
+    let quote_id = match quote.get("id") {
+        Some(Value::String(value)) if !value.trim().is_empty() => Some(value.trim().to_string()),
+        Some(Value::Number(value)) => Some(value.to_string()),
+        _ => None,
+    };
+    let desc = quote
+        .get("desc")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let sender_nick = quote
+        .get("sender_nickname")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let sender = if !sender_nick.is_empty() {
+        sender_nick.to_string()
+    } else {
+        quote
+            .get("sender_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let quote_text = if desc.is_empty() {
+        None
+    } else if sender.is_empty() {
+        Some(desc)
+    } else {
+        Some(format!("{sender}: {desc}"))
+    };
+    (quote_id, quote_text)
+}
+
+/// hermes `_YB_RES_REF_RE` scan — `(rid, kind, filename)` tuples for
+/// every resolvable `[kind|ybres:RID]` anchor in the text (voice
+/// anchors are excluded by `RESOLVABLE_MEDIA_KINDS`).
+pub fn ybres_refs_from_text(text: &str) -> Vec<(String, String, String)> {
+    let Ok(re) = regex::Regex::new(r"\[(image|voice|video|file(?::[^|\]]*)?)\|ybres:([A-Za-z0-9_\-]+)\]")
+    else {
+        return Vec::new();
+    };
+    let mut refs = Vec::new();
+    for capture in re.captures_iter(text) {
+        let head = capture.get(1).map(|g| g.as_str()).unwrap_or("");
+        let rid = capture.get(2).map(|g| g.as_str()).unwrap_or("");
+        if rid.is_empty() {
+            continue;
+        }
+        let (kind, filename) = match head.split_once(':') {
+            Some((kind, name)) => (kind.trim(), name.trim().to_string()),
+            None => (head.trim(), String::new()),
+        };
+        if !RESOLVABLE_MEDIA_KINDS.contains(&kind) {
+            continue;
+        }
+        refs.push((rid.to_string(), kind.to_string(), filename));
+    }
+    refs
+}
+
+/// hermes `_YB_LOCAL_MEDIA_RE` + `_collect_quote_local_media` —
+/// already-local `[kind: /path]` / `[file: name → /path]` anchors
+/// (patched on the original turn) whose paths still exist. No
+/// re-download: unresolved anchors belong to `ybres_refs_from_text`.
+pub fn local_media_from_text(text: &str) -> Vec<(std::path::PathBuf, String)> {
+    let Ok(re) = regex::Regex::new(r"\[(\w+):[^\]]*?(/[^\]]+?)\s*\]") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for capture in re.captures_iter(text) {
+        let kind = capture.get(1).map(|g| g.as_str()).unwrap_or("").to_lowercase();
+        let path_str = capture.get(2).map(|g| g.as_str()).unwrap_or("").trim();
+        if path_str.is_empty() {
+            continue;
+        }
+        let path = std::path::PathBuf::from(path_str);
+        if !path.exists() {
+            continue;
+        }
+        if !seen.insert(path.to_string_lossy().to_string()) {
+            continue;
+        }
+        let mime = crate::media_cache::mime_for_ext(&path);
+        let mime = if mime == "application/octet-stream" && kind == "image" {
+            "image/jpeg".to_string()
+        } else {
+            mime
+        };
+        out.push((path, mime));
+    }
+    out
+}
+
+/// Adapter-side message-content cache (hermes `_msg_content_cache`):
+/// msg_id → patched text, FIFO-capped at 200 entries. ulnclaw
+/// transcripts carry no platform message ids, so quote lookup rides
+/// this cache instead of the hermes transcript scan.
+fn msg_content_cache() -> &'static Mutex<std::collections::VecDeque<(String, String)>> {
+    static CACHE: std::sync::OnceLock<Mutex<std::collections::VecDeque<(String, String)>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(std::collections::VecDeque::new()))
+}
+
+fn msg_content_cache_get(msg_id: &str) -> Option<String> {
+    let cache = msg_content_cache().lock().unwrap();
+    cache
+        .iter()
+        .find(|(id, _)| id == msg_id)
+        .map(|(_, content)| content.clone())
+}
+
+fn msg_content_cache_put(msg_id: &str, content: &str) {
+    let mut cache = msg_content_cache().lock().unwrap();
+    if let Some(entry) = cache.iter_mut().find(|(id, _)| id == msg_id) {
+        entry.1 = content.to_string();
+        return;
+    }
+    cache.push_back((msg_id.to_string(), content.to_string()));
+    while cache.len() > MSG_CONTENT_CACHE_MAX {
+        cache.pop_front();
+    }
+}
+
+/// Per-group observed-media buffer (hermes transcript window feeding
+/// `_collect_observed_media`): one entry per inbound group message —
+/// the message's `(rid, kind, name)` refs — capped at the lookback
+/// window.
+fn observed_media_buffer()
+-> &'static Mutex<HashMap<String, std::collections::VecDeque<Vec<(String, String, String)>>>> {
+    static BUFFER: std::sync::OnceLock<
+        Mutex<HashMap<String, std::collections::VecDeque<Vec<(String, String, String)>>>>,
+    > = std::sync::OnceLock::new();
+    BUFFER.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn record_observed(chat_id: &str, refs: &[MediaRef]) {
+    let entries: Vec<(String, String, String)> = refs
+        .iter()
+        .map(|r| {
+            (
+                parse_resource_id(&r.url),
+                r.kind.to_string(),
+                r.name.clone(),
+            )
+        })
+        .filter(|(rid, _, _)| !rid.is_empty())
+        .collect();
+    let mut buffer = observed_media_buffer().lock().unwrap();
+    let queue = buffer.entry(chat_id.to_string()).or_default();
+    queue.push_back(entries);
+    while queue.len() > OBSERVED_MEDIA_BACKFILL_LOOKBACK {
+        queue.pop_front();
+    }
+}
+
+/// hermes `_collect_observed_media` walk: newest message first (inner
+/// matches reversed too) so the per-turn cap keeps the *latest* media,
+/// deduped by rid, then restored to chronological order.
+fn collect_observed_refs(chat_id: &str) -> Vec<(String, String, String)> {
+    let buffer = observed_media_buffer().lock().unwrap();
+    let Some(queue) = buffer.get(chat_id) else {
+        return Vec::new();
+    };
+    let mut order: Vec<(String, String, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    'outer: for message_refs in queue.iter().rev() {
+        for (rid, kind, name) in message_refs.iter().rev() {
+            if !RESOLVABLE_MEDIA_KINDS.contains(&kind.as_str()) {
+                continue;
+            }
+            if !seen.insert(rid.clone()) {
+                continue;
+            }
+            order.push((rid.clone(), kind.clone(), name.clone()));
+            if order.len() >= OBSERVED_MEDIA_BACKFILL_MAX_RESOLVE_PER_TURN {
+                break 'outer;
+            }
+        }
+    }
+    order.reverse();
+    order
+}
+
+/// Map a runtime kind back to the `&'static str` `MediaRef` expects.
+fn static_media_kind(kind: &str) -> &'static str {
+    match kind {
+        "image" => "image",
+        "video" => "video",
+        "voice" => "voice",
+        _ => "file",
+    }
+}
+
+/// hermes `_resolve_ybres_refs` — resolve backfill `(rid, kind, name)`
+/// tuples through the resource cache / download pipeline, skipping rids
+/// already covered by the current message's own refs.
+async fn resolve_backfill_refs(
+    runner: &Arc<Runner>,
+    refs: Vec<(String, String, String)>,
+    seen_rids: &mut std::collections::HashSet<String>,
+) -> Vec<crate::messaging::MediaAttachment> {
+    let mut out = Vec::new();
+    for (rid, kind, filename) in refs {
+        if !seen_rids.insert(rid.clone()) {
+            continue;
+        }
+        if let Some(cached) = resource_cache_get(&rid) {
+            out.push(cached);
+            continue;
+        }
+        let fetch_url = match fetch_resource_url(runner, &rid).await {
+            Ok(url) => url,
+            Err(e) => {
+                eprintln!("[yuanbao] backfill resource resolve failed rid={rid}: {e}");
+                continue;
+            }
+        };
+        let reference = MediaRef {
+            kind: static_media_kind(&kind),
+            url: String::new(),
+            name: filename,
+        };
+        if let Some(attachment) = download_and_cache_media(&fetch_url, &reference, &rid).await {
+            out.push(attachment);
+        }
+    }
+    out
+}
+
+/// hermes run.py reply-to pointer injection: `[Replying to: "..."]`
+/// prefix (snippet capped at 500 chars) when both the quote id and
+/// text are present. The "replying to your own message" variant is not
+/// ported (ulnclaw does not track the bot's platform message ids).
+pub fn render_reply_to_prefix(text: &str, quote_id: Option<&str>, quote_text: Option<&str>) -> String {
+    let (Some(_), Some(quote_text)) = (quote_id, quote_text) else {
+        return text.to_string();
+    };
+    if quote_text.trim().is_empty() {
+        return text.to_string();
+    }
+    let snippet: String = quote_text.chars().take(QUOTE_SNIPPET_MAX_CHARS).collect();
+    format!("[Replying to: \"{snippet}\"]\n\n{text}")
 }
 
 // ---------------------------------------------------------------------------
@@ -2423,5 +2766,137 @@ mod tests {
         std::fs::remove_file(&file_path).unwrap();
         // Cached file vanished on disk → entry invalidated.
         assert!(resource_cache_get("invalidate-me").is_none());
+    }
+
+    #[test]
+    fn quote_context_extraction_variants() {
+        // Full quote: id + sender nickname + desc.
+        let data = r#"{"quote": {"id": "msg-123", "desc": "look at this", "sender_nickname": "Alice"}}"#;
+        assert_eq!(
+            extract_quote_context(data),
+            (Some("msg-123".to_string()), Some("Alice: look at this".to_string()))
+        );
+        // sender_id fallback, no nickname.
+        let data = r#"{"quote": {"id": 42, "desc": "hi", "sender_id": "u9"}}"#;
+        assert_eq!(
+            extract_quote_context(data),
+            (Some("42".to_string()), Some("u9: hi".to_string()))
+        );
+        // Desc only (no sender).
+        let data = r#"{"quote": {"id": "m1", "desc": "bare"}}"#;
+        assert_eq!(
+            extract_quote_context(data),
+            (Some("m1".to_string()), Some("bare".to_string()))
+        );
+        // Id without desc → no quote text.
+        assert_eq!(
+            extract_quote_context(r#"{"quote": {"id": "m2"}}"#),
+            (Some("m2".to_string()), None)
+        );
+        // No quote object / malformed JSON / empty → (None, None).
+        assert_eq!(extract_quote_context(r#"{"other": 1}"#), (None, None));
+        assert_eq!(extract_quote_context("not json"), (None, None));
+        assert_eq!(extract_quote_context(""), (None, None));
+    }
+
+    #[test]
+    fn ybres_refs_extraction_filters_kinds() {
+        let text = "pic [image|ybres:rid-1] doc [file:report.pdf|ybres:rid_2] \
+                    clip [video|ybres:rid-3] note [voice|ybres:rid-4] bare [image]";
+        let refs = ybres_refs_from_text(text);
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[0], ("rid-1".to_string(), "image".to_string(), String::new()));
+        assert_eq!(refs[1], ("rid_2".to_string(), "file".to_string(), "report.pdf".to_string()));
+        assert_eq!(refs[2], ("rid-3".to_string(), "video".to_string(), String::new()));
+        assert!(ybres_refs_from_text("no anchors here").is_empty());
+    }
+
+    #[test]
+    fn local_media_extraction_uses_existing_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("pic.jpg");
+        let file = dir.path().join("report.pdf");
+        std::fs::write(&image, b"img").unwrap();
+        std::fs::write(&file, b"doc").unwrap();
+        let text = format!(
+            "[image: {}] [file: report.pdf → {}] [image: /does/not/exist.png] [image: {}]",
+            image.display(),
+            file.display(),
+            image.display()
+        );
+        let found = local_media_from_text(&text);
+        // Missing path filtered; duplicate path deduped.
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].0, image);
+        assert!(found[0].1.starts_with("image/"));
+        assert_eq!(found[1].0, file);
+        assert_eq!(found[1].1, "application/pdf");
+    }
+
+    #[test]
+    fn msg_content_cache_fifo_and_update() {
+        let prefix = format!("p209-cache-{}", std::process::id());
+        for i in 0..MSG_CONTENT_CACHE_MAX {
+            msg_content_cache_put(&format!("{prefix}-{i}"), &format!("content-{i}"));
+        }
+        assert_eq!(
+            msg_content_cache_get(&format!("{prefix}-0")),
+            Some("content-0".to_string())
+        );
+        // One more entry evicts the oldest.
+        msg_content_cache_put(&format!("{prefix}-new"), "newest");
+        assert_eq!(msg_content_cache_get(&format!("{prefix}-0")), None);
+        assert_eq!(
+            msg_content_cache_get(&format!("{prefix}-{}", MSG_CONTENT_CACHE_MAX - 1)),
+            Some(format!("content-{}", MSG_CONTENT_CACHE_MAX - 1))
+        );
+        assert_eq!(msg_content_cache_get(&format!("{prefix}-new")), Some("newest".to_string()));
+        // Update in place keeps the entry.
+        msg_content_cache_put(&format!("{prefix}-new"), "updated");
+        assert_eq!(msg_content_cache_get(&format!("{prefix}-new")), Some("updated".to_string()));
+    }
+
+    #[test]
+    fn observed_backfill_window_dedup_cap_and_order() {
+        let chat = format!("p209-group-{}", std::process::id());
+        let mk = |kind: &str, rid: &str, name: &str| MediaRef {
+            kind: match kind {
+                "image" => "image",
+                "video" => "video",
+                "voice" => "voice",
+                _ => "file",
+            },
+            url: format!("https://example.com/r?resourceId={rid}"),
+            name: name.to_string(),
+        };
+        // Three messages: oldest has rid-a (image) + rid-b (file); middle
+        // re-sends rid-a plus rid-c (voice — unresolvable); newest rid-d.
+        record_observed(&chat, &[mk("image", "rid-a", ""), mk("file", "rid-b", "b.pdf")]);
+        record_observed(&chat, &[mk("image", "rid-a", ""), mk("voice", "rid-c", "")]);
+        record_observed(&chat, &[mk("video", "rid-d", "")]);
+        let refs = collect_observed_refs(&chat);
+        // Newest-first walk discovers rid-d, then rid-a (via the middle
+        // message, deduping its older copy), then rid-b; voice rid-c is
+        // dropped. Reversing yields the hermes order: rid-b, rid-a, rid-d.
+        let rids: Vec<&str> = refs.iter().map(|(rid, _, _)| rid.as_str()).collect();
+        assert_eq!(rids, vec!["rid-b", "rid-a", "rid-d"]);
+        assert_eq!(refs[0].2, "b.pdf");
+        // Unknown chats yield nothing.
+        assert!(collect_observed_refs("p209-unknown-group").is_empty());
+    }
+
+    #[test]
+    fn reply_to_prefix_rendering() {
+        let text = render_reply_to_prefix("hello", Some("m1"), Some("quoted words"));
+        assert_eq!(text, "[Replying to: \"quoted words\"]\n\nhello");
+        // Missing id or text → unchanged; blank text → unchanged.
+        assert_eq!(render_reply_to_prefix("hello", None, Some("q")), "hello");
+        assert_eq!(render_reply_to_prefix("hello", Some("m1"), None), "hello");
+        assert_eq!(render_reply_to_prefix("hello", Some("m1"), Some("  ")), "hello");
+        // Snippet truncates at 500 chars.
+        let long = "x".repeat(600);
+        let rendered = render_reply_to_prefix("hi", Some("m1"), Some(&long));
+        assert!(rendered.contains(&"x".repeat(500)));
+        assert!(!rendered.contains(&"x".repeat(501)));
     }
 }
