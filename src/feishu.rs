@@ -50,10 +50,11 @@
 //! hermes in-memory approval state. Read receipts
 //! (`im.message.message_read_v1`) are explicitly ignored (hermes
 //! `_on_message_read_event`). Known differences: post/card
-//! deep-normalization, non-approval card actions (synthetic COMMAND
-//! routing), per-chat serial queues, and the webhook anomaly tracker
-//! are not ported — text/image/file/audio messages flow through the
-//! same allowlist∪pairing gate as the other adapters.
+//! deep-normalization, per-chat serial queues, and the webhook anomaly
+//! tracker are not ported (non-approval card actions ARE ported: they
+//! route as `/card <tag> <json>` synthetic COMMAND events) —
+//! text/image/file/audio messages flow through the same
+//! allowlist∪pairing gate as the other adapters.
 
 use crate::messaging::{Dispatcher, MediaAttachment, MessageEvent};
 use serde::{Deserialize, Serialize};
@@ -831,7 +832,7 @@ pub async fn feishu_handle_webhook(
     // `action` + `operator` (token-gated above). Handled inline so the
     // response body can carry the resolved card (all clients update).
     if payload.get("action").map(|v| v.is_object()).unwrap_or(false) {
-        let response = handle_card_action(cfg, pairing, &payload).await;
+        let response = handle_card_action(cfg, dispatcher, pairing, &payload).await;
         return FeishuWebhookResponse {
             status: 200,
             body: response,
@@ -1451,6 +1452,52 @@ fn write_update_response(answer: &str, operator: &str) {
     }
 }
 
+/// hermes `_FEISHU_CARD_ACTION_DEDUP_TTL_SECONDS` — card action token
+/// dedup window.
+const CARD_ACTION_DEDUP_TTL_SECS: u64 = 15 * 60;
+
+/// hermes `_is_card_action_duplicate` — True when the token was already
+/// processed within the dedup window (expired entries are pruned on
+/// every call). Empty tokens are never deduped.
+fn card_action_token_seen(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    // std Mutex: `tokio::sync::Mutex::blocking_lock` panics inside the
+    // async runtime that drives the webhook handler.
+    static TOKENS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    > = std::sync::OnceLock::new();
+    let lock = TOKENS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut map = lock.lock().unwrap();
+    let now = std::time::Instant::now();
+    map.retain(|_, seen_at| now.duration_since(*seen_at).as_secs() <= CARD_ACTION_DEDUP_TTL_SECS);
+    if map.contains_key(token) {
+        return true;
+    }
+    map.insert(token.to_string(), now);
+    false
+}
+
+/// hermes `_handle_card_action_event` synthetic text: `/card <tag>`
+/// plus the action value as compact JSON when non-empty (ensure_ascii=False
+/// parity — serde never escapes UTF-8; key order sorts, unlike hermes
+/// insertion order).
+fn card_action_synthetic_text(action_tag: &str, action_value: &Value) -> String {
+    let mut text = format!("/card {action_tag}");
+    let non_empty_object = action_value
+        .as_object()
+        .map(|object| !object.is_empty())
+        .unwrap_or(false);
+    if non_empty_object {
+        if let Ok(rendered) = serde_json::to_string(action_value) {
+            text.push(' ');
+            text.push_str(&rendered);
+        }
+    }
+    text
+}
+
 /// hermes `_on_card_action_trigger` + `_handle_approval_card_action` /
 /// `_handle_update_prompt_card_action`. Webhook transport only — the
 /// lark SDK WebSocket client drops CARD frames, so card actions cannot
@@ -1459,6 +1506,7 @@ fn write_update_response(answer: &str, operator: &str) {
 /// resolved card for handled clicks, `{}` otherwise.
 pub(crate) async fn handle_card_action(
     cfg: &FeishuConfig,
+    dispatcher: &Arc<Dispatcher>,
     pairing: Option<&crate::pairing::PairingStore>,
     payload: &Value,
 ) -> Value {
@@ -1535,8 +1583,83 @@ pub(crate) async fn handle_card_action(
         });
     }
 
-    // Non-approval card actions: hermes routes them as synthetic COMMAND
-    // events (`_handle_card_action_event`) — not ported.
+    // Non-approval card actions: hermes `_handle_card_action_event`
+    // routes them as synthetic COMMAND events through the normal intake
+    // pipeline.
+    let token = payload
+        .get("token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !token.is_empty() && card_action_token_seen(&token) {
+        return json!({});
+    }
+    if operator.is_empty() || callback_chat_id.is_empty() {
+        return json!({});
+    }
+    let resolved = cfg.resolve();
+    let authorized = resolved.allowed_users.iter().any(|u| u == "*" || *u == operator)
+        || pairing
+            .map(|store| store.is_approved("feishu", &operator))
+            .unwrap_or(false);
+    if !authorized {
+        eprintln!("[feishu] rejected unauthorized card action command (operator={operator})");
+        return json!({});
+    }
+    let action_tag = payload
+        .pointer("/action/tag")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("button")
+        .to_string();
+    let synthetic_text = card_action_synthetic_text(&action_tag, &action_value);
+    let message_id = if token.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        token.clone()
+    };
+    let mut msg_event = MessageEvent {
+        platform: "feishu".into(),
+        chat_id: callback_chat_id.clone(),
+        sender_id: operator.clone(),
+        sender_name: operator.clone(),
+        text: synthetic_text,
+        message_id,
+        attachments: Vec::new(),
+    };
+    let dispatcher = dispatcher.clone();
+    let chat_id = callback_chat_id.clone();
+    let cfg = cfg.clone();
+    // hermes submits the handler on the loop and responds immediately —
+    // the dispatch runs detached so the webhook returns `{}` at once.
+    tokio::spawn(async move {
+        if !crate::messaging::pre_gateway_dispatch_gate_public(&mut msg_event).await {
+            return;
+        }
+        let api = feishu_api(&cfg);
+        let outcome = match dispatcher.handle_event(msg_event).await {
+            Ok(o) => o,
+            Err(e) => crate::messaging::DispatchOutcome {
+                reply: format!("error: {e}"),
+                transcript_echoes: Vec::new(),
+            },
+        };
+        let mut full = String::new();
+        for echo in &outcome.transcript_echoes {
+            full.push_str(echo);
+            full.push('\n');
+        }
+        full.push_str(&outcome.reply);
+        let (reply_text, _media_paths) = crate::messaging::extract_media_tags(&full);
+        if !reply_text.trim().is_empty() {
+            if let Err(e) = api.send_text(&chat_id, &reply_text).await {
+                eprintln!("[feishu] card action reply failed: {e}");
+            }
+        }
+    });
+    eprintln!(
+        "[feishu] routing card action {action_tag:?} from {operator} in {callback_chat_id} as synthetic command"
+    );
     json!({})
 }
 
@@ -1920,5 +2043,69 @@ mod tests {
         let resp = feishu_handle_webhook(&cfg, &dummy_dispatcher().await, None, body, &[]).await;
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body["code"], 0);
+    }
+
+    #[test]
+    fn card_action_token_dedup_window() {
+        let token = format!("p210-token-{}", uuid::Uuid::new_v4().simple());
+        assert!(!card_action_token_seen(&token));
+        assert!(card_action_token_seen(&token));
+        let other = format!("p210-other-{}", uuid::Uuid::new_v4().simple());
+        assert!(!card_action_token_seen(&other));
+        // Empty tokens are never deduped (hermes `if not token: return False`).
+        assert!(!card_action_token_seen(""));
+        assert!(!card_action_token_seen(""));
+    }
+
+    #[test]
+    fn card_action_synthetic_text_formatting() {
+        // No value → bare command.
+        assert_eq!(card_action_synthetic_text("button", &json!({})), "/card button");
+        // Non-empty value rides as compact JSON; UTF-8 stays raw
+        // (ensure_ascii=False parity); serde_json keys sort.
+        let value = json!({"choice": "选项A", "action": "go"});
+        assert_eq!(
+            card_action_synthetic_text("button", &value),
+            "/card button {\"action\":\"go\",\"choice\":\"选项A\"}"
+        );
+        assert_eq!(
+            card_action_synthetic_text("select_static", &json!({})),
+            "/card select_static"
+        );
+    }
+
+    // multi_thread flavor: the routing path builds the process-wide API
+    // handle via a blocking lock, which needs block_in_place support.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn card_action_command_routing_gates() {
+        let dispatcher = dummy_dispatcher().await;
+        // Unauthorized operator (no allowlist, no pairing) → {} and no dispatch.
+        let cfg = FeishuConfig::default();
+        let payload = json!({
+            "token": format!("p210-unauth-{}", uuid::Uuid::new_v4().simple()),
+            "action": {"tag": "button", "value": {"custom": "x"}},
+            "operator": {"open_id": "ou_stranger"},
+            "context": {"open_chat_id": "oc_1"},
+        });
+        assert_eq!(handle_card_action(&cfg, &dispatcher, None, &payload).await, json!({}));
+        // Authorized (wildcard) → {} response; the synthetic command
+        // dispatch runs detached.
+        let wildcard = FeishuConfig { allowed_users: vec!["*".into()], ..Default::default() };
+        let payload = json!({
+            "token": format!("p210-auth-{}", uuid::Uuid::new_v4().simple()),
+            "action": {"tag": "button", "value": {"custom": "x"}},
+            "operator": {"open_id": "ou_user"},
+            "context": {"open_chat_id": "oc_1"},
+        });
+        assert_eq!(handle_card_action(&wildcard, &dispatcher, None, &payload).await, json!({}));
+        // Duplicate token is dropped (still {}).
+        assert_eq!(handle_card_action(&wildcard, &dispatcher, None, &payload).await, json!({}));
+        // Missing operator → {} (dropped before gating).
+        let incomplete = json!({
+            "action": {"tag": "button", "value": {}},
+            "operator": {"open_id": ""},
+            "context": {"open_chat_id": "oc_1"},
+        });
+        assert_eq!(handle_card_action(&wildcard, &dispatcher, None, &incomplete).await, json!({}));
     }
 }
