@@ -99,6 +99,17 @@ pub struct MessagingConfig {
     /// `platforms.whatsapp` plugin, bridge-client transport).
     #[serde(default)]
     pub whatsapp: crate::whatsapp::WhatsappConfig,
+    /// IRC via a zero-dependency TLS client (hermes `platforms.irc`
+    /// plugin).
+    #[serde(default)]
+    pub irc: crate::irc::IrcConfig,
+    /// ntfy topics via HTTP streaming (hermes `platforms.ntfy` plugin).
+    #[serde(default)]
+    pub ntfy: crate::ntfy::NtfyConfig,
+    /// SimpleX via the simplex-chat daemon WS API (hermes
+    /// `platforms.simplex` plugin).
+    #[serde(default)]
+    pub simplex: crate::simplex::SimplexConfig,
 }
 
 fn default_pairing() -> bool {
@@ -833,8 +844,32 @@ pub async fn run_messaging(
             crate::whatsapp::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.irc.enabled {
+        let cfg = msg.irc.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::irc::run(cfg, dispatcher, pairing).await;
+        }));
+    }
+    if msg.ntfy.enabled {
+        let cfg = msg.ntfy.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::ntfy::run(cfg, dispatcher, pairing).await;
+        }));
+    }
+    if msg.simplex.enabled {
+        let cfg = msg.simplex.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::simplex::run(cfg, dispatcher, pairing).await;
+        }));
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp] enabled = true (sms rides the gateway /webhooks/twilio route))");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex] enabled = true (sms rides the gateway /webhooks/twilio route))");
         return;
     }
     for task in tasks {

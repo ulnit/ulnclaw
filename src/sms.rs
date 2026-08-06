@@ -167,6 +167,11 @@ pub fn strip_markdown(message: &str) -> String {
     out.trim().to_string()
 }
 
+/// Public wrapper for cross-adapter reuse (IRC markdown stripping).
+pub fn strip_paired_pub(input: &str, mark: &str) -> String {
+    strip_paired(input, mark)
+}
+
 /// Remove `MARK text MARK` pairs, keeping the inner text (non-greedy,
 /// DOTALL — mirrors hermes `re.sub(r"\*\*(.+?)\*\*", r"\1", flags=DOTALL)`).
 fn strip_paired(input: &str, mark: &str) -> String {
