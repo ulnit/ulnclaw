@@ -26,9 +26,17 @@
 //! subscribes per channel (`kinds=[9]`, `#h`, `since` resume from the
 //! last observed timestamp) plus the kind-44100 membership feed, and
 //! routes events through the same `handle_event` machinery as polling.
-//! Reconnects with 1→30 s backoff. Dynamic DM rediscovery from
-//! membership events is not ported (channels are explicit operator
-//! configuration here); npub bech32 pubkeys are not converted.
+//! Reconnects with 1→30 s backoff.
+//!
+//! DM discovery mirrors hermes: startup seeds every watched
+//! conversation's high-water mark (history never replays) and runs
+//! `dms list` + `channels list` discovery (`_discover_dms`); mid-run,
+//! kind-44100 membership events p-tagged to us advance the subscribe
+//! cursor and rediscover new DM conversations, subscribing the WS to
+//! each (poll transport rediscovers every fifth sweep). Conversations
+//! that leak in via `channels list` named "DM" start as groups and
+//! latch to DM on the first p-tagged un-mentioned message (hermes
+//! issue #68871 classifier). npub bech32 pubkeys are not converted.
 
 use crate::messaging::{Dispatcher, MessageEvent};
 use serde::{Deserialize, Serialize};
@@ -55,6 +63,8 @@ const WS_AUTH_TIMEOUT: Duration = Duration::from_secs(20);
 const WS_MEMBERSHIP_KIND: u64 = 44100;
 /// hermes `_WS_MEMBERSHIP_SUB_ID`.
 const WS_MEMBERSHIP_SUB_ID: &str = "hermes-buzz-membership";
+/// hermes `_DM_DISCOVERY_EVERY` — poll sweeps between DM rediscovery.
+const DM_DISCOVERY_EVERY: u64 = 5;
 /// hermes reconnect backoff ceiling (30 s).
 const WS_MAX_BACKOFF_SECS: f64 = 30.0;
 /// Post-dispatch "seen" tapback (hermes 👀 reaction after
@@ -309,19 +319,30 @@ pub fn parse_json_list(out: &str) -> Vec<Value> {
     serde_json::from_str(trimmed).unwrap_or_else(|_| Vec::new())
 }
 
+/// Conversation classification (hermes per-state `chat_type`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatType {
+    /// Community channel — mention-gated (hermes `group`).
+    Group,
+    /// Direct message — always dispatches (hermes `dm`).
+    Dm,
+}
+
 /// Per-channel poll state (hermes `_channel_state`).
 struct ChannelState {
     seen: VecDeque<String>,
     seen_set: HashSet<String>,
     last_ts: i64,
+    chat_type: ChatType,
 }
 
 impl ChannelState {
-    fn new() -> Self {
+    fn new(chat_type: ChatType) -> Self {
         Self {
             seen: VecDeque::new(),
             seen_set: HashSet::new(),
             last_ts: 0,
+            chat_type,
         }
     }
 
@@ -339,6 +360,99 @@ impl ChannelState {
         }
         true
     }
+}
+
+/// hermes `_may_reclassify_as_dm` — true when the conversation's
+/// metadata does not rule out a DM. Known real community channels (real
+/// name or non-empty description in `channels list`) never turn into
+/// DMs just because a message p-tags us; a conversation with no
+/// metadata at all is trusted only when the operator did not explicitly
+/// configure it as a watched channel.
+fn may_reclassify_as_dm(
+    cfg: &ResolvedBuzz,
+    meta: &HashMap<String, Value>,
+    channel_id: &str,
+) -> bool {
+    match meta.get(channel_id) {
+        None => !cfg
+            .channels
+            .iter()
+            .any(|c| c == channel_id || c.trim_start_matches("dm:") == channel_id),
+        Some(entry) => {
+            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let description = entry
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            name == "DM" && description.is_empty()
+        }
+    }
+}
+
+/// hermes `_is_direct_message_event` — shaped like a direct message to
+/// us: a chat message from another user, p-tagged to our pubkey, whose
+/// content does NOT visibly mention us (the p-tag is structural DM
+/// addressing, not the artifact of a typed @mention).
+fn is_direct_message_event(
+    cfg: &ResolvedBuzz,
+    meta: &HashMap<String, Value>,
+    channel_id: &str,
+    event: &Value,
+) -> bool {
+    if cfg.self_pubkey.is_empty() || !may_reclassify_as_dm(cfg, meta, channel_id) {
+        return false;
+    }
+    if event.get("kind").and_then(|v| v.as_u64()).unwrap_or(0) != CHAT_KIND {
+        return false;
+    }
+    let pubkey = event
+        .get("pubkey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if pubkey.is_empty() || pubkey == cfg.self_pubkey {
+        return false;
+    }
+    let Some(tags) = event.get("tags").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    let p_tagged_to_self = tags.iter().any(|tag| {
+        tag.as_array()
+            .map(|parts| {
+                parts.len() > 1
+                    && parts[0].as_str() == Some("p")
+                    && parts[1]
+                        .as_str()
+                        .map(|t| t.to_lowercase() == cfg.self_pubkey)
+                        .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    });
+    if !p_tagged_to_self {
+        return false;
+    }
+    match event.get("content").and_then(|v| v.as_str()) {
+        Some(content) => !is_mentioned(content, &cfg.self_pubkey),
+        None => false,
+    }
+}
+
+/// hermes `_maybe_latch_dm` — latch a group conversation to DM once any
+/// direct message is seen; the classification then sticks so later
+/// un-mentioned messages in the conversation dispatch too.
+fn maybe_latch_dm(
+    cfg: &ResolvedBuzz,
+    meta: &HashMap<String, Value>,
+    channel_id: &str,
+    state: &mut ChannelState,
+    event: &Value,
+) {
+    if state.chat_type == ChatType::Dm || !is_direct_message_event(cfg, meta, channel_id, event) {
+        return;
+    }
+    state.chat_type = ChatType::Dm;
+    eprintln!("[buzz] conversation {channel_id} reclassified as DM (message p-tagged to self)");
 }
 
 /// hermes mention detection: content carries `@<name>` or our pubkey.
@@ -402,6 +516,164 @@ async fn run_cli(cli: &str, args: &[&str], stdin_body: Option<&str>) -> Result<(
     ))
 }
 
+/// Shared runtime conversation registry (hermes `_channel_state` +
+/// `_channel_meta` + `_membership_since` + `_poll_count`) — persists
+/// across WS reconnects and drives poll sweeps.
+struct BuzzRegistry {
+    states: tokio::sync::Mutex<HashMap<String, ChannelState>>,
+    /// `channels list` metadata entries (hermes `_channel_meta`),
+    /// consulted by the DM reclassification guard.
+    meta: std::sync::Mutex<HashMap<String, Value>>,
+    /// hermes `_membership_since` — kind-44100 subscribe cursor
+    /// (advances with each membership event's created_at).
+    membership_since: std::sync::atomic::AtomicU64,
+    /// hermes `_poll_count` — poll sweep counter for periodic DM
+    /// rediscovery.
+    poll_count: std::sync::atomic::AtomicU64,
+}
+
+impl BuzzRegistry {
+    fn new() -> Self {
+        Self {
+            states: tokio::sync::Mutex::new(HashMap::new()),
+            meta: std::sync::Mutex::new(HashMap::new()),
+            membership_since: std::sync::atomic::AtomicU64::new(0),
+            poll_count: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// hermes `_membership_since` advance (never moves backwards).
+    fn advance_membership(&self, created_at: u64) {
+        self.membership_since
+            .fetch_max(created_at, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Snapshot of watched conversation ids (hermes iterates
+    /// `_channel_state` keys).
+    async fn channel_ids(&self) -> Vec<String> {
+        self.states.lock().await.keys().cloned().collect()
+    }
+}
+
+/// hermes `_seed_channel` — initialize a conversation's high-water mark
+/// from its newest events so a (re)start never replays history into the
+/// agent. History is marked seen, never dispatched; it still classifies
+/// (DM latch).
+async fn seed_channel(
+    cfg: &ResolvedBuzz,
+    registry: &BuzzRegistry,
+    channel_id: &str,
+    chat_type: ChatType,
+) {
+    {
+        let mut states = registry.states.lock().await;
+        states.insert(channel_id.to_string(), ChannelState::new(chat_type));
+    }
+    let limit_str = FETCH_LIMIT.to_string();
+    let result = run_cli(
+        &cfg.cli_path,
+        &["messages", "get", "--channel", channel_id, "--limit", &limit_str],
+        None,
+    )
+    .await;
+    let (code, out) = match result {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[buzz] could not seed channel {channel_id} — {e}");
+            (1, String::new())
+        }
+    };
+    if code != 0 {
+        // Fall back to "now" so a transiently unreadable channel does
+        // not replay its whole history once it becomes readable.
+        let mut states = registry.states.lock().await;
+        if let Some(state) = states.get_mut(channel_id) {
+            state.last_ts = now_secs() as i64;
+        }
+        return;
+    }
+    let meta = registry.meta.lock().unwrap().clone();
+    let mut states = registry.states.lock().await;
+    let Some(state) = states.get_mut(channel_id) else {
+        return;
+    };
+    for event in parse_json_list(&out) {
+        let event_id = event.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let created_at = event.get("created_at").and_then(|v| v.as_i64()).unwrap_or(0);
+        if !event_id.is_empty() {
+            state.remember(event_id);
+        }
+        state.last_ts = state.last_ts.max(created_at);
+        maybe_latch_dm(cfg, &meta, channel_id, state, &event);
+    }
+}
+
+/// hermes `_discover_dms` — watch DM conversations. New ones found
+/// mid-run dispatch from their beginning (a fresh conversation has no
+/// history worth suppressing); ones present at startup are seeded like
+/// channels. `dms list` is only a best-effort source: on some hosted
+/// relays it returns `[]` even when DM conversations exist — those DMs
+/// DO surface in `channels list` as entries named "DM" with an empty
+/// description, so that listing is scanned as a fallback (watched as
+/// groups; they latch to DM via p-tag detection rather than trusting
+/// the name alone). Returns the newly added conversation ids.
+async fn discover_dms(cfg: &ResolvedBuzz, registry: &BuzzRegistry, seed: bool) -> Vec<String> {
+    let mut added = Vec::new();
+    if let Ok((0, out)) = run_cli(&cfg.cli_path, &["dms", "list"], None).await {
+        for dm in parse_json_list(&out) {
+            let dm_id = dm
+                .get("dm_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if dm_id.is_empty() || registry.states.lock().await.contains_key(&dm_id) {
+                continue;
+            }
+            if seed {
+                seed_channel(cfg, registry, &dm_id, ChatType::Dm).await;
+            } else {
+                registry
+                    .states
+                    .lock()
+                    .await
+                    .insert(dm_id.clone(), ChannelState::new(ChatType::Dm));
+            }
+            added.push(dm_id);
+        }
+    }
+    let listed = match run_cli(&cfg.cli_path, &["channels", "list"], None).await {
+        Ok((0, out)) => parse_json_list(&out),
+        _ => return added,
+    };
+    for ch in listed {
+        let ch_id = ch
+            .get("channel_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if ch_id.is_empty() {
+            continue;
+        }
+        registry.meta.lock().unwrap().insert(ch_id.clone(), ch);
+        let known = registry.states.lock().await.contains_key(&ch_id);
+        let reclassifiable = may_reclassify_as_dm(cfg, &registry.meta.lock().unwrap(), &ch_id);
+        if known || !reclassifiable {
+            continue;
+        }
+        if seed {
+            seed_channel(cfg, registry, &ch_id, ChatType::Group).await;
+        } else {
+            registry
+                .states
+                .lock()
+                .await
+                .insert(ch_id.clone(), ChannelState::new(ChatType::Group));
+        }
+        added.push(ch_id);
+    }
+    added
+}
+
 /// Entry point spawned by `run_messaging`.
 pub async fn run(
     cfg: BuzzConfig,
@@ -431,6 +703,18 @@ pub async fn run(
             }
         }
     }
+    // Seed high-water marks so a (re)start never replays history, then
+    // discover existing DM conversations (hermes connect()).
+    let registry = Arc::new(BuzzRegistry::new());
+    for channel in resolved.channels.clone() {
+        let chat_type = if channel.starts_with("dm:") {
+            ChatType::Dm
+        } else {
+            ChatType::Group
+        };
+        seed_channel(&resolved, &registry, &channel, chat_type).await;
+    }
+    discover_dms(&resolved, &registry, true).await;
     // Transport selection (hermes connect()).
     if resolved.transport != BuzzTransport::Poll {
         let key = resolve_private_key(&resolved);
@@ -446,6 +730,7 @@ pub async fn run(
                 &ws_url,
                 dispatcher.clone(),
                 pairing.clone(),
+                registry.clone(),
             )
             .await
             {
@@ -454,7 +739,7 @@ pub async fn run(
                         "[buzz] connected to {} as {}, watching {} channel(s) via websocket",
                         resolved.relay_url,
                         &resolved.self_pubkey[..resolved.self_pubkey.len().min(12)],
-                        resolved.channels.len()
+                        registry.states.lock().await.len()
                     );
                     // The WS task owns inbound; park here.
                     std::future::pending::<()>().await;
@@ -483,26 +768,26 @@ pub async fn run(
             }
         }
     }
-    let mut states: HashMap<String, ChannelState> = HashMap::new();
-    for channel in &resolved.channels {
-        states.insert(channel.clone(), ChannelState::new());
-    }
     eprintln!(
         "[buzz] polling {} channel(s) via {} every {}ms",
-        resolved.channels.len(),
+        registry.states.lock().await.len(),
         resolved.cli_path,
         resolved.poll_interval_ms
     );
     loop {
-        for channel in resolved.channels.clone() {
-            poll_channel(&resolved, &dispatcher, &pairing, &channel, states.get_mut(&channel).unwrap())
-                .await;
+        let sweep = registry
+            .poll_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if sweep % DM_DISCOVERY_EVERY == 0 {
+            discover_dms(&resolved, &registry, false).await;
+        }
+        for channel in registry.channel_ids().await {
+            poll_channel(&resolved, &dispatcher, &pairing, &registry, &channel).await;
         }
         tokio::time::sleep(Duration::from_millis(resolved.poll_interval_ms)).await;
     }
 }
-
-type WsStates = Arc<tokio::sync::Mutex<HashMap<String, ChannelState>>>;
 
 /// Start the WS loop and wait for the NIP-42 handshake (hermes
 /// `_start_websocket`): Ok when authenticated within the timeout.
@@ -512,14 +797,10 @@ async fn start_websocket(
     ws_url: &str,
     dispatcher: Arc<Dispatcher>,
     pairing: Option<Arc<crate::pairing::PairingStore>>,
+    registry: Arc<BuzzRegistry>,
 ) -> Result<(), String> {
-    let states: WsStates = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-    {
-        let mut guard = states.lock().await;
-        for channel in &cfg.channels {
-            guard.insert(channel.clone(), ChannelState::new());
-        }
-    }
+    // hermes `_start_websocket`: the membership cursor starts now.
+    registry.advance_membership(now_secs());
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
     let session = WsSession {
         cfg: cfg.clone(),
@@ -527,7 +808,7 @@ async fn start_websocket(
         ws_url: ws_url.to_string(),
         dispatcher,
         pairing,
-        states,
+        registry,
     };
     let handle = tokio::spawn(async move {
         websocket_loop(session, Some(ready_tx)).await;
@@ -552,7 +833,7 @@ struct WsSession {
     ws_url: String,
     dispatcher: Arc<Dispatcher>,
     pairing: Option<Arc<crate::pairing::PairingStore>>,
-    states: WsStates,
+    registry: Arc<BuzzRegistry>,
 }
 
 /// Persistent authenticated subscription with bounded reconnect
@@ -599,28 +880,37 @@ async fn run_ws_session(
         return Err(e);
     }
 
-    // Channel subscriptions (hermes `_subscribe_websocket`).
-    {
-        let states = session.states.lock().await;
-        let now = now_secs() as i64;
-        for (index, channel_id) in session.cfg.channels.iter().enumerate() {
-            let state = states.get(channel_id);
-            let since = (state.map(|s| s.last_ts).unwrap_or(now) - 1).max(0);
-            let request = serde_json::json!([
-                "REQ",
-                format!("hermes-buzz-{index}"),
-                {"kinds": [CHAT_KIND], "#h": [channel_id], "since": since},
-            ]);
-            send_ws(&write, &request.to_string()).await?;
+    // Channel subscriptions (hermes `_subscribe_websocket`): every
+    // watched conversation (configured + discovered at startup) plus
+    // the membership feed for live DM discovery.
+    let mut subscriptions: HashMap<String, String> = HashMap::new();
+    for (index, channel_id) in session.cfg.channels.iter().enumerate() {
+        let subscription_id = format!("hermes-buzz-{index}");
+        send_channel_subscription(&write, &session.registry, &subscription_id, channel_id).await?;
+        subscriptions.insert(subscription_id, channel_id.clone());
+    }
+    for channel_id in session.registry.channel_ids().await {
+        if session.cfg.channels.iter().any(|c| c == &channel_id) {
+            continue;
         }
-        if !session.cfg.self_pubkey.is_empty() {
-            let request = serde_json::json!([
-                "REQ",
-                WS_MEMBERSHIP_SUB_ID,
-                {"kinds": [WS_MEMBERSHIP_KIND], "#p": [session.cfg.self_pubkey], "since": (now - 1).max(0)},
-            ]);
-            send_ws(&write, &request.to_string()).await?;
-        }
+        let subscription_id = format!("hermes-buzz-dm-{}", subscriptions.len());
+        send_channel_subscription(&write, &session.registry, &subscription_id, &channel_id)
+            .await?;
+        subscriptions.insert(subscription_id, channel_id);
+    }
+    if !session.cfg.self_pubkey.is_empty() {
+        let since = (session
+            .registry
+            .membership_since
+            .load(std::sync::atomic::Ordering::SeqCst) as i64
+            - 1)
+            .max(0);
+        let request = serde_json::json!([
+            "REQ",
+            WS_MEMBERSHIP_SUB_ID,
+            {"kinds": [WS_MEMBERSHIP_KIND], "#p": [session.cfg.self_pubkey], "since": since},
+        ]);
+        send_ws(&write, &request.to_string()).await?;
     }
 
     if let Some(tx) = ready_tx {
@@ -641,20 +931,56 @@ async fn run_ws_session(
         }
     });
 
-    let result = event_pump(session, &mut read).await;
+    let result = event_pump(session, &write, &mut read, &mut subscriptions).await;
     ping_task.abort();
     result
 }
 
-async fn send_ws(
-    write: &Arc<tokio::sync::Mutex<futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::Message>>>,
-    text: &str,
-) -> Result<(), String> {
+/// Shared write half of the WS connection (subscription sends, ping
+/// task, event-pump membership resubscribes).
+type WsWriteHalf = Arc<
+    tokio::sync::Mutex<
+        futures::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            tokio_tungstenite::tungstenite::Message,
+        >,
+    >,
+>;
+
+async fn send_ws(write: &WsWriteHalf, text: &str) -> Result<(), String> {
     use futures::SinkExt;
     let mut sink = write.lock().await;
     sink.send(tokio_tungstenite::tungstenite::Message::Text(text.to_string()))
         .await
         .map_err(|e| format!("buzz WS send: {e}"))
+}
+
+/// hermes `_send_channel_subscription` — kind-9 `#h` subscription with
+/// `since` resume from the last observed timestamp (an unset high-water
+/// mark subscribes from now so brand-new conversations do not replay).
+async fn send_channel_subscription(
+    write: &WsWriteHalf,
+    registry: &BuzzRegistry,
+    subscription_id: &str,
+    channel_id: &str,
+) -> Result<(), String> {
+    let since = {
+        let states = registry.states.lock().await;
+        let last = states
+            .get(channel_id)
+            .map(|s| s.last_ts)
+            .filter(|ts| *ts > 0)
+            .unwrap_or(now_secs() as i64);
+        (last - 1).max(0)
+    };
+    let request = serde_json::json!([
+        "REQ",
+        subscription_id,
+        {"kinds": [CHAT_KIND], "#h": [channel_id], "since": since},
+    ]);
+    send_ws(write, &request.to_string()).await
 }
 
 /// NIP-42: answer the relay's AUTH challenge with a signed kind-22242
@@ -741,7 +1067,9 @@ async fn next_text(
 /// Steady-state event pump (hermes `_websocket_loop` inner loop).
 async fn event_pump(
     session: &WsSession,
+    write: &WsWriteHalf,
     read: &mut futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    subscriptions: &mut HashMap<String, String>,
 ) -> Result<(), String> {
     use futures::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
@@ -766,23 +1094,19 @@ async fn event_pump(
                     continue;
                 };
                 if subscription_id == WS_MEMBERSHIP_SUB_ID {
-                    // Membership feed: dynamic DM rediscovery is not
-                    // ported (explicit channel configuration) — events
-                    // are consumed to keep the subscription healthy.
+                    // Membership feed: live DM rediscovery (hermes
+                    // `_handle_membership_event`).
+                    handle_membership_event(session, write, subscriptions, &event).await;
                     continue;
                 }
-                let index: Option<usize> = subscription_id
-                    .strip_prefix("hermes-buzz-")
-                    .and_then(|rest| rest.parse().ok());
-                let Some(channel_id) = index
-                    .and_then(|i| session.cfg.channels.get(i).cloned())
-                else {
+                let Some(channel_id) = subscriptions.get(&subscription_id).cloned() else {
                     continue;
                 };
-                let mut states = session.states.lock().await;
+                let mut states = session.registry.states.lock().await;
                 if let Some(state) = states.get_mut(&channel_id) {
                     handle_event(
                         &session.cfg,
+                        &session.registry,
                         &session.dispatcher,
                         &session.pairing,
                         &channel_id,
@@ -809,6 +1133,34 @@ async fn event_pump(
     Err("buzz WS stream ended".into())
 }
 
+/// hermes `_handle_membership_event` — a membership event p-tagged to
+/// us: advance the resume cursor, rediscover conversations, and
+/// subscribe to any new ones (fresh DMs dispatch from their beginning).
+async fn handle_membership_event(
+    session: &WsSession,
+    write: &WsWriteHalf,
+    subscriptions: &mut HashMap<String, String>,
+    event: &Value,
+) {
+    let created_at = event
+        .get("created_at")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    session.registry.advance_membership(created_at);
+    for channel_id in discover_dms(&session.cfg, &session.registry, false).await {
+        let subscription_id = format!("hermes-buzz-dm-{}", subscriptions.len());
+        subscriptions.insert(subscription_id.clone(), channel_id.clone());
+        if let Err(e) =
+            send_channel_subscription(write, &session.registry, &subscription_id, &channel_id)
+                .await
+        {
+            eprintln!("[buzz] subscribe to new conversation {channel_id}: {e}");
+            continue;
+        }
+        eprintln!("[buzz] subscribed to new conversation {channel_id}");
+    }
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -821,9 +1173,13 @@ async fn poll_channel(
     cfg: &ResolvedBuzz,
     dispatcher: &Arc<Dispatcher>,
     pairing: &Option<Arc<crate::pairing::PairingStore>>,
+    registry: &BuzzRegistry,
     channel_id: &str,
-    state: &mut ChannelState,
 ) {
+    let mut states = registry.states.lock().await;
+    let Some(state) = states.get_mut(channel_id) else {
+        return;
+    };
     let since = state.last_ts.to_string();
     let limit_str = FETCH_LIMIT.to_string();
     let mut args: Vec<&str> = vec!["messages", "get", "--channel", channel_id, "--limit", &limit_str];
@@ -842,12 +1198,13 @@ async fn poll_channel(
         return;
     }
     for event in parse_json_list(&out) {
-        handle_event(cfg, dispatcher, pairing, channel_id, state, &event).await;
+        handle_event(cfg, registry, dispatcher, pairing, channel_id, state, &event).await;
     }
 }
 
 async fn handle_event(
     cfg: &ResolvedBuzz,
+    registry: &BuzzRegistry,
     dispatcher: &Arc<Dispatcher>,
     pairing: &Option<Arc<crate::pairing::PairingStore>>,
     channel_id: &str,
@@ -880,10 +1237,17 @@ async fn handle_event(
     if !cfg.self_pubkey.is_empty() && pubkey == cfg.self_pubkey {
         return;
     }
-    // Channel mention gate (DMs are channels configured as DMs by the
-    // operator via a `dm:` prefix in BUZZ_CHANNELS — hermes latches DMs
-    // dynamically; the port uses explicit configuration).
-    let is_dm = channel_id.starts_with("dm:");
+    // Reclassify a leaked DM before gating so its first un-mentioned
+    // message both latches the conversation and dispatches (hermes
+    // `_maybe_latch_dm`, issue #68871).
+    {
+        let meta = registry.meta.lock().unwrap().clone();
+        maybe_latch_dm(cfg, &meta, channel_id, state, event);
+    }
+    // Channel mention gate: DMs always dispatch (chat_type latched from
+    // discovery/p-tags, or configured via the `dm:` prefix in
+    // BUZZ_CHANNELS).
+    let is_dm = state.chat_type == ChatType::Dm || channel_id.starts_with("dm:");
     if !is_dm && cfg.require_mention && !is_mentioned(&content, &cfg.self_pubkey) {
         return;
     }
@@ -1019,7 +1383,7 @@ mod tests {
 
     #[test]
     fn seen_cap_bounds_dedup_set() {
-        let mut state = ChannelState::new();
+        let mut state = ChannelState::new(ChatType::Group);
         for i in 0..SEEN_CAP + 100 {
             assert!(state.remember(&format!("evt{i}")));
         }
@@ -1166,5 +1530,213 @@ mod tests {
     #[test]
     fn seen_emoji_matches_hermes() {
         assert_eq!(SEEN_EMOJI, "👀");
+    }
+
+    #[test]
+    fn discovery_cadence_matches_hermes() {
+        assert_eq!(DM_DISCOVERY_EVERY, 5);
+    }
+
+    #[test]
+    fn membership_cursor_only_advances() {
+        let registry = BuzzRegistry::new();
+        registry.advance_membership(100);
+        registry.advance_membership(90);
+        assert_eq!(
+            registry
+                .membership_since
+                .load(std::sync::atomic::Ordering::SeqCst),
+            100
+        );
+        registry.advance_membership(120);
+        assert_eq!(
+            registry
+                .membership_since
+                .load(std::sync::atomic::Ordering::SeqCst),
+            120
+        );
+    }
+
+    #[test]
+    fn may_reclassify_as_dm_guard() {
+        let mut cfg = BuzzConfig::default().resolve();
+        cfg.channels = vec!["general".into(), "dm:secret".into()];
+        let mut meta = HashMap::new();
+        // No metadata: unconfigured conversations are trusted...
+        assert!(may_reclassify_as_dm(&cfg, &meta, "some-dm"));
+        // ...explicitly configured ones never reclassify (plain or
+        // dm:-prefixed).
+        assert!(!may_reclassify_as_dm(&cfg, &meta, "general"));
+        assert!(!may_reclassify_as_dm(&cfg, &meta, "secret"));
+        // Metadata: relay-materialized DMs are named "DM" with an empty
+        // description.
+        meta.insert(
+            "dm-ish".into(),
+            serde_json::json!({"name": "DM", "description": ""}),
+        );
+        assert!(may_reclassify_as_dm(&cfg, &meta, "dm-ish"));
+        meta.insert(
+            "real".into(),
+            serde_json::json!({"name": "General", "description": "community"}),
+        );
+        assert!(!may_reclassify_as_dm(&cfg, &meta, "real"));
+        meta.insert(
+            "named".into(),
+            serde_json::json!({"name": "DM", "description": "not empty"}),
+        );
+        assert!(!may_reclassify_as_dm(&cfg, &meta, "named"));
+    }
+
+    #[test]
+    fn direct_message_event_detection() {
+        let mut cfg = BuzzConfig::default().resolve();
+        cfg.self_pubkey = "selfpub".into();
+        let meta = HashMap::new();
+        // Structural p-tag, no visible mention → direct message.
+        let dm_event = serde_json::json!({
+            "id": "e1", "kind": 9, "pubkey": "other",
+            "content": "hello there",
+            "tags": [["p", "SELFPUB"]]
+        });
+        assert!(is_direct_message_event(&cfg, &meta, "conv", &dm_event));
+        // Visible mention → typed @mention artifact, not DM addressing.
+        let mentioned = serde_json::json!({
+            "id": "e2", "kind": 9, "pubkey": "other",
+            "content": "hey selfpub",
+            "tags": [["p", "selfpub"]]
+        });
+        assert!(!is_direct_message_event(&cfg, &meta, "conv", &mentioned));
+        // No p-tag → plain broadcast.
+        let no_tag = serde_json::json!({
+            "id": "e3", "kind": 9, "pubkey": "other",
+            "content": "hi", "tags": []
+        });
+        assert!(!is_direct_message_event(&cfg, &meta, "conv", &no_tag));
+        // Own echo never latches.
+        let own = serde_json::json!({
+            "id": "e4", "kind": 9, "pubkey": "SELFPUB",
+            "content": "hi", "tags": [["p", "selfpub"]]
+        });
+        assert!(!is_direct_message_event(&cfg, &meta, "conv", &own));
+        // Real channel metadata blocks reclassification.
+        let mut real_meta = HashMap::new();
+        real_meta.insert(
+            "conv".into(),
+            serde_json::json!({"name": "General", "description": "x"}),
+        );
+        assert!(!is_direct_message_event(&cfg, &real_meta, "conv", &dm_event));
+    }
+
+    #[test]
+    fn latch_dm_sticks_and_respects_guard() {
+        let mut cfg = BuzzConfig::default().resolve();
+        cfg.self_pubkey = "selfpub".into();
+        let meta = HashMap::new();
+        let mut state = ChannelState::new(ChatType::Group);
+        let event = serde_json::json!({
+            "id": "e1", "kind": 9, "pubkey": "other",
+            "content": "hello", "tags": [["p", "selfpub"]]
+        });
+        maybe_latch_dm(&cfg, &meta, "conv", &mut state, &event);
+        assert_eq!(state.chat_type, ChatType::Dm);
+        // Real channels never latch.
+        let mut real_meta = HashMap::new();
+        real_meta.insert(
+            "chan".into(),
+            serde_json::json!({"name": "General", "description": "x"}),
+        );
+        let mut group = ChannelState::new(ChatType::Group);
+        maybe_latch_dm(&cfg, &real_meta, "chan", &mut group, &event);
+        assert_eq!(group.chat_type, ChatType::Group);
+    }
+
+    #[cfg(unix)]
+    fn write_executable(dir: &std::path::Path, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn discover_dms_finds_new_conversations() {
+        let _guard = crate::models_dev::test_env_lock();
+        std::env::remove_var("BUZZ_CHANNELS");
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = BuzzConfig::default().resolve();
+        cfg.cli_path = write_executable(
+            dir.path(),
+            "buzz-discover.sh",
+            r#"#!/bin/sh
+if [ "$1" = "dms" ]; then
+  echo '[{"dm_id":"dm-conv-1"}]'
+  exit 0
+fi
+if [ "$1" = "channels" ]; then
+  echo '[{"channel_id":"c1","name":"General","description":"community"},{"channel_id":"dm-conv-2","name":"DM","description":""}]'
+  exit 0
+fi
+echo '[]'
+"#,
+        );
+        cfg.channels = vec!["general".into()];
+        let registry = BuzzRegistry::new();
+        let added = discover_dms(&cfg, &registry, false).await;
+        assert_eq!(added, vec!["dm-conv-1".to_string(), "dm-conv-2".to_string()]);
+        {
+            let states = registry.states.lock().await;
+            let dm = states.get("dm-conv-1").unwrap();
+            assert_eq!(dm.chat_type, ChatType::Dm);
+            assert_eq!(dm.last_ts, 0); // fresh: dispatch from beginning
+            let fallback = states.get("dm-conv-2").unwrap();
+            assert_eq!(fallback.chat_type, ChatType::Group);
+            assert!(!states.contains_key("c1")); // real channel, gated out
+        }
+        // Second sweep: nothing new.
+        assert!(discover_dms(&cfg, &registry, false).await.is_empty());
+        // Meta recorded for the reclassification guard.
+        let meta = registry.meta.lock().unwrap();
+        assert!(meta.contains_key("c1"));
+        assert!(meta.contains_key("dm-conv-2"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn seed_channel_marks_history_seen_and_latches() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = BuzzConfig::default().resolve();
+        cfg.cli_path = write_executable(
+            dir.path(),
+            "buzz-seed.sh",
+            r#"#!/bin/sh
+echo '[{"id":"h1","kind":9,"pubkey":"other","content":"old dm","created_at":100,"tags":[["p","selfpub"]]},{"id":"h2","kind":9,"pubkey":"other","content":"older","created_at":90,"tags":[]}]'
+"#,
+        );
+        cfg.self_pubkey = "selfpub".into();
+        cfg.channels = vec!["other-chan".into()];
+        let registry = BuzzRegistry::new();
+        seed_channel(&cfg, &registry, "conv", ChatType::Group).await;
+        let states = registry.states.lock().await;
+        let state = states.get("conv").unwrap();
+        assert_eq!(state.last_ts, 100);
+        // History is seen, never dispatched.
+        assert!(state.seen_set.contains("h1"));
+        assert!(state.seen_set.contains("h2"));
+        // p-tagged history latched the conversation to DM.
+        assert_eq!(state.chat_type, ChatType::Dm);
+    }
+
+    #[tokio::test]
+    async fn seed_channel_falls_back_to_now_on_cli_failure() {
+        let mut cfg = BuzzConfig::default().resolve();
+        cfg.cli_path = "/nonexistent/buzz-cli".into();
+        let registry = BuzzRegistry::new();
+        let before = now_secs() as i64;
+        seed_channel(&cfg, &registry, "conv", ChatType::Group).await;
+        let states = registry.states.lock().await;
+        assert!(states.get("conv").unwrap().last_ts >= before);
     }
 }
