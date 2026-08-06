@@ -32,7 +32,6 @@ skill sync + local OAuth upstream proxy, and a Tauri desktop GUI (`desktop/`).
 - **📐 Blueprints** — skills with a `metadata.hermes.blueprint.schedule` frontmatter become cron jobs (`skills blueprints`, `skills schedule/unschedule`)
 - **🛡️ Skills guard** — `skills scan <name>` runs the `skills-guard-v1` static scanner (119 threat patterns, invisible-unicode + structural checks, source trust levels) before you install or run third-party skills; dangerous skills are blocked even from trusted sources
 - **🔌 MCP client** — stdio JSON-RPC: any MCP server's tools appear as `mcp__<server>__<tool>`; npx/uvx launches get an OSV malware preflight (MAL-* advisories block, fail-open)
-- **🌍 Browser automation** — CDP WebSocket client with a built-in supervisor (auto-launches headless Chrome/Chromium, or point `ULNCLAW_BROWSER_CDP` at your own): accessibility snapshots with element refs, click/type/scroll/press/screenshot/JS evaluate/dialogs
 - **🌐 Browser automation** — 12 `browser_*` tools over a CDP WebSocket client (accessibility snapshots with element refs, click/type/scroll/press, screenshots + vision, console/eval, raw CDP, dialogs); managed headless Chrome (`ULNCLAW_BROWSER_CDP=auto`), any existing DevTools endpoint, or the Camofox anti-detect REST backend (`CAMOFOX_URL`), with hermes-grade SSRF guards (metadata floor, private-address gating, redirect rechecks, raw-CDP allowlist) and forced secret redaction on browser output
 - **🚪 HTTP gateway** — `ulnclaw gateway`: OpenAI-compatible `/v1/chat/completions` + `/v1/responses` (with session continuity), `stream: true` SSE streaming on both (token deltas, tool-progress/function-call events), async `/v1/runs` with SSE events + approval resolution, sessions API (incl. `PATCH`/fork + enforced per-session model lock), `/api/jobs` cron management (CRUD + pause/resume/run) with a built-in scheduler that auto-runs due jobs, external delivery targets (`deliver`: `origin`/platform/`platform:chat[:thread]`/`all`, resolved against platform senders + home-channel env vars with `[SILENT]` suppression, wrapped headers and failure summaries — `GET /api/jobs/delivery-targets` lists them) and the Chronos NAS fire webhook `POST /api/jobs/fire` (JWT-verified from `[cron.chronos]`, 202 + background run), `/v1/skills` + `/v1/toolsets` discovery, `/api/model/options` (multi-provider picker inventory), Prometheus `/metrics`, token accounting `/api/usage`, background-delegation registry `/v1/delegations`, live browser CDP control `/v1/browser/status|connect|disconnect`, bearer auth, and a single-instance pidfile guard (`gateway.pid` with a PID-reuse-proof start token — a second start refuses, `--replace` takes over from the running instance, `--force` runs alongside)
 - **🖥️ Terminal environments** — run `terminal` locally (default), in docker (auto container creation), or over ssh (`[terminal] backend`)
@@ -263,6 +262,7 @@ async fn main() -> Result<()> {
 - [Architecture Guide](docs/en/architecture.md) · [API Reference](docs/en/api-reference.md)
 - [Integration Guide](docs/en/integration.md) · [Development Guide](docs/en/development.md)
 - [Tool System](docs/en/tools.md) · [Provider System](docs/en/providers.md)
+- Design notes: [Multiplexing Gateway](docs/design/multiplexing-gateway.md) (multi-profile routing + fail-closed secret scopes) · [Browser CDP Client](docs/design/browser-cdp.md) (CDP session layer + `/v1/browser/*` control plane)
 
 ### Building & Testing
 
@@ -447,6 +447,7 @@ async fn main() -> Result<()> {
 - [架构指南](docs/zh/architecture.md) · [API 参考](docs/zh/api-reference.md)
 - [集成指南](docs/zh/integration.md) · [开发指南](docs/zh/development.md)
 - [工具系统](docs/zh/tools.md) · [Provider 系统](docs/zh/providers.md)
+- 设计文档：[多路复用网关](docs/design/multiplexing-gateway.md)（多 profile 路由 + fail-closed 密钥作用域）· [浏览器 CDP 客户端](docs/design/browser-cdp.md)（CDP 会话层 + `/v1/browser/*` 控制面）
 
 ### 构建与测试
 
