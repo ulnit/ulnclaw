@@ -53,6 +53,12 @@ child process.
   `/api/kanban/*` (same engine + `kanban.db` as the CLI and agent tools):
   quick-add, complete/block/unblock actions, task detail with comments,
   board switcher, 5 s polling.
+- **Projects** (tab in the sidebar) — first-class multi-folder project
+  registry over `/api/projects/*` (same `projects.db` as the `ulnclaw
+  project` CLI): project cards with create/use/archive/delete, folder
+  management with primary switching, board binding, a filesystem repo
+  scan feeding the discovery cache, and one-click adoption of discovered
+  repos into projects.
 - **Pet overlay** — the petdex mascot as an animated spritesheet canvas in
   the bottom-right corner: `display.pet.*` config via `/api/pets/config`,
   sheet from `/api/pets/:slug/spritesheet`, working (`running` row) while

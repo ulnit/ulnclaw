@@ -132,6 +132,33 @@ export interface KanbanDetail {
   attachments: { kind: string; value: string }[];
 }
 
+export interface ProjectFolder {
+  path: string;
+  label: string | null;
+  is_primary: boolean;
+  added_at: number;
+}
+
+export interface Project {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  color: string | null;
+  board_slug: string | null;
+  primary_path: string | null;
+  archived: boolean;
+  created_at: number;
+  folders: ProjectFolder[];
+}
+
+export interface DiscoveredRepo {
+  root: string;
+  label: string;
+  last_seen: number;
+}
+
 const SETTINGS_KEY = "ulnclaw.gateway";
 
 export function loadSettings(): GatewaySettings {
@@ -464,6 +491,102 @@ export class GatewayClient {
       body: JSON.stringify({ body, author: "desktop" }),
     });
     return Boolean(value?.ok);
+  }
+
+  // ---- Projects registry (shared with the `ulnclaw project` CLI) ----
+
+  async projectsList(includeArchived = false): Promise<{ active_id: string | null; projects: Project[] }> {
+    const query = includeArchived ? "?all=true" : "";
+    const value = await this.kanbanJson(`/api/projects${query}`);
+    return {
+      active_id: (value?.active_id || null) as string | null,
+      projects: (value?.projects || []) as Project[],
+    };
+  }
+
+  async projectCreate(request: {
+    name: string;
+    folders?: string[];
+    board_slug?: string;
+    use?: boolean;
+  }): Promise<Project | null> {
+    const value = await this.kanbanJson("/api/projects", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+    return (value?.project || null) as Project | null;
+  }
+
+  async projectUpdate(
+    id: string,
+    patch: { name?: string; description?: string; board_slug?: string },
+  ): Promise<Project | null> {
+    const value = await this.kanbanJson(`/api/projects/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    return (value?.project || null) as Project | null;
+  }
+
+  async projectDelete(id: string): Promise<boolean> {
+    const value = await this.kanbanJson(`/api/projects/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    return Boolean(value?.id);
+  }
+
+  async projectAddFolder(id: string, path: string, primary = false): Promise<Project | null> {
+    const value = await this.kanbanJson(`/api/projects/${encodeURIComponent(id)}/folders`, {
+      method: "POST",
+      body: JSON.stringify({ path, primary }),
+    });
+    return (value?.project || null) as Project | null;
+  }
+
+  async projectRemoveFolder(id: string, path: string): Promise<Project | null> {
+    const value = await this.kanbanJson(`/api/projects/${encodeURIComponent(id)}/folders`, {
+      method: "DELETE",
+      body: JSON.stringify({ path }),
+    });
+    return (value?.project || null) as Project | null;
+  }
+
+  async projectSetPrimary(id: string, path: string): Promise<Project | null> {
+    const value = await this.kanbanJson(`/api/projects/${encodeURIComponent(id)}/primary`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+    return (value?.project || null) as Project | null;
+  }
+
+  async projectArchive(id: string, archived: boolean): Promise<boolean> {
+    const action = archived ? "restore" : "archive";
+    const value = await this.kanbanJson(`/api/projects/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      body: "{}",
+    });
+    return Boolean(value?.id);
+  }
+
+  async projectSetActive(id: string | null): Promise<boolean> {
+    const value = await this.kanbanJson("/api/projects/active", {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    });
+    return value !== null;
+  }
+
+  async projectScan(roots?: string[]): Promise<{ recorded: number } | null> {
+    const value = await this.kanbanJson("/api/projects/scan", {
+      method: "POST",
+      body: JSON.stringify({ roots: roots || [] }),
+    });
+    return value ? { recorded: (value.recorded || 0) as number } : null;
+  }
+
+  async projectsRepos(): Promise<DiscoveredRepo[]> {
+    const value = await this.kanbanJson("/api/projects/repos");
+    return (value?.repos || []) as DiscoveredRepo[];
   }
 
   // ---- Pet hatch jobs (desktop hatch overlay, hermes pet-generate parity) ----

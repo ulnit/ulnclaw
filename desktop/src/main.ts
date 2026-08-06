@@ -5,6 +5,7 @@
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
 import type { GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import { KanbanWidget } from "./kanban";
+import { ProjectsWidget } from "./projects";
 import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
 
@@ -42,9 +43,10 @@ const state = {
   skills: [] as SkillRow[],
   pendingUploads: [] as { path: string; mime: string; bytes: number }[],
   kanban: null as KanbanWidget | null,
+  projects: null as ProjectsWidget | null,
   pet: null as PetOverlay | null,
   hatch: null as HatchOverlay | null,
-  view: "chat" as "chat" | "kanban",
+  view: "chat" as "chat" | "kanban" | "projects",
 };
 
 const el = {
@@ -516,27 +518,39 @@ async function start(): Promise<void> {
     void refreshSessions();
   });
 
-  // View tabs: chat vs kanban board.
+  // View tabs: chat vs kanban board vs projects.
   const chatMain = document.getElementById("chat")!;
   const kanbanMain = document.getElementById("kanban")!;
+  const projectsMain = document.getElementById("projects")!;
   const tabChat = document.getElementById("tab-chat") as HTMLButtonElement;
   const tabKanban = document.getElementById("tab-kanban") as HTMLButtonElement;
+  const tabProjects = document.getElementById("tab-projects") as HTMLButtonElement;
   state.kanban = new KanbanWidget(kanbanMain, () => state.client);
   state.kanban.mount();
-  const switchView = (view: "chat" | "kanban") => {
+  state.projects = new ProjectsWidget(projectsMain, () => state.client);
+  state.projects.mount();
+  const switchView = (view: "chat" | "kanban" | "projects") => {
     state.view = view;
     chatMain.hidden = view !== "chat";
     kanbanMain.hidden = view !== "kanban";
+    projectsMain.hidden = view !== "projects";
     tabChat.classList.toggle("active", view === "chat");
     tabKanban.classList.toggle("active", view === "kanban");
+    tabProjects.classList.toggle("active", view === "projects");
     if (view === "kanban") {
       state.kanban!.start();
     } else {
       state.kanban!.stop();
     }
+    if (view === "projects") {
+      state.projects!.start();
+    } else {
+      state.projects!.stop();
+    }
   };
   tabChat.onclick = () => switchView("chat");
   tabKanban.onclick = () => switchView("kanban");
+  tabProjects.onclick = () => switchView("projects");
 
   // Petdex mascot overlay (display.pet.* driven, polls the gateway).
   state.pet = new PetOverlay(() => state.client);
