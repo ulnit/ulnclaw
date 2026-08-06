@@ -6158,6 +6158,7 @@ mod tests {
             workspace_kind: "scratch".into(),
             workspace_path: None,
             branch_name: None,
+            project_id: None,
             session_id: None,
             current_run_id: None,
             block_kind: None,

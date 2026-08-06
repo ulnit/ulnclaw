@@ -64,6 +64,13 @@ enum Commands {
         #[command(subcommand)]
         action: KanbanAction,
     },
+    /// First-class projects — named multi-folder workspaces (hermes
+    /// project registry)
+    #[command(name = "project")]
+    Projects {
+        #[command(subcommand)]
+        action: ProjectsAction,
+    },
     /// Petdex mascot pets — browse/install/animate (hermes pets)
     Pets {
         #[command(subcommand)]
@@ -514,6 +521,105 @@ enum PetsAction {
     },
 }
 
+/// First-class project registry actions (hermes `project` command).
+/// Projects are human-named workspaces spanning one or more folders;
+/// the primary repo anchors kanban worktrees + deterministic branches.
+#[derive(Subcommand)]
+enum ProjectsAction {
+    /// Create a new project (first folder = primary)
+    Create {
+        /// Human name, e.g. 'Hermes Agent'
+        name: String,
+        /// Folder paths to include (first = primary)
+        folders: Vec<String>,
+        /// Explicit slug override
+        #[arg(long)]
+        slug: Option<String>,
+        /// Primary repo path
+        #[arg(long)]
+        primary: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        icon: Option<String>,
+        #[arg(long)]
+        color: Option<String>,
+        /// Bind a kanban board slug
+        #[arg(long)]
+        board: Option<String>,
+        /// Set as the active project
+        #[arg(long = "use")]
+        r#use: bool,
+    },
+    /// List projects
+    #[command(visible_alias = "ls")]
+    List {
+        /// Include archived projects
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show a project's details
+    Show {
+        /// Project id or slug
+        project: String,
+    },
+    /// Add a folder to a project
+    AddFolder {
+        /// Project id or slug
+        project: String,
+        /// Folder path
+        path: String,
+        #[arg(long)]
+        label: Option<String>,
+        /// Mark as primary repo
+        #[arg(long)]
+        primary: bool,
+    },
+    /// Remove a folder from a project
+    RemoveFolder {
+        /// Project id or slug
+        project: String,
+        /// Folder path
+        path: String,
+    },
+    /// Rename a project
+    Rename {
+        /// Project id or slug
+        project: String,
+        /// New name
+        name: String,
+    },
+    /// Set the primary folder (must already be in the project)
+    SetPrimary {
+        /// Project id or slug
+        project: String,
+        /// Folder path
+        path: String,
+    },
+    /// Set the active project (omit to clear)
+    Use {
+        /// Project id or slug
+        project: Option<String>,
+    },
+    /// Archive a project
+    Archive {
+        /// Project id or slug
+        project: String,
+    },
+    /// Restore an archived project
+    Restore {
+        /// Project id or slug
+        project: String,
+    },
+    /// Bind a kanban board to a project (omit board to unbind)
+    BindBoard {
+        /// Project id or slug
+        project: String,
+        /// Board slug
+        board: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum KanbanAction {
     /// Initialize the board store (idempotent)
@@ -542,6 +648,11 @@ enum KanbanAction {
         /// (hermes create --provider)
         #[arg(long)]
         provider: Option<String>,
+        /// Link to a project (id or slug): anchors the task's worktree
+        /// under the project's primary repo with a deterministic branch
+        /// (hermes create --project)
+        #[arg(long)]
+        project: Option<String>,
         /// Skill force-loaded into the dispatcher worker (repeatable)
         #[arg(long = "skill")]
         skills: Vec<String>,
@@ -1927,6 +2038,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         }
         Commands::Sessions { action } => sessions_cmd(action, &config).await,
         Commands::Kanban { action } => kanban_cmd(action).await,
+        Commands::Projects { action } => projects_cmd(action),
         Commands::Pets { action } => pets_cmd(action).await,
         Commands::Tools => tools_cmd(&config),
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
@@ -4577,6 +4689,225 @@ fn triage_targets(
     }
 }
 
+/// Print a project the way hermes `project show` does.
+fn print_project(proj: &ulnclaw::projects_db::Project) {
+    let flags = if proj.archived { " (archived)" } else { "" };
+    println!("{}  [{}]{}", proj.slug, proj.id, flags);
+    println!("  name:    {}", proj.name);
+    if let Some(d) = &proj.description {
+        println!("  about:   {d}");
+    }
+    if let Some(b) = &proj.board_slug {
+        println!("  board:   {b}");
+    }
+    if let Some(p) = &proj.primary_path {
+        println!("  primary: {p}");
+    }
+    if !proj.folders.is_empty() {
+        println!("  folders:");
+        for f in &proj.folders {
+            let mark = if f.is_primary { " *" } else { "  " };
+            let label = f
+                .label
+                .as_deref()
+                .map(|l| format!(" ({l})"))
+                .unwrap_or_default();
+            println!("   {mark} {}{label}", f.path);
+        }
+    }
+}
+
+/// Best-effort: point the bound board's default_workdir at the
+/// project's primary repo (hermes `_sync_board_default_workdir`).
+/// Failures are non-fatal — the binding itself already succeeded.
+fn sync_board_default_workdir(proj: &ulnclaw::projects_db::Project, board_slug: &str) {
+    let Some(primary) = proj
+        .primary_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    else {
+        return;
+    };
+    let slug = board_slug.trim().to_lowercase();
+    if slug.is_empty() {
+        return;
+    }
+    let Ok(store) = ulnclaw::kanban::KanbanStore::open_default() else {
+        return;
+    };
+    let exists = store
+        .list_boards()
+        .map(|boards| boards.iter().any(|b| b.slug == slug))
+        .unwrap_or(false);
+    if !exists {
+        return;
+    }
+    let _ = store.set_board_workdir(&slug, Some(primary));
+}
+
+fn projects_cmd(action: ProjectsAction) -> Result<(), String> {
+    use ulnclaw::projects_db as pdb;
+    let conn = pdb::connect(None).map_err(|e| e.to_string())?;
+    let resolve = |id_or_slug: &str| -> Result<pdb::Project, String> {
+        pdb::get_project(&conn, id_or_slug)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("project: no such project: {id_or_slug}"))
+    };
+    match action {
+        ProjectsAction::Create {
+            name,
+            folders,
+            slug,
+            primary,
+            description,
+            icon,
+            color,
+            board,
+            r#use,
+        } => {
+            let folder_refs: Vec<&str> = folders.iter().map(String::as_str).collect();
+            let args = pdb::CreateProject {
+                name: &name,
+                slug: slug.as_deref(),
+                folders: &folder_refs,
+                primary_path: primary.as_deref(),
+                description: description.as_deref(),
+                icon: icon.as_deref(),
+                color: color.as_deref(),
+                board_slug: board.as_deref(),
+            };
+            let pid = pdb::create_project(&conn, &args)
+                .map_err(|e| format!("project: {e}"))?;
+            if r#use {
+                pdb::set_active(&conn, Some(&pid)).map_err(|e| e.to_string())?;
+            }
+            let proj = pdb::get_project(&conn, &pid)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "project: vanished after create".to_string())?;
+            println!("Created project {} ({})", proj.slug, pid);
+            print_project(&proj);
+        }
+        ProjectsAction::List { all } => {
+            let active = pdb::get_active_id(&conn).map_err(|e| e.to_string())?;
+            let projects = pdb::list_projects(&conn, all).map_err(|e| e.to_string())?;
+            if projects.is_empty() {
+                println!(
+                    "No projects yet. Create one with `ulnclaw project create <name>`."
+                );
+                return Ok(());
+            }
+            for p in &projects {
+                let marker = if Some(p.id.as_str()) == active.as_deref() {
+                    "*"
+                } else {
+                    " "
+                };
+                let flags = if p.archived { " (archived)" } else { "" };
+                println!(
+                    "{marker} {:<24} {}{}  [{} folder(s)]",
+                    p.slug,
+                    p.name,
+                    flags,
+                    p.folders.len()
+                );
+            }
+        }
+        ProjectsAction::Show { project } => {
+            let proj = resolve(&project)?;
+            print_project(&proj);
+        }
+        ProjectsAction::AddFolder {
+            project,
+            path,
+            label,
+            primary,
+        } => {
+            let proj = resolve(&project)?;
+            let norm = pdb::add_folder(&conn, &proj.id, &path, label.as_deref(), primary)
+                .map_err(|e| format!("project: {e}"))?;
+            println!("Added {norm} to {}", proj.slug);
+        }
+        ProjectsAction::RemoveFolder { project, path } => {
+            let proj = resolve(&project)?;
+            if !pdb::remove_folder(&conn, &proj.id, &path).map_err(|e| e.to_string())? {
+                return Err(format!("project: folder not in project: {path}"));
+            }
+            println!("Removed {path} from {}", proj.slug);
+        }
+        ProjectsAction::Rename { project, name } => {
+            let proj = resolve(&project)?;
+            pdb::update_project(
+                &conn,
+                &proj.id,
+                &pdb::UpdateProject {
+                    name: Some(&name),
+                    description: None,
+                    icon: None,
+                    color: None,
+                    board_slug: None,
+                },
+            )
+            .map_err(|e| format!("project: {e}"))?;
+            println!("Renamed {} -> {name}", proj.slug);
+        }
+        ProjectsAction::SetPrimary { project, path } => {
+            let proj = resolve(&project)?;
+            if !pdb::set_primary(&conn, &proj.id, &path).map_err(|e| e.to_string())? {
+                return Err(format!(
+                    "project: '{path}' is not a folder of {}; add it first with                      `ulnclaw project add-folder`",
+                    proj.slug
+                ));
+            }
+            println!("Set primary of {} -> {path}", proj.slug);
+        }
+        ProjectsAction::Use { project } => match project {
+            None => {
+                pdb::set_active(&conn, None).map_err(|e| e.to_string())?;
+                println!("Cleared active project");
+            }
+            Some(id_or_slug) => {
+                let proj = resolve(&id_or_slug)?;
+                pdb::set_active(&conn, Some(&proj.id)).map_err(|e| e.to_string())?;
+                println!("Active project: {}", proj.slug);
+            }
+        },
+        ProjectsAction::Archive { project } => {
+            let proj = resolve(&project)?;
+            pdb::archive_project(&conn, &proj.id).map_err(|e| e.to_string())?;
+            println!("Archived {}", proj.slug);
+        }
+        ProjectsAction::Restore { project } => {
+            let proj = resolve(&project)?;
+            pdb::restore_project(&conn, &proj.id).map_err(|e| e.to_string())?;
+            println!("Restored {}", proj.slug);
+        }
+        ProjectsAction::BindBoard { project, board } => {
+            let proj = resolve(&project)?;
+            let board_arg = board.clone().unwrap_or_default();
+            pdb::update_project(
+                &conn,
+                &proj.id,
+                &pdb::UpdateProject {
+                    name: None,
+                    description: None,
+                    icon: None,
+                    color: None,
+                    board_slug: Some(&board_arg),
+                },
+            )
+            .map_err(|e| format!("project: {e}"))?;
+            if board_arg.trim().is_empty() {
+                println!("Unbound board from {}", proj.slug);
+            } else {
+                println!("Bound {} -> board {}", proj.slug, board_arg.trim());
+                sync_board_default_workdir(&proj, board_arg.trim());
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
     use ulnclaw::kanban::{KanbanStore, NewTask, DEFAULT_CLAIM_TTL_SECS};
     let store = KanbanStore::open_default().map_err(|e| e.to_string())?;
@@ -4650,6 +4981,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             tenant,
             model,
             provider,
+            project,
             skills,
             max_runtime,
             idempotency_key,
@@ -4723,6 +5055,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     tenant,
                     model,
                     provider,
+                    project_id: project,
                     created_by: KanbanStore::claimer_id(),
                     skills: if skills.is_empty() { None } else { Some(skills) },
                     max_runtime_seconds,

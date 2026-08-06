@@ -224,6 +224,10 @@ pub struct Task {
     /// Worktree branch (hermes `branch_name`); defaults to `wt/<id>`
     /// at dispatch time when empty.
     pub branch_name: Option<String>,
+    /// First-class Project link (hermes `project_id`): a project-linked
+    /// task anchors its worktree under the project's primary repo with
+    /// a deterministic branch (`<project-slug>/<task-id>`).
+    pub project_id: Option<String>,
     /// Creator session for wake routing (hermes `session_id`): the
     /// gateway notifier wakes this session when the task reaches a
     /// wake-eligible terminal event.
@@ -1918,6 +1922,11 @@ pub struct NewTask {
     /// Worktree branch name (hermes `create --branch`; only valid
     /// with the worktree kind).
     pub branch_name: Option<String>,
+    /// Link the task to a first-class Project (hermes `create
+    /// --project`): id or slug, resolved at create time. Anchors a
+    /// worktree under the project's primary repo with a deterministic
+    /// branch; unresolvable values silently drop the link.
+    pub project_id: Option<String>,
     /// Park the card directly in a column at create time (hermes
     /// `create --initial-status`): `blocked` waits for human-ops
     /// review; `running` keeps the default flow.
@@ -1985,6 +1994,7 @@ impl KanbanStore {
                 workspace_kind  TEXT NOT NULL DEFAULT 'scratch',
                 workspace_path  TEXT,
                 branch_name     TEXT,
+                project_id      TEXT,
                 session_id      TEXT,
                 block_kind      TEXT,
                 block_recurrences INTEGER NOT NULL DEFAULT 0,
@@ -2186,6 +2196,12 @@ impl KanbanStore {
         if !columns.contains("provider") {
             conn.execute_batch("ALTER TABLE tasks ADD COLUMN provider TEXT;")
                 .map_err(db_error("migrate provider"))?;
+        }
+        // Pre-P160 stores lack the project-link column (hermes
+        // tasks.project_id).
+        if !columns.contains("project_id") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN project_id TEXT;")
+                .map_err(db_error("migrate project_id"))?;
         }
         let store = Self {
             conn: Mutex::new(conn),
@@ -2609,7 +2625,7 @@ impl KanbanStore {
             }
         }
         // Workspace validation (hermes create_task).
-        let workspace_kind = task
+        let mut workspace_kind = task
             .workspace_kind
             .as_deref()
             .map(str::trim)
@@ -2628,7 +2644,7 @@ impl KanbanStore {
             .map(str::trim)
             .filter(|path| !path.is_empty())
             .map(str::to_string);
-        let branch_name = task
+        let mut branch_name = task
             .branch_name
             .as_deref()
             .map(str::trim)
@@ -2652,11 +2668,51 @@ impl KanbanStore {
             ));
         }
         let id = Self::new_task_id();
+        // Project link (hermes create_task --project): resolve the optional
+        // first-class Project and anchor the workspace under its primary
+        // repo with a deterministic branch. An unresolvable id/slug drops
+        // the link instead of failing creation (hermes drop-dangling
+        // semantics).
+        let mut project_id: Option<String> = None;
+        let mut project_repo: Option<String> = None;
+        if let Some(raw) = task
+            .project_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+        {
+            let resolved = crate::projects_db::connect(None)
+                .ok()
+                .and_then(|conn| crate::projects_db::get_project(&conn, raw).ok().flatten());
+            if let Some(project) = resolved {
+                let primary = project
+                    .primary_path
+                    .clone()
+                    .filter(|path| !path.trim().is_empty());
+                if workspace_kind == "scratch" && primary.is_some() {
+                    workspace_kind = "worktree".to_string();
+                }
+                if workspace_kind == "worktree" && workspace_path.is_none() {
+                    project_repo = primary;
+                }
+                if branch_name.is_none() {
+                    branch_name = Some(crate::projects_db::branch_name_for(
+                        &project,
+                        &id,
+                        task.title.trim(),
+                    ));
+                }
+                project_id = Some(project.id.clone());
+            }
+        }
         let board = self.current_board()?;
         // Resolve workspace_path from the board default_workdir when the
         // caller named a dir/worktree workspace without a path (hermes
         // create_task board-level fill-in).
-        if workspace_path.is_none() && matches!(workspace_kind.as_str(), "dir" | "worktree") {
+        if workspace_path.is_none()
+            && project_repo.is_none()
+            && matches!(workspace_kind.as_str(), "dir" | "worktree")
+        {
             let conn = self.conn.lock().unwrap();
             let default_workdir: Option<String> = conn
                 .query_row(
@@ -2672,6 +2728,16 @@ impl KanbanStore {
                 .map(str::trim)
                 .filter(|path| !path.is_empty())
                 .map(str::to_string);
+        }
+        // Project-linked worktree: a fresh dir under the project's primary
+        // repo keyed on the task id (hermes create_task project anchor).
+        if workspace_path.is_none() && workspace_kind == "worktree" {
+            if let Some(repo) = project_repo.as_deref() {
+                let dir = std::path::Path::new(repo)
+                    .join(".worktrees")
+                    .join(&id);
+                workspace_path = Some(dir.to_string_lossy().to_string());
+            }
         }
         if let Some(status) = task
             .initial_status
@@ -2710,9 +2776,10 @@ impl KanbanStore {
             "INSERT INTO tasks (id, board, title, body, assignee, status, priority, \
              created_by, created_at, tenant, model, provider, skills, max_runtime_seconds, \
              idempotency_key, max_retries, workspace_kind, workspace_path, branch_name, \
-             session_id, goal_mode, goal_max_turns, workflow_template_id, current_step_key) \
+             project_id, session_id, goal_mode, goal_max_turns, workflow_template_id, \
+             current_step_key) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             params![
                 id,
                 board,
@@ -2733,6 +2800,7 @@ impl KanbanStore {
                 workspace_kind,
                 workspace_path,
                 branch_name,
+                project_id,
                 task.session_id,
                 i64::from(task.goal_mode),
                 task.goal_max_turns,
@@ -3186,6 +3254,7 @@ impl KanbanStore {
             workspace_kind: row.get("workspace_kind")?,
             workspace_path: row.get("workspace_path")?,
             branch_name: row.get("branch_name")?,
+            project_id: row.get("project_id")?,
             session_id: row.get("session_id")?,
             current_run_id: row.get("current_run_id")?,
             block_kind: row.get("block_kind")?,
@@ -3201,7 +3270,7 @@ impl KanbanStore {
         created_by, created_at, started_at, completed_at, tenant, model, provider, result, \
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
-        last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, \
+        last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, project_id, \
         session_id, current_run_id, block_kind, block_recurrences,         goal_mode, goal_max_turns, workflow_template_id, current_step_key";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
@@ -8340,6 +8409,7 @@ mod tests {
             workspace_kind: "scratch".into(),
             workspace_path: None,
             branch_name: None,
+            project_id: None,
             session_id: None,
             current_run_id: None,
             block_kind: None,
@@ -10185,5 +10255,125 @@ mod tests {
         let runs = store.list_runs(&task.id, true, None, None).unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].summary.as_deref(), Some("sum"));
+    }
+
+    fn with_test_home<F: FnOnce()>(dir: &std::path::Path, f: F) {
+        let _guard = crate::models_dev::test_env_lock();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir);
+        f();
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[test]
+    fn create_task_project_link_anchors_worktree() {
+        let (_dir, store) = temp_store();
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        with_test_home(home.path(), || {
+            let conn = crate::projects_db::connect(None).unwrap();
+            let repo_path = repo.path().to_string_lossy().to_string();
+            let pid = crate::projects_db::create_project(
+                &conn,
+                &crate::projects_db::CreateProject {
+                    name: "Demo Project",
+                    slug: None,
+                    folders: &[repo_path.as_str()],
+                    primary_path: None,
+                    description: None,
+                    icon: None,
+                    color: None,
+                    board_slug: None,
+                },
+            )
+            .unwrap();
+            drop(conn);
+            let task = store
+                .create_task(&NewTask {
+                    title: "Add feature X".into(),
+                    created_by: "tester".into(),
+                    project_id: Some("demo-project".into()),
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(task.project_id.as_deref(), Some(pid.as_str()));
+            assert_eq!(task.workspace_kind, "worktree");
+            let expected_path = repo.path().join(".worktrees").join(&task.id);
+            assert_eq!(
+                task.workspace_path.as_deref(),
+                Some(expected_path.to_string_lossy().as_ref())
+            );
+            assert_eq!(
+                task.branch_name.as_deref(),
+                Some(format!("demo-project/{}-add-feature-x", task.id).as_str())
+            );
+        });
+    }
+
+    #[test]
+    fn create_task_unknown_project_drops_link() {
+        let (_dir, store) = temp_store();
+        let home = tempfile::tempdir().unwrap();
+        with_test_home(home.path(), || {
+            let task = store
+                .create_task(&NewTask {
+                    title: "Orphan link".into(),
+                    created_by: "tester".into(),
+                    project_id: Some("no-such-project".into()),
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(task.project_id, None);
+            assert_eq!(task.workspace_kind, "scratch");
+            assert_eq!(task.workspace_path, None);
+            assert_eq!(task.branch_name, None);
+        });
+    }
+
+    #[test]
+    fn create_task_project_explicit_branch_and_path_win() {
+        let (_dir, store) = temp_store();
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        with_test_home(home.path(), || {
+            let conn = crate::projects_db::connect(None).unwrap();
+            let repo_path = repo.path().to_string_lossy().to_string();
+            crate::projects_db::create_project(
+                &conn,
+                &crate::projects_db::CreateProject {
+                    name: "Demo",
+                    slug: Some("demo"),
+                    folders: &[repo_path.as_str()],
+                    primary_path: None,
+                    description: None,
+                    icon: None,
+                    color: None,
+                    board_slug: None,
+                },
+            )
+            .unwrap();
+            drop(conn);
+            let explicit_path = repo.path().join("custom");
+            let task = store
+                .create_task(&NewTask {
+                    title: "Explicit".into(),
+                    created_by: "tester".into(),
+                    project_id: Some("demo".into()),
+                    workspace_kind: Some("worktree".into()),
+                    workspace_path: Some(explicit_path.to_string_lossy().to_string()),
+                    branch_name: Some("demo/custom-branch".into()),
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(task.workspace_kind, "worktree");
+            assert_eq!(
+                task.workspace_path.as_deref(),
+                Some(explicit_path.to_string_lossy().as_ref())
+            );
+            assert_eq!(task.branch_name.as_deref(), Some("demo/custom-branch"));
+        });
     }
 }
