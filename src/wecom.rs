@@ -11,10 +11,12 @@
 //! AES-256-CBC encrypted with the per-message `aeskey` — WeCom's scheme
 //! uses the key itself as the IV prefix).
 //!
-//! Known differences: client-side text-split batching (0.6 s debounce)
-//! is not ported — each frame dispatches immediately; the webhook
-//! self-built-app flow lives in `wecom_callback` (hermes
-//! `callback_adapter.py`), not here.
+//! Inbound text batching merges the WeCom client's 4000-char splits:
+//! plain-text frames are debounced per session scope (0.6 s quiet
+//! period, 2.0 s when the latest chunk sits near the split threshold)
+//! before dispatch (hermes `_enqueue_text_event` /
+//! `_flush_text_batch`). The webhook self-built-app flow lives in
+//! `wecom_callback` (hermes `callback_adapter.py`), not here.
 
 use crate::messaging::{Dispatcher, MediaAttachment, MessageEvent};
 use serde::{Deserialize, Serialize};
@@ -46,6 +48,13 @@ const UPLOAD_CHUNK_SIZE: usize = 512 * 1024;
 const MAX_UPLOAD_CHUNKS: usize = 100;
 const DEDUP_WINDOW_SECS: u64 = 300;
 const DEDUP_MAX_SIZE: usize = 1000;
+/// hermes `_SPLIT_THRESHOLD` — a chunk this close to the 4000-char cap
+/// almost certainly has a continuation chunk behind it.
+const SPLIT_THRESHOLD: usize = 3900;
+/// hermes `_text_batch_delay_seconds` default.
+const DEFAULT_TEXT_BATCH_DELAY_SECS: f64 = 0.6;
+/// hermes `_text_batch_split_delay_seconds` default.
+const DEFAULT_TEXT_BATCH_SPLIT_DELAY_SECS: f64 = 2.0;
 
 /// `[messaging.wecom]` — WeCom AI Bot adapter (hermes `platforms.wecom`
 /// plugin config + `WECOM_*` env vars).
@@ -70,6 +79,12 @@ pub struct WeComConfig {
     pub group_policy: String,
     /// Group allowlist.
     pub group_allow_from: Vec<String>,
+    /// Quiet period before a buffered text batch flushes; 0 disables
+    /// batching (hermes `HERMES_WECOM_TEXT_BATCH_DELAY_SECONDS`).
+    pub text_batch_delay_seconds: f64,
+    /// Longer quiet period when the latest chunk sits at the split
+    /// threshold (hermes `HERMES_WECOM_TEXT_BATCH_SPLIT_DELAY_SECONDS`).
+    pub text_batch_split_delay_seconds: f64,
 }
 
 impl Default for WeComConfig {
@@ -84,6 +99,8 @@ impl Default for WeComConfig {
             allow_from: Vec::new(),
             group_policy: "pairing".into(),
             group_allow_from: Vec::new(),
+            text_batch_delay_seconds: DEFAULT_TEXT_BATCH_DELAY_SECS,
+            text_batch_split_delay_seconds: DEFAULT_TEXT_BATCH_SPLIT_DELAY_SECS,
         }
     }
 }
@@ -114,6 +131,8 @@ pub struct ResolvedWeCom {
     pub allow_from: Vec<String>,
     pub group_policy: String,
     pub group_allow_from: Vec<String>,
+    pub text_batch_delay_seconds: f64,
+    pub text_batch_split_delay_seconds: f64,
 }
 
 impl WeComConfig {
@@ -135,6 +154,14 @@ impl WeComConfig {
                 .to_lowercase(),
             group_allow_from: env_csv("WECOM_GROUP_ALLOW_FROM")
                 .unwrap_or_else(|| self.group_allow_from.clone()),
+            text_batch_delay_seconds: env_trim("WECOM_TEXT_BATCH_DELAY_SECONDS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(self.text_batch_delay_seconds)
+                .max(0.0),
+            text_batch_split_delay_seconds: env_trim("WECOM_TEXT_BATCH_SPLIT_DELAY_SECONDS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(self.text_batch_split_delay_seconds)
+                .max(0.0),
         }
     }
 
@@ -231,6 +258,20 @@ struct Runtime {
     chat_req_ids: Mutex<HashMap<String, String>>,
     /// ws sender half shared with the PlatformSender.
     ws_sink: Mutex<Option<WsSink>>,
+    /// Pending text batches keyed by session scope (hermes
+    /// `_pending_text_batches` — merges WeCom client-side splits).
+    text_batches: Mutex<HashMap<String, PendingTextBatch>>,
+}
+
+/// One buffered inbound text awaiting its quiet-period flush (hermes
+/// `_pending_text_batches` entry + `_last_chunk_len` bookkeeping).
+struct PendingTextBatch {
+    event: MessageEvent,
+    last_chunk_len: usize,
+    is_group: bool,
+    /// Incremented on every merge; flush tasks carrying a stale
+    /// generation no-op (replaces hermes' task-cancellation dance).
+    generation: u64,
 }
 
 type WsSink = futures::stream::SplitSink<
@@ -418,6 +459,7 @@ pub async fn run(
         dedup: Mutex::new(HashMap::new()),
         chat_req_ids: Mutex::new(HashMap::new()),
         ws_sink: Mutex::new(None),
+        text_batches: Mutex::new(HashMap::new()),
     });
     let pending: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
     crate::messaging::register_platform_sender(
@@ -662,7 +704,7 @@ async fn handle_callback(
         return;
     }
 
-    let mut event = MessageEvent {
+    let event = MessageEvent {
         platform: "wecom".into(),
         chat_id: chat_id.clone(),
         sender_id: sender_id.clone(),
@@ -671,9 +713,34 @@ async fn handle_callback(
         message_id: msg_id,
         attachments,
     };
+    // Text batching (hermes `_enqueue_text_event`): everything except
+    // voice notes debounces — the WeCom client splits long user
+    // messages around 4000 chars and the chunks land milliseconds
+    // apart.
+    let msgtype = body
+        .get("msgtype")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if msgtype != "voice" && runtime.cfg.text_batch_delay_seconds > 0.0 {
+        enqueue_text_batch(runtime, dispatcher, event, is_group).await;
+        return;
+    }
+    dispatch_wecom_event(runtime, dispatcher, event, is_group).await;
+}
+
+/// Dispatch one (possibly batch-merged) inbound event and deliver the
+/// reply — the tail of `handle_callback`, also run by the batch flush.
+async fn dispatch_wecom_event(
+    runtime: &Arc<Runtime>,
+    dispatcher: &Arc<Dispatcher>,
+    mut event: MessageEvent,
+    is_group: bool,
+) {
     if !crate::messaging::pre_gateway_dispatch_gate_public(&mut event).await {
         return;
     }
+    let chat_id = event.chat_id.clone();
     let outcome = match dispatcher.handle_event(event).await {
         Ok(o) => o,
         Err(e) => crate::messaging::DispatchOutcome {
@@ -711,6 +778,111 @@ async fn handle_callback(
             eprintln!("[wecom] cannot reply to group {chat_id}: no inbound req_id cached");
         }
     }
+}
+
+/// Session-scoped batch key (hermes `_text_batch_key` with the default
+/// `group_sessions_per_user = true`): group messages batch per sender,
+/// DMs per chat.
+pub fn text_batch_key(chat_id: &str, sender_id: &str, is_group: bool) -> String {
+    if is_group {
+        format!("{chat_id}|{sender_id}")
+    } else {
+        chat_id.to_string()
+    }
+}
+
+/// Quiet period before flushing a batch (hermes `_flush_text_batch`):
+/// a chunk at/over the split threshold gets the longer delay since a
+/// continuation is almost certain.
+pub fn batch_flush_delay(last_chunk_len: usize, delay: f64, split_delay: f64) -> f64 {
+    if last_chunk_len >= SPLIT_THRESHOLD {
+        split_delay
+    } else {
+        delay
+    }
+}
+
+/// Merge an inbound text frame into the pending batch and (re)start
+/// the flush timer (hermes `_enqueue_text_event`). Each merge bumps
+/// the generation; stale flush tasks no-op.
+async fn enqueue_text_batch(
+    runtime: &Arc<Runtime>,
+    dispatcher: &Arc<Dispatcher>,
+    event: MessageEvent,
+    is_group: bool,
+) {
+    let key = text_batch_key(&event.chat_id, &event.sender_id, is_group);
+    let chunk_len = event.text.chars().count();
+    let generation = {
+        let mut batches = runtime.text_batches.lock().await;
+        match batches.get_mut(&key) {
+            Some(pending) => {
+                if !event.text.is_empty() {
+                    if pending.event.text.is_empty() {
+                        pending.event.text = event.text.clone();
+                    } else {
+                        pending.event.text.push('\n');
+                        pending.event.text.push_str(&event.text);
+                    }
+                }
+                pending.event.attachments.extend(event.attachments);
+                pending.last_chunk_len = chunk_len;
+                pending.generation += 1;
+                pending.generation
+            }
+            None => {
+                batches.insert(
+                    key.clone(),
+                    PendingTextBatch {
+                        event,
+                        last_chunk_len: chunk_len,
+                        is_group,
+                        generation: 0,
+                    },
+                );
+                0
+            }
+        }
+    };
+    let runtime = runtime.clone();
+    let dispatcher = dispatcher.clone();
+    tokio::spawn(async move {
+        flush_text_batch(&runtime, &dispatcher, &key, generation).await;
+    });
+}
+
+/// Wait out the quiet period, then dispatch the merged batch (hermes
+/// `_flush_text_batch`). A bumped generation means a newer frame
+/// restarted the timer — this task steps aside.
+async fn flush_text_batch(
+    runtime: &Arc<Runtime>,
+    dispatcher: &Arc<Dispatcher>,
+    key: &str,
+    generation: u64,
+) {
+    let delay = {
+        let batches = runtime.text_batches.lock().await;
+        match batches.get(key) {
+            Some(pending) if pending.generation == generation => batch_flush_delay(
+                pending.last_chunk_len,
+                runtime.cfg.text_batch_delay_seconds,
+                runtime.cfg.text_batch_split_delay_seconds,
+            ),
+            _ => return,
+        }
+    };
+    tokio::time::sleep(Duration::from_secs_f64(delay)).await;
+    let batch = {
+        let mut batches = runtime.text_batches.lock().await;
+        match batches.get(key) {
+            Some(pending) if pending.generation == generation => batches.remove(key),
+            _ => None,
+        }
+    };
+    let Some(batch) = batch else {
+        return;
+    };
+    dispatch_wecom_event(runtime, dispatcher, batch.event, batch.is_group).await;
 }
 
 /// hermes policy semantics: `open` | `allowlist` | `disabled` |
@@ -1175,13 +1347,91 @@ mod tests {
                 allow_from: Vec::new(),
                 group_policy: "pairing".into(),
                 group_allow_from: Vec::new(),
+                text_batch_delay_seconds: DEFAULT_TEXT_BATCH_DELAY_SECS,
+                text_batch_split_delay_seconds: DEFAULT_TEXT_BATCH_SPLIT_DELAY_SECS,
             },
             client: reqwest::Client::new(),
             dedup: Mutex::new(HashMap::new()),
             chat_req_ids: Mutex::new(HashMap::new()),
             ws_sink: Mutex::new(None),
+            text_batches: Mutex::new(HashMap::new()),
         };
         assert!(!runtime.is_duplicate("m1").await);
         assert!(runtime.is_duplicate("m1").await);
+    }
+
+    #[test]
+    fn batch_key_scopes_groups_per_sender() {
+        // hermes default: group_sessions_per_user = true.
+        assert_eq!(text_batch_key("c1", "alice", true), "c1|alice");
+        assert_eq!(text_batch_key("c1", "bob", true), "c1|bob");
+        // DMs batch per chat regardless of sender.
+        assert_eq!(text_batch_key("c1", "alice", false), "c1");
+    }
+
+    #[test]
+    fn flush_delay_uses_split_window_near_threshold() {
+        assert_eq!(batch_flush_delay(100, 0.6, 2.0), 0.6);
+        assert_eq!(batch_flush_delay(SPLIT_THRESHOLD - 1, 0.6, 2.0), 0.6);
+        assert_eq!(batch_flush_delay(SPLIT_THRESHOLD, 0.6, 2.0), 2.0);
+        assert_eq!(batch_flush_delay(4000, 0.6, 2.0), 2.0);
+    }
+
+    #[tokio::test]
+    async fn text_batch_merge_and_generation() {
+        let runtime = Arc::new(Runtime {
+            cfg: ResolvedWeCom {
+                bot_id: String::new(),
+                secret: String::new(),
+                websocket_url: String::new(),
+                device_id: String::new(),
+                dm_policy: "pairing".into(),
+                allow_from: Vec::new(),
+                group_policy: "pairing".into(),
+                group_allow_from: Vec::new(),
+                text_batch_delay_seconds: 0.6,
+                text_batch_split_delay_seconds: 2.0,
+            },
+            client: reqwest::Client::new(),
+            dedup: Mutex::new(HashMap::new()),
+            chat_req_ids: Mutex::new(HashMap::new()),
+            ws_sink: Mutex::new(None),
+            text_batches: Mutex::new(HashMap::new()),
+        });
+        // Simulate the merge half of enqueue_text_batch directly (the
+        // flush half needs a live dispatcher).
+        let key = text_batch_key("c1", "alice", false);
+        {
+            let mut batches = runtime.text_batches.lock().await;
+            batches.insert(
+                key.clone(),
+                PendingTextBatch {
+                    event: MessageEvent {
+                        platform: "wecom".into(),
+                        chat_id: "c1".into(),
+                        sender_id: "alice".into(),
+                        sender_name: "alice".into(),
+                        text: "part one".into(),
+                        message_id: "m1".into(),
+                        attachments: Vec::new(),
+                    },
+                    last_chunk_len: 8,
+                    is_group: false,
+                    generation: 0,
+                },
+            );
+        }
+        {
+            let mut batches = runtime.text_batches.lock().await;
+            let pending = batches.get_mut(&key).unwrap();
+            pending.event.text.push('\n');
+            pending.event.text.push_str("part two");
+            pending.last_chunk_len = 8;
+            pending.generation += 1;
+        }
+        let batches = runtime.text_batches.lock().await;
+        let pending = batches.get(&key).unwrap();
+        assert_eq!(pending.event.text, "part one\npart two");
+        assert_eq!(pending.generation, 1);
     }
 }
