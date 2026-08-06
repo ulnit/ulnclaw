@@ -318,6 +318,10 @@ pub struct DispatchResult {
     /// Ready tasks whose respawn was deferred this tick, with the guard
     /// reason (hermes `DispatchResult.respawn_guarded`).
     pub respawn_guarded: Vec<(String, String)>,
+    /// Ready tasks whose assignee is not a configured profile — a
+    /// control-plane lane pulled via `kanban claim`, never auto-spawned
+    /// (hermes `DispatchResult.skipped_nonspawnable`).
+    pub skipped_nonspawnable: Vec<String>,
 }
 
 /// Worker brief for a dispatcher-spawned task (hermes spawns
@@ -5127,6 +5131,38 @@ impl KanbanStore {
         Ok(())
     }
 
+    /// Health-telemetry probe (hermes `has_spawnable_ready`): true iff
+    /// at least one ready + unclaimed task is work the dispatcher
+    /// would actually spawn — an unassigned task (runs on the default
+    /// profile) or one whose assignee is a known profile. A ready
+    /// queue full of unknown-assignee lanes is "correctly idle", not
+    /// "stuck", so the dispatcher health warning stays quiet.
+    /// `known_profiles = None` preserves the legacy any-ready-task
+    /// semantics.
+    pub fn has_spawnable_ready(
+        &self,
+        known_profiles: Option<&std::collections::HashSet<String>>,
+    ) -> Result<bool> {
+        let assignees: Vec<String> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT DISTINCT COALESCE(assignee, '') FROM tasks                      WHERE status = 'ready' AND claim_lock IS NULL",
+                )
+                .map_err(db_error("spawnable probe"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(db_error("spawnable probe"))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error("spawnable probe"))?
+        };
+        Ok(assignees.into_iter().any(|raw| {
+            let assignee = raw.trim();
+            assignee.is_empty()
+                || known_profiles.map_or(true, |profiles| profiles.contains(assignee))
+        }))
+    }
+
     /// Run one dispatcher tick (hermes `dispatch_once`, scoped port):
     /// 1. reclaim stale claims, 2. promote parent-done todos (and
     ///    auto-recover non-sticky blocked tasks under the failure
@@ -5141,7 +5177,12 @@ impl KanbanStore {
     /// the task is auto-blocked with the last error (hermes
     /// DEFAULT_FAILURE_LIMIT = 2). With `use_worktrees`, scratch tasks
     /// created without an explicit `--workspace` keep the pre-P139
-    /// behaviour and run in a git worktree.
+    /// behaviour and run in a git worktree. `known_profiles` gates the
+    /// spawn loop (hermes `profile_exists` check): when `Some`, ready
+    /// tasks whose non-empty assignee is not in the set are parked in
+    /// `skipped_nonspawnable` — control-plane lanes pulled via
+    /// `kanban claim` that must never auto-spawn; `None` keeps the
+    /// legacy spawn-everything behaviour.
     pub fn dispatch_once<F>(
         &self,
         home: &Path,
@@ -5151,6 +5192,7 @@ impl KanbanStore {
         dry_run: bool,
         failure_limit: usize,
         stale_timeout_seconds: i64,
+        known_profiles: Option<&std::collections::HashSet<String>>,
     ) -> Result<DispatchResult>
     where
         F: FnMut(&Task, Option<&Path>) -> std::result::Result<Option<i64>, String>,
@@ -5185,6 +5227,24 @@ impl KanbanStore {
                 if running_count >= cap {
                     result.skipped_capped.push(id);
                     continue;
+                }
+            }
+            // Non-spawnable assignee gate (hermes): a task assigned to
+            // a name that is not a configured profile is a
+            // control-plane lane pulled via `kanban claim` — spawning
+            // it would crash-loop a worker against the unknown profile
+            // (#kanban-dispatcher-crash-loop).
+            if let Some(profiles) = known_profiles {
+                let lane = self
+                    .get_task(&id)?
+                    .and_then(|task| task.assignee)
+                    .map(|assignee| assignee.trim().to_string())
+                    .filter(|assignee| !assignee.is_empty());
+                if let Some(assignee) = lane {
+                    if !profiles.contains(&assignee) {
+                        result.skipped_nonspawnable.push(id);
+                        continue;
+                    }
                 }
             }
             // Respawn guard (hermes): defer tasks whose immediate
@@ -5467,7 +5527,7 @@ mod tests {
         store.ready_task(&second.id).unwrap();
 
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1234)), Some(1), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(1234)), Some(1), false, 2, 0, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, first.id);
@@ -5478,7 +5538,7 @@ mod tests {
 
         // Second tick with a higher cap picks up the remaining task.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5678)), Some(2), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(5678)), Some(2), false, 2, 0, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         assert_eq!(result.spawned[0].0, second.id);
@@ -5490,7 +5550,7 @@ mod tests {
         let task = make_task(&store, "probe");
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| panic!("dry run must not spawn"), None, true, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| panic!("dry run must not spawn"), None, true, 2, 0, None)
             .unwrap();
         assert_eq!(result.would_spawn, vec![task.id.clone()]);
         assert!(result.spawned.is_empty());
@@ -5505,14 +5565,14 @@ mod tests {
 
         // First failure: recorded, still ready-ish for retry.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom".into()), None, false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom".into()), None, false, 2, 0, None)
             .unwrap();
         assert_eq!(result.spawn_failed, vec![task.id.clone()]);
         assert!(result.auto_blocked.is_empty());
 
         // Second consecutive failure trips the limit → blocked.
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom again".into()), None, false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom again".into()), None, false, 2, 0, None)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         let blocked = store.get_task(&task.id).unwrap().unwrap();
@@ -5609,6 +5669,111 @@ mod tests {
         let promoted = store.recompute_ready_with_limit(5).unwrap();
         assert_eq!(promoted, vec![task.id.clone()]);
         assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "ready");
+    }
+
+    #[test]
+    fn dispatch_skips_unknown_assignee_lanes() {
+        let (dir, store) = temp_store();
+        let lane = store
+            .create_task(&NewTask {
+                title: "pulled by terminal".into(),
+                assignee: Some("orion-cc".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let alice = store
+            .create_task(&NewTask {
+                title: "real profile work".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let unassigned = make_task(&store, "default profile work");
+        for id in [&lane.id, &alice.id, &unassigned.id] {
+            store.ready_task(id).unwrap();
+        }
+        let profiles: std::collections::HashSet<String> =
+            ["alice".to_string()].into_iter().collect();
+        let result = store
+            .dispatch_once(
+                dir.path(),
+                false,
+                |_, _| Ok(Some(7)),
+                None,
+                false,
+                2,
+                0,
+                Some(&profiles),
+            )
+            .unwrap();
+        assert_eq!(result.skipped_nonspawnable, vec![lane.id.clone()]);
+        let mut spawned: Vec<String> =
+            result.spawned.into_iter().map(|(id, _)| id).collect();
+        spawned.sort();
+        let mut expected = vec![alice.id.clone(), unassigned.id.clone()];
+        expected.sort();
+        assert_eq!(spawned, expected);
+
+        // Dispatch claimed the spawned tasks; the probe now agrees the
+        // queue is correctly idle (only the claim-pulled lane remains).
+        assert!(!store.has_spawnable_ready(Some(&profiles)).unwrap());
+        // Legacy ungated semantics still see any ready task.
+        assert!(store.has_spawnable_ready(None).unwrap());
+    }
+
+    #[test]
+    fn dispatch_without_profile_gate_spawns_unknown_assignee() {
+        let (dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "legacy".into(),
+                assignee: Some("ghost".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&task.id).unwrap();
+        let result = store
+            .dispatch_once(dir.path(), false, |_, _| Ok(Some(9)), None, false, 2, 0, None)
+            .unwrap();
+        assert!(result.skipped_nonspawnable.is_empty());
+        assert_eq!(result.spawned.len(), 1);
+    }
+
+    #[test]
+    fn has_spawnable_ready_ignores_claimed_and_unknown_lanes() {
+        let (_dir, store) = temp_store();
+        let profiles: std::collections::HashSet<String> =
+            ["alice".to_string()].into_iter().collect();
+        assert!(!store.has_spawnable_ready(Some(&profiles)).unwrap());
+
+        let lane = store
+            .create_task(&NewTask {
+                title: "lane".into(),
+                assignee: Some("orion-research".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&lane.id).unwrap();
+        assert!(!store.has_spawnable_ready(Some(&profiles)).unwrap());
+
+        let real = store
+            .create_task(&NewTask {
+                title: "real".into(),
+                assignee: Some("alice".into()),
+                created_by: "tester".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.ready_task(&real.id).unwrap();
+        assert!(store.has_spawnable_ready(Some(&profiles)).unwrap());
+
+        // Claimed work no longer counts as spawnable.
+        store.claim_task(&real.id, "w", 60).unwrap();
+        assert!(!store.has_spawnable_ready(Some(&profiles)).unwrap());
     }
 
     #[test]
@@ -6606,7 +6771,7 @@ mod tests {
 
         let tick = || {
             store
-                .dispatch_once(dir.path(), false, |_, _| Err("exec format error".to_string()), Some(4), false, 2, 0)
+                .dispatch_once(dir.path(), false, |_, _| Err("exec format error".to_string()), Some(4), false, 2, 0, None)
                 .unwrap()
         };
 
@@ -6648,7 +6813,7 @@ mod tests {
             .unwrap();
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), false, |_, _| Err("boom".to_string()), Some(4), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("boom".to_string()), Some(4), false, 2, 0, None)
             .unwrap();
         assert_eq!(result.auto_blocked, vec![task.id.clone()]);
         assert!(result.spawn_failed.is_empty());
@@ -6670,7 +6835,7 @@ mod tests {
         let task = make_task(&store, "resilient");
         store.ready_task(&task.id).unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None)
             .unwrap();
         assert_eq!(
             store.get_task(&task.id).unwrap().unwrap().consecutive_failures,
@@ -6688,10 +6853,10 @@ mod tests {
         let other = make_task(&store, "blocked cycle");
         store.ready_task(&other.id).unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None)
             .unwrap();
         store
-            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0)
+            .dispatch_once(dir.path(), false, |_, _| Err("flaky".to_string()), Some(4), false, 2, 0, None)
             .unwrap();
         let t = store.get_task(&other.id).unwrap().unwrap();
         assert_eq!(t.status, "blocked");
@@ -7095,6 +7260,7 @@ mod tests {
                 false,
                 2,
                 0,
+                None,
             )
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
@@ -7129,6 +7295,7 @@ mod tests {
                 false,
                 2,
                 0,
+                None,
             )
             .unwrap();
         assert_eq!(result.spawn_failed, vec![task.id.clone()]);
@@ -7150,7 +7317,7 @@ mod tests {
         let task = make_task(&store, "legacy worktrees");
         store.ready_task(&task.id).unwrap();
         let result = store
-            .dispatch_once(dir.path(), true, |_, _| Ok(Some(7)), Some(2), false, 2, 0)
+            .dispatch_once(dir.path(), true, |_, _| Ok(Some(7)), Some(2), false, 2, 0, None)
             .unwrap();
         assert_eq!(result.spawned.len(), 1);
         let t = store.get_task(&task.id).unwrap().unwrap();
@@ -7302,6 +7469,7 @@ mod tests {
                 false,
                 2,
                 0,
+                None,
             )
             .unwrap();
         assert!(result.spawned.is_empty());

@@ -360,7 +360,13 @@
   粘性的 —— 最近一次 blocked/unblocked 事件是 worker/运维主动发起的
   `blocked`（#28712）—— 或失败计数已达到有效上限（任务 `max_retries`
   > 调度器 `failure_limit` > 默认 2，#35072）；调度器经
-  `dispatch_once` 透传自身配置的上限。
+  `dispatch_once` 透传自身配置的上限。P146 补上不可 spawn 门控与健康
+  探针：`dispatch_once` 接受配置的 profile 集合，把 assignee 不在集合
+  内的就绪任务归入 `skipped_nonspawnable`（只能经 claim 拉取的控制面
+  通道，绝不自动 spawn —— hermes #kanban-dispatcher-crash-loop）；
+  网关调度器的 stuck 警告改由 `has_spawnable_ready` 判定，就绪队列里
+  只有通道任务时视为"正常空闲"，仅在确有可 spawn 工作（未指派或已配
+  置 profile 的任务）等待时才告警。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

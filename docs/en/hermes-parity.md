@@ -405,7 +405,15 @@ performance and a single static binary.
   worker/operator `blocked` (#28712) — or the failure count already
   reached the effective limit (per-task `max_retries` > dispatcher
   `failure_limit` > default 2, #35072); the dispatcher passes its
-  configured limit through `dispatch_once`.
+  configured limit through `dispatch_once`. P146 added the
+  non-spawnable gate + health probe: `dispatch_once` takes the
+  configured profile set and parks ready tasks whose assignee is not
+  a configured profile in `skipped_nonspawnable` (claim-pulled
+  control-plane lanes that must never auto-spawn — hermes
+  #kanban-dispatcher-crash-loop), and the gateway dispatcher's stuck
+  warning now consults `has_spawnable_ready` so a ready queue full of
+  lanes reads as "correctly idle", firing only when spawnable work
+  (unassigned or known-profile tasks) actually waits.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

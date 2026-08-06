@@ -3604,8 +3604,9 @@ pub fn spawn_kanban_dispatcher(
         let mut interval =
             tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(5)));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // Health telemetry (hermes HEALTH_WINDOW): warn when the ready
-        // queue stays non-empty but nothing spawns, throttled to 300 s.
+        // Health telemetry (hermes HEALTH_WINDOW): warn when spawnable
+        // ready work keeps waiting but nothing spawns, throttled to
+        // 300 s. Claim-pulled lanes don't count (has_spawnable_ready).
         const HEALTH_WINDOW: u32 = 6;
         let mut bad_ticks: u32 = 0;
         let mut last_warn_at: i64 = 0;
@@ -3619,9 +3620,10 @@ pub fn spawn_kanban_dispatcher(
                 let home = crate::config::ulnclaw_home();
                 // Live re-read so [kanban] stale_timeout_seconds edits
                 // take effect without a gateway restart.
-                let stale_timeout = crate::config::UlncLawConfig::load(None)
-                    .map(|c| c.kanban.stale_timeout_seconds)
-                    .unwrap_or(14400);
+                let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+                let stale_timeout = config.kanban.stale_timeout_seconds;
+                let known_profiles: std::collections::HashSet<String> =
+                    config.profiles.keys().cloned().collect();
                 match store.dispatch_once(
                     &home,
                     use_worktrees,
@@ -3632,6 +3634,7 @@ pub fn spawn_kanban_dispatcher(
                     false,
                     2,
                     stale_timeout,
+                    Some(&known_profiles),
                 ) {
                     Ok(result) => {
                         if !result.spawned.is_empty() || !result.reclaimed.is_empty() {
@@ -3642,9 +3645,12 @@ pub fn spawn_kanban_dispatcher(
                                 result.spawned.len()
                             );
                         }
+                        // Hermes health probe: only count work the
+                        // dispatcher would actually spawn (unknown
+                        // assignees are claim-pulled lanes, correctly
+                        // idle — not stuck).
                         let ready_pending = store
-                            .list_tasks(None, Some("ready"), None, 1)
-                            .map(|tasks| !tasks.is_empty())
+                            .has_spawnable_ready(Some(&known_profiles))
                             .unwrap_or(false);
                         Some((result.spawned.len(), ready_pending))
                     }
@@ -3668,7 +3674,7 @@ pub fn spawn_kanban_dispatcher(
                         .unwrap_or(0);
                     if now - last_warn_at >= 300 {
                         tracing::warn!(
-                            "kanban dispatcher stuck: ready queue non-empty for                              {bad_ticks} consecutive ticks but 0 workers spawned.                              Check profile health (binary, PATH, credentials) and                              `ulnclaw kanban list --status ready`."
+                            "kanban dispatcher stuck: spawnable ready tasks waiting for                              {bad_ticks} consecutive ticks but 0 workers spawned.                              Check profile health (binary, PATH, credentials) and                              `ulnclaw kanban list --status ready`."
                         );
                         last_warn_at = now;
                     }

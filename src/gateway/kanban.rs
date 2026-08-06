@@ -485,6 +485,8 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
     let dry_run = body.dry_run.unwrap_or(false);
     let use_worktrees = config.kanban.worktrees;
     let stale_timeout = config.kanban.stale_timeout_seconds;
+    let known_profiles: std::collections::HashSet<String> =
+        config.profiles.keys().cloned().collect();
     // Spawning child processes is blocking work — keep it off the axum task.
     let outcome = tokio::task::spawn_blocking(move || {
         store.dispatch_once(
@@ -495,6 +497,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
             dry_run,
             2,
             stale_timeout,
+            Some(&known_profiles),
         )
     })
     .await;
@@ -508,6 +511,7 @@ pub async fn dispatch(Json(body): Json<DispatchBody>) -> Response {
             "would_spawn": result.would_spawn,
             "respawn_guarded": result.respawn_guarded,
             "skipped_capped": result.skipped_capped,
+            "skipped_nonspawnable": result.skipped_nonspawnable,
             "spawn_failed": result.spawn_failed,
             "auto_blocked": result.auto_blocked,
         }))

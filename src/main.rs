@@ -5526,9 +5526,10 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                 std::process::id()
             );
             let home = ulnclaw::config::ulnclaw_home();
-            let stale_timeout = ulnclaw::config::UlncLawConfig::load(None)
-                .map(|c| c.kanban.stale_timeout_seconds)
-                .unwrap_or(14400);
+            let boot_config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
+            let stale_timeout = boot_config.kanban.stale_timeout_seconds;
+            let known_profiles: std::collections::HashSet<String> =
+                boot_config.profiles.keys().cloned().collect();
             loop {
                 match store.dispatch_once(
                     &home,
@@ -5540,6 +5541,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     false,
                     2,
                     stale_timeout,
+                    Some(&known_profiles),
                 ) {
                     Ok(result)
                         if !result.spawned.is_empty() || !result.reclaimed.is_empty() =>
@@ -5721,6 +5723,8 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             let home = ulnclaw::config::ulnclaw_home();
             let config = ulnclaw::config::UlncLawConfig::load(None).unwrap_or_default();
             let use_worktrees = config.kanban.worktrees;
+            let known_profiles: std::collections::HashSet<String> =
+                config.profiles.keys().cloned().collect();
             let result = store
                 .dispatch_once(
                     &home,
@@ -5732,6 +5736,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     dry_run,
                     failure_limit.max(1),
                     config.kanban.stale_timeout_seconds,
+                    Some(&known_profiles),
                 )
                 .map_err(|e| e.to_string())?;
             if json {
@@ -5760,6 +5765,9 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             }
             for id in &result.skipped_capped {
                 println!("  ⏭ {id} skipped (concurrency cap)");
+            }
+            for id in &result.skipped_nonspawnable {
+                println!("  ⏭ {id} skipped (assignee is not a configured profile — claim-pulled lane)");
             }
             for id in &result.auto_blocked {
                 println!("  ⊘ {id} auto-blocked (spawn failures)");
