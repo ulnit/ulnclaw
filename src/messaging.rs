@@ -110,6 +110,14 @@ pub struct MessagingConfig {
     /// `platforms.simplex` plugin).
     #[serde(default)]
     pub simplex: crate::simplex::SimplexConfig,
+    /// Microsoft Teams via the raw Bot Framework protocol (hermes
+    /// `platforms.teams` plugin), mounted on the gateway router.
+    #[serde(default)]
+    pub teams: crate::teams::TeamsConfig,
+    /// LINE Messaging API via gateway webhook (hermes `platforms.line`
+    /// plugin).
+    #[serde(default)]
+    pub line: crate::line::LineConfig,
 }
 
 fn default_pairing() -> bool {
@@ -868,8 +876,15 @@ pub async fn run_messaging(
             crate::simplex::run(cfg, dispatcher, pairing).await;
         }));
     }
+    if msg.teams.enabled {
+        // Gateway-mounted webhook platform: register sender + runtime.
+        crate::teams::register(&msg.teams);
+    }
+    if msg.line.enabled {
+        crate::line::register(&msg.line);
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex] enabled = true (sms rides the gateway /webhooks/twilio route))");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex] enabled = true (sms/teams/line ride gateway webhook routes))");
         return;
     }
     for task in tasks {

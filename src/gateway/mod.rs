@@ -710,6 +710,14 @@ fn attach_webhook_routes(
         router = router.route("/webhooks/twilio", post(twilio_webhook_route));
         tracing::info!("gateway webhook route mounted: /webhooks/twilio");
     }
+    if config.messaging.teams.enabled {
+        router = router.route("/webhooks/teams", post(teams_webhook_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/teams");
+    }
+    if config.messaging.line.enabled {
+        router = router.route("/webhooks/line", post(line_webhook_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/line");
+    }
     router
 }
 
@@ -956,6 +964,45 @@ async fn twilio_webhook_route(
         result.body,
     )
         .into_response()
+}
+
+async fn teams_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let pairing = if config.messaging.pairing {
+        Some(crate::pairing::PairingStore::open(&crate::config::ulnclaw_home()))
+    } else {
+        None
+    };
+    let result = crate::teams::teams_handle_webhook(&dispatcher, pairing.as_ref(), &body).await;
+    let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, axum::Json(result.body)).into_response()
+}
+
+async fn line_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let header_pairs: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let pairing = if config.messaging.pairing {
+        Some(crate::pairing::PairingStore::open(&crate::config::ulnclaw_home()))
+    } else {
+        None
+    };
+    let result =
+        crate::line::line_handle_webhook(&dispatcher, pairing.as_ref(), &body, &header_pairs)
+            .await;
+    let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, axum::Json(result.body)).into_response()
 }
 
 async fn bluebubbles_webhook_route(
