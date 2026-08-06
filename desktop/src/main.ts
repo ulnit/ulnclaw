@@ -11,6 +11,7 @@ import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
 import { ModelPickerOverlay } from "./model-picker";
 import { FindBar } from "./find-bar";
+import { CommandPalette } from "./command-palette";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -52,6 +53,7 @@ const state = {
   hatch: null as HatchOverlay | null,
   picker: null as ModelPickerOverlay | null,
   findBar: null as FindBar | null,
+  palette: null as CommandPalette | null,
   view: "chat" as "chat" | "kanban" | "projects" | "jobs",
 };
 
@@ -644,6 +646,32 @@ async function start(): Promise<void> {
   // Find-in-chat bar (hermes find-bar parity, DOM-based for the Tauri
   // webview): Ctrl/Cmd+F opens over the chat view, Enter steps.
   state.findBar = new FindBar(chatMain, el.messages, () => state.view === "chat");
+
+  // Command palette (hermes command-palette parity): Ctrl/Cmd+K fuzzy
+  // launcher for views, session switching, and session actions.
+  state.palette = new CommandPalette({
+    sessions: () => state.sessions,
+    currentSessionId: () => state.current?.id ?? null,
+    newSession: () => el.newSession.click(),
+    openSession: async (id) => {
+      const session = state.sessions.find((s) => s.id === id);
+      if (session) await openSession(session);
+    },
+    renameSession: async () => {
+      if (state.current) await renameSession(state.current);
+    },
+    deleteSession: async () => {
+      if (state.current) await deleteSession(state.current);
+    },
+    modelPicker: () => state.picker?.open() ?? Promise.resolve(),
+    findInChat: () => {
+      switchView("chat");
+      state.findBar?.open();
+    },
+    switchView,
+    openSettings: () => el.settingsBtn.click(),
+    refreshSessions: () => refreshSessions(),
+  });
 
   await pollHealth();
   await refreshSessions();

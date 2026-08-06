@@ -1,0 +1,216 @@
+// Desktop command palette — GUI twin of hermes' command palette
+// (apps/desktop/src/app/command-palette/): Ctrl/Cmd+K fuzzy launcher
+// for navigation, session switching, and session actions. Scoped to
+// the ulnclaw desktop surfaces (chat/kanban/projects/jobs views).
+// Dependency-free <dialog> like the model-picker/hatch overlays.
+
+import type { SessionRow } from "./gateway";
+
+export interface PaletteCommand {
+  id: string;
+  label: string;
+  group: string;
+  hint?: string;
+  run: () => void | Promise<void>;
+}
+
+export interface CommandPaletteHooks {
+  sessions(): SessionRow[];
+  currentSessionId(): string | null;
+  newSession(): void;
+  openSession(id: string): void | Promise<void>;
+  renameSession(): void | Promise<void>;
+  deleteSession(): void | Promise<void>;
+  modelPicker(): void | Promise<void>;
+  findInChat(): void;
+  switchView(view: "chat" | "kanban" | "projects" | "jobs"): void;
+  openSettings(): void;
+  refreshSessions(): void | Promise<void>;
+}
+
+/** Subsequence fuzzy score (higher = better, null = no match). */
+function fuzzyScore(query: string, label: string): number | null {
+  if (query.length === 0) return 1;
+  const q = query.toLowerCase();
+  const text = label.toLowerCase();
+  if (text.includes(q)) {
+    // Contiguous matches win; earlier is better.
+    return 1000 - text.indexOf(q) + q.length * 4;
+  }
+  let qi = 0;
+  let score = 0;
+  let streak = 0;
+  for (let ti = 0; ti < text.length && qi < q.length; ti += 1) {
+    if (text[ti] === q[qi]) {
+      qi += 1;
+      streak += 1;
+      score += 2 + streak * 2 - ti * 0.01;
+    } else {
+      streak = 0;
+    }
+  }
+  return qi === q.length ? score : null;
+}
+
+export class CommandPalette {
+  private dialog: HTMLDialogElement;
+  private input: HTMLInputElement;
+  private list: HTMLDivElement;
+  private items: PaletteCommand[] = [];
+  private selected = 0;
+  private keyHandler: (event: KeyboardEvent) => void;
+
+  constructor(private hooks: CommandPaletteHooks) {
+    this.dialog = document.createElement("dialog");
+    this.dialog.className = "command-palette-dialog";
+    this.input = document.createElement("input");
+    this.input.className = "command-palette-input";
+    this.input.placeholder = "Type a command… (Esc to close)";
+    this.list = document.createElement("div");
+    this.list.className = "command-palette-list";
+    this.dialog.append(this.input, this.list);
+    document.body.appendChild(this.dialog);
+
+    this.input.addEventListener("input", () => this.render());
+    this.input.addEventListener("keydown", (event) => this.onKey(event));
+    this.dialog.addEventListener("click", (event) => {
+      // Click on the backdrop closes.
+      if (event.target === this.dialog) this.close();
+    });
+    this.keyHandler = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        this.toggle();
+      }
+    };
+    window.addEventListener("keydown", this.keyHandler);
+  }
+
+  toggle(): void {
+    if (this.dialog.open) {
+      this.close();
+    } else {
+      void this.open();
+    }
+  }
+
+  async open(): Promise<void> {
+    this.input.value = "";
+    this.selected = 0;
+    this.items = await this.buildCommands();
+    this.render();
+    this.dialog.showModal();
+    this.input.focus();
+  }
+
+  close(): void {
+    if (this.dialog.open) this.dialog.close();
+  }
+
+  private async buildCommands(): Promise<PaletteCommand[]> {
+    const hooks = this.hooks;
+    const commands: PaletteCommand[] = [
+      { id: "new-session", label: "New session", group: "Sessions", hint: "start a fresh chat", run: () => hooks.newSession() },
+      { id: "view-chat", label: "Go to Chat", group: "Navigate", run: () => hooks.switchView("chat") },
+      { id: "view-kanban", label: "Go to Kanban", group: "Navigate", run: () => hooks.switchView("kanban") },
+      { id: "view-projects", label: "Go to Projects", group: "Navigate", run: () => hooks.switchView("projects") },
+      { id: "view-jobs", label: "Go to Jobs (cron)", group: "Navigate", run: () => hooks.switchView("jobs") },
+      { id: "find", label: "Find in chat", group: "Session", hint: "Ctrl/Cmd+F", run: () => hooks.findInChat() },
+      { id: "model", label: "Model for this session…", group: "Session", run: () => hooks.modelPicker() },
+      { id: "rename", label: "Rename session…", group: "Session", run: () => hooks.renameSession() },
+      { id: "delete", label: "Delete session…", group: "Session", run: () => hooks.deleteSession() },
+      { id: "refresh", label: "Refresh session list", group: "Gateway", run: () => hooks.refreshSessions() },
+      { id: "settings", label: "Open gateway settings…", group: "Gateway", run: () => hooks.openSettings() },
+    ];
+    const current = hooks.currentSessionId();
+    for (const session of hooks.sessions()) {
+      const title = session.title || session.id.slice(0, 8);
+      commands.push({
+        id: `switch-${session.id}`,
+        label: `Switch to: ${title}`,
+        group: "Switch session",
+        hint: session.id === current ? "current" : undefined,
+        run: () => hooks.openSession(session.id),
+      });
+    }
+    return commands;
+  }
+
+  private matches(): PaletteCommand[] {
+    const query = this.input.value.trim();
+    const scored = this.items
+      .map((item) => ({ item, score: fuzzyScore(query, item.label) }))
+      .filter((entry): entry is { item: PaletteCommand; score: number } => entry.score !== null)
+      .sort((a, b) => b.score - a.score);
+    return scored.map((entry) => entry.item).slice(0, 30);
+  }
+
+  private render(): void {
+    const visible = this.matches();
+    this.selected = Math.min(this.selected, Math.max(visible.length - 1, 0));
+    this.list.innerHTML = "";
+    let lastGroup = "";
+    visible.forEach((item, index) => {
+      if (item.group !== lastGroup) {
+        lastGroup = item.group;
+        const header = document.createElement("div");
+        header.className = "command-palette-group";
+        header.textContent = item.group;
+        this.list.appendChild(header);
+      }
+      const row = document.createElement("div");
+      row.className = "command-palette-item" + (index === this.selected ? " active" : "");
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      row.appendChild(label);
+      if (item.hint) {
+        const hint = document.createElement("span");
+        hint.className = "command-palette-hint";
+        hint.textContent = item.hint;
+        row.appendChild(hint);
+      }
+      row.addEventListener("mouseenter", () => {
+        this.selected = index;
+        this.highlight(visible);
+      });
+      row.onclick = () => void this.runItem(item);
+      this.list.appendChild(row);
+    });
+    if (visible.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "command-palette-empty";
+      empty.textContent = "No matching commands";
+      this.list.appendChild(empty);
+    }
+  }
+
+  private highlight(visible: PaletteCommand[]): void {
+    const rows = this.list.querySelectorAll<HTMLElement>(".command-palette-item");
+    rows.forEach((row, index) => row.classList.toggle("active", index === this.selected));
+  }
+
+  private onKey(event: KeyboardEvent): void {
+    const visible = this.matches();
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      this.selected = Math.min(this.selected + 1, Math.max(visible.length - 1, 0));
+      this.highlight(visible);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      this.selected = Math.max(this.selected - 1, 0);
+      this.highlight(visible);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const item = visible[this.selected];
+      if (item) void this.runItem(item);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      this.close();
+    }
+  }
+
+  private async runItem(item: PaletteCommand): Promise<void> {
+    this.close();
+    await item.run();
+  }
+}
