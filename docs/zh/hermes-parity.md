@@ -354,7 +354,13 @@
   summary/metadata，缺少 run 行时自动合成；发出 `edited` 事件），
   terminal kanban 工具新增 `summary` + `metadata` 参数供 worker 交付
   结构化事实，block 操作先写 `BLOCKED: <reason>` 评论再落锁
-  （hermes `_cmd_block` 对齐）。
+  （hermes `_cmd_block` 对齐）。P145 把 `recompute_ready` 扩展到
+  blocked 列：父任务全部 done/archived 的阻塞任务自动恢复为 ready
+  （保留 `consecutive_failures`，发出 `promoted` 事件），除非阻塞是
+  粘性的 —— 最近一次 blocked/unblocked 事件是 worker/运维主动发起的
+  `blocked`（#28712）—— 或失败计数已达到有效上限（任务 `max_retries`
+  > 调度器 `failure_limit` > 默认 2，#35072）；调度器经
+  `dispatch_once` 透传自身配置的上限。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

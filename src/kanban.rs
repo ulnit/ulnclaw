@@ -36,6 +36,11 @@ pub const VALID_BLOCK_KINDS: &[&str] = &[
 /// this many recurrences accumulate (hermes `BLOCK_RECURRENCE_LIMIT`).
 pub const BLOCK_RECURRENCE_LIMIT: i64 = 2;
 
+/// Consecutive failures that permanently block a task when neither a
+/// per-task `max_retries` nor a dispatcher `failure_limit` is set
+/// (hermes `DEFAULT_FAILURE_LIMIT`).
+pub const DEFAULT_FAILURE_LIMIT: i64 = 2;
+
 /// Terminal event kinds that wake the creator session (hermes
 /// `_WAKE_KINDS`). `archived` / `unblocked` are claimed by the
 /// notifier's terminal set but stay silent.
@@ -4934,23 +4939,54 @@ impl KanbanStore {
         Ok(reclaimed)
     }
 
-    /// Promote `todo` tasks whose parents are all `done` to `ready`
-    /// (hermes `recompute_ready`). Returns promoted task ids.
+    /// Promote `todo` tasks whose parents are all `done`/`archived` to
+    /// `ready` (hermes `recompute_ready`). Returns promoted task ids.
+    /// Uses [`DEFAULT_FAILURE_LIMIT`] for the blocked-column guard;
+    /// dispatchers pass their configured limit via
+    /// [`Self::recompute_ready_with_limit`].
     pub fn recompute_ready(&self) -> Result<Vec<String>> {
-        let todos: Vec<String> = {
+        self.recompute_ready_with_limit(DEFAULT_FAILURE_LIMIT)
+    }
+
+    /// Full hermes `recompute_ready`: the `blocked` column is also
+    /// considered so a task blocked purely by a parent dependency
+    /// unblocks itself when the parents finish, except when
+    /// 1. the block is sticky — the latest `blocked`/`unblocked` event
+    ///    is a worker/operator-initiated `blocked` (#28712), or
+    /// 2. `consecutive_failures` already reached the effective failure
+    ///    limit (per-task `max_retries` > `failure_limit` arg), so the
+    ///    circuit breaker can accumulate across recovery cycles
+    ///    (#35072).
+    /// Blocked auto-recovery preserves the failure counters (hermes)
+    /// and emits `promoted`.
+    pub fn recompute_ready_with_limit(&self, failure_limit: i64) -> Result<Vec<String>> {
+        let candidates: Vec<(String, String, i64, Option<i64>)> = {
             let conn = self.conn.lock().unwrap();
             let mut stmt = conn
-                .prepare("SELECT id FROM tasks WHERE status = 'todo'")
+                .prepare(
+                    "SELECT id, status, consecutive_failures, max_retries                      FROM tasks WHERE status IN ('todo', 'blocked')",
+                )
                 .map_err(db_error("recompute"))?;
             let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                })
                 .map_err(db_error("recompute"))?;
-            let found = rows.collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(db_error("recompute"))?;
-            found
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error("recompute"))?
         };
         let mut promoted = Vec::new();
-        for id in todos {
+        for (id, status, failures, max_retries) in candidates {
+            if status == "blocked" && self.has_sticky_block(&id)? {
+                // Worker / operator asked for review — only an explicit
+                // unblock may release it (hermes #28712).
+                continue;
+            }
             let parents = self.parents_of(&id)?;
             let mut all_done = true;
             for parent in parents {
@@ -4962,12 +4998,49 @@ impl KanbanStore {
                     }
                 }
             }
-            if all_done {
-                self.ready_task(&id)?;
-                promoted.push(id);
+            if !all_done {
+                continue;
             }
+            if status == "blocked" {
+                let effective_limit = max_retries.unwrap_or(failure_limit);
+                if failures >= effective_limit {
+                    // Circuit-breaker territory — never auto-recover
+                    // (hermes #35072).
+                    continue;
+                }
+                self.transition(
+                    &id,
+                    &["blocked"],
+                    "ready",
+                    "promoted",
+                    serde_json::json!({ "reason": "auto-recover: parents done" }),
+                    ", claim_lock = NULL, claim_expires = NULL, worker_pid = NULL",
+                    vec![],
+                )?;
+                self.recover_stale_run(&id, "invariant recovery on blocked auto-recover")?;
+            } else {
+                self.ready_task(&id)?;
+            }
+            promoted.push(id);
         }
         Ok(promoted)
+    }
+
+    /// True when the task's latest `blocked`/`unblocked` event is a
+    /// worker/operator-initiated `blocked` (hermes `_has_sticky_block`,
+    /// #28712). Circuit-breaker blocks emit `gave_up`, not `blocked`,
+    /// so they are not sticky and may auto-recover.
+    fn has_sticky_block(&self, task_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let kind: Option<String> = conn
+            .query_row(
+                "SELECT kind FROM task_events WHERE task_id = ?1                  AND kind IN ('blocked', 'unblocked') ORDER BY id DESC LIMIT 1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error("sticky block"))?;
+        Ok(kind.as_deref() == Some("blocked"))
     }
 
     /// Record a non-success outcome and maybe trip the circuit breaker
@@ -5055,7 +5128,9 @@ impl KanbanStore {
     }
 
     /// Run one dispatcher tick (hermes `dispatch_once`, scoped port):
-    /// 1. reclaim stale claims, 2. promote parent-done todos, 3. spawn
+    /// 1. reclaim stale claims, 2. promote parent-done todos (and
+    ///    auto-recover non-sticky blocked tasks under the failure
+    ///    limit), 3. spawn
     /// ready tasks (priority desc, oldest first) up to the live
     /// concurrency cap `max_spawn` (counting already-running tasks).
     /// Before each spawn the task workspace is resolved (hermes
@@ -5085,7 +5160,7 @@ impl KanbanStore {
         result.reclaimed = self.release_stale_claims()?;
         result.stale = self.detect_stale_running(stale_timeout_seconds)?;
         result.crashed = self.detect_crashed_workers()?;
-        result.promoted = self.recompute_ready()?;
+        result.promoted = self.recompute_ready_with_limit(failure_limit as i64)?;
 
         let running = self.list_tasks(None, Some("running"), None, 10_000)?;
         let mut running_count = running.len();
@@ -5443,6 +5518,97 @@ mod tests {
         let blocked = store.get_task(&task.id).unwrap().unwrap();
         assert_eq!(blocked.status, "blocked");
         assert!(blocked.result.is_none());
+    }
+
+    #[test]
+    fn recompute_ready_auto_recovers_breaker_blocked_children() {
+        let (_dir, store) = temp_store();
+        let parent = make_task(&store, "parent");
+        let child = make_task(&store, "child");
+        store.link_tasks(&parent.id, &child.id).unwrap();
+
+        // Park the parent in ready so recompute never touches it
+        // again, then circuit-breaker the child: two recorded failures
+        // at limit 2 trip ready → blocked with a `gave_up` event (not
+        // sticky).
+        store.ready_task(&parent.id).unwrap();
+        store.ready_task(&child.id).unwrap();
+        assert!(!store
+            .record_task_failure(&child.id, "crash 1", "crashed", 2)
+            .unwrap());
+        assert!(store
+            .record_task_failure(&child.id, "crash 2", "crashed", 2)
+            .unwrap());
+        assert_eq!(
+            store.get_task(&child.id).unwrap().unwrap().status,
+            "blocked"
+        );
+
+        // Parent still open — nothing to recover.
+        assert!(store.recompute_ready().unwrap().is_empty());
+
+        // Parent completes; the default limit (2) still holds the task
+        // at failures == 2 back (hermes #35072)...
+        store.complete_task(&parent.id, None).unwrap();
+        assert!(store.recompute_ready().unwrap().is_empty());
+
+        // ...but a dispatcher configured with a higher limit recovers
+        // it, preserving the failure counter for the breaker.
+        let promoted = store.recompute_ready_with_limit(3).unwrap();
+        assert_eq!(promoted, vec![child.id.clone()]);
+        let child = store.get_task(&child.id).unwrap().unwrap();
+        assert_eq!(child.status, "ready");
+        assert_eq!(child.consecutive_failures, 2);
+        assert!(child.claim_lock.is_none());
+    }
+
+    #[test]
+    fn recompute_ready_skips_sticky_worker_blocks() {
+        let (_dir, store) = temp_store();
+        let parent = make_task(&store, "parent");
+        let child = make_task(&store, "child");
+        store.link_tasks(&parent.id, &child.id).unwrap();
+
+        // Worker-initiated block (emits a `blocked` event → sticky).
+        store.ready_task(&child.id).unwrap();
+        store
+            .block_task(&child.id, "review-required: needs a human")
+            .unwrap();
+        store.complete_task(&parent.id, None).unwrap();
+
+        // Even with parents done and a generous limit, the sticky
+        // block stays put until an explicit unblock (hermes #28712).
+        assert!(store.recompute_ready_with_limit(99).unwrap().is_empty());
+        assert_eq!(
+            store.get_task(&child.id).unwrap().unwrap().status,
+            "blocked"
+        );
+
+        // Explicit unblock flips the sticky predicate; parents are done
+        // so it lands straight in ready.
+        let unblocked = store.unblock_task(&child.id).unwrap();
+        assert_eq!(unblocked.status, "ready");
+    }
+
+    #[test]
+    fn recompute_ready_recovers_parentless_breaker_block_under_raised_limit() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "flaky");
+        store.ready_task(&task.id).unwrap();
+        assert!(!store
+            .record_task_failure(&task.id, "spawn failed", "spawn_failed", 2)
+            .unwrap());
+        assert!(store
+            .record_task_failure(&task.id, "spawn failed again", "spawn_failed", 2)
+            .unwrap());
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "blocked");
+
+        // Default limit: failures == limit, so no auto-recover.
+        assert!(store.recompute_ready().unwrap().is_empty());
+        // Raised limit (transient infra error cleared) recovers it.
+        let promoted = store.recompute_ready_with_limit(5).unwrap();
+        assert_eq!(promoted, vec![task.id.clone()]);
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "ready");
     }
 
     #[test]
@@ -7319,12 +7485,6 @@ mod tests {
         // Parent still open → unblock lands in todo, not ready.
         let unblocked = store.unblock_task(&child.id).unwrap();
         assert_eq!(unblocked.status, "todo");
-        let event = store
-            .events(&child.id)
-            .unwrap()
-            .into_iter()
-            .find(|e| e.kind == "unblocked")
-            .unwrap();
         assert_eq!(store.get_task(&child.id).unwrap().unwrap().status, "todo");
         let event = store
             .events(&child.id)

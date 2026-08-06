@@ -398,6 +398,14 @@ performance and a single static binary.
   terminal kanban tool gained `summary` + `metadata` so workers hand
   off structured facts, and blocking now writes a `BLOCKED: <reason>`
   comment before the state change (hermes `_cmd_block` parity).
+  P145 extended `recompute_ready` to the blocked column: a blocked
+  task whose parents are all done/archived auto-recovers to ready
+  (preserving `consecutive_failures`, `promoted` event) unless the
+  block is sticky — latest `blocked`/`unblocked` event is a
+  worker/operator `blocked` (#28712) — or the failure count already
+  reached the effective limit (per-task `max_retries` > dispatcher
+  `failure_limit` > default 2, #35072); the dispatcher passes its
+  configured limit through `dispatch_once`.
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the
