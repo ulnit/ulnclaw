@@ -74,6 +74,14 @@ pub struct DingTalkConfig {
     pub allowed_users: Vec<String>,
     /// Regex wake words that trigger the bot in groups.
     pub mention_patterns: Vec<String>,
+    /// AI Card template id (`card_template_id`, fallback
+    /// `DINGTALK_CARD_TEMPLATE_ID`). When set, replies ride a streaming
+    /// AI Card (hermes `_create_and_stream_card`) instead of the session
+    /// webhook markdown.
+    pub card_template_id: String,
+    /// Robot code for card delivery (fallback `DINGTALK_ROBOT_CODE`,
+    /// then `client_id` — hermes `robot_code or client_id`).
+    pub robot_code: String,
 }
 
 impl Default for DingTalkConfig {
@@ -87,6 +95,8 @@ impl Default for DingTalkConfig {
             allowed_chats: Vec::new(),
             allowed_users: Vec::new(),
             mention_patterns: Vec::new(),
+            card_template_id: String::new(),
+            robot_code: String::new(),
         }
     }
 }
@@ -114,6 +124,13 @@ fn env_csv(name: &str) -> Option<Vec<String>> {
     })
 }
 
+/// DingTalk API base — normally `https://api.dingtalk.com`; the
+/// `DINGTALK_API_BASE` override exists for tests and corporate proxies
+/// (mirrors the slack/telegram/discord pattern).
+fn dingtalk_api_base() -> String {
+    env_trim("DINGTALK_API_BASE").unwrap_or_else(|| API_BASE.to_string())
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedDingTalk {
     pub client_id: String,
@@ -123,6 +140,8 @@ pub struct ResolvedDingTalk {
     pub allowed_chats: Vec<String>,
     pub allowed_users: Vec<String>,
     pub mention_patterns: Vec<String>,
+    pub card_template_id: String,
+    pub robot_code: String,
 }
 
 impl DingTalkConfig {
@@ -154,6 +173,10 @@ impl DingTalkConfig {
             allowed_users: env_csv("DINGTALK_ALLOWED_USERS")
                 .unwrap_or_else(|| self.allowed_users.clone()),
             mention_patterns,
+            card_template_id: env_trim("DINGTALK_CARD_TEMPLATE_ID")
+                .unwrap_or_else(|| self.card_template_id.trim().to_string()),
+            robot_code: env_trim("DINGTALK_ROBOT_CODE")
+                .unwrap_or_else(|| self.robot_code.trim().to_string()),
         }
     }
 }
@@ -272,7 +295,7 @@ impl Runtime {
         }
         let resp = self
             .client
-            .post(format!("{API_BASE}/v1.0/oauth2/accessToken"))
+            .post(format!("{}/v1.0/oauth2/accessToken", dingtalk_api_base()))
             .json(&json!({"appKey": self.cfg.client_id, "appSecret": self.cfg.client_secret}))
             .timeout(REQUEST_TIMEOUT)
             .send()
@@ -431,6 +454,151 @@ impl Runtime {
             }
         }
         Ok(())
+    }
+
+    /// Robot code for card delivery — configured value wins, falling back
+    /// to client_id (hermes `self._robot_code = robot_code or client_id`).
+    fn robot_code(&self) -> String {
+        if self.cfg.robot_code.is_empty() {
+            self.cfg.client_id.clone()
+        } else {
+            self.cfg.robot_code.clone()
+        }
+    }
+
+    /// hermes `_create_and_stream_card` step 1 — create the card instance
+    /// (STREAM callback type, forwardable group/robot space models).
+    async fn create_card(&self, token: &str, out_track_id: &str) -> Result<(), String> {
+        let body = json!({
+            "cardTemplateId": self.cfg.card_template_id,
+            "outTrackId": out_track_id,
+            "cardData": {"cardParamMap": {"content": ""}},
+            "callbackType": "STREAM",
+            "imGroupOpenSpaceModel": {"supportForward": true},
+            "imRobotOpenSpaceModel": {"supportForward": true},
+        });
+        let resp = self
+            .client
+            .post(format!("{}/v1.0/card/instances", dingtalk_api_base()))
+            .header("x-acs-dingtalk-access-token", token)
+            .json(&body)
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| format!("createCard: {e}"))?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("createCard → {status}: {text}"));
+        }
+        Ok(())
+    }
+
+    /// hermes step 2 — deliver into the conversation: group space
+    /// `dtv1.card//IM_GROUP.<conversationId>` with the robot code, DM
+    /// space `dtv1.card//IM_ROBOT.<senderStaffId>` (hermes skips DM cards
+    /// without a staff id).
+    async fn deliver_card(
+        &self,
+        token: &str,
+        out_track_id: &str,
+        is_group: bool,
+        conversation_id: &str,
+        sender_staff_id: &str,
+    ) -> Result<(), String> {
+        let mut body = json!({
+            "outTrackId": out_track_id,
+            "userIdType": 1,
+        });
+        if is_group {
+            body["openSpaceId"] = json!(format!("dtv1.card//IM_GROUP.{conversation_id}"));
+            body["imGroupOpenDeliverModel"] = json!({"robotCode": self.robot_code()});
+        } else {
+            if sender_staff_id.is_empty() {
+                return Err("AI Card skipped: missing sender_staff_id for DM".into());
+            }
+            body["openSpaceId"] = json!(format!("dtv1.card//IM_ROBOT.{sender_staff_id}"));
+            body["imRobotOpenDeliverModel"] = json!({"spaceType": "IM_ROBOT"});
+        }
+        let resp = self
+            .client
+            .post(format!("{}/v1.0/card/instances/deliver", dingtalk_api_base()))
+            .header("x-acs-dingtalk-access-token", token)
+            .json(&body)
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| format!("deliverCard: {e}"))?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("deliverCard → {status}: {text}"));
+        }
+        Ok(())
+    }
+
+    /// hermes `_stream_card_content` — full-content streaming update;
+    /// `finalize` closes the streaming indicator (hermes
+    /// `REQUIRES_EDIT_FINALIZE`).
+    async fn stream_card_content(
+        &self,
+        token: &str,
+        out_track_id: &str,
+        content: &str,
+        finalize: bool,
+    ) -> Result<(), String> {
+        let truncated: String = content.chars().take(MAX_MESSAGE_LENGTH).collect();
+        let body = json!({
+            "outTrackId": out_track_id,
+            "guid": uuid::Uuid::new_v4().to_string(),
+            "key": "content",
+            "content": truncated,
+            "isFull": true,
+            "isFinalize": finalize,
+            "isError": false,
+        });
+        let resp = self
+            .client
+            .put(format!("{}/v1.0/card/streaming", dingtalk_api_base()))
+            .header("x-acs-dingtalk-access-token", token)
+            .json(&body)
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| format!("streamingUpdate: {e}"))?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("streamingUpdate → {status}: {text}"));
+        }
+        Ok(())
+    }
+
+    /// hermes `_create_and_stream_card`: create → deliver → stream with
+    /// `finalize=true` (one-shot; ulnclaw sends complete replies, so the
+    /// card never lingers in streaming state and the sibling-cleanup
+    /// ledger has nothing to track). Returns the out_track_id.
+    async fn send_ai_card(
+        &self,
+        is_group: bool,
+        conversation_id: &str,
+        sender_staff_id: &str,
+        content: &str,
+    ) -> Result<String, String> {
+        if self.cfg.card_template_id.is_empty() {
+            return Err("no card_template_id configured".into());
+        }
+        let token = self.get_access_token().await?;
+        let out_track_id = format!(
+            "ulnclaw_{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        );
+        self.create_card(&token, &out_track_id).await?;
+        self.deliver_card(&token, &out_track_id, is_group, conversation_id, sender_staff_id)
+            .await?;
+        self.stream_card_content(&token, &out_track_id, content, true)
+            .await?;
+        Ok(out_track_id)
     }
 }
 
@@ -858,32 +1026,55 @@ async fn handle_bot_message(
     // degrade to their path lines (hermes sends image URLs in markdown;
     // local files have no public URL to link).
     if !reply_text.trim().is_empty() {
-        if let Err(e) = runtime.send_markdown(&chat_id, &reply_text).await {
-            eprintln!("[dingtalk] reply failed: {e}");
-        } else if let Some((target_msg, target_conv)) = runtime.take_done_reaction(&chat_id).await
-        {
-            // hermes `_fire_done_reaction`: recall 🤔Thinking, then add
-            // 🥳Done — once per inbound message.
-            let rt = runtime.clone();
-            let code = if robot_code.is_empty() {
-                runtime.cfg.client_id.clone()
-            } else {
-                robot_code.clone()
-            };
-            tokio::spawn(async move {
-                if let Err(e) = rt
-                    .send_emotion(&code, &target_msg, &target_conv, THINKING_EMOJI, true)
-                    .await
-                {
-                    eprintln!("[dingtalk] Thinking recall failed: {e}");
+        // With a card template configured the reply rides an AI Card
+        // (hermes `_create_and_stream_card`); any failure falls back to
+        // the session-webhook markdown.
+        let mut sent = false;
+        if !runtime.cfg.card_template_id.is_empty() {
+            match runtime
+                .send_ai_card(is_group, &conversation_id, &sender_staff_id, &reply_text)
+                .await
+            {
+                Ok(track_id) => {
+                    eprintln!("[dingtalk] AI card created+finalized: {track_id}");
+                    sent = true;
                 }
-                if let Err(e) = rt
-                    .send_emotion(&code, &target_msg, &target_conv, DONE_EMOJI, false)
-                    .await
-                {
-                    eprintln!("[dingtalk] Done reaction failed: {e}");
-                }
-            });
+                Err(e) => eprintln!("[dingtalk] AI card failed, falling back to webhook: {e}"),
+            }
+        }
+        if !sent {
+            match runtime.send_markdown(&chat_id, &reply_text).await {
+                Ok(()) => sent = true,
+                Err(e) => eprintln!("[dingtalk] reply failed: {e}"),
+            }
+        }
+        if sent {
+            if let Some((target_msg, target_conv)) =
+                runtime.take_done_reaction(&chat_id).await
+            {
+                // hermes `_fire_done_reaction`: recall 🤔Thinking, then add
+                // 🥳Done — once per inbound message.
+                let rt = runtime.clone();
+                let code = if robot_code.is_empty() {
+                    runtime.cfg.client_id.clone()
+                } else {
+                    robot_code.clone()
+                };
+                tokio::spawn(async move {
+                    if let Err(e) = rt
+                        .send_emotion(&code, &target_msg, &target_conv, THINKING_EMOJI, true)
+                        .await
+                    {
+                        eprintln!("[dingtalk] Thinking recall failed: {e}");
+                    }
+                    if let Err(e) = rt
+                        .send_emotion(&code, &target_msg, &target_conv, DONE_EMOJI, false)
+                        .await
+                    {
+                        eprintln!("[dingtalk] Done reaction failed: {e}");
+                    }
+                });
+            }
         }
     }
 }
@@ -1113,6 +1304,8 @@ mod tests {
                 allowed_chats: Vec::new(),
                 allowed_users: Vec::new(),
                 mention_patterns: Vec::new(),
+                card_template_id: String::new(),
+                robot_code: String::new(),
             },
             client: reqwest::Client::new(),
             session_webhooks: Mutex::new(HashMap::new()),
@@ -1193,6 +1386,8 @@ mod tests {
             allowed_chats: vec!["allowed-chat".into(), "free-chat".into()],
             allowed_users: Vec::new(),
             mention_patterns: vec!["^小马".into()],
+            card_template_id: String::new(),
+            robot_code: String::new(),
         };
         let runtime = Runtime {
             cfg,
@@ -1229,6 +1424,8 @@ mod tests {
                 allowed_chats: Vec::new(),
                 allowed_users: vec!["Manager123".into()],
                 mention_patterns: Vec::new(),
+                card_template_id: String::new(),
+                robot_code: String::new(),
             },
             client: reqwest::Client::new(),
             session_webhooks: Mutex::new(HashMap::new()),
@@ -1277,6 +1474,8 @@ mod tests {
                 allowed_chats: Vec::new(),
                 allowed_users: Vec::new(),
                 mention_patterns: Vec::new(),
+                card_template_id: String::new(),
+                robot_code: String::new(),
             },
             client: reqwest::Client::new(),
             session_webhooks: Mutex::new(HashMap::new()),
@@ -1336,5 +1535,177 @@ mod tests {
         assert_eq!(runtime.take_done_reaction("ghost").await, None);
         runtime.record_message_context("empty", "", "").await;
         assert_eq!(runtime.take_done_reaction("empty").await, None);
+    }
+
+    // -- AI Card (card_1_0) parity -----------------------------------------
+
+    /// axum mock of the DingTalk card endpoints — logs (method, path,
+    /// body) per call so the create → deliver → stream sequence is
+    /// assertable.
+    async fn spawn_card_api(
+        log: Arc<std::sync::Mutex<Vec<(String, String, Value)>>>,
+    ) -> String {
+        use axum::extract::State;
+        use axum::routing::{post, put};
+        type Log = Arc<std::sync::Mutex<Vec<(String, String, Value)>>>;
+        let app = axum::Router::new()
+            .route(
+                "/v1.0/oauth2/accessToken",
+                post(
+                    move |State(log): State<Log>, axum::Json(body): axum::Json<Value>| async move {
+                        log.lock().unwrap().push(("POST".into(), "/v1.0/oauth2/accessToken".into(), body));
+                        axum::Json(json!({"accessToken": "TOK", "expireIn": 7200}))
+                    },
+                ),
+            )
+            .route(
+                "/v1.0/card/instances",
+                post(
+                    move |State(log): State<Log>, axum::Json(body): axum::Json<Value>| async move {
+                        log.lock().unwrap().push(("POST".into(), "/v1.0/card/instances".into(), body));
+                        axum::Json(json!({"result": {"outTrackId": "x"}}))
+                    },
+                ),
+            )
+            .route(
+                "/v1.0/card/instances/deliver",
+                post(
+                    move |State(log): State<Log>, axum::Json(body): axum::Json<Value>| async move {
+                        log.lock().unwrap().push(("POST".into(), "/v1.0/card/instances/deliver".into(), body));
+                        axum::Json(json!({"result": true}))
+                    },
+                ),
+            )
+            .route(
+                "/v1.0/card/streaming",
+                put(
+                    move |State(log): State<Log>, axum::Json(body): axum::Json<Value>| async move {
+                        log.lock().unwrap().push(("PUT".into(), "/v1.0/card/streaming".into(), body));
+                        axum::Json(json!({"result": true}))
+                    },
+                ),
+            )
+            .with_state(log);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn ai_card_group_create_deliver_stream() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+        let base = spawn_card_api(log.clone()).await;
+        std::env::set_var("DINGTALK_API_BASE", &base);
+        let mut runtime = test_runtime();
+        runtime.cfg.client_id = "cid".into();
+        runtime.cfg.client_secret = "csecret".into();
+        runtime.cfg.card_template_id = "tpl-123".into();
+        runtime.cfg.robot_code = "robot-9".into();
+        let track = runtime
+            .send_ai_card(true, "conv-1", "staff-1", "Hello **card**")
+            .await
+            .expect("card send should succeed");
+        std::env::remove_var("DINGTALK_API_BASE");
+        assert!(track.starts_with("ulnclaw_"));
+        let reqs = log.lock().unwrap();
+        let paths: Vec<String> = reqs.iter().map(|(_, p, _)| p.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/v1.0/oauth2/accessToken",
+                "/v1.0/card/instances",
+                "/v1.0/card/instances/deliver",
+                "/v1.0/card/streaming",
+            ]
+        );
+        // create: STREAM callback + template + forwardable spaces.
+        let create = &reqs[1].2;
+        assert_eq!(create["cardTemplateId"], "tpl-123");
+        assert_eq!(create["callbackType"], "STREAM");
+        assert_eq!(create["cardData"]["cardParamMap"]["content"], "");
+        assert_eq!(create["imGroupOpenSpaceModel"]["supportForward"], true);
+        // deliver: group space + configured robot_code.
+        let deliver = &reqs[2].2;
+        assert_eq!(deliver["openSpaceId"], "dtv1.card//IM_GROUP.conv-1");
+        assert_eq!(deliver["imGroupOpenDeliverModel"]["robotCode"], "robot-9");
+        assert_eq!(deliver["userIdType"], 1);
+        // stream: full content, finalized, keyed "content".
+        let stream = &reqs[3].2;
+        assert_eq!(stream["key"], "content");
+        assert_eq!(stream["content"], "Hello **card**");
+        assert_eq!(stream["isFull"], true);
+        assert_eq!(stream["isFinalize"], true);
+        assert_eq!(stream["isError"], false);
+    }
+
+    #[tokio::test]
+    async fn ai_card_dm_uses_robot_space_and_robot_code_defaults_to_client_id() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+        let base = spawn_card_api(log.clone()).await;
+        std::env::set_var("DINGTALK_API_BASE", &base);
+        let mut runtime = test_runtime();
+        runtime.cfg.client_id = "cid".into();
+        runtime.cfg.client_secret = "csecret".into();
+        runtime.cfg.card_template_id = "tpl-123".into();
+        // robot_code left empty → falls back to client_id (hermes).
+        let track = runtime
+            .send_ai_card(false, "conv-1", "staff-77", "dm reply")
+            .await
+            .expect("card send should succeed");
+        std::env::remove_var("DINGTALK_API_BASE");
+        assert!(track.starts_with("ulnclaw_"));
+        let reqs = log.lock().unwrap();
+        let deliver = &reqs[2].2;
+        assert_eq!(deliver["openSpaceId"], "dtv1.card//IM_ROBOT.staff-77");
+        assert_eq!(deliver["imRobotOpenDeliverModel"]["spaceType"], "IM_ROBOT");
+    }
+
+    #[tokio::test]
+    async fn ai_card_dm_without_staff_id_is_skipped() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        let log = Arc::new(std::sync::Mutex::new(Vec::<(String, String, Value)>::new()));
+        let base = spawn_card_api(log.clone()).await;
+        std::env::set_var("DINGTALK_API_BASE", &base);
+        let mut runtime = test_runtime();
+        runtime.cfg.client_id = "cid".into();
+        runtime.cfg.client_secret = "csecret".into();
+        runtime.cfg.card_template_id = "tpl-123".into();
+        let err = runtime
+            .send_ai_card(false, "conv-1", "", "dm reply")
+            .await
+            .unwrap_err();
+        std::env::remove_var("DINGTALK_API_BASE");
+        assert!(err.contains("sender_staff_id"), "got: {err}");
+        // create fired but deliver was skipped (hermes ordering).
+        let reqs = log.lock().unwrap();
+        let paths: Vec<String> = reqs.iter().map(|(_, p, _)| p.clone()).collect();
+        assert!(paths.contains(&"/v1.0/card/instances".to_string()));
+        assert!(!paths.contains(&"/v1.0/card/instances/deliver".to_string()));
+    }
+
+    #[test]
+    fn ai_card_requires_template() {
+        let runtime = test_runtime(); // no card_template_id
+        assert!(runtime.cfg.card_template_id.is_empty());
+    }
+
+    #[test]
+    fn card_config_env_overrides() {
+        let _env_guard = crate::models_dev::test_env_lock();
+        std::env::set_var("DINGTALK_CARD_TEMPLATE_ID", "tpl-env");
+        std::env::set_var("DINGTALK_ROBOT_CODE", "robot-env");
+        std::env::set_var("DINGTALK_API_BASE", "http://example.test");
+        let resolved = DingTalkConfig::default().resolve();
+        std::env::remove_var("DINGTALK_CARD_TEMPLATE_ID");
+        std::env::remove_var("DINGTALK_ROBOT_CODE");
+        std::env::remove_var("DINGTALK_API_BASE");
+        assert_eq!(resolved.card_template_id, "tpl-env");
+        assert_eq!(resolved.robot_code, "robot-env");
+        assert_eq!(dingtalk_api_base(), API_BASE);
     }
 }
