@@ -81,6 +81,13 @@ function renderSessions(): void {
     main.innerHTML = `<span class="title"></span><span class="when">${when}</span>`;
     main.querySelector(".title")!.textContent = title;
     item.appendChild(main);
+    if (session.project) {
+      const badge = document.createElement("span");
+      badge.className = "session-project-badge";
+      badge.title = `Project: ${session.project}`;
+      badge.textContent = session.project;
+      item.appendChild(badge);
+    }
     const actions = document.createElement("span");
     actions.className = "session-actions";
     const renameBtn = document.createElement("button");

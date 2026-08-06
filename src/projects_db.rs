@@ -962,6 +962,79 @@ pub fn project_for_path(
     }
 }
 
+/// True when `target` equals `folder` or is nested below it (separator-
+/// aware prefix match — a sibling like `/repo2` never matches `/repo`).
+fn path_under(folder: &str, target: &str) -> bool {
+    if target == folder {
+        return true;
+    }
+    let trimmed = folder.trim_end_matches(['/', '\\']);
+    let bytes = target.as_bytes();
+    if bytes.len() > trimmed.len() && target.starts_with(trimmed) {
+        let next = bytes[trimmed.len()];
+        return next == b'/' || next == b'\\';
+    }
+    false
+}
+
+/// Batched [`project_for_path`]: resolve the owning project for many
+/// paths with a single folder scan (hermes desktop session grouping by
+/// project). Longest-prefix folder wins; archived projects are excluded.
+/// Returns one entry per input path that matched, keyed by the original
+/// (un-normalized) input.
+pub fn projects_for_paths(
+    conn: &Connection,
+    paths: &[String],
+) -> Result<std::collections::HashMap<String, Project>> {
+    let mut out: std::collections::HashMap<String, Project> = std::collections::HashMap::new();
+    if paths.is_empty() {
+        return Ok(out);
+    }
+    let folders: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT pf.path, pf.project_id FROM project_folders pf \
+                 JOIN projects p ON p.id = pf.project_id WHERE p.archived = 0",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_err)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_err)?
+    };
+    if folders.is_empty() {
+        return Ok(out);
+    }
+    let mut cache: std::collections::HashMap<String, Option<Project>> =
+        std::collections::HashMap::new();
+    for path in paths {
+        let target = normalize_path(path);
+        if target.is_empty() {
+            continue;
+        }
+        let mut best: Option<(String, usize)> = None;
+        for (folder, pid) in &folders {
+            if path_under(folder, &target)
+                && best.as_ref().map(|(_, len)| folder.len() > *len).unwrap_or(true)
+            {
+                best = Some((pid.clone(), folder.len()));
+            }
+        }
+        if let Some((pid, _)) = best {
+            let entry = cache
+                .entry(pid.clone())
+                .or_insert_with(|| get_project(conn, &pid).ok().flatten());
+            if let Some(project) = entry {
+                out.insert(path.clone(), project.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Deterministic branch name for a project-linked kanban task (hermes
 /// `branch_name_for`). Shape: `<project-slug>/<task-id>` (optionally
 /// `-<title-slug>`).
@@ -1263,6 +1336,73 @@ mod tests {
         assert_eq!(list_discovered_repos(&conn).unwrap().len(), 0);
         assert_eq!(get_discovery_policy_key(&conn).unwrap(), Some("all-dirs".to_string()));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn projects_for_paths_longest_prefix_and_archived() {
+        let (conn, _tmp) = temp_db();
+        let outer = create_project(
+            &conn,
+            &CreateProject {
+                name: "Outer",
+                slug: Some("outer"),
+                folders: &["/work/code"],
+                primary_path: None,
+                description: None,
+                icon: None,
+                color: None,
+                board_slug: None,
+            },
+        )
+        .unwrap();
+        let inner = create_project(
+            &conn,
+            &CreateProject {
+                name: "Inner",
+                slug: Some("inner"),
+                folders: &["/work/code/nested"],
+                primary_path: None,
+                description: None,
+                icon: None,
+                color: None,
+                board_slug: None,
+            },
+        )
+        .unwrap();
+        let archived = create_project(
+            &conn,
+            &CreateProject {
+                name: "Gone",
+                slug: Some("gone"),
+                folders: &["/work/old"],
+                primary_path: None,
+                description: None,
+                icon: None,
+                color: None,
+                board_slug: None,
+            },
+        )
+        .unwrap();
+        archive_project(&conn, &archived).unwrap();
+
+        let paths: Vec<String> = [
+            "/work/code",           // exact outer folder
+            "/work/code/src/main",  // nested under outer
+            "/work/code/nested/x",  // inner wins (longest prefix)
+            "/work/code2",          // sibling — no match
+            "/work/old/stuff",      // archived — no match
+            "",                     // empty — skipped
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let resolved = projects_for_paths(&conn, &paths).unwrap();
+        assert_eq!(resolved.get("/work/code").map(|p| p.id.as_str()), Some(outer.as_str()));
+        assert_eq!(resolved.get("/work/code/src/main").map(|p| p.id.as_str()), Some(outer.as_str()));
+        assert_eq!(resolved.get("/work/code/nested/x").map(|p| p.id.as_str()), Some(inner.as_str()));
+        assert!(!resolved.contains_key("/work/code2"));
+        assert!(!resolved.contains_key("/work/old/stuff"));
+        assert_eq!(resolved.len(), 3);
     }
 
     #[test]

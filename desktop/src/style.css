@@ -325,3 +325,8 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
   background: var(--panel-2); color: var(--text); border: 1px solid #2a3442;
   border-radius: 8px; padding: 6px 10px;
 }
+.session-project-badge {
+  display: inline-block; margin: 2px 0 0 4px; padding: 1px 8px;
+  font-size: 0.68em; border-radius: 9px; background: rgba(74,170,120,0.22);
+  color: var(--text); opacity: 0.9; font-family: ui-monospace, monospace;
+}

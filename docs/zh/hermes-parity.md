@@ -462,7 +462,11 @@
   服务桌面界面：`/api/projects` 增删查改（`PATCH` board 绑定与 CLI
   `bind-board` 相同地把主仓库镜像为 board 的 `default_workdir`；文件夹
   增删、主目录设置、归档/恢复、硬删除、活跃指针）以及
-  `/api/projects/scan|repos` 发现端点。
+  `/api/projects/scan|repos` 发现端点。P164 把会话接入项目：
+  `/api/sessions` 行（list 与 get）携带 `project` slug（按会话 cwd 对
+  `projects.db` 文件夹做最长前缀匹配，归档项目除外；projects.db 缺失时
+  降级为 `project: null`），桌面侧栏以徽章渲染——对齐 hermes 桌面按
+  项目分组会话的契约。
   看板其余有意保留的
   差异：调度期 `default_assignee` 应用（ulnclaw 在默认 profile 上 spawn
   未指派任务而不是跳过）。

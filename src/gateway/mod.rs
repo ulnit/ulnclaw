@@ -2606,13 +2606,51 @@ struct SessionsQuery {
     limit: Option<usize>,
 }
 
+/// Attach the owning project slug (longest-prefix folder match on the
+/// session cwd via `projects.db`) to session rows — the desktop sidebar
+/// renders it as a project badge (hermes desktop session grouping by
+/// project). Best-effort: a closed/missing projects store leaves rows
+/// with `project: null` instead of failing the listing.
+fn enrich_sessions_with_projects(
+    rows: Vec<crate::session::sqlite::SessionRow>,
+) -> Vec<Value> {
+    let cwds: Vec<String> = rows
+        .iter()
+        .filter_map(|row| row.cwd.clone())
+        .filter(|cwd| !cwd.trim().is_empty())
+        .collect();
+    let mapping = crate::projects_db::connect(None)
+        .ok()
+        .and_then(|conn| crate::projects_db::projects_for_paths(&conn, &cwds).ok());
+    rows.into_iter()
+        .map(|row| {
+            let mut value = serde_json::to_value(&row).unwrap_or(Value::Null);
+            let slug = row
+                .cwd
+                .as_ref()
+                .and_then(|cwd| mapping.as_ref().and_then(|m| m.get(cwd)))
+                .map(|project| project.slug.clone());
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "project".to_string(),
+                    slug.map(Value::String).unwrap_or(Value::Null),
+                );
+            }
+            value
+        })
+        .collect()
+}
+
 async fn list_sessions(
     State(state): State<Arc<GatewayState>>,
     Query(query): Query<SessionsQuery>,
 ) -> Response {
     let limit = query.limit.unwrap_or(50).min(500);
     match state.store.list_session_rows(limit) {
-        Ok(rows) => Json(json!({"object": "list", "data": rows})).into_response(),
+        Ok(rows) => {
+            let data = enrich_sessions_with_projects(rows);
+            Json(json!({"object": "list", "data": data})).into_response()
+        }
         Err(e) => server_error(&e.to_string()),
     }
 }
@@ -2629,7 +2667,10 @@ async fn create_session(State(state): State<Arc<GatewayState>>) -> Response {
 
 async fn get_session(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
     match state.store.get_session_row(&id) {
-        Ok(Some(row)) => Json(json!(row)).into_response(),
+        Ok(Some(row)) => {
+            let mut rows = enrich_sessions_with_projects(vec![row]);
+            Json(rows.pop().unwrap_or(Value::Null)).into_response()
+        }
         Ok(None) => not_found(&format!("session {} not found", id)),
         Err(e) => server_error(&e.to_string()),
     }
@@ -6517,6 +6558,57 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let (_, body) = get_json(app.clone(), "/api/projects", Some(token)).await;
         assert_eq!(body["projects"].as_array().unwrap().len(), 0);
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sessions_list_carries_project_slug() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        // A project whose folder owns the session cwd.
+        let workdir = tmp.path().join("work");
+        std::fs::create_dir_all(&workdir).unwrap();
+        {
+            let conn = crate::projects_db::connect(None).unwrap();
+            crate::projects_db::create_project(
+                &conn,
+                &crate::projects_db::CreateProject {
+                    name: "Work",
+                    slug: Some("work"),
+                    folders: &[workdir.to_string_lossy().as_ref()],
+                    primary_path: None,
+                    description: None,
+                    icon: None,
+                    color: None,
+                    board_slug: None,
+                },
+            )
+            .unwrap();
+        }
+
+        let state = test_state();
+        state
+            .store
+            .create_session("cli", None, Some(workdir.to_str().unwrap()))
+            .unwrap();
+        state.store.create_session("cli", None, Some("/elsewhere")).unwrap();
+
+        let app = router(state);
+        let (status, body) = get_json(app, "/api/sessions", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let data = body["data"].as_array().unwrap();
+        assert_eq!(data.len(), 2);
+        let with_project = data.iter().find(|row| row["project"] == "work");
+        assert!(with_project.is_some(), "{data:?}");
+        let without = data.iter().find(|row| row["cwd"] == "/elsewhere");
+        assert!(without.unwrap()["project"].is_null());
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

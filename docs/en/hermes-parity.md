@@ -540,7 +540,12 @@ performance and a single static binary.
   (`PATCH` board binding mirrors the primary repo into the board's
   `default_workdir` exactly like CLI `bind-board`; folders add/remove,
   set-primary, archive/restore, hard delete, active pointer) plus
-  `/api/projects/scan|repos` discovery. Remaining deliberate kanban
+  `/api/projects/scan|repos` discovery. P164 linked sessions to
+  projects: `/api/sessions` rows (list + get) carry a `project` slug
+  resolved by longest-prefix cwd match against `projects.db` folders
+  (archived projects excluded; a missing store degrades to
+  `project: null`), and the desktop sidebar renders it as a badge —
+  the hermes desktop session-grouping-by-project contract. Remaining deliberate kanban
   divergences: dispatch-time `default_assignee` application (ulnclaw
   spawns unassigned tasks on the default profile instead of skipping
   them).

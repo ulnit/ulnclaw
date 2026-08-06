@@ -16,6 +16,8 @@ export interface SessionRow {
   started_at: number;
   last_activity_at: number;
   message_count?: number;
+  /** Owning project slug (longest-prefix cwd match in projects.db). */
+  project?: string | null;
 }
 
 export interface MessageRow {
