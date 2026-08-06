@@ -275,6 +275,11 @@ model = "qwen3:1.7b"
 
     #[test]
     fn missing_key_for_cloud_provider_is_config_error() {
+        // Serialize env state: other tests set OPENAI_API_KEY, which
+        // would satisfy resolution and mask the missing-key error.
+        let _guard = crate::models_dev::test_env_lock();
+        let prev = std::env::var("OPENAI_API_KEY").ok();
+        std::env::remove_var("OPENAI_API_KEY");
         let mut model = main_model_config();
         model.api_key = None;
         let config = config_with(
@@ -288,5 +293,9 @@ model = "gpt-5.2"
             .err()
             .unwrap();
         assert!(error.to_string().contains("auxiliary.compression"));
+        match prev {
+            Some(v) => std::env::set_var("OPENAI_API_KEY", v),
+            None => std::env::remove_var("OPENAI_API_KEY"),
+        }
     }
 }

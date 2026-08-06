@@ -10,6 +10,9 @@
  *   POST /read        -> { key } send read receipt
  *   POST /send        -> { chatId, message, replyTo? } send text
  *   POST /send-media  -> { to, path, mediaType, caption } send media file
+ *   POST /send-poll    -> { chatId, question, options, selectableCount? } native poll
+ *   POST /send-location-> { chatId, latitude, longitude, name?, address? } location pin
+ *   POST /edit         -> { chatId, messageId, message } edit a sent message
  *
  * CLI: node bridge.js --port 3000 --session <dir> --mode self-chat
  *
@@ -97,6 +100,8 @@ const {
   getContentType,
   jidNormalizedUser,
 } = baileys;
+// Baileys >= 6.7 exports the poll-vote aggregator; older builds may not.
+const getAggregateVotesInPollMessage = baileys.getAggregateVotesInPollMessage;
 
 let qrcodeTerminal = null;
 try {
@@ -115,6 +120,11 @@ const SENT_ID_TTL_MS = 5 * 60 * 1000;
 
 /** Contact name cache (JID -> display name). */
 const names = new Map();
+
+/** Poll creation messages we sent, keyed by message id — needed to
+ *  decrypt inbound votes (hermes bridge poll_update handling). */
+const pollCreations = new Map(); // id -> full creation message
+const POLL_CREATIONS_CAP = 256;
 
 let sock = null;
 let status = 'connecting'; // connecting | qr | connected | disconnected | logged_out
@@ -158,6 +168,7 @@ function mediaTypeForContent(contentType) {
   if (contentType.includes('audioMessage')) return 'audio';
   if (contentType.includes('stickerMessage')) return 'sticker';
   if (contentType.includes('documentMessage')) return 'document';
+  if (contentType.includes('locationMessage')) return 'location';
   return '';
 }
 
@@ -171,6 +182,55 @@ function textOf(message) {
     (message.documentMessage && message.documentMessage.caption) ||
     ''
   );
+}
+
+function locationText(message) {
+  const loc = message && message.locationMessage;
+  if (!loc) return '';
+  const base = `location: ${loc.degreesLatitude},${loc.degreesLongitude}`;
+  return loc.name ? `${base} ${loc.name}` : base;
+}
+
+function rememberPollCreation(sent) {
+  if (!sent || !sent.key || !sent.key.id || !sent.message) return;
+  if (pollCreations.size >= POLL_CREATIONS_CAP) {
+    const oldest = pollCreations.keys().next().value;
+    if (oldest) pollCreations.delete(oldest);
+  }
+  pollCreations.set(sent.key.id, sent.message);
+}
+
+/** Resolve the option *this* voter picked on one of our polls.
+ *  Returns '' when the vote cannot be decrypted/aggregated. */
+async function resolvePollVoteText(message) {
+  if (typeof getAggregateVotesInPollMessage !== 'function') return '';
+  const update = message.message && message.message.pollUpdateMessage;
+  if (!update || !update.key || !update.key.id) return '';
+  const creation = pollCreations.get(update.key.id);
+  if (!creation) return '';
+  try {
+    const agg = await Promise.resolve(
+      getAggregateVotesInPollMessage({ message: creation, pollUpdates: [message] })
+    );
+    const voterRaw = message.key.participant || message.key.remoteJid || '';
+    let voter = voterRaw;
+    try {
+      voter = jidNormalizedUser(voterRaw);
+    } catch (_) {}
+    for (const opt of agg || []) {
+      const voters = (opt.voters || []).map((v) => {
+        try {
+          return jidNormalizedUser(v);
+        } catch (_) {
+          return v;
+        }
+      });
+      if (voters.includes(voter)) return opt.name || '';
+    }
+  } catch (err) {
+    debug('poll vote resolution failed:', err.message);
+  }
+  return '';
 }
 
 async function resolveName(jid) {
@@ -231,12 +291,22 @@ async function handleIncoming(message) {
   }
 
   const senderId = isGroup ? key.participant || chatId : chatId;
-  const text = textOf(message.message);
+  let text = '';
+  if (contentType === 'pollUpdateMessage') {
+    // hermes: the selected option surfaces as plain message text so the
+    // normal clarify text-intercept resolves pending questions.
+    text = await resolvePollVoteText(message);
+    if (!text) return;
+  } else if (contentType === 'locationMessage') {
+    text = locationText(message.message);
+  } else {
+    text = textOf(message.message);
+  }
   const mediaType = mediaTypeForContent(contentType);
   let hasMedia = false;
   let mime = '';
   const mediaUrls = [];
-  if (mediaType) {
+  if (mediaType && contentType !== 'locationMessage') {
     const cached = await cacheMedia(message, contentType);
     if (cached) {
       hasMedia = true;
@@ -456,6 +526,75 @@ const server = http.createServer(async (req, res) => {
       const sent = await sock.sendMessage(body.to, payload);
       rememberSentId(sent && sent.key && sent.key.id);
       sendJson(res, 200, { ok: true, messageId: sent && sent.key ? sent.key.id : '' });
+      return;
+    }
+    if (req.method === 'POST' && url === '/send-poll') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      if (!sock || status !== 'connected') {
+        sendJson(res, 503, { ok: false, error: 'not connected' });
+        return;
+      }
+      if (
+        !body.chatId ||
+        typeof body.question !== 'string' ||
+        !Array.isArray(body.options) ||
+        body.options.length < 1
+      ) {
+        sendJson(res, 400, { ok: false, error: 'chatId, question and options[] required' });
+        return;
+      }
+      const sent = await sock.sendMessage(body.chatId, {
+        poll: {
+          name: body.question,
+          values: body.options.map(String),
+          selectableCount: Number.isInteger(body.selectableCount) ? body.selectableCount : 1,
+        },
+      });
+      rememberSentId(sent && sent.key && sent.key.id);
+      rememberPollCreation(sent);
+      sendJson(res, 200, { ok: true, messageId: sent && sent.key ? sent.key.id : '' });
+      return;
+    }
+    if (req.method === 'POST' && url === '/send-location') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      if (!sock || status !== 'connected') {
+        sendJson(res, 503, { ok: false, error: 'not connected' });
+        return;
+      }
+      const latitude = Number(body.latitude);
+      const longitude = Number(body.longitude);
+      if (!body.chatId || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        sendJson(res, 400, { ok: false, error: 'chatId, latitude and longitude required' });
+        return;
+      }
+      const sent = await sock.sendMessage(body.chatId, {
+        location: {
+          degreesLatitude: latitude,
+          degreesLongitude: longitude,
+          name: body.name || undefined,
+          address: body.address || undefined,
+        },
+      });
+      rememberSentId(sent && sent.key && sent.key.id);
+      sendJson(res, 200, { ok: true, messageId: sent && sent.key ? sent.key.id : '' });
+      return;
+    }
+    if (req.method === 'POST' && url === '/edit') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      if (!sock || status !== 'connected') {
+        sendJson(res, 503, { ok: false, error: 'not connected' });
+        return;
+      }
+      if (!body.chatId || !body.messageId || typeof body.message !== 'string') {
+        sendJson(res, 400, { ok: false, error: 'chatId, messageId and message required' });
+        return;
+      }
+      const sent = await sock.sendMessage(body.chatId, {
+        text: body.message,
+        edit: { remoteJid: body.chatId, id: body.messageId, fromMe: true },
+      });
+      rememberSentId(sent && sent.key && sent.key.id);
+      sendJson(res, 200, { ok: true, messageId: body.messageId });
       return;
     }
     sendJson(res, 404, { ok: false, error: 'not found' });

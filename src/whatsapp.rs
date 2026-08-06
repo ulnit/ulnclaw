@@ -5,12 +5,16 @@
 //! and talks to it over localhost HTTP: `GET /health` (connection /
 //! pairing status), `GET /messages` (inbound queue, polled every
 //! second), `POST /read` (read receipts), `POST /send`
-//! (`{chatId, message, replyTo?}`), and `POST /send-media`
-//! (`{to, path, mediaType, caption}`). This port keeps the exact wire
-//! protocol but treats the bridge as an external service: ulnclaw does
-//! not spawn or supervise the Node process (no `bridge.js` is bundled —
-//! run any Baileys bridge implementing the hermes endpoints and point
-//! `[messaging.whatsapp] bridge_url` at it).
+//! (`{chatId, message, replyTo?}`), `POST /send-media`
+//! (`{to, path, mediaType, caption}`), `POST /send-poll`
+//! (`{chatId, question, options, selectableCount}` — native polls,
+//! inbound votes surface as the selected option's text), `POST
+//! /send-location` (`{chatId, latitude, longitude, name?, address?}`),
+//! and `POST /edit` (`{chatId, messageId, message}` — edit a sent
+//! message). This port keeps the exact wire protocol; the bundled
+//! bridge implements all of it (see the lifecycle note below), and any
+//! external Baileys bridge speaking the hermes endpoints also works —
+//! point `[messaging.whatsapp] bridge_url` at it.
 //!
 //! Intake mirrors hermes: messages from self and status broadcasts are
 //! dropped, DMs are allowlist∪pairing gated, groups honor
@@ -691,6 +695,156 @@ async fn send_media(
     }
 }
 
+/// hermes `send_poll` payload (bridge `/send-poll`).
+pub fn send_poll_payload(
+    chat_id: &str,
+    question: &str,
+    options: &[String],
+    selectable_count: u32,
+) -> Value {
+    json!({
+        "chatId": chat_id,
+        "question": question,
+        "options": options,
+        "selectableCount": selectable_count,
+    })
+}
+
+/// hermes `send_location` payload (bridge `/send-location`).
+pub fn send_location_payload(
+    chat_id: &str,
+    latitude: f64,
+    longitude: f64,
+    name: &str,
+    address: &str,
+) -> Value {
+    let mut payload = json!({
+        "chatId": chat_id,
+        "latitude": latitude,
+        "longitude": longitude,
+    });
+    if !name.is_empty() {
+        payload["name"] = json!(name);
+    }
+    if !address.is_empty() {
+        payload["address"] = json!(address);
+    }
+    payload
+}
+
+/// hermes `edit_message` payload (bridge `/edit`).
+pub fn edit_message_payload(chat_id: &str, message_id: &str, message: &str) -> Value {
+    json!({
+        "chatId": chat_id,
+        "messageId": message_id,
+        "message": message,
+    })
+}
+
+/// hermes `send_poll`: native WhatsApp poll via the bridge. Low-level
+/// transport primitive — clarify prompts map onto it through
+/// `send_clarify`; approval UX stays gateway-owned.
+async fn send_poll(
+    runtime: &Arc<Runtime>,
+    chat_id: &str,
+    question: &str,
+    options: &[String],
+    selectable_count: u32,
+) -> Result<String, String> {
+    let url = format!("{}/send-poll", runtime.cfg.bridge_url);
+    let resp = runtime
+        .client
+        .post(&url)
+        .json(&send_poll_payload(chat_id, question, options, selectable_count))
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {body}"));
+    }
+    let value: Value = resp.json().await.unwrap_or(json!({}));
+    Ok(value
+        .get("messageId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
+}
+
+/// hermes `send_location`: native WhatsApp location pin via the bridge.
+#[allow(dead_code)] // transport primitive; no agent tool surface yet
+async fn send_location(
+    runtime: &Arc<Runtime>,
+    chat_id: &str,
+    latitude: f64,
+    longitude: f64,
+    name: &str,
+    address: &str,
+) -> Result<String, String> {
+    let url = format!("{}/send-location", runtime.cfg.bridge_url);
+    let resp = runtime
+        .client
+        .post(&url)
+        .json(&send_location_payload(chat_id, latitude, longitude, name, address))
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {body}"));
+    }
+    let value: Value = resp.json().await.unwrap_or(json!({}));
+    Ok(value
+        .get("messageId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
+}
+
+/// hermes `edit_message`: edit a previously sent message via the
+/// bridge. Best-effort transport primitive.
+#[allow(dead_code)] // transport primitive; no streaming-edit surface yet
+async fn edit_message(
+    runtime: &Arc<Runtime>,
+    chat_id: &str,
+    message_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let url = format!("{}/edit", runtime.cfg.bridge_url);
+    let resp = runtime
+        .client
+        .post(&url)
+        .json(&edit_message_payload(chat_id, message_id, content))
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!("HTTP {status}: {body}"))
+    }
+}
+
+/// hermes `send_clarify` choice cleaning: trim, drop blanks.
+pub fn clarify_clean_choices(choices: &[String]) -> Vec<String> {
+    choices
+        .iter()
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
+/// hermes `send_clarify` poll eligibility: 2–12 clean choices.
+pub fn clarify_poll_eligible(clean_count: usize) -> bool {
+    (2..=12).contains(&clean_count)
+}
 /// DM allowlist∪pairing gate (hermes authorization semantics).
 async fn sender_allowed(
     runtime: &Arc<Runtime>,
@@ -736,6 +890,33 @@ impl crate::messaging::PlatformSender for WhatsappSender {
         for chunk in crate::messaging::chunk_text(text, MAX_MESSAGE_LENGTH) {
             if let Err(e) = send_text(&self.runtime, chat_id, &chunk).await {
                 eprintln!("[whatsapp] send_text to {chat_id} failed: {e}");
+            }
+        }
+    }
+
+    /// hermes `send_clarify`: multiple-choice clarifies render as a
+    /// native WhatsApp poll (2–12 clean choices, single-select); the
+    /// selected option later arrives as plain message text and the
+    /// normal clarify text-intercept resolves the pending question.
+    /// Failures and open-ended prompts fall back to numbered text.
+    async fn send_clarify(
+        &self,
+        chat_id: &str,
+        _clarify_id: &str,
+        question: &str,
+        choices: &[String],
+    ) -> bool {
+        let clean = clarify_clean_choices(choices);
+        if !clarify_poll_eligible(clean.len()) {
+            return false;
+        }
+        match send_poll(&self.runtime, chat_id, question.trim(), &clean, 1).await {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!(
+                    "[whatsapp] native clarify poll failed; falling back to text: {e}"
+                );
+                false
             }
         }
     }
@@ -865,5 +1046,57 @@ mod tests {
     fn chunk_limit_matches_hermes_conservative_bound() {
         assert_eq!(MAX_MESSAGE_LENGTH, 4000);
         assert_eq!(DEFAULT_POLL_INTERVAL_MS, 1000);
+    }
+
+    #[test]
+    fn poll_payload_matches_bridge_contract() {
+        let payload = send_poll_payload(
+            "123@s.whatsapp.net",
+            "Pick one",
+            &["A".to_string(), "B".to_string()],
+            1,
+        );
+        assert_eq!(payload["chatId"], "123@s.whatsapp.net");
+        assert_eq!(payload["question"], "Pick one");
+        assert_eq!(payload["options"], json!(["A", "B"]));
+        assert_eq!(payload["selectableCount"], 1);
+    }
+
+    #[test]
+    fn location_payload_omits_blank_name_address() {
+        let payload = send_location_payload("c@g.us", 31.23, 121.47, "", "");
+        assert_eq!(payload["chatId"], "c@g.us");
+        assert_eq!(payload["latitude"], 31.23);
+        assert_eq!(payload["longitude"], 121.47);
+        assert!(payload.get("name").is_none());
+        assert!(payload.get("address").is_none());
+        let full = send_location_payload("c@g.us", 1.0, 2.0, "Home", "Some street");
+        assert_eq!(full["name"], "Home");
+        assert_eq!(full["address"], "Some street");
+    }
+
+    #[test]
+    fn edit_payload_matches_bridge_contract() {
+        let payload = edit_message_payload("c@g.us", "MSGID1", "fixed text");
+        assert_eq!(payload["chatId"], "c@g.us");
+        assert_eq!(payload["messageId"], "MSGID1");
+        assert_eq!(payload["message"], "fixed text");
+    }
+
+    #[test]
+    fn clarify_poll_eligibility_matches_hermes_bounds() {
+        // hermes send_clarify: 2 <= len(choices) <= 12 ride the native
+        // poll; anything else falls back to numbered text.
+        let clean = clarify_clean_choices(&[
+            " A ".to_string(),
+            String::new(),
+            "   ".to_string(),
+            "B".to_string(),
+        ]);
+        assert_eq!(clean, vec!["A".to_string(), "B".to_string()]);
+        assert!(!clarify_poll_eligible(1));
+        assert!(clarify_poll_eligible(2));
+        assert!(clarify_poll_eligible(12));
+        assert!(!clarify_poll_eligible(13));
     }
 }
