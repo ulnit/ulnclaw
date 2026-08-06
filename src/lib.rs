@@ -72,6 +72,7 @@
 //! }
 //! ```
 
+pub mod a2a;
 pub mod active_sessions;
 pub mod agent;
 pub mod agent_import;
@@ -83,6 +84,7 @@ pub mod banner;
 pub mod binary_ext;
 pub mod browser;
 pub mod bundles;
+pub mod buzz;
 pub mod kanban;
 pub mod kanban_diagnostics;
 pub mod kanban_triage;
@@ -128,6 +130,7 @@ pub mod pairing;
 pub mod pets;
 pub mod pets_atlas;
 pub mod pets_generate;
+pub mod photon;
 pub mod skills_sync;
 pub mod memory_cmd;
 pub mod moa;
@@ -145,6 +148,7 @@ pub mod prompt_size;
 pub mod plugins;
 pub mod prompt_stash;
 pub mod provider;
+pub mod raft;
 pub mod redact;
 pub mod secrets;
 pub mod secrets_cache;

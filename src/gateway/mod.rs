@@ -722,6 +722,17 @@ fn attach_webhook_routes(
         router = router.route("/webhooks/googlechat", post(google_chat_webhook_route));
         tracing::info!("gateway webhook route mounted: /webhooks/googlechat");
     }
+    if config.messaging.raft.enabled {
+        router = router.route("/webhooks/raft/wake", post(raft_wake_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/raft/wake");
+    }
+    if config.messaging.a2a.enabled {
+        router = router
+            .route("/a2a", post(a2a_rpc_route))
+            .route("/.well-known/agent-card.json", get(a2a_agent_card_route))
+            .route("/.well-known/agent.json", get(a2a_agent_card_route));
+        tracing::info!("gateway A2A routes mounted: /a2a + /.well-known/agent-card.json");
+    }
     router
 }
 
@@ -1034,6 +1045,50 @@ async fn google_chat_webhook_route(
     .await;
     let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, axum::Json(result.body)).into_response()
+}
+
+async fn raft_wake_route(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let header_pairs: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let result = crate::raft::raft_handle_wake(
+        &config.messaging.raft,
+        &dispatcher,
+        &body,
+        &header_pairs,
+    )
+    .await;
+    let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, axum::Json(result.body)).into_response()
+}
+
+async fn a2a_rpc_route(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let header_pairs: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let dispatcher = crate::messaging::Dispatcher::new(state.agent.clone(), state.store.clone());
+    let result = crate::a2a::a2a_handle_rpc(&dispatcher, &body, &header_pairs).await;
+    let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, axum::Json(result.body)).into_response()
+}
+
+async fn a2a_agent_card_route() -> Response {
+    match crate::a2a::a2a_agent_card_response() {
+        Some(card) => (StatusCode::OK, axum::Json(card)).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn bluebubbles_webhook_route(

@@ -122,6 +122,22 @@ pub struct MessagingConfig {
     /// `platforms.google_chat` plugin), mounted on the gateway router.
     #[serde(default)]
     pub google_chat: crate::google_chat::GoogleChatConfig,
+    /// iMessage via the `buzz` CLI (hermes `platforms.buzz` plugin,
+    /// polling transport).
+    #[serde(default)]
+    pub buzz: crate::buzz::BuzzConfig,
+    /// iMessage via the Photon sidecar HTTP API (hermes
+    /// `platforms.photon` plugin, sidecar-client transport).
+    #[serde(default)]
+    pub photon: crate::photon::PhotonConfig,
+    /// Raft activity wake events via gateway webhook (hermes
+    /// `platforms.raft` plugin, wake-endpoint half).
+    #[serde(default)]
+    pub raft: crate::raft::RaftConfig,
+    /// A2A v1.0 agent server surface on the gateway (hermes
+    /// `platforms.a2a` plugin).
+    #[serde(default)]
+    pub a2a: crate::a2a::A2aConfig,
 }
 
 fn default_pairing() -> bool {
@@ -890,8 +906,27 @@ pub async fn run_messaging(
     if msg.google_chat.enabled {
         crate::google_chat::register(&msg.google_chat);
     }
+    if msg.buzz.enabled {
+        let cfg = msg.buzz.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::buzz::run(cfg, dispatcher, pairing).await;
+        }));
+    }
+    if msg.photon.enabled {
+        let cfg = msg.photon.clone();
+        let dispatcher = dispatcher.clone();
+        let pairing = pairing.clone();
+        tasks.push(tokio::spawn(async move {
+            crate::photon::run(cfg, dispatcher, pairing).await;
+        }));
+    }
+    if msg.a2a.enabled {
+        crate::a2a::register(&msg.a2a);
+    }
     if tasks.is_empty() {
-        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex] enabled = true (sms/teams/line/google_chat ride gateway webhook routes))");
+        eprintln!("[messaging] no platforms enabled ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex|buzz|photon] enabled = true (sms/teams/line/google_chat/raft/a2a ride gateway webhook routes))");
         return;
     }
     for task in tasks {
