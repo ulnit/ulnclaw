@@ -495,8 +495,7 @@ Bitwarden / 1Password）、computer-use（cua-driver）、子进程插件系统�
 布局，无旧布局可迁移）与 `-c <会话名>` 标题查找（`--continue` 不带值）。
 
 有意不移植（超出本地 agent 范围的 hermes 面）：Electron
-桌面应用（ulnclaw 改以 Tauri `desktop/` 外壳交付；Electron 专属的
-kanban/仪表盘挂件仍未移植）；Python 插件导入/entry-point 包及其携带的
+桌面应用本身（ulnclaw 改以 Tauri `desktop/` 外壳交付——其仪表盘挂件均已移植：kanban、projects、jobs、宠物/孵化悬浮层、模型挑选器、聊天内查找、命令面板、工件浏览器、学习视图）；Python 插件导入/entry-point 包及其携带的
 provider 注册（ulnclaw 插件体系改用 shell 钩子线协议 + 目录插件，并含 git
 install/update/remove 生命周期）；iron-proxy 出站凭证注入防火墙（`hermes egress`，
 Docker 沙箱基础设施）；Nous 门户专属的订阅门控与组织提案审批流程（OAuth/同步为

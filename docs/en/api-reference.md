@@ -1044,6 +1044,10 @@ Binds and serves until interrupted.
 | POST | `/api/jobs/:id/pause` | yes | Disable job (clears `next_run`) |
 | POST | `/api/jobs/:id/resume` | yes | Re-enable job (recomputes `next_run`) |
 | POST | `/api/jobs/:id/run` | yes | Trigger one immediate execution as a tracked run |
+| GET | `/api/learning/graph` | yes | Learning "star map": learned non-base skills + memory chunks with edges, clusters, stats |
+| GET | `/api/learning/node?id=<node>` | yes | Node content prefill (`kind`, `label`, `content`); `404` when unknown |
+| PUT | `/api/learning/node` | yes | Rewrite node content (`{"id", "content"}`) — SKILL.md or memory entry |
+| DELETE | `/api/learning/node` | yes | Archive a learned skill / remove a memory entry (`{"id"}`) |
 | GET | `/v1/skills` | yes | Installed skills (`<home>/skills/*/SKILL.md`) |
 | GET | `/v1/toolsets` | yes | Toolsets with resolved tool lists and enabled state |
 | POST | `/v1/runs` | yes | Start async run → `202` + `run_id` |

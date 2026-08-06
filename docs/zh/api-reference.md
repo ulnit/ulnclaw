@@ -1043,6 +1043,10 @@ axum 路由表（供 `serve` 与测试使用）。
 | POST | `/api/jobs/:id/pause` | 是 | 停用任务（清空 `next_run`） |
 | POST | `/api/jobs/:id/resume` | 是 | 重新启用任务（重算 `next_run`） |
 | POST | `/api/jobs/:id/run` | 是 | 立即触发一次执行（作为被跟踪的运行） |
+| GET | `/api/learning/graph` | 是 | 学习"星图"：已学非基础技能 + 记忆块，含连边、簇与统计 |
+| GET | `/api/learning/node?id=<node>` | 是 | 节点内容预填充（`kind`、`label`、`content`）；未知返回 `404` |
+| PUT | `/api/learning/node` | 是 | 重写节点内容（`{"id", "content"}`）——SKILL.md 或记忆条目 |
+| DELETE | `/api/learning/node` | 是 | 归档已学技能 / 删除记忆条目（`{"id"}`） |
 | GET | `/v1/skills` | 是 | 已安装技能（`<home>/skills/*/SKILL.md`） |
 | GET | `/v1/toolsets` | 是 | 工具集及其解析后的工具列表与启用状态 |
 | POST | `/v1/runs` | 是 | 启动异步运行 → `202` + `run_id` |

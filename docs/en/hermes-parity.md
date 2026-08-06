@@ -586,9 +586,10 @@ migrate) and `-c <session-name>` title lookup (`--continue` takes no
 value).
 
 Deliberately not ported (hermes surfaces outside the local-agent scope):
-the Electron desktop app (ulnclaw ships the
-Tauri `desktop/` shell instead; the Electron-only kanban/dashboard widgets
-remain unported);
+the Electron desktop app itself (ulnclaw ships the Tauri `desktop/`
+shell instead — its dashboard widgets are ported: kanban, projects, jobs,
+pet/hatch overlays, model picker, find-in-chat, command palette, artifacts
+browser, learning view);
 Python plugin imports/entry-point packages and the provider registrations
 they carry (ulnclaw's plugin system uses the shell-hook wire protocol +
 directory plugins with the git install/update/remove lifecycle instead);
