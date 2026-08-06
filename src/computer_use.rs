@@ -356,6 +356,61 @@ fn action_result(action: &str, payload: Value) -> Value {
     out
 }
 
+/// Client-side longest-edge enforcement for driver screenshots — the
+/// second layer over the `set_config max_image_dimension` cap applied at
+/// session start. Drivers that honor `set_config` already return capped
+/// PNGs and this stays a cheap no-op (dimension check after decode);
+/// drivers that ignore it (old builds, forks) get downscaled here so
+/// SOM/vision payloads stay bounded regardless. Aspect ratio is
+/// preserved; `width`/`height` fields are refreshed when present.
+/// Fail-open: any decode or encode problem leaves the payload untouched.
+fn enforce_screenshot_dimension(result: &mut Value, max_dimension: u32) {
+    if max_dimension == 0 {
+        return;
+    }
+    let Some(b64) = result
+        .get("screenshot_png_b64")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let Ok(bytes) = engine.decode(b64.as_bytes()) else {
+        return;
+    };
+    let Ok(img) = image::load_from_memory(&bytes) else {
+        return;
+    };
+    let longest = img.width().max(img.height());
+    if longest <= max_dimension {
+        return;
+    }
+    let resized = img.resize(
+        max_dimension,
+        max_dimension,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut buffer = Vec::new();
+    if resized
+        .write_to(
+            &mut std::io::Cursor::new(&mut buffer),
+            image::ImageFormat::Png,
+        )
+        .is_err()
+    {
+        return;
+    }
+    result["screenshot_png_b64"] = json!(engine.encode(&buffer));
+    if result.get("width").is_some() {
+        result["width"] = json!(resized.width());
+    }
+    if result.get("height").is_some() {
+        result["height"] = json!(resized.height());
+    }
+}
+
 /// The `computer_use` tool schema (hermes `schema.py`
 /// `COMPUTER_USE_SCHEMA`), parsed from a static string because the literal
 /// is too large for the `json!` macro's recursion budget.
@@ -718,7 +773,7 @@ pub async fn handle_computer_use(args: Value, ctx: Arc<crate::tools::ToolContext
         }
     }
 
-    match action.as_str() {
+    let outcome = match action.as_str() {
         "capture" => capture(&cfg, &args).await,
         "click" => click(&cfg, &args, 1, "left").await,
         "double_click" => click(&cfg, &args, 2, "left").await,
@@ -740,7 +795,14 @@ pub async fn handle_computer_use(args: Value, ctx: Arc<crate::tools::ToolContext
         "focus_app" => focus_app(&cfg, &args).await,
         other if other.starts_with("cua_browser_") => browser_passthrough(&cfg, other, &args).await,
         _ => Ok(json!({"ok": false, "action": action, "error": format!("unknown action {action:?}")})),
-    }
+    };
+    // Belt-and-braces over the driver-side `set_config` cap: downscale
+    // oversized screenshots client-side (no-op when the driver already
+    // honored the cap or the payload carries no image).
+    outcome.map(|mut value| {
+        enforce_screenshot_dimension(&mut value, cfg.max_image_dimension);
+        value
+    })
 }
 
 /// capture: get_window_state with mode som|vision|ax (hermes `capture()`).
@@ -1289,6 +1351,85 @@ mod tests {
         let ctx = Arc::new(crate::tools::ToolContext::default());
         let out = handle_computer_use(json!({"action": "fly"}), ctx).await.unwrap();
         assert_eq!(out["ok"], json!(false));
+    }
+
+    // ── client-side screenshot dimension enforcement ─────────────────
+
+    /// Encode a solid-color `w x h` PNG as base64.
+    fn solid_png_b64(w: u32, h: u32) -> String {
+        use base64::Engine as _;
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([30, 60, 90]));
+        let mut buffer = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut buffer),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        base64::engine::general_purpose::STANDARD.encode(&buffer)
+    }
+
+    fn decode_png_dims(b64: &str) -> (u32, u32) {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+        (img.width(), img.height())
+    }
+
+    #[test]
+    fn enforce_downscales_oversized_screenshot_preserving_aspect() {
+        let mut result = json!({
+            "ok": true,
+            "action": "capture",
+            "screenshot_png_b64": solid_png_b64(2000, 1000),
+            "width": 2000,
+            "height": 1000,
+        });
+        enforce_screenshot_dimension(&mut result, 1000);
+        let (w, h) = decode_png_dims(result["screenshot_png_b64"].as_str().unwrap());
+        assert_eq!((w, h), (1000, 500), "longest edge capped, aspect kept");
+        assert_eq!(result["width"], json!(1000));
+        assert_eq!(result["height"], json!(500));
+    }
+
+    #[test]
+    fn enforce_noop_when_within_cap() {
+        let b64 = solid_png_b64(640, 480);
+        let mut result = json!({"screenshot_png_b64": b64.clone()});
+        enforce_screenshot_dimension(&mut result, 1456);
+        assert_eq!(
+            result["screenshot_png_b64"].as_str().unwrap(),
+            b64,
+            "already-capped payload passes through byte-identical"
+        );
+    }
+
+    #[test]
+    fn enforce_disabled_with_zero_cap() {
+        let b64 = solid_png_b64(2000, 1000);
+        let mut result = json!({"screenshot_png_b64": b64.clone()});
+        enforce_screenshot_dimension(&mut result, 0);
+        assert_eq!(result["screenshot_png_b64"].as_str().unwrap(), b64);
+    }
+
+    #[test]
+    fn enforce_fail_open_on_bad_payloads() {
+        // Not base64.
+        let mut result = json!({"screenshot_png_b64": "!!!not-base64!!!"});
+        enforce_screenshot_dimension(&mut result, 100);
+        assert_eq!(result["screenshot_png_b64"], json!("!!!not-base64!!!"));
+        // Base64 but not an image.
+        use base64::Engine as _;
+        let junk = base64::engine::general_purpose::STANDARD.encode(b"plainly not a png");
+        let mut result = json!({"screenshot_png_b64": junk.clone()});
+        enforce_screenshot_dimension(&mut result, 100);
+        assert_eq!(result["screenshot_png_b64"], json!(junk));
+        // No screenshot field at all.
+        let mut result = json!({"ok": true, "action": "click"});
+        enforce_screenshot_dimension(&mut result, 100);
+        assert_eq!(result, json!({"ok": true, "action": "click"}));
     }
 
     #[test]
