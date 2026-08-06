@@ -1048,6 +1048,10 @@ pub async fn run_messaging(
             crate::wecom::run(cfg, dispatcher, pairing).await;
         }));
     }
+    // Standalone `notify/notify` sender (hermes `_standalone_send`):
+    // delivery works without the live WS adapter whenever credentials
+    // are configured; a starting live adapter overwrites the slot.
+    crate::homeassistant::maybe_register_standalone_sender(&msg.homeassistant);
     if msg.homeassistant.enabled {
         let cfg = msg.homeassistant.clone();
         let dispatcher = dispatcher.clone();

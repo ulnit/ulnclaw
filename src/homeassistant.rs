@@ -15,9 +15,11 @@
 //! hermes deliberately uses REST for sends to avoid racing the event
 //! listener on the shared WS connection.
 //!
-//! Known difference: the hermes standalone cron sender posts to
-//! `notify/notify` out-of-process; ulnclaw cron delivery rides the
-//! registered platform sender instead.
+//! The hermes standalone cron sender (`_standalone_send` → the HA
+//! `notify/notify` service) is ported as a credential-only sender that
+//! registers whenever HASS_URL + HASS_TOKEN are set, so delivery works
+//! without the live WebSocket adapter; a live adapter overwrites the
+//! slot with its persistent-notification sender.
 
 use crate::messaging::{Dispatcher, MessageEvent};
 use futures::StreamExt;
@@ -490,6 +492,88 @@ impl crate::messaging::PlatformSender for HomeassistantSender {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Standalone `notify/notify` sender (hermes `_standalone_send`)
+// ---------------------------------------------------------------------------
+
+/// Payload for the HA `notify.notify` service call (hermes
+/// `_standalone_send` body; an empty target is omitted — HA rejects
+/// blank targets).
+pub fn notify_payload(message: &str, target: &str) -> Value {
+    let mut payload = json!({ "message": message });
+    if !target.trim().is_empty() {
+        payload["target"] = json!(target);
+    }
+    payload
+}
+
+/// hermes `_standalone_send` — deliver a notification through the HA
+/// `notify/notify` REST service WITHOUT a live WebSocket adapter
+/// (out-of-process cron delivery). Requires `HASS_URL` + `HASS_TOKEN`;
+/// HA notifications have no threading or attachment model, so those
+/// hermes arguments have no port here.
+pub async fn standalone_notify(
+    url: &str,
+    token: &str,
+    message: &str,
+    target: &str,
+) -> Result<(), String> {
+    let hass_url = url.trim().trim_end_matches('/');
+    if hass_url.is_empty() || token.trim().is_empty() {
+        return Err(
+            "Home Assistant standalone send: HASS_URL and HASS_TOKEN must both be set".to_string(),
+        );
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("client: {e}"))?;
+    let endpoint = format!("{hass_url}/api/services/notify/notify");
+    let resp = client
+        .post(&endpoint)
+        .bearer_auth(token.trim())
+        .json(&notify_payload(message, target))
+        .send()
+        .await
+        .map_err(|e| format!("Home Assistant send failed: {e}"))?;
+    let status = resp.status().as_u16();
+    if status != 200 && status != 201 {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Home Assistant API error ({status}): {body}"));
+    }
+    Ok(())
+}
+
+/// Sender registered without a live adapter so platform delivery
+/// (`deliver=homeassistant` hermes semantics) works out-of-process.
+struct StandaloneHomeassistantSender {
+    cfg: ResolvedHomeassistant,
+}
+
+#[async_trait::async_trait]
+impl crate::messaging::PlatformSender for StandaloneHomeassistantSender {
+    async fn send_text(&self, chat_id: &str, text: &str) {
+        if let Err(e) = standalone_notify(&self.cfg.url, &self.cfg.token, text, chat_id).await {
+            eprintln!("[homeassistant] standalone notify failed: {e}");
+        }
+    }
+}
+
+/// Register the credential-only `notify/notify` sender when HASS_URL +
+/// HASS_TOKEN are configured — even if the live WebSocket adapter is
+/// disabled. A live adapter that starts later overwrites this slot with
+/// its persistent-notification sender (hermes live-adapter preference).
+pub fn maybe_register_standalone_sender(cfg: &HomeassistantConfig) {
+    let resolved = cfg.resolve();
+    if resolved.url.trim().is_empty() || resolved.token.trim().is_empty() {
+        return;
+    }
+    crate::messaging::register_platform_sender(
+        "homeassistant",
+        Arc::new(StandaloneHomeassistantSender { cfg: resolved }),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,5 +749,35 @@ mod tests {
         let resolved = cfg.resolve();
         assert_eq!(resolved.cooldown_seconds, 77);
         std::env::remove_var("HASS_COOLDOWN_SECONDS");
+    }
+
+    #[test]
+    fn notify_payload_includes_target_when_present() {
+        let with_target = notify_payload("hello", "kitchen");
+        assert_eq!(with_target["message"], "hello");
+        assert_eq!(with_target["target"], "kitchen");
+        // Blank target is omitted (HA rejects empty targets).
+        let bare = notify_payload("hello", "  ");
+        assert!(bare.get("target").is_none());
+    }
+
+    #[tokio::test]
+    async fn standalone_notify_requires_url_and_token() {
+        let err = standalone_notify("", "tok", "m", "t").await.unwrap_err();
+        assert!(err.contains("HASS_URL and HASS_TOKEN"));
+        let err = standalone_notify("http://ha.local:8123", "  ", "m", "t")
+            .await
+            .unwrap_err();
+        assert!(err.contains("HASS_URL and HASS_TOKEN"));
+    }
+
+    #[test]
+    fn standalone_sender_registration_gated_on_credentials() {
+        let _guard = crate::models_dev::test_env_lock();
+        std::env::remove_var("HASS_URL");
+        std::env::remove_var("HASS_TOKEN");
+        // No credentials -> nothing registered (slot untouched).
+        maybe_register_standalone_sender(&HomeassistantConfig::default());
+        assert!(crate::messaging::platform_sender("homeassistant").is_none());
     }
 }
