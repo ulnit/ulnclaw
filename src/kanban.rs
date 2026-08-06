@@ -46,6 +46,34 @@ pub const DEFAULT_FAILURE_LIMIT: i64 = 2;
 /// workspace (hermes `KANBAN_ATTACHMENT_MAX_BYTES`).
 pub const KANBAN_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
 
+/// Default per-task worker log rotation threshold — rotate at 2 MiB
+/// and keep one backup generation (hermes
+/// `DEFAULT_LOG_ROTATE_BYTES`).
+pub const DEFAULT_WORKER_LOG_ROTATE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Rotate a worker log that reached the cap: move it to `<name>.1`
+/// (replacing any previous backup) so the next attempt starts fresh
+/// while one generation survives (hermes
+/// `worker_log_rotation_config`). No-op below the cap or when the log
+/// does not exist yet.
+pub fn rotate_worker_log(log_path: &Path, rotate_bytes: u64) -> std::io::Result<()> {
+    let meta = match std::fs::metadata(log_path) {
+        Ok(meta) => meta,
+        Err(_) => return Ok(()),
+    };
+    if meta.len() < rotate_bytes {
+        return Ok(());
+    }
+    let name = log_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "worker.log".into());
+    let backup = log_path.with_file_name(format!("{name}.1"));
+    let _ = std::fs::remove_file(&backup);
+    std::fs::rename(log_path, &backup)?;
+    Ok(())
+}
+
 /// Terminal event kinds that wake the creator session (hermes
 /// `_WAKE_KINDS`). `archived` / `unblocked` are claimed by the
 /// notifier's terminal set but stay silent.
@@ -450,8 +478,21 @@ pub fn spawn_worker(
     std::fs::create_dir_all(&log_dir)
         .map_err(|e| format!("create {}: {e}", log_dir.display()))?;
     let log_path = log_dir.join(format!("{}.log", task.id));
-    let log_file = std::fs::File::create(&log_path)
-        .map_err(|e| format!("create {}: {e}", log_path.display()))?;
+    // Rotate at the configured cap, keep one backup generation
+    // (hermes worker_log_rotation_config); append so earlier attempts
+    // inside the current generation survive a re-spawn.
+    let rotate_bytes = crate::config::UlncLawConfig::load(None)
+        .ok()
+        .and_then(|config| config.kanban.worker_log_rotate_bytes)
+        .filter(|bytes| *bytes > 0)
+        .unwrap_or(DEFAULT_WORKER_LOG_ROTATE_BYTES);
+    rotate_worker_log(&log_path, rotate_bytes)
+        .map_err(|e| format!("rotate {}: {e}", log_path.display()))?;
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("open {}: {e}", log_path.display()))?;
     let err_file = log_file
         .try_clone()
         .map_err(|e| format!("clone log handle: {e}"))?;
@@ -6975,6 +7016,28 @@ mod tests {
         // The would-be spawn counts against the cap for the second task.
         assert_eq!(result.would_spawn.len(), 1);
         assert_eq!(result.skipped_per_profile_capped.len(), 1);
+    }
+
+    #[test]
+    fn worker_log_rotation_keeps_one_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("t_abc123.log");
+
+        // Below the cap: nothing moves.
+        std::fs::write(&log_path, "small").unwrap();
+        rotate_worker_log(&log_path, 1024).unwrap();
+        assert!(log_path.exists());
+
+        // At/over the cap: rotated to .1, previous backup replaced.
+        std::fs::write(&log_path, "x".repeat(2048)).unwrap();
+        rotate_worker_log(&log_path, 1024).unwrap();
+        assert!(!log_path.exists());
+        let backup = dir.path().join("t_abc123.log.1");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap().len(), 2048);
+
+        std::fs::write(&log_path, "y".repeat(3000)).unwrap();
+        rotate_worker_log(&log_path, 1024).unwrap();
+        assert_eq!(std::fs::read_to_string(&backup).unwrap().len(), 3000);
     }
 
     #[test]

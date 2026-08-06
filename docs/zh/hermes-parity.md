@@ -400,7 +400,11 @@
   （#35240）：每次 `dispatch_once` 都在 `<kanban.db>.dispatch.lock`
   的非阻塞 `flock` 下进行；失败的调度器（例如逃出服务重启的孤儿进
   程）返回 `skipped_locked = true` 且零数据库写入，下一间隔再试 ——
-  CLI（`dispatch: skipped …`）与 dispatch API JSON 均可见。
+  CLI（`dispatch: skipped …`）与 dispatch API JSON 均可见。P152 增
+  加 worker 日志轮转：`kanban/worker-logs/` 下的按任务日志在达到
+  `[kanban] worker_log_rotate_bytes`（默认 2 MiB）时轮转，保留一份
+  `.log.1` 备份代，同一代内追加写入 —— 重生 attempt 不再截断先前输
+  出（hermes `worker_log_rotation_config`）。
 - 消息平台：媒体以缓存路径引用交付，agent 用 vision_analyze/
   video_analyze/read_file 检视（hermes 的原生多模态用户轮注入未移植）；
   语音消息经 `[stt]` 管道转写，但内置 `local` faster-whisper provider

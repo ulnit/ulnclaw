@@ -456,7 +456,12 @@ performance and a single static binary.
   losing dispatcher (e.g. an orphan escaped a service restart)
   returns `skipped_locked = true` with zero DB writes and retries
   next interval — surfaced in the CLI (`dispatch: skipped …`) and the
-  dispatch API JSON.
+  dispatch API JSON. P152 added worker log rotation: per-task logs
+  under `kanban/worker-logs/` rotate at `[kanban]
+  worker_log_rotate_bytes` (default 2 MiB), keep one `.log.1` backup
+  generation, and append within a generation so re-spawned attempts
+  no longer truncate earlier output (hermes
+  `worker_log_rotation_config`).
 - Messaging: media arrives as cached path references the agent inspects
   with vision_analyze/video_analyze/read_file (hermes' native multimodal
   user-turn injection is not ported); voice notes ARE transcribed via the

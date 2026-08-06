@@ -769,6 +769,10 @@ pub struct KanbanConfig {
     /// (hermes `kanban.max_in_progress_per_profile`, #21582). None or
     /// 0 disables the cap.
     pub max_in_progress_per_profile: Option<usize>,
+    /// Rotate a per-task worker log once it reaches this many bytes,
+    /// keeping one `.log.1` backup generation (hermes
+    /// `kanban.worker_log_rotate_bytes`; default 2 MiB).
+    pub worker_log_rotate_bytes: Option<u64>,
 }
 
 impl Default for KanbanConfig {
@@ -785,6 +789,7 @@ impl Default for KanbanConfig {
             auto_decompose_per_tick: 3,
             stale_timeout_seconds: 14400,
             max_in_progress_per_profile: None,
+            worker_log_rotate_bytes: None,
         }
     }
 }
