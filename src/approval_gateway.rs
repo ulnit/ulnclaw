@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(b.rx.try_recv().unwrap(), "session");
         assert_eq!(resolve_all("s2", CHOICE_ONCE), 0);
         // Dropped sender resolves cleanly without panicking.
-        let mut c = register("s3", "cmd-c", "d", false, true, true);
+        let c = register("s3", "cmd-c", "d", false, true, true);
         drop(c);
         assert!(resolve("s3", CHOICE_DENY));
     }

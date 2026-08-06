@@ -11,11 +11,24 @@
 //!
 //! Intake mirrors hermes: only Nostr kind-9 chat events dispatch,
 //! event ids dedup per channel (500-entry cap), own-pubkey echoes are
-//! suppressed (`BUZZ_PUBKEY`), channels are require-mention gated
-//! (leading `@mention` stripped before dispatch) while DMs always
-//! pass, and an optional pubkey allowlist filters senders. The NIP-42
-//! WebSocket transport and npub/hex bech32 conversion are not ported
-//! (hex pubkeys only; the WS mode needs a relay auth dance).
+//! suppressed (`BUZZ_PUBKEY` or derived from the NIP-42 key), channels
+//! are require-mention gated (leading `@mention` stripped before
+//! dispatch) while DMs always pass, and an optional pubkey allowlist
+//! filters senders.
+//!
+//! Inbound transports (hermes `transport` setting): `auto` (default)
+//! prefers the NIP-42-authenticated WebSocket subscription and falls
+//! back to CLI polling when it cannot authenticate within 20 s;
+//! `websocket` requires it; `poll` keeps the original loop. The WS
+//! path answers the relay's `AUTH` challenge with a signed kind-22242
+//! event (`src/nostr_auth.rs`, BIP-340 schnorr, nsec or hex key from
+//! `BUZZ_PRIVATE_KEY` or a `~/.config/buzz/*credentials*.json` file),
+//! subscribes per channel (`kinds=[9]`, `#h`, `since` resume from the
+//! last observed timestamp) plus the kind-44100 membership feed, and
+//! routes events through the same `handle_event` machinery as polling.
+//! Reconnects with 1→30 s backoff. Dynamic DM rediscovery from
+//! membership events is not ported (channels are explicit operator
+//! configuration here); npub bech32 pubkeys are not converted.
 
 use crate::messaging::{Dispatcher, MessageEvent};
 use serde::{Deserialize, Serialize};
@@ -36,6 +49,14 @@ const MIN_POLL_INTERVAL_MS: u64 = 1000;
 /// hermes `_CLI_TIMEOUT`.
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_MESSAGE_LENGTH: usize = 4000;
+/// hermes `_WS_AUTH_TIMEOUT`.
+const WS_AUTH_TIMEOUT: Duration = Duration::from_secs(20);
+/// hermes `_WS_MEMBERSHIP_KIND` (Buzz channel-membership events).
+const WS_MEMBERSHIP_KIND: u64 = 44100;
+/// hermes `_WS_MEMBERSHIP_SUB_ID`.
+const WS_MEMBERSHIP_SUB_ID: &str = "hermes-buzz-membership";
+/// hermes reconnect backoff ceiling (30 s).
+const WS_MAX_BACKOFF_SECS: f64 = 30.0;
 
 /// `[messaging.buzz]` — Buzz adapter (hermes `platforms.buzz` plugin
 /// config + `BUZZ_*` env vars).
@@ -59,6 +80,21 @@ pub struct BuzzConfig {
     pub poll_interval_ms: u64,
     /// Cron/notification delivery channel (fallback `BUZZ_HOME_CHANNEL`).
     pub home_channel: String,
+    /// Community relay URL for the WS transport (fallback
+    /// `BUZZ_RELAY_URL`).
+    pub relay_url: String,
+    /// Nostr private key, nsec or hex (fallback `BUZZ_PRIVATE_KEY`;
+    /// credentials JSON file as a second source).
+    pub private_key: String,
+    /// Explicit credentials JSON path (fallback `BUZZ_CREDENTIALS_FILE`;
+    /// default scans `~/.config/buzz/*credentials*.json`).
+    pub credentials_file: String,
+    /// Inbound transport: `auto` | `websocket` | `poll` (fallback
+    /// `BUZZ_TRANSPORT`).
+    pub transport: String,
+    /// Optional NIP-OA owner-attestation tag JSON appended to the auth
+    /// event (fallback `BUZZ_AUTH_TAG`).
+    pub auth_tag: String,
 }
 
 impl Default for BuzzConfig {
@@ -72,6 +108,11 @@ impl Default for BuzzConfig {
             require_mention: true,
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
             home_channel: String::new(),
+            relay_url: String::new(),
+            private_key: String::new(),
+            credentials_file: String::new(),
+            transport: String::new(),
+            auth_tag: String::new(),
         }
     }
 }
@@ -102,6 +143,31 @@ pub struct ResolvedBuzz {
     pub require_mention: bool,
     pub poll_interval_ms: u64,
     pub home_channel: String,
+    pub relay_url: String,
+    pub private_key: String,
+    pub credentials_file: String,
+    /// Resolved transport (hermes: auto | websocket | poll).
+    pub transport: BuzzTransport,
+    pub auth_tag: String,
+}
+
+/// Inbound transport selection (hermes `transport`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuzzTransport {
+    /// WS with poll fallback (hermes default).
+    Auto,
+    /// Require WS; fail when it cannot authenticate.
+    WebSocket,
+    /// CLI polling only.
+    Poll,
+}
+
+fn parse_transport(raw: &str) -> BuzzTransport {
+    match raw.trim().to_lowercase().as_str() {
+        "websocket" | "ws" => BuzzTransport::WebSocket,
+        "poll" | "cli" => BuzzTransport::Poll,
+        _ => BuzzTransport::Auto,
+    }
 }
 
 impl BuzzConfig {
@@ -132,8 +198,103 @@ impl BuzzConfig {
                 .max(MIN_POLL_INTERVAL_MS),
             home_channel: env_trim("BUZZ_HOME_CHANNEL")
                 .unwrap_or_else(|| self.home_channel.clone()),
+            relay_url: env_trim("BUZZ_RELAY_URL").unwrap_or_else(|| self.relay_url.clone()),
+            private_key: env_trim("BUZZ_PRIVATE_KEY").unwrap_or_else(|| self.private_key.clone()),
+            credentials_file: env_trim("BUZZ_CREDENTIALS_FILE")
+                .unwrap_or_else(|| self.credentials_file.clone()),
+            transport: parse_transport(
+                &env_trim("BUZZ_TRANSPORT").unwrap_or_else(|| self.transport.clone()),
+            ),
+            auth_tag: env_trim("BUZZ_AUTH_TAG").unwrap_or_else(|| self.auth_tag.clone()),
         }
     }
+}
+
+/// hermes `_websocket_url`: http(s) relay URLs become ws(s).
+pub fn websocket_url(relay_url: &str) -> Result<String, String> {
+    let parsed = url::Url::parse(relay_url.trim()).map_err(|e| format!("relay URL: {e}"))?;
+    let scheme = match parsed.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        "ws" | "wss" => parsed.scheme(),
+        _ => return Err("Buzz relay URL must use http(s) or ws(s)".into()),
+    };
+    if parsed.host_str().is_none() {
+        return Err("Buzz relay URL must use http(s) or ws(s)".into());
+    }
+    let mut out = format!("{scheme}://{}", parsed.host_str().unwrap());
+    if let Some(port) = parsed.port() {
+        out = format!("{out}:{port}");
+    }
+    let path = parsed.path();
+    if !path.is_empty() && path != "/" {
+        out.push_str(path);
+    }
+    if let Some(query) = parsed.query() {
+        out = format!("{out}?{query}");
+    }
+    Ok(out)
+}
+
+/// Resolve the Nostr private key (hermes `_resolve_private_key`):
+/// config/env first, then a credentials JSON — explicit path or the
+/// first `~/.config/buzz/*credentials*.json` (keys `nsec`,
+/// `private_key_hex`, `private_key`). Never logged.
+pub fn resolve_private_key(cfg: &ResolvedBuzz) -> String {
+    if !cfg.private_key.is_empty() {
+        return cfg.private_key.clone();
+    }
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if !cfg.credentials_file.is_empty() {
+        candidates.push(expand_home(&cfg.credentials_file));
+    } else if let Some(dir) = home_dir().map(|h| h.join(".config").join("buzz")) {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let mut found: Vec<std::path::PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.extension().and_then(|e| e.to_str()) == Some("json")
+                        && p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.contains("credentials"))
+                            .unwrap_or(false)
+                })
+                .collect();
+            found.sort();
+            candidates.extend(found);
+        }
+    }
+    for path in candidates {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(data) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        let Some(obj) = data.as_object() else { continue };
+        for field in ["nsec", "private_key_hex", "private_key"] {
+            if let Some(value) = obj.get(field).and_then(|v| v.as_str()) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
+fn expand_home(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = home_dir() {
+            return home.join(rest);
+        }
+    }
+    std::path::PathBuf::from(path)
 }
 
 /// hermes `_parse_json_list` — tolerant JSON array parse.
@@ -244,7 +405,7 @@ pub async fn run(
     dispatcher: Arc<Dispatcher>,
     pairing: Option<Arc<crate::pairing::PairingStore>>,
 ) {
-    let resolved = cfg.resolve();
+    let mut resolved = cfg.resolve();
     if resolved.channels.is_empty() {
         eprintln!(
             "[buzz] disabled: no channels configured (set [messaging.buzz] channels or BUZZ_CHANNELS)"
@@ -257,6 +418,68 @@ pub async fn run(
             cfg: resolved.clone(),
         }),
     );
+    // Derive the own pubkey from the NIP-42 key when not configured
+    // (echo suppression + mention detection need it).
+    if resolved.self_pubkey.is_empty() {
+        let key = resolve_private_key(&resolved);
+        if !key.is_empty() {
+            if let Ok(pubkey) = crate::nostr_auth::public_key_hex(&key) {
+                resolved.self_pubkey = pubkey;
+            }
+        }
+    }
+    // Transport selection (hermes connect()).
+    if resolved.transport != BuzzTransport::Poll {
+        let key = resolve_private_key(&resolved);
+        let ws_url = if key.is_empty() || resolved.relay_url.is_empty() {
+            Err("no relay URL / private key configured".to_string())
+        } else {
+            websocket_url(&resolved.relay_url)
+        };
+        match ws_url {
+            Ok(ws_url) => match start_websocket(
+                &resolved,
+                &key,
+                &ws_url,
+                dispatcher.clone(),
+                pairing.clone(),
+            )
+            .await
+            {
+                Ok(()) => {
+                    eprintln!(
+                        "[buzz] connected to {} as {}, watching {} channel(s) via websocket",
+                        resolved.relay_url,
+                        &resolved.self_pubkey[..resolved.self_pubkey.len().min(12)],
+                        resolved.channels.len()
+                    );
+                    // The WS task owns inbound; park here.
+                    std::future::pending::<()>().await;
+                    return;
+                }
+                Err(e) => {
+                    if resolved.transport == BuzzTransport::WebSocket {
+                        eprintln!(
+                            "[buzz] WebSocket transport did not authenticate (transport=websocket): {e}"
+                        );
+                        return;
+                    }
+                    eprintln!(
+                        "[buzz] WebSocket transport unavailable ({e}); falling back to polling"
+                    );
+                }
+            },
+            Err(e) => {
+                if resolved.transport == BuzzTransport::WebSocket {
+                    eprintln!(
+                        "[buzz] WebSocket transport unavailable ({e}); transport=websocket — giving up"
+                    );
+                    return;
+                }
+                eprintln!("[buzz] WebSocket transport unavailable ({e}); falling back to polling");
+            }
+        }
+    }
     let mut states: HashMap<String, ChannelState> = HashMap::new();
     for channel in &resolved.channels {
         states.insert(channel.clone(), ChannelState::new());
@@ -274,6 +497,320 @@ pub async fn run(
         }
         tokio::time::sleep(Duration::from_millis(resolved.poll_interval_ms)).await;
     }
+}
+
+type WsStates = Arc<tokio::sync::Mutex<HashMap<String, ChannelState>>>;
+
+/// Start the WS loop and wait for the NIP-42 handshake (hermes
+/// `_start_websocket`): Ok when authenticated within the timeout.
+async fn start_websocket(
+    cfg: &ResolvedBuzz,
+    private_key: &str,
+    ws_url: &str,
+    dispatcher: Arc<Dispatcher>,
+    pairing: Option<Arc<crate::pairing::PairingStore>>,
+) -> Result<(), String> {
+    let states: WsStates = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    {
+        let mut guard = states.lock().await;
+        for channel in &cfg.channels {
+            guard.insert(channel.clone(), ChannelState::new());
+        }
+    }
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+    let session = WsSession {
+        cfg: cfg.clone(),
+        private_key: private_key.to_string(),
+        ws_url: ws_url.to_string(),
+        dispatcher,
+        pairing,
+        states,
+    };
+    let handle = tokio::spawn(async move {
+        websocket_loop(session, Some(ready_tx)).await;
+    });
+    let outcome = match tokio::time::timeout(WS_AUTH_TIMEOUT + Duration::from_secs(5), ready_rx)
+        .await
+    {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("websocket task ended before reporting".into()),
+        Err(_) => Err("WebSocket did not authenticate in time".into()),
+    };
+    if outcome.is_err() {
+        // hermes cancels the WS task when the handshake fails.
+        handle.abort();
+    }
+    outcome
+}
+
+struct WsSession {
+    cfg: ResolvedBuzz,
+    private_key: String,
+    ws_url: String,
+    dispatcher: Arc<Dispatcher>,
+    pairing: Option<Arc<crate::pairing::PairingStore>>,
+    states: WsStates,
+}
+
+/// Persistent authenticated subscription with bounded reconnect
+/// backoff (hermes `_websocket_loop`). The ready signal fires once the
+/// first connection authenticates; later reconnects stay silent.
+async fn websocket_loop(
+    session: WsSession,
+    ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+) {
+    let mut backoff = 1.0f64;
+    let mut ready_tx = ready_tx;
+    loop {
+        match run_ws_session(&session, ready_tx.take()).await {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("[buzz] WebSocket disconnected; retrying in {backoff:.1}s: {e}");
+            }
+        }
+        tokio::time::sleep(Duration::from_secs_f64(backoff)).await;
+        backoff = (backoff * 2.0).min(WS_MAX_BACKOFF_SECS);
+    }
+}
+
+/// One connection attempt: NIP-42 auth, subscriptions, event pump.
+/// The ready sender (first attempt only) fires right after the
+/// handshake succeeds.
+async fn run_ws_session(
+    session: &WsSession,
+    ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+) -> Result<(), String> {
+    use futures::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (ws, _resp) = tokio_tungstenite::connect_async(&session.ws_url)
+        .await
+        .map_err(|e| format!("buzz WS connect: {e}"))?;
+    let (write, mut read) = ws.split();
+    let write = Arc::new(tokio::sync::Mutex::new(write));
+
+    if let Err(e) = authenticate_websocket(session, &write, &mut read).await {
+        if let Some(tx) = ready_tx {
+            let _ = tx.send(Err(e.clone()));
+        }
+        return Err(e);
+    }
+
+    // Channel subscriptions (hermes `_subscribe_websocket`).
+    {
+        let states = session.states.lock().await;
+        let now = now_secs() as i64;
+        for (index, channel_id) in session.cfg.channels.iter().enumerate() {
+            let state = states.get(channel_id);
+            let since = (state.map(|s| s.last_ts).unwrap_or(now) - 1).max(0);
+            let request = serde_json::json!([
+                "REQ",
+                format!("hermes-buzz-{index}"),
+                {"kinds": [CHAT_KIND], "#h": [channel_id], "since": since},
+            ]);
+            send_ws(&write, &request.to_string()).await?;
+        }
+        if !session.cfg.self_pubkey.is_empty() {
+            let request = serde_json::json!([
+                "REQ",
+                WS_MEMBERSHIP_SUB_ID,
+                {"kinds": [WS_MEMBERSHIP_KIND], "#p": [session.cfg.self_pubkey], "since": (now - 1).max(0)},
+            ]);
+            send_ws(&write, &request.to_string()).await?;
+        }
+    }
+
+    if let Some(tx) = ready_tx {
+        let _ = tx.send(Ok(()));
+    }
+
+    // Keepalive ping task (hermes ping_interval=20).
+    let ping_write = write.clone();
+    let ping_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(20));
+        loop {
+            interval.tick().await;
+            let mut sink = ping_write.lock().await;
+            use futures::SinkExt;
+            if sink.send(Message::Ping(Vec::new())).await.is_err() {
+                return;
+            }
+        }
+    });
+
+    let result = event_pump(session, &mut read).await;
+    ping_task.abort();
+    result
+}
+
+async fn send_ws(
+    write: &Arc<tokio::sync::Mutex<futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::Message>>>,
+    text: &str,
+) -> Result<(), String> {
+    use futures::SinkExt;
+    let mut sink = write.lock().await;
+    sink.send(tokio_tungstenite::tungstenite::Message::Text(text.to_string()))
+        .await
+        .map_err(|e| format!("buzz WS send: {e}"))
+}
+
+/// NIP-42: answer the relay's AUTH challenge with a signed kind-22242
+/// event and wait for the OK acknowledgment (hermes
+/// `_authenticate_websocket`).
+async fn authenticate_websocket(
+    session: &WsSession,
+    write: &Arc<tokio::sync::Mutex<futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::Message>>>,
+    read: &mut futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+) -> Result<(), String> {
+    let raw = next_text(read, WS_AUTH_TIMEOUT)
+        .await?
+        .ok_or("buzz WS closed before AUTH challenge")?;
+    let message: Value = serde_json::from_str(&raw).map_err(|_| "malformed AUTH frame")?;
+    let items = message.as_array().ok_or("Buzz relay did not send a NIP-42 AUTH challenge")?;
+    if items.len() < 2 || items[0].as_str() != Some("AUTH") {
+        return Err("Buzz relay did not send a NIP-42 AUTH challenge".into());
+    }
+    let challenge = items[1].as_str().unwrap_or("").to_string();
+    let event = crate::nostr_auth::build_auth_event(
+        &session.private_key,
+        &challenge,
+        &session.ws_url,
+        &session.cfg.auth_tag,
+        None,
+    )?;
+    let event_id = event["id"].as_str().unwrap_or("").to_string();
+    let reply = serde_json::json!(["AUTH", event]);
+    send_ws(write, &reply.to_string()).await?;
+    loop {
+        let raw = next_text(read, WS_AUTH_TIMEOUT)
+            .await?
+            .ok_or("buzz WS closed during AUTH")?;
+        let response: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+        let Some(items) = response.as_array() else { continue };
+        if items.is_empty() {
+            continue;
+        }
+        match items[0].as_str() {
+            Some("OK") if items.len() >= 4 && items[1].as_str() == Some(event_id.as_str()) => {
+                if items[2].as_bool() == Some(true) {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "Buzz WebSocket AUTH rejected: {}",
+                    items[3].as_str().unwrap_or("")
+                ));
+            }
+            Some("NOTICE") | Some("CLOSED") => {
+                let detail = items
+                    .last()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("authentication failed");
+                return Err(format!("Buzz WebSocket AUTH failed: {detail}"));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Read the next text frame within a timeout (skips binary/pings).
+async fn next_text(
+    read: &mut futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    timeout: Duration,
+) -> Result<Option<String>, String> {
+    use futures::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        let frame = tokio::time::timeout(timeout, read.next())
+            .await
+            .map_err(|_| "buzz WS auth timeout")?;
+        let Some(frame) = frame else {
+            return Ok(None);
+        };
+        match frame {
+            Ok(Message::Text(text)) => return Ok(Some(text)),
+            Ok(Message::Close(_)) => return Ok(None),
+            Ok(_) => continue,
+            Err(e) => return Err(format!("buzz WS read: {e}")),
+        }
+    }
+}
+
+/// Steady-state event pump (hermes `_websocket_loop` inner loop).
+async fn event_pump(
+    session: &WsSession,
+    read: &mut futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+) -> Result<(), String> {
+    use futures::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    while let Some(frame) = read.next().await {
+        let frame = frame.map_err(|e| format!("buzz WS read: {e}"))?;
+        let Message::Text(raw) = frame else { continue };
+        let message: Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(_) => {
+                eprintln!("[buzz] ignoring malformed WebSocket frame");
+                continue;
+            }
+        };
+        let Some(items) = message.as_array() else { continue };
+        if items.is_empty() {
+            continue;
+        }
+        match items[0].as_str() {
+            Some("EVENT") if items.len() >= 3 => {
+                let subscription_id = items[1].as_str().unwrap_or("").to_string();
+                let Some(event) = items[2].as_object().map(|_| items[2].clone()) else {
+                    continue;
+                };
+                if subscription_id == WS_MEMBERSHIP_SUB_ID {
+                    // Membership feed: dynamic DM rediscovery is not
+                    // ported (explicit channel configuration) — events
+                    // are consumed to keep the subscription healthy.
+                    continue;
+                }
+                let index: Option<usize> = subscription_id
+                    .strip_prefix("hermes-buzz-")
+                    .and_then(|rest| rest.parse().ok());
+                let Some(channel_id) = index
+                    .and_then(|i| session.cfg.channels.get(i).cloned())
+                else {
+                    continue;
+                };
+                let mut states = session.states.lock().await;
+                if let Some(state) = states.get_mut(&channel_id) {
+                    handle_event(
+                        &session.cfg,
+                        &session.dispatcher,
+                        &session.pairing,
+                        &channel_id,
+                        state,
+                        &event,
+                    )
+                    .await;
+                }
+            }
+            Some("CLOSED") => {
+                let detail = items
+                    .last()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("subscription closed");
+                return Err(detail.to_string());
+            }
+            Some("NOTICE") => {
+                let detail = items.last().and_then(|v| v.as_str()).unwrap_or("");
+                eprintln!("[buzz] relay notice: {detail}");
+            }
+            _ => {}
+        }
+    }
+    Err("buzz WS stream ended".into())
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// hermes `_poll_channel` + `_handle_event`.
@@ -484,6 +1021,8 @@ mod tests {
         assert_eq!(resolved.cli_path, "buzz");
         assert!(resolved.require_mention);
         assert_eq!(resolved.poll_interval_ms, DEFAULT_POLL_INTERVAL_MS);
+        assert_eq!(resolved.transport, BuzzTransport::Auto);
+        assert!(resolved.relay_url.is_empty());
     }
 
     #[test]
@@ -506,6 +1045,57 @@ mod tests {
         assert!("dm:abc123".starts_with("dm:"));
         assert_eq!("dm:abc123".trim_start_matches("dm:"), "abc123");
         assert!(!"general".starts_with("dm:"));
+    }
+
+    #[test]
+    fn websocket_url_derivation() {
+        assert_eq!(
+            websocket_url("https://mycommunity.communities.buzz.xyz").unwrap(),
+            "wss://mycommunity.communities.buzz.xyz"
+        );
+        assert_eq!(
+            websocket_url("http://relay.local:8080/path").unwrap(),
+            "ws://relay.local:8080/path"
+        );
+        assert_eq!(
+            websocket_url("wss://relay.example/room?x=1").unwrap(),
+            "wss://relay.example/room?x=1"
+        );
+        assert!(websocket_url("ftp://relay.example").is_err());
+        assert!(websocket_url("not a url").is_err());
+    }
+
+    #[test]
+    fn transport_parsing() {
+        assert_eq!(parse_transport("websocket"), BuzzTransport::WebSocket);
+        assert_eq!(parse_transport("POLL"), BuzzTransport::Poll);
+        assert_eq!(parse_transport("auto"), BuzzTransport::Auto);
+        assert_eq!(parse_transport(""), BuzzTransport::Auto);
+        assert_eq!(parse_transport("bogus"), BuzzTransport::Auto);
+    }
+
+    #[test]
+    fn private_key_from_credentials_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("my-credentials.json");
+        std::fs::write(
+            &path,
+            r#"{"nsec": "", "private_key_hex": "0000000000000000000000000000000000000000000000000000000000000003"}"#,
+        )
+        .unwrap();
+        let mut cfg = BuzzConfig::default().resolve();
+        cfg.credentials_file = path.to_string_lossy().to_string();
+        assert_eq!(
+            resolve_private_key(&cfg),
+            "0000000000000000000000000000000000000000000000000000000000000003"
+        );
+        // Config value wins over the file.
+        cfg.private_key = "nsec1abc".to_string();
+        assert_eq!(resolve_private_key(&cfg), "nsec1abc");
+        // Missing file resolves empty.
+        cfg.private_key = String::new();
+        cfg.credentials_file = "/nonexistent/creds.json".to_string();
+        assert_eq!(resolve_private_key(&cfg), "");
     }
 
     #[test]

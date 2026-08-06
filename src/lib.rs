@@ -86,6 +86,7 @@ pub mod binary_ext;
 pub mod browser;
 pub mod bundles;
 pub mod buzz;
+pub mod nostr_auth;
 pub mod kanban;
 pub mod kanban_diagnostics;
 pub mod kanban_triage;
