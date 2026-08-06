@@ -1530,6 +1530,24 @@ enum PluginsAction {
     Disable { name: String },
     /// Add every pending [hooks] command to the consent allowlist
     AcceptHooks,
+    /// Install a plugin from a Git URL or owner/repo shorthand (hermes plugins install)
+    Install {
+        /// Git URL, owner/repo, or owner/repo/path/to/plugin
+        identifier: String,
+        /// Reinstall over an existing plugin directory
+        #[arg(long)]
+        force: bool,
+        /// Enable immediately without prompting
+        #[arg(long, conflicts_with = "no_enable")]
+        enable: bool,
+        /// Install disabled (skip the enable prompt)
+        #[arg(long)]
+        no_enable: bool,
+    },
+    /// Update an installed plugin from its git remote (hermes plugins update)
+    Update { name: String },
+    /// Remove an installed plugin directory (hermes plugins remove)
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -4014,6 +4032,72 @@ async fn plugins_cmd(config: &UlncLawConfig, action: PluginsAction) -> Result<()
             } else {
                 println!("✓ Accepted {added} hook command(s) into {}.", home.join("shell-hooks-allowlist.json").display());
             }
+        }
+        PluginsAction::Install {
+            identifier,
+            force,
+            enable,
+            no_enable,
+        } => {
+            if identifier.starts_with("http://") || identifier.starts_with("file://") {
+                println!(
+                    "Warning: Using insecure/local URL scheme. Consider using https:// or git@ for production installs."
+                );
+            }
+            println!("Cloning {identifier}...");
+            let installed = plugins::install_plugin(&home, &identifier, force)?;
+            if !installed.has_manifest {
+                println!(
+                    "Warning: {} doesn't contain plugin.toml/plugin.yaml. It may not be a valid plugin.",
+                    installed.name
+                );
+            }
+            println!(
+                "✓ Installed plugin {} → {}",
+                installed.name,
+                installed.dir.display()
+            );
+            let should_enable = if enable {
+                true
+            } else if no_enable {
+                false
+            } else if std::io::IsTerminal::is_terminal(&std::io::stdin())
+                && std::io::IsTerminal::is_terminal(&std::io::stdout())
+            {
+                print!("  Enable '{}' now? [y/N]: ", installed.name);
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer).ok();
+                matches!(answer.trim(), "y" | "Y" | "yes" | "YES")
+            } else {
+                false
+            };
+            if should_enable {
+                println!("{}", plugins::enable_plugin(&home, &installed.name)?);
+            } else {
+                println!("{}", plugins::disable_plugin(&home, &installed.name)?);
+                println!(
+                    "Plugin installed but not enabled. Run `ulnclaw plugins enable {}` to activate.",
+                    installed.name
+                );
+            }
+            println!("Restart the gateway for the plugin to take effect.");
+        }
+        PluginsAction::Update { name } => {
+            println!("Updating {name}...");
+            let output = plugins::update_plugin(&home, &name)?;
+            if output.contains("Already up to date") {
+                println!("✓ Plugin {name} is already up to date.");
+            } else {
+                println!("✓ Plugin {name} updated.");
+                let trimmed = output.trim();
+                if !trimmed.is_empty() {
+                    println!("{trimmed}");
+                }
+            }
+        }
+        PluginsAction::Remove { name } => {
+            println!("{}", plugins::remove_plugin(&home, &name)?);
         }
     }
     Ok(())

@@ -828,6 +828,351 @@ pub fn disable_plugin(home: &Path, name: &str) -> Result<String, String> {
     Ok(format!("✓ Disabled plugin {name} (takes effect on next start)."))
 }
 
+/// GitHub browser-URL segments that mark a repo page rather than a
+/// cloneable URL (hermes `_GITHUB_BROWSER_SEGMENTS`).
+const GITHUB_BROWSER_SEGMENTS: &[&str] = &[
+    "actions", "blob", "commit", "commits", "issues", "pull", "pulls",
+    "releases", "tree", "wiki",
+];
+
+/// Git subprocess wall-clock cap (hermes 60 s clone/pull timeout).
+const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Resolve a plugin identifier to `(git_url, subdir)` (hermes
+/// `_resolve_git_url`). Accepts full URLs (https/http/git@/ssh/file),
+/// GitHub browser URLs (`/tree/<branch>/<path>`), `#subdir` fragments,
+/// `.git/`-boundary subdirs, and `owner/repo[/subdir]` shorthand.
+pub fn resolve_git_url(identifier: &str) -> Result<(String, Option<String>), String> {
+    let id = identifier.trim();
+    let is_url = id.starts_with("https://")
+        || id.starts_with("http://")
+        || id.starts_with("git@")
+        || id.starts_with("ssh://")
+        || id.starts_with("file://");
+    if is_url {
+        if let Some(path) = id.strip_prefix("https://github.com/") {
+            let no_query = path.split('?').next().unwrap_or("");
+            let no_frag = no_query.split('#').next().unwrap_or("");
+            let parts: Vec<&str> = no_frag.trim_matches('/').split('/').collect();
+            if parts.len() >= 3
+                && !parts[0].is_empty()
+                && !parts[1].is_empty()
+                && GITHUB_BROWSER_SEGMENTS.contains(&parts[2])
+            {
+                let repo = parts[1].strip_suffix(".git").unwrap_or(parts[1]);
+                let subdir = if parts[2] == "tree" && parts.len() >= 5 {
+                    let joined = parts[4..].join("/").trim_matches('/').to_string();
+                    if joined.is_empty() { None } else { Some(joined) }
+                } else {
+                    None
+                };
+                return Ok((
+                    format!("https://github.com/{}/{repo}.git", parts[0]),
+                    subdir,
+                ));
+            }
+        }
+        // Explicit `#subdir` fragment — unambiguous for any scheme.
+        if let Some(hash_idx) = id.find('#') {
+            let (url, frag) = id.split_at(hash_idx);
+            let frag = frag[1..].trim_matches('/');
+            return Ok((
+                url.to_string(),
+                if frag.is_empty() { None } else { Some(frag.to_string()) },
+            ));
+        }
+        // Natural `.git/` boundary (GitHub-style URLs).
+        if let Some(idx) = id.find(".git/") {
+            let url = &id[..idx + 4];
+            let subdir = id[idx + 5..].trim_matches('/');
+            return Ok((
+                url.to_string(),
+                if subdir.is_empty() { None } else { Some(subdir.to_string()) },
+            ));
+        }
+        return Ok((id.to_string(), None));
+    }
+    // owner/repo[/subdir...] shorthand
+    let parts: Vec<&str> = id
+        .trim_matches('/')
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.len() >= 2 {
+        let subdir = parts[2..].join("/");
+        let subdir = subdir.trim_matches('/').to_string();
+        return Ok((
+            format!("https://github.com/{}/{}.git", parts[0], parts[1]),
+            if subdir.is_empty() { None } else { Some(subdir) },
+        ));
+    }
+    Err(format!(
+        "Invalid plugin identifier: '{identifier}'. Use a Git URL or 'owner/repo' shorthand (optionally with a subdirectory: 'owner/repo/path/to/plugin')."
+    ))
+}
+
+/// Repo name for the plugin directory from a git URL (hermes
+/// `_repo_name_from_url`).
+pub fn repo_name_from_url(url: &str) -> String {
+    let mut name = url.trim_end_matches('/');
+    if let Some(stripped) = name.strip_suffix(".git") {
+        name = stripped;
+    }
+    let last = name.rsplit('/').next().unwrap_or(name);
+    // ssh-style urls: git@github.com:owner/repo
+    let last = last.rsplit(':').next().unwrap_or(last);
+    let last = last.rsplit('/').next().unwrap_or(last);
+    last.to_string()
+}
+
+/// Validate a plugin name and return the safe target directory inside
+/// `<home>/plugins` (hermes `_sanitize_plugin_name`, install mode:
+/// no subdirectories allowed).
+pub fn sanitize_plugin_target(home: &Path, name: &str) -> Result<PathBuf, String> {
+    if name.is_empty() {
+        return Err("Plugin name must not be empty.".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err(format!(
+            "Invalid plugin name '{name}': must not reference the plugins directory itself."
+        ));
+    }
+    if name.contains("..") || name.contains('\\') || name.contains('/') {
+        return Err(format!(
+            "Invalid plugin name '{name}': path separators and traversal sequences are not allowed."
+        ));
+    }
+    let plugins = plugins_dir(home);
+    let target = plugins.join(name);
+    // Defense in depth: the joined path must stay inside the plugins dir.
+    let norm_plugins = plugins.components().count();
+    if target.components().count() != norm_plugins + 1 {
+        return Err(format!("Plugin name '{name}' escapes the plugins directory."));
+    }
+    Ok(target)
+}
+
+/// Result of a successful plugin install.
+#[derive(Debug, Clone)]
+pub struct InstalledPlugin {
+    pub dir: PathBuf,
+    pub name: String,
+    /// `false` when the clone carried no recognizable manifest.
+    pub has_manifest: bool,
+}
+
+/// Read a plugin name from a `plugin.toml`, falling back to a minimal
+/// `name:` scan of `plugin.yaml`/`plugin.yml` (hermes repos).
+fn read_manifest_name(dir: &Path) -> (Option<String>, bool) {
+    if let Ok(text) = std::fs::read_to_string(dir.join("plugin.toml")) {
+        if let Ok(manifest) = toml::from_str::<PluginManifest>(&text) {
+            return (Some(manifest.name), true);
+        }
+        return (None, true);
+    }
+    for yaml in ["plugin.yaml", "plugin.yml"] {
+        if let Ok(text) = std::fs::read_to_string(dir.join(yaml)) {
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if let Some(value) = trimmed.strip_prefix("name:") {
+                    let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+                    if !value.is_empty() {
+                        return (Some(value.to_string()), true);
+                    }
+                }
+            }
+            return (None, true);
+        }
+    }
+    (None, false)
+}
+
+/// Non-interactive git env (hermes `noninteractive_git_env`): fail fast
+/// instead of prompting for credentials.
+fn noninteractive_git_env() -> [(String, String); 2] {
+    [
+        ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
+        ("GCM_INTERACTIVE".to_string(), "Never".to_string()),
+    ]
+}
+
+/// Run a git command with the hermes non-interactive policy (stdin
+/// null, 60 s wall-clock cap; reader threads keep the pipes drained so
+/// the deadline is honoured even under heavy output). Returns stdout on
+/// success.
+fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+    use std::io::Read;
+    let mut child = match std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd.unwrap_or_else(|| Path::new("/")))
+        .envs(noninteractive_git_env())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err("git is not installed or not in PATH.".to_string())
+        }
+        Err(e) => return Err(format!("git failed to start: {e}")),
+    };
+    let mut stdout_pipe = child.stdout.take().expect("stdout piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
+    let out_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        stdout_pipe.read_to_end(&mut buf).ok();
+        buf
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        stderr_pipe.read_to_end(&mut buf).ok();
+        buf
+    });
+    let deadline = std::time::Instant::now() + GIT_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    child.kill().ok();
+                    child.wait().ok();
+                    return Err(format!(
+                        "Git {} timed out after {} seconds.",
+                        args.first().copied().unwrap_or("run"),
+                        GIT_TIMEOUT.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("git wait failed: {e}")),
+        }
+    };
+    let out_buf = out_handle.join().unwrap_or_default();
+    let err_buf = err_handle.join().unwrap_or_default();
+    if !status.success() {
+        let err = String::from_utf8_lossy(&err_buf);
+        let out = String::from_utf8_lossy(&out_buf);
+        let detail = err.trim();
+        let detail = if detail.is_empty() { out.trim() } else { detail };
+        return Err(format!(
+            "Git {} failed:\n{}",
+            args.first().copied().unwrap_or("run"),
+            detail
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out_buf).to_string())
+}
+
+/// Clone a Git plugin into `<home>/plugins` (hermes
+/// `_install_plugin_core`): shallow clone to a temp dir, optional
+/// subdir with traversal guard, manifest-name discovery, sanitized
+/// target, `force` reinstalls over an existing directory.
+pub fn install_plugin(home: &Path, identifier: &str, force: bool) -> Result<InstalledPlugin, String> {
+    let (git_url, subdir) = resolve_git_url(identifier)?;
+    let temp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let clone_root = temp.path().join("plugin");
+    run_git(
+        &["clone", "--depth", "1", &git_url, clone_root.to_str().unwrap_or_default()],
+        None,
+    )?;
+
+    // Resolve the directory within the clone that holds the plugin.
+    let source_dir = match &subdir {
+        Some(sub) => {
+            let candidate = clone_root.join(sub);
+            let canon_root = clone_root
+                .canonicalize()
+                .map_err(|e| format!("clone root: {e}"))?;
+            let canon = candidate
+                .canonicalize()
+                .map_err(|_| format!("Plugin subdirectory '{sub}' does not exist in the repository."))?;
+            if canon != canon_root && !canon.starts_with(&canon_root) {
+                return Err(format!("Plugin subdirectory '{sub}' escapes the repository."));
+            }
+            if !canon.is_dir() {
+                return Err(format!("Plugin subdirectory '{sub}' is not a directory."));
+            }
+            canon
+        }
+        None => clone_root.clone(),
+    };
+
+    let (manifest_name, has_manifest) = read_manifest_name(&source_dir);
+    let plugin_name = manifest_name
+        .clone()
+        .filter(|n| !n.is_empty())
+        .or_else(|| {
+            subdir
+                .as_ref()
+                .map(|s| s.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string())
+        })
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| repo_name_from_url(&git_url));
+    let target = sanitize_plugin_target(home, &plugin_name)?;
+
+    if target.exists() {
+        if !force {
+            return Err(format!(
+                "Plugin '{plugin_name}' already exists. Use --force to reinstall or run `ulnclaw plugins update {plugin_name}`."
+            ));
+        }
+        std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(target.parent().unwrap_or(home)).map_err(|e| e.to_string())?;
+    if std::fs::rename(&source_dir, &target).is_err() {
+        // Cross-device fallback (temp on another mount).
+        copy_dir_recursive(&source_dir, &target)?;
+    }
+    let final_name = read_manifest_name(&target).0.unwrap_or(plugin_name);
+    Ok(InstalledPlugin {
+        dir: target,
+        name: final_name,
+        has_manifest,
+    })
+}
+
+/// Recursive directory copy (rename fallback path).
+fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(from).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let dest = to.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Update an installed plugin by pulling latest from its git remote
+/// (hermes `cmd_update`). Returns the git output.
+pub fn update_plugin(home: &Path, name: &str) -> Result<String, String> {
+    let target = sanitize_plugin_target(home, name)?;
+    if !target.exists() {
+        return Err(format!("Plugin '{name}' is not installed."));
+    }
+    if !target.join(".git").exists() {
+        return Err(format!(
+            "Plugin '{name}' was not installed from git (no .git directory). Cannot update."
+        ));
+    }
+    run_git(&["pull"], Some(&target))
+}
+
+/// Remove an installed plugin directory (hermes `cmd_remove`).
+pub fn remove_plugin(home: &Path, name: &str) -> Result<String, String> {
+    let target = sanitize_plugin_target(home, name)?;
+    if !target.exists() {
+        return Err(format!("Plugin '{name}' is not installed."));
+    }
+    std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+    Ok(format!("✓ Removed plugin {name}."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1052,5 +1397,151 @@ mod tests {
             command: "/nonexistent-ulnclaw-hook".into(),
         };
         assert!(run_hook_callback(&callback, &json!({})).await.is_none());
+    }
+
+    #[test]
+    fn resolve_git_url_shorthand() {
+        let (url, sub) = resolve_git_url("owner/repo").unwrap();
+        assert_eq!(url, "https://github.com/owner/repo.git");
+        assert_eq!(sub, None);
+        let (url, sub) = resolve_git_url("owner/repo/path/to/plugin").unwrap();
+        assert_eq!(url, "https://github.com/owner/repo.git");
+        assert_eq!(sub.as_deref(), Some("path/to/plugin"));
+    }
+
+    #[test]
+    fn resolve_git_url_full_and_fragment() {
+        let (url, sub) = resolve_git_url("https://github.com/o/r.git").unwrap();
+        assert_eq!(url, "https://github.com/o/r.git");
+        assert_eq!(sub, None);
+        let (url, sub) = resolve_git_url("https://github.com/o/r.git/deep/plugin").unwrap();
+        assert_eq!(url, "https://github.com/o/r.git");
+        assert_eq!(sub.as_deref(), Some("deep/plugin"));
+        let (url, sub) = resolve_git_url("git@github.com:o/r.git#sub/dir").unwrap();
+        assert_eq!(url, "git@github.com:o/r.git");
+        assert_eq!(sub.as_deref(), Some("sub/dir"));
+    }
+
+    #[test]
+    fn resolve_git_url_browser_tree() {
+        let (url, sub) =
+            resolve_git_url("https://github.com/o/r/tree/main/plugins/foo").unwrap();
+        assert_eq!(url, "https://github.com/o/r.git");
+        assert_eq!(sub.as_deref(), Some("plugins/foo"));
+        let (url, sub) = resolve_git_url("https://github.com/o/r/issues").unwrap();
+        assert_eq!(url, "https://github.com/o/r.git");
+        assert_eq!(sub, None);
+    }
+
+    #[test]
+    fn resolve_git_url_rejects_garbage() {
+        assert!(resolve_git_url("justone").is_err());
+        assert!(resolve_git_url("").is_err());
+    }
+
+    #[test]
+    fn repo_name_from_url_variants() {
+        assert_eq!(repo_name_from_url("https://github.com/o/r.git"), "r");
+        assert_eq!(repo_name_from_url("https://github.com/o/r"), "r");
+        assert_eq!(repo_name_from_url("git@github.com:o/r.git"), "r");
+        assert_eq!(repo_name_from_url("file:///tmp/foo.git/"), "foo");
+    }
+
+    #[test]
+    fn sanitize_plugin_target_guards() {
+        let home = Path::new("/tmp/ulnclaw-home");
+        assert!(sanitize_plugin_target(home, "good-name").is_ok());
+        assert!(sanitize_plugin_target(home, "").is_err());
+        assert!(sanitize_plugin_target(home, ".").is_err());
+        assert!(sanitize_plugin_target(home, "..").is_err());
+        assert!(sanitize_plugin_target(home, "../evil").is_err());
+        assert!(sanitize_plugin_target(home, "a/b").is_err());
+        assert!(sanitize_plugin_target(home, "a\\b").is_err());
+    }
+
+    #[test]
+    fn read_manifest_name_toml_and_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("plugin.toml"),
+            "name = \"toml-plugin\"\ndescription = \"d\"",
+        )
+        .unwrap();
+        assert_eq!(
+            read_manifest_name(dir.path()),
+            (Some("toml-plugin".to_string()), true)
+        );
+        let dir2 = tempfile::tempdir().unwrap();
+        std::fs::write(dir2.path().join("plugin.yaml"), "name: yaml-plugin
+version: 1")
+            .unwrap();
+        assert_eq!(
+            read_manifest_name(dir2.path()),
+            (Some("yaml-plugin".to_string()), true)
+        );
+        let dir3 = tempfile::tempdir().unwrap();
+        assert_eq!(read_manifest_name(dir3.path()), (None, false));
+    }
+
+    #[test]
+    fn install_update_remove_roundtrip_with_local_git() {
+        let git_ok = std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !git_ok {
+            return; // git unavailable in this environment
+        }
+        let run_git_init = |args: &[&str], dir: &std::path::Path| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.com")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.com")
+                .output()
+                .expect("git runs");
+            assert!(
+                out.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        // Source repo with a plugin.toml manifest.
+        let source = tempfile::tempdir().unwrap();
+        run_git_init(&["init", "-q"], source.path());
+        std::fs::write(
+            source.path().join("plugin.toml"),
+            "name = \"roundtrip\"\ndescription = \"d\"",
+        )
+        .unwrap();
+        std::fs::write(source.path().join("hook.sh"), "#!/bin/sh\necho hi").unwrap();
+        run_git_init(&["add", "-A"], source.path());
+        run_git_init(&["commit", "-qm", "init"], source.path());
+
+        // Install from a file:// URL.
+        let home = tempfile::tempdir().unwrap();
+        let url = format!("file://{}", source.path().display());
+        let installed = install_plugin(home.path(), &url, false).unwrap();
+        assert_eq!(installed.name, "roundtrip");
+        assert!(installed.has_manifest);
+        assert!(installed.dir.join("plugin.toml").exists());
+        // Reinstall without --force errors; --force succeeds.
+        assert!(install_plugin(home.path(), &url, false).is_err());
+        assert!(install_plugin(home.path(), &url, true).is_ok());
+
+        // Update (clone carries .git); a second repo-less plugin cannot.
+        let output = update_plugin(home.path(), "roundtrip").unwrap();
+        assert!(output.contains("up to date") || output.contains("Updating") || !output.trim().is_empty());
+        std::fs::create_dir_all(home.path().join("plugins").join("nogy")).unwrap();
+        assert!(update_plugin(home.path(), "nogy").is_err());
+
+        // Remove.
+        let message = remove_plugin(home.path(), "roundtrip").unwrap();
+        assert!(message.contains("Removed"));
+        assert!(!installed.dir.exists());
+        assert!(remove_plugin(home.path(), "roundtrip").is_err());
     }
 }
