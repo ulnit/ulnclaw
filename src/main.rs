@@ -6728,17 +6728,20 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                 println!("No sessions found.");
                 return Ok(());
             }
+            // Owning project per session (longest-prefix cwd match in
+            // projects.db) — rendered as a badge in both pickers (P165).
+            let project_by_session = resolve_browse_projects(&rows);
             // Raw-mode TUI on a real terminal (hermes curses picker),
             // plain stdin loop otherwise (pipes, CI).
             let selected = if std::io::IsTerminal::is_terminal(&std::io::stdout())
                 && std::io::IsTerminal::is_terminal(&std::io::stdin())
             {
-                match run_session_browse_tui(&rows) {
+                match run_session_browse_tui(&rows, &project_by_session) {
                     Ok(selected) => selected,
-                    Err(_) => run_session_browse_stdin(&rows)?, // raw mode unavailable
+                    Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
                 }
             } else {
-                run_session_browse_stdin(&rows)?
+                run_session_browse_stdin(&rows, &project_by_session)?
             };
             if let Some(id) = selected {
                 println!("Resuming session: {}", id);
@@ -6888,17 +6891,54 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
     Ok(())
 }
 
+/// Resolve the owning project slug for each browse row's cwd
+/// (best-effort: a missing/closed projects store yields an empty map).
+fn resolve_browse_projects(
+    rows: &[ulnclaw::session::sqlite::BrowseRow],
+) -> std::collections::HashMap<String, String> {
+    let cwds: Vec<String> = rows
+        .iter()
+        .filter_map(|row| row.cwd.clone())
+        .filter(|cwd| !cwd.trim().is_empty())
+        .collect();
+    if cwds.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    let Ok(conn) = ulnclaw::projects_db::connect(None) else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(mapping) = ulnclaw::projects_db::projects_for_paths(&conn, &cwds) else {
+        return std::collections::HashMap::new();
+    };
+    rows.iter()
+        .filter_map(|row| {
+            let cwd = row.cwd.as_ref()?;
+            let slug = mapping.get(cwd)?.slug.clone();
+            Some((row.id.clone(), slug))
+        })
+        .collect()
+}
+
 /// Format one browse row: title (preview/id fallback) + relative time +
 /// source + truncated id, adaptive to the available width (hermes
-/// `_format_row`).
-fn format_browse_row(row: &ulnclaw::session::sqlite::BrowseRow, name_width: usize) -> String {
+/// `_format_row`). When the session belongs to a project, a `⌂ slug`
+/// badge prefixes the name (P165).
+fn format_browse_row(
+    row: &ulnclaw::session::sqlite::BrowseRow,
+    name_width: usize,
+    project: Option<&str>,
+) -> String {
     let title = row
         .title
         .clone()
         .filter(|t| !t.trim().is_empty())
         .or_else(|| row.preview.clone())
         .unwrap_or_else(|| row.id.clone());
-    let name: String = title.chars().take(name_width).collect();
+    let label = match project {
+        Some(slug) => format!("\u{2302}{slug} {title}"),
+        None => title,
+    };
+    let name: String = label.chars().take(name_width).collect();
     format!(
         "{:<width$}  {:<10}  {:<6}  {}",
         name,
@@ -6911,15 +6951,20 @@ fn format_browse_row(row: &ulnclaw::session::sqlite::BrowseRow, name_width: usiz
 
 /// Case-insensitive browse filter over title/preview/id/source (shared by
 /// the TUI and the stdin picker).
-fn browse_row_matches(row: &ulnclaw::session::sqlite::BrowseRow, filter: &str) -> bool {
+fn browse_row_matches(
+    row: &ulnclaw::session::sqlite::BrowseRow,
+    project: Option<&str>,
+    filter: &str,
+) -> bool {
     if filter.is_empty() {
         return true;
     }
     let q = filter.to_lowercase();
-    row.title
-        .as_deref()
-        .map(|t| t.to_lowercase().contains(&q))
-        .unwrap_or(false)
+    project.map(|slug| slug.to_lowercase().contains(&q)).unwrap_or(false)
+        || row.title
+            .as_deref()
+            .map(|t| t.to_lowercase().contains(&q))
+            .unwrap_or(false)
         || row.preview
             .as_deref()
             .map(|p| p.to_lowercase().contains(&q))
@@ -6937,6 +6982,7 @@ fn browse_row_matches(row: &ulnclaw::session::sqlite::BrowseRow, filter: &str) -
 /// count. Returns the selected session id, or `None` when cancelled.
 fn run_session_browse_tui(
     rows: &[ulnclaw::session::sqlite::BrowseRow],
+    projects: &std::collections::HashMap<String, String>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -6972,8 +7018,12 @@ fn run_session_browse_tui(
     let mut filter = String::new();
 
     loop {
-        let filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> =
-            rows.iter().filter(|r| browse_row_matches(r, &filter)).collect();
+        let filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> = rows
+            .iter()
+            .filter(|r| {
+                browse_row_matches(r, projects.get(&r.id).map(String::as_str), &filter)
+            })
+            .collect();
         if cursor_idx >= filtered.len() {
             cursor_idx = filtered.len().saturating_sub(1);
         }
@@ -7048,8 +7098,16 @@ fn run_session_browse_tui(
                 queue!(out, SetForegroundColor(Color::Green)).map_err(|e| e.to_string())?;
             }
             let arrow = if selected { " \u{25B6} " } else { "   " };
-            queue!(out, Print(arrow), Print(format_browse_row(row, name_width)))
-                .map_err(|e| e.to_string())?;
+            queue!(
+                out,
+                Print(arrow),
+                Print(format_browse_row(
+                    row,
+                    name_width,
+                    projects.get(&row.id).map(String::as_str)
+                ))
+            )
+            .map_err(|e| e.to_string())?;
             if selected {
                 queue!(out, ResetColor).map_err(|e| e.to_string())?;
             }
@@ -7170,11 +7228,16 @@ fn run_session_browse_tui(
 /// selected session id, or `None` when cancelled.
 fn run_session_browse_stdin(
     rows: &[ulnclaw::session::sqlite::BrowseRow],
+    projects: &std::collections::HashMap<String, String>,
 ) -> Result<Option<String>, String> {
     let mut filter = String::new();
     loop {
-        let filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> =
-            rows.iter().filter(|r| browse_row_matches(r, &filter)).collect();
+        let filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> = rows
+            .iter()
+            .filter(|r| {
+                browse_row_matches(r, projects.get(&r.id).map(String::as_str), &filter)
+            })
+            .collect();
         println!();
         if filter.is_empty() {
             println!(
@@ -7189,7 +7252,11 @@ fn run_session_browse_stdin(
         }
         let page = &filtered[..filtered.len().min(20)];
         for (idx, row) in page.iter().enumerate() {
-            println!("  {:>2}. {}", idx + 1, format_browse_row(row, 50));
+            println!(
+                "  {:>2}. {}",
+                idx + 1,
+                format_browse_row(row, 50, projects.get(&row.id).map(String::as_str))
+            );
         }
         if filtered.len() > page.len() {
             println!("      \u{2026} {} more — type text to narrow", filtered.len() - page.len());

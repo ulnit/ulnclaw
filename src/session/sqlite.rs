@@ -135,6 +135,9 @@ pub struct BrowseRow {
     pub preview: Option<String>,
     pub source: String,
     pub last_active: f64,
+    /// Working directory of the session — the browse surfaces resolve it
+    /// against `projects.db` to show the owning project (P165).
+    pub cwd: Option<String>,
 }
 
 /// Maximum session title length in characters (hermes `MAX_TITLE_LENGTH`).
@@ -1208,7 +1211,8 @@ impl SqliteSessionStore {
                     (SELECT m.content FROM messages m
                      WHERE m.session_id = s.id AND m.role = 'user'
                        AND m.content IS NOT NULL AND m.content != ''
-                     ORDER BY m.id LIMIT 1)
+                     ORDER BY m.id LIMIT 1),
+                    s.cwd
              FROM sessions s WHERE s.archived = 0",
         );
         let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -1234,6 +1238,7 @@ impl SqliteSessionStore {
                     source: row.get(2)?,
                     last_active: row.get(3)?,
                     preview: row.get(4)?,
+                    cwd: row.get(5)?,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;
@@ -2174,6 +2179,12 @@ mod tests {
         store.set_session_archived(&first, true).unwrap();
         let rows = store.list_sessions_for_browse(100, Some("cli"), &[]).unwrap();
         assert!(rows.is_empty());
+
+        // The session cwd rides along for project resolution (P165).
+        let with_cwd = store.create_session("cli", None, Some("/work/repo")).unwrap();
+        let rows = store.list_sessions_for_browse(100, Some("cli"), &[]).unwrap();
+        let row = rows.iter().find(|r| r.id == with_cwd).unwrap();
+        assert_eq!(row.cwd.as_deref(), Some("/work/repo"));
     }
 
     #[test]
