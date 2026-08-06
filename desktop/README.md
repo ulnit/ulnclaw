@@ -59,6 +59,11 @@ child process.
   management with primary switching, board binding, a filesystem repo
   scan feeding the discovery cache, and one-click adoption of discovered
   repos into projects.
+- **Jobs** (tab in the sidebar) — cron/scheduled-job dashboard over
+  `/api/jobs` (same scheduler as the `ulnclaw cron` CLI): job rows with a
+  status dot, schedule, skills, prompt preview and next-run countdown;
+  pause/resume, run-now, inline edit (prompt + schedule), delete, and a
+  create dialog (name/schedule/prompt/skills/repeat), 10 s polling.
 - **Pet overlay** — the petdex mascot as an animated spritesheet canvas in
   the bottom-right corner: `display.pet.*` config via `/api/pets/config`,
   sheet from `/api/pets/:slug/spritesheet`, working (`running` row) while
@@ -142,6 +147,15 @@ Rust 侧负责托管 `ulnclaw gateway` 子进程。
 - **看板**（侧栏标签页）—— 基于 `/api/kanban/*` 的四列卡片墙（与 CLI、
   agent 工具共用同一引擎和 `kanban.db`）：快速添加、完成/阻塞/解除阻塞、
   带评论的任务详情、看板切换、5 秒轮询。
+- **项目**（侧栏标签页）—— 基于 `/api/projects/*` 的一等多文件夹项目
+  登记簿（与 `ulnclaw project` CLI 共用同一 `projects.db`）：项目卡片
+  支持创建/启用/归档/删除、文件夹管理与主目录切换、board 绑定、文件
+  系统仓库扫描发现缓存与一键收养。
+- **任务**（侧栏标签页）—— 基于 `/api/jobs` 的定时任务仪表盘（与
+  `ulnclaw cron` CLI 共用同一调度器）：任务行带状态点、调度表达式、
+  技能、提示词预览与下次运行倒计时；支持暂停/恢复、立即运行、行内
+  编辑（提示词 + 调度）、删除与创建对话框（名称/调度/提示词/技能/
+  重复），10 秒轮询。
 - **宠物悬浮层** —— 右下角的 petdex 吉祥物精灵图动画画布：
   `/api/pets/config` 读取 `display.pet.*` 配置，
   `/api/pets/:slug/spritesheet` 加载精灵图，`/v1/runs` 有运行中任务时

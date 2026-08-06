@@ -161,6 +161,20 @@ export interface DiscoveredRepo {
   last_seen: number;
 }
 
+export interface CronJob {
+  id: string;
+  name: string;
+  schedule: string;
+  prompt: string;
+  skills: string[];
+  enabled: boolean;
+  repeat: number | null;
+  next_run: number | null;
+  created_at: number;
+  last_run: number | null;
+  last_status: string | null;
+}
+
 const SETTINGS_KEY = "ulnclaw.gateway";
 
 export function loadSettings(): GatewaySettings {
@@ -589,6 +603,63 @@ export class GatewayClient {
   async projectsRepos(): Promise<DiscoveredRepo[]> {
     const value = await this.kanbanJson("/api/projects/repos");
     return (value?.repos || []) as DiscoveredRepo[];
+  }
+
+  // ---- Cron jobs (hermes cron dashboard, /api/jobs) ----
+
+  async jobsList(includeDisabled = true): Promise<CronJob[]> {
+    const query = includeDisabled ? "?include_disabled=true" : "";
+    const value = await this.kanbanJson(`/api/jobs${query}`);
+    return (value?.jobs || []) as CronJob[];
+  }
+
+  async jobCreate(request: {
+    name: string;
+    schedule: string;
+    prompt: string;
+    skills?: string[];
+    repeat?: number;
+  }): Promise<CronJob | null> {
+    const value = await this.kanbanJson("/api/jobs", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+    return (value?.job || value) as CronJob | null;
+  }
+
+  async jobUpdate(
+    id: string,
+    patch: { name?: string; schedule?: string; prompt?: string; enabled?: boolean },
+  ): Promise<CronJob | null> {
+    const value = await this.kanbanJson(`/api/jobs/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    return (value?.job || value) as CronJob | null;
+  }
+
+  async jobDelete(id: string): Promise<boolean> {
+    const value = await this.kanbanJson(`/api/jobs/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    return value !== null;
+  }
+
+  async jobSetEnabled(id: string, enabled: boolean): Promise<boolean> {
+    const action = enabled ? "resume" : "pause";
+    const value = await this.kanbanJson(`/api/jobs/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      body: "{}",
+    });
+    return value !== null;
+  }
+
+  async jobRunNow(id: string): Promise<boolean> {
+    const value = await this.kanbanJson(`/api/jobs/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+      body: "{}",
+    });
+    return value !== null;
   }
 
   // ---- Pet hatch jobs (desktop hatch overlay, hermes pet-generate parity) ----

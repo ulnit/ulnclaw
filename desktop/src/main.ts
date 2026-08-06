@@ -6,6 +6,7 @@ import { GatewayClient, loadSettings, saveSettings } from "./gateway";
 import type { GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import { KanbanWidget } from "./kanban";
 import { ProjectsWidget } from "./projects";
+import { JobsWidget } from "./jobs";
 import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
 
@@ -44,9 +45,10 @@ const state = {
   pendingUploads: [] as { path: string; mime: string; bytes: number }[],
   kanban: null as KanbanWidget | null,
   projects: null as ProjectsWidget | null,
+  jobs: null as JobsWidget | null,
   pet: null as PetOverlay | null,
   hatch: null as HatchOverlay | null,
-  view: "chat" as "chat" | "kanban" | "projects",
+  view: "chat" as "chat" | "kanban" | "projects" | "jobs",
 };
 
 const el = {
@@ -525,25 +527,31 @@ async function start(): Promise<void> {
     void refreshSessions();
   });
 
-  // View tabs: chat vs kanban board vs projects.
+  // View tabs: chat / kanban / projects / jobs.
   const chatMain = document.getElementById("chat")!;
   const kanbanMain = document.getElementById("kanban")!;
   const projectsMain = document.getElementById("projects")!;
+  const jobsMain = document.getElementById("jobs")!;
   const tabChat = document.getElementById("tab-chat") as HTMLButtonElement;
   const tabKanban = document.getElementById("tab-kanban") as HTMLButtonElement;
   const tabProjects = document.getElementById("tab-projects") as HTMLButtonElement;
+  const tabJobs = document.getElementById("tab-jobs") as HTMLButtonElement;
   state.kanban = new KanbanWidget(kanbanMain, () => state.client);
   state.kanban.mount();
   state.projects = new ProjectsWidget(projectsMain, () => state.client);
   state.projects.mount();
-  const switchView = (view: "chat" | "kanban" | "projects") => {
+  state.jobs = new JobsWidget(jobsMain, () => state.client);
+  state.jobs.mount();
+  const switchView = (view: "chat" | "kanban" | "projects" | "jobs") => {
     state.view = view;
     chatMain.hidden = view !== "chat";
     kanbanMain.hidden = view !== "kanban";
     projectsMain.hidden = view !== "projects";
+    jobsMain.hidden = view !== "jobs";
     tabChat.classList.toggle("active", view === "chat");
     tabKanban.classList.toggle("active", view === "kanban");
     tabProjects.classList.toggle("active", view === "projects");
+    tabJobs.classList.toggle("active", view === "jobs");
     if (view === "kanban") {
       state.kanban!.start();
     } else {
@@ -554,10 +562,16 @@ async function start(): Promise<void> {
     } else {
       state.projects!.stop();
     }
+    if (view === "jobs") {
+      state.jobs!.start();
+    } else {
+      state.jobs!.stop();
+    }
   };
   tabChat.onclick = () => switchView("chat");
   tabKanban.onclick = () => switchView("kanban");
   tabProjects.onclick = () => switchView("projects");
+  tabJobs.onclick = () => switchView("jobs");
 
   // Petdex mascot overlay (display.pet.* driven, polls the gateway).
   state.pet = new PetOverlay(() => state.client);
