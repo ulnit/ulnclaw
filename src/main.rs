@@ -1190,8 +1190,12 @@ enum SessionAction {
         #[arg(long, default_value = "500")]
         limit: usize,
     },
-    /// Re-title sessions whose title leaked a /skill scaffold
+    /// Re-title sessions whose auto-title came from a /skill's own text
     /// (hermes sessions retitle-skills)
+    #[command(long_about = "Sessions opened with a /skill were auto-titled from the expanded \
+message, which embeds the whole skill body \u{2014} so the title describes the SKILL, not the \
+request. This regenerates those titles from what the user actually typed. Lists what it would \
+change unless --apply is passed.")]
     RetitleSkills {
         /// Max sessions to scan
         #[arg(long, default_value = "200")]
@@ -7536,7 +7540,9 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                 }
             }
             if changed == 0 {
-                println!("Nothing to retitle.");
+                println!("  every title already reflects the user's request.");
+            } else if apply {
+                println!("\u{2713} Re-titled {} session(s).", changed);
             }
         }
         SessionAction::Delete { id, yes } => {
