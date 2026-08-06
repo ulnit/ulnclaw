@@ -174,6 +174,59 @@ pub fn blueprint_to_job(spec: &BlueprintSpec, name_override: Option<&str>) -> Re
     })
 }
 
+/// Register a pending "schedule this blueprint" suggestion (hermes
+/// `register_blueprint_suggestion`). Blueprints are the unified
+/// suggestion surface's `blueprint` source: an installed blueprint is
+/// offered as a suggestion the user accepts (or dismisses) rather than
+/// auto-scheduled. hermes wires this into the skill-install flow;
+/// ulnclaw has no install surface, so `skills blueprints` registers
+/// lazily instead — dedup latching in the store makes that idempotent.
+///
+/// Returns the created record, or `None` when skipped (already
+/// offered/decided, backlog full, empty skill name).
+pub fn register_blueprint_suggestion(
+    store: &crate::cron::suggestions::SuggestionStore,
+    spec: &BlueprintSpec,
+) -> Option<crate::cron::suggestions::Suggestion> {
+    if spec.skill_name.is_empty() {
+        return None;
+    }
+    let mut description = format!(
+        "The '{}' blueprint runs on schedule {}",
+        spec.skill_name, spec.schedule
+    );
+    if !spec.deliver.is_empty() && spec.deliver != "origin" {
+        description.push_str(&format!(", delivering to {}", spec.deliver));
+    }
+    description.push('.');
+    let job_spec = crate::cron::suggestions::JobSpec {
+        name: Some(format!("blueprint:{}", spec.skill_name)),
+        prompt: spec.prompt.clone().unwrap_or_else(|| {
+            format!(
+                "Run the '{}' skill now and report the results.",
+                spec.skill_name
+            )
+        }),
+        schedule: spec.schedule.clone(),
+        skills: vec![spec.skill_name.clone()],
+        deliver: if spec.deliver.is_empty() || spec.deliver == "origin" {
+            None
+        } else {
+            Some(spec.deliver.clone())
+        },
+    };
+    store
+        .add(
+            &format!("Schedule '{}'", spec.skill_name),
+            &description,
+            "blueprint",
+            job_spec,
+            &format!("blueprint:{}:{}", spec.skill_name, spec.schedule),
+        )
+        .ok()
+        .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +325,74 @@ Body text here.
             prompt: None,
         };
         assert!(blueprint_to_job(&spec, None).is_err());
+    }
+
+    fn digest_spec() -> BlueprintSpec {
+        BlueprintSpec {
+            skill_name: "daily-digest".into(),
+            schedule: "0 9 * * *".into(),
+            deliver: "origin".into(),
+            prompt: Some("Summarize the inbox.".into()),
+        }
+    }
+
+    #[test]
+    fn register_blueprint_suggestion_creates_pending_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::cron::suggestions::SuggestionStore::open(dir.path().join("s.json"));
+        let record = register_blueprint_suggestion(&store, &digest_spec()).expect("registered");
+        assert_eq!(record.title, "Schedule 'daily-digest'");
+        assert_eq!(record.source, "blueprint");
+        assert_eq!(record.dedup_key, "blueprint:daily-digest:0 9 * * *");
+        assert_eq!(record.status, "pending");
+        assert!(
+            record.description.contains("runs on schedule 0 9 * * *"),
+            "{}",
+            record.description
+        );
+        // origin delivery stays implicit (hermes only surfaces non-origin).
+        assert!(!record.description.contains("delivering"));
+        // Accepted suggestions must produce the same job as `skills schedule`.
+        assert_eq!(
+            record.job_spec.name.as_deref(),
+            Some("blueprint:daily-digest")
+        );
+        assert_eq!(record.job_spec.skills, vec!["daily-digest".to_string()]);
+        assert!(record.job_spec.deliver.is_none());
+    }
+
+    #[test]
+    fn register_blueprint_suggestion_dedup_latches() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::cron::suggestions::SuggestionStore::open(dir.path().join("s.json"));
+        assert!(register_blueprint_suggestion(&store, &digest_spec()).is_some());
+        assert!(
+            register_blueprint_suggestion(&store, &digest_spec()).is_none(),
+            "second registration must latch"
+        );
+        assert_eq!(store.list_pending().len(), 1);
+        // Dismissal latches too — the blueprint is never re-offered.
+        assert!(store.dismiss("1"));
+        assert!(register_blueprint_suggestion(&store, &digest_spec()).is_none());
+    }
+
+    #[test]
+    fn register_blueprint_suggestion_nonorigin_delivery_surfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::cron::suggestions::SuggestionStore::open(dir.path().join("s.json"));
+        let mut spec = digest_spec();
+        spec.deliver = "telegram".into();
+        let record = register_blueprint_suggestion(&store, &spec).expect("registered");
+        assert!(record.description.contains("delivering to telegram"));
+        assert_eq!(record.job_spec.deliver.as_deref(), Some("telegram"));
+    }
+
+    #[test]
+    fn register_blueprint_suggestion_requires_skill_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::cron::suggestions::SuggestionStore::open(dir.path().join("s.json"));
+        let mut spec = digest_spec();
+        spec.skill_name = String::new();
+        assert!(register_blueprint_suggestion(&store, &spec).is_none());
     }
 }

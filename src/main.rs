@@ -9429,12 +9429,29 @@ async fn skills_cmd(action: SkillAction) -> Result<(), String> {
         }
         SkillAction::Blueprints => {
             let mut found = false;
+            // hermes registers a suggestion when a blueprint skill is
+            // installed; ulnclaw has no install surface, so the listing
+            // registers lazily for every unscheduled blueprint (dedup
+            // latching keeps it idempotent).
+            let active_job_names: std::collections::HashSet<String> =
+                ulnclaw::cron::CronStore::open(&home.join("state.db"))
+                    .ok()
+                    .and_then(|store| store.list().ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|job| job.name)
+                    .collect();
+            let suggestion_store = ulnclaw::cron::suggestions::SuggestionStore::open_default();
             for skill in ulnclaw::skills::list_skills(&dir) {
                 let content =
                     std::fs::read_to_string(skill.path.join("SKILL.md")).unwrap_or_default();
-                let Ok(Some(spec)) = ulnclaw::skills::blueprint::parse_blueprint(&content) else {
+                let Ok(Some(mut spec)) = ulnclaw::skills::blueprint::parse_blueprint(&content)
+                else {
                     continue;
                 };
+                if spec.skill_name.is_empty() {
+                    spec.skill_name = skill.name.clone();
+                }
                 found = true;
                 println!("  {} — schedule: {}", skill.name, spec.schedule);
                 if spec.deliver != "origin" {
@@ -9442,6 +9459,17 @@ async fn skills_cmd(action: SkillAction) -> Result<(), String> {
                 }
                 if let Some(ref prompt) = spec.prompt {
                     println!("    prompt: {}", prompt);
+                }
+                if !active_job_names.contains(&format!("blueprint:{}", spec.skill_name)) {
+                    if let Some(record) = ulnclaw::skills::blueprint::register_blueprint_suggestion(
+                        &suggestion_store,
+                        &spec,
+                    ) {
+                        println!(
+                            "    blueprint: '{}' is an automation — added to suggestions; run /suggestions to schedule or dismiss it ({})",
+                            spec.skill_name, record.id
+                        );
+                    }
                 }
             }
             if !found {
