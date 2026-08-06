@@ -186,6 +186,11 @@ pub struct SlackConfig {
     /// Channel ids allowed to talk to the bot (empty = refuse all).
     #[serde(default)]
     pub allowed_channel_ids: Vec<String>,
+    /// Custom assistant-thread typing status (hermes `typing_status_text`).
+    /// When unset the gateway shows "is thinking..." and switches to an
+    /// elapsed-time "still working… (Xm YYs)" heartbeat after 30 s.
+    #[serde(default)]
+    pub typing_status_text: Option<String>,
 }
 
 /// A downloaded attachment cached in `<home>/media-cache/` (hermes media
@@ -1790,7 +1795,7 @@ pub mod slack {
 
     async fn open_socket_url(client: &reqwest::Client, app_token: &str) -> Result<String> {
         let response = client
-            .post("https://slack.com/api/apps.connections.open")
+            .post(format!("{}/apps.connections.open", slack_api_base()))
             .header("Authorization", format!("Bearer {app_token}"))
             .send()
             .await
@@ -1914,9 +1919,36 @@ pub mod slack {
                     }
                     continue;
                 }
+                // hermes typing parity: the assistant-thread status rides the
+                // event's thread, falling back to the message's own ts for
+                // top-level messages (hermes synthetic-thread session keying).
+                let raw_thread_ts = event
+                    .get("thread_ts")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let typing_thread = if raw_thread_ts.is_empty() {
+                    message_event.message_id.clone()
+                } else {
+                    raw_thread_ts
+                };
+                let typing_status_cfg = cfg.typing_status_text.clone();
                 let dispatcher = dispatcher.clone();
                 let bot_token = bot_token.to_string();
                 tokio::spawn(async move {
+                    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+                    let heartbeat = if typing_thread.is_empty() {
+                        None
+                    } else {
+                        Some(tokio::spawn(typing_heartbeat(
+                            bot_token.clone(),
+                            message_event.chat_id.clone(),
+                            typing_thread,
+                            typing_status_cfg,
+                            std::time::Duration::from_secs(2),
+                            stop_rx,
+                        )))
+                    };
                     let outcome = match dispatcher.handle_event(message_event.clone()).await {
                         Ok(outcome) => outcome,
                         Err(e) => crate::messaging::DispatchOutcome {
@@ -1936,6 +1968,11 @@ pub mod slack {
                     }
                     for path in media_paths {
                         upload_file(&bot_token, &message_event.chat_id, &path).await;
+                    }
+                    // hermes stop_typing: clear the status once the reply is out.
+                    if let Some(handle) = heartbeat {
+                        let _ = stop_tx.send(true);
+                        let _ = handle.await;
                     }
                 });
             }
@@ -1958,7 +1995,7 @@ pub mod slack {
         let client = reqwest::Client::new();
         for chunk in chunk_text(text, 3500) {
             let result = client
-                .post("https://slack.com/api/chat.postMessage")
+                .post(format!("{}/chat.postMessage", slack_api_base()))
                 .header("Authorization", format!("Bearer {bot_token}"))
                 .json(&json!({"channel": channel, "text": chunk}))
                 .send()
@@ -2000,7 +2037,7 @@ pub mod slack {
 
         // Step 1: request an upload URL + file id.
         let url_response = client
-            .get("https://slack.com/api/files.getUploadURLExternal")
+            .get(format!("{}/files.getUploadURLExternal", slack_api_base()))
             .header("Authorization", &auth)
             .query(&[("filename", &file_name), ("length", &data.len().to_string())])
             .send()
@@ -2064,7 +2101,7 @@ pub mod slack {
             .unwrap_or_default();
         let channels_json = serde_json::to_string(&json!([channel])).unwrap_or_default();
         let complete = client
-            .post("https://slack.com/api/files.completeUploadExternal")
+            .post(format!("{}/files.completeUploadExternal", slack_api_base()))
             .header("Authorization", &auth)
             .form(&[
                 ("files", files_json.as_str()),
@@ -2087,6 +2124,117 @@ pub mod slack {
             },
             Err(e) => eprintln!("[slack] completeUploadExternal failed: {e}"),
         }
+    }
+
+    /// Slack Web API base URL — normally `https://slack.com/api`; the
+    /// `SLACK_API_BASE` override exists for tests and corporate proxies
+    /// (mirrors the qqbot `QQ_PORTAL_HOST` pattern).
+    pub(crate) fn slack_api_base() -> String {
+        env_or_none("SLACK_API_BASE").unwrap_or_else(|| "https://slack.com/api".to_string())
+    }
+
+    fn env_or_none(name: &str) -> Option<String> {
+        std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    }
+
+    /// hermes `assistant.threads.setStatus` — show (or clear, when `status`
+    /// is empty) the assistant thread status line next to the bot name.
+    /// Requires the `assistant:write` scope; failures are logged but never
+    /// fatal (hermes silently degrades to no indicator).
+    pub async fn set_thread_status(bot_token: &str, channel: &str, thread_ts: &str, status: &str) -> bool {
+        let client = reqwest::Client::new();
+        let result = client
+            .post(format!("{}/assistant.threads.setStatus", slack_api_base()))
+            .header("Authorization", format!("Bearer {bot_token}"))
+            .json(&json!({"channel_id": channel, "thread_ts": thread_ts, "status": status}))
+            .send()
+            .await;
+        match result {
+            Ok(response) => match response.json::<Value>().await {
+                Ok(value) => {
+                    let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if !ok {
+                        eprintln!(
+                            "[slack] assistant.threads.setStatus failed: {}",
+                            value.get("error").and_then(|v| v.as_str()).unwrap_or("unknown")
+                        );
+                    }
+                    ok
+                }
+                Err(e) => {
+                    eprintln!("[slack] assistant.threads.setStatus parse failed: {e}");
+                    false
+                }
+            },
+            Err(e) => {
+                eprintln!("[slack] assistant.threads.setStatus failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// hermes `send_typing` status selection: configured text always wins;
+    /// after 30 s the default becomes an elapsed-time heartbeat (hermes
+    /// #45702) so a long turn reads as working, not stuck.
+    pub fn typing_status_text(elapsed: std::time::Duration, configured: Option<&str>) -> String {
+        if let Some(text) = configured.filter(|t| !t.is_empty()) {
+            return text.to_string();
+        }
+        let secs = elapsed.as_secs();
+        if secs >= 30 {
+            let mins = secs / 60;
+            let rem = secs % 60;
+            let human = if mins > 0 {
+                format!("{mins}m{rem:02}s")
+            } else {
+                format!("{rem}s")
+            };
+            format!("still working… ({human})")
+        } else {
+            "is thinking...".to_string()
+        }
+    }
+
+    /// hermes `_keep_typing` (Slack flavor): refresh the assistant-thread
+    /// status every `interval` (hermes default 2 s) until `stop` flips,
+    /// each call bounded so a slow round-trip cannot stall the cadence
+    /// (hermes `max(0.25, min(1.5, interval - 0.25))`); on stop, clear the
+    /// indicator (hermes `stop_typing` posts an empty status).
+    pub async fn typing_heartbeat(
+        bot_token: String,
+        channel: String,
+        thread_ts: String,
+        configured: Option<String>,
+        interval: std::time::Duration,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) {
+        let started = std::time::Instant::now();
+        let call_timeout =
+            std::time::Duration::from_secs_f64((interval.as_secs_f64() - 0.25).clamp(0.25, 1.5));
+        loop {
+            if *stop.borrow() {
+                break;
+            }
+            let status = typing_status_text(started.elapsed(), configured.as_deref());
+            let _ = tokio::time::timeout(
+                call_timeout,
+                set_thread_status(&bot_token, &channel, &thread_ts, &status),
+            )
+            .await;
+            tokio::select! {
+                _ = tokio::time::sleep(interval) => {}
+                changed = stop.changed() => {
+                    if changed.is_err() || *stop.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs_f64(1.5),
+            set_thread_status(&bot_token, &channel, &thread_ts, ""),
+        )
+        .await;
     }
 }
 
@@ -2298,5 +2446,121 @@ mod tests {
     fn token_resolution_prefers_config() {
         assert_eq!(resolve_token("abc", "ULNCLAW_NEVER_SET_XYZ").as_deref(), Some("abc"));
         assert_eq!(resolve_token("  ", "ULNCLAW_NEVER_SET_XYZ"), None);
+    }
+
+    #[test]
+    fn slack_typing_status_text_selection() {
+        use std::time::Duration;
+        // Default while fresh; elapsed heartbeat after 30 s (hermes #45702).
+        assert_eq!(slack::typing_status_text(Duration::from_secs(0), None), "is thinking...");
+        assert_eq!(slack::typing_status_text(Duration::from_secs(29), None), "is thinking...");
+        assert_eq!(slack::typing_status_text(Duration::from_secs(30), None), "still working… (30s)");
+        assert_eq!(slack::typing_status_text(Duration::from_secs(63), None), "still working… (1m03s)");
+        assert_eq!(slack::typing_status_text(Duration::from_secs(3661), None), "still working… (61m01s)");
+        // Configured text always wins, even after the heartbeat threshold;
+        // an empty configured value falls back to the defaults.
+        assert_eq!(slack::typing_status_text(Duration::from_secs(90), Some("brewing…")), "brewing…");
+        assert_eq!(slack::typing_status_text(Duration::from_secs(0), Some("")), "is thinking...");
+    }
+
+    #[test]
+    fn slack_api_base_env_override() {
+        let _guard = crate::models_dev::test_env_lock();
+        std::env::remove_var("SLACK_API_BASE");
+        assert_eq!(slack::slack_api_base(), "https://slack.com/api");
+        std::env::set_var("SLACK_API_BASE", "http://127.0.0.1:9");
+        assert_eq!(slack::slack_api_base(), "http://127.0.0.1:9");
+        std::env::remove_var("SLACK_API_BASE");
+    }
+
+    async fn spawn_slack_status_server(
+        log: Arc<Mutex<Vec<(String, Value)>>>,
+        response_ok: bool,
+    ) -> String {
+        use axum::extract::State;
+        use axum::routing::post;
+        let app = axum::Router::new()
+            .route(
+                "/assistant.threads.setStatus",
+                post(
+                    move |State(log): State<Arc<Mutex<Vec<(String, Value)>>>>,
+                     headers: axum::http::HeaderMap,
+                     axum::Json(body): axum::Json<Value>| async move {
+                        let auth = headers
+                            .get("authorization")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("")
+                            .to_string();
+                        log.lock().await.push((auth, body));
+                        axum::Json(json!({ "ok": response_ok }))
+                    },
+                ),
+            )
+            .with_state(log);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn slack_set_thread_status_posts_assistant_payload() {
+        let _guard = crate::models_dev::test_env_lock();
+        let log: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_slack_status_server(log.clone(), true).await;
+        std::env::set_var("SLACK_API_BASE", &base);
+        assert!(slack::set_thread_status("xoxb-test", "C123", "111.222", "is thinking...").await);
+        std::env::remove_var("SLACK_API_BASE");
+        let entries = log.lock().await.clone();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "Bearer xoxb-test");
+        assert_eq!(entries[0].1["channel_id"], "C123");
+        assert_eq!(entries[0].1["thread_ts"], "111.222");
+        assert_eq!(entries[0].1["status"], "is thinking...");
+    }
+
+    #[tokio::test]
+    async fn slack_set_thread_status_reports_api_failure() {
+        let _guard = crate::models_dev::test_env_lock();
+        let log: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_slack_status_server(log.clone(), false).await;
+        std::env::set_var("SLACK_API_BASE", &base);
+        let ok = slack::set_thread_status("xoxb-test", "C1", "1.0", "x").await;
+        std::env::remove_var("SLACK_API_BASE");
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn slack_typing_heartbeat_refreshes_then_clears() {
+        let _guard = crate::models_dev::test_env_lock();
+        let log: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_slack_status_server(log.clone(), true).await;
+        std::env::set_var("SLACK_API_BASE", &base);
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(slack::typing_heartbeat(
+            "xoxb-test".to_string(),
+            "C123".to_string(),
+            "111.222".to_string(),
+            None,
+            std::time::Duration::from_millis(40),
+            stop_rx,
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        stop_tx.send(true).unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+        std::env::remove_var("SLACK_API_BASE");
+        let statuses: Vec<String> = log
+            .lock()
+            .await
+            .iter()
+            .map(|(_, body)| body["status"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(statuses.len() >= 3, "expected refreshes, got {statuses:?}");
+        assert_eq!(statuses[0], "is thinking...");
+        // hermes stop_typing: the final call clears the status.
+        assert_eq!(statuses.last().map(String::as_str), Some(""));
+        assert!(statuses[..statuses.len() - 1].iter().all(|s| s == "is thinking..."));
     }
 }
