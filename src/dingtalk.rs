@@ -16,14 +16,18 @@
 //! `/v1.0/robot/messageFiles/download` with an OAuth2 access token and
 //! cached into the media cache.
 //!
-//! Known differences: AI streaming cards (`card_1_0` SDK), Thinking/Done
-//! emoji reactions, and message editing are not ported — replies are
+//! Emoji reactions are ported (hermes `_send_emotion` /
+//! `_fire_done_reaction`): a 🤔Thinking text-emoji lands on the inbound
+//! message fire-and-forget via `POST /v1.0/robot/emotion/reply`, then
+//! swaps to 🥳Done (`/recall` + `/reply`) once after the final markdown
+//! reply — idempotent per chat. Known differences: AI streaming cards
+//! (`card_1_0` SDK) and message editing are not ported — replies are
 //! plain webhook markdown.
 
 use crate::messaging::{Dispatcher, MediaAttachment, MessageEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -40,6 +44,13 @@ const DEDUP_WINDOW_SECS: u64 = 300;
 const DEDUP_MAX_SIZE: usize = 1000;
 /// Access tokens are valid ~7200 s; refresh with a safety margin.
 const TOKEN_REFRESH_SECS: u64 = 6600;
+/// hermes `_send_emotion` text-emoji metadata (`emotion_type` 2 = text
+/// emoji).
+const EMOTION_ID: &str = "2659900";
+const EMOTION_BACKGROUND_ID: &str = "im_bg_1";
+/// Lifecycle emojis (hermes stream handler / `_fire_done_reaction`).
+const THINKING_EMOJI: &str = "🤔Thinking";
+const DONE_EMOJI: &str = "🥳Done";
 
 /// `[messaging.dingtalk]` — DingTalk Stream Mode adapter (hermes
 /// `platforms.dingtalk` plugin config + `DINGTALK_*` env vars).
@@ -155,6 +166,12 @@ struct Runtime {
     dedup: Mutex<HashMap<String, u64>>,
     access_token: Mutex<(String, std::time::Instant)>,
     mention_regexes: Vec<regex::Regex>,
+    /// chat_id → (open_msg_id, open_conversation_id); hermes
+    /// `_message_contexts`.
+    message_contexts: Mutex<HashMap<String, (String, String)>>,
+    /// Chats whose 🤔Thinking → 🥳Done swap already fired; hermes
+    /// `_done_emoji_fired`.
+    done_emoji_fired: Mutex<HashSet<String>>,
 }
 
 impl Runtime {
@@ -276,6 +293,71 @@ impl Runtime {
         Ok(token)
     }
 
+    /// hermes `_send_emotion`: add or recall a text-emoji reaction on a
+    /// message. Best-effort — callers log and move on.
+    async fn send_emotion(
+        &self,
+        robot_code: &str,
+        open_msg_id: &str,
+        open_conversation_id: &str,
+        emoji_name: &str,
+        recall: bool,
+    ) -> Result<(), String> {
+        if open_msg_id.is_empty() || open_conversation_id.is_empty() {
+            return Err("missing openMsgId/openConversationId".into());
+        }
+        let token = self.get_access_token().await?;
+        let resp = self
+            .client
+            .post(format!("{API_BASE}{}", emotion_endpoint(recall)))
+            .header("x-acs-dingtalk-access-token", &token)
+            .json(&emotion_payload(
+                robot_code,
+                open_msg_id,
+                open_conversation_id,
+                emoji_name,
+            ))
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| format!("emotion {}: {e}", if recall { "recall" } else { "reply" }))?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("emotion → {status}: {body}"));
+        }
+        Ok(())
+    }
+
+    /// hermes `_message_contexts[chat_id] = message` +
+    /// `_done_emoji_fired.discard(chat_id)` — stash the inbound ids for
+    /// the post-reply Done swap and reset the per-chat fired marker.
+    async fn record_message_context(&self, chat_id: &str, msg_id: &str, conversation_id: &str) {
+        self.done_emoji_fired.lock().await.remove(chat_id);
+        self.message_contexts.lock().await.insert(
+            chat_id.to_string(),
+            (msg_id.to_string(), conversation_id.to_string()),
+        );
+    }
+
+    /// hermes `_fire_done_reaction` state half: mark the chat fired and
+    /// return the reaction target exactly once per inbound message.
+    async fn take_done_reaction(&self, chat_id: &str) -> Option<(String, String)> {
+        {
+            let mut fired = self.done_emoji_fired.lock().await;
+            if fired.contains(chat_id) {
+                return None;
+            }
+            fired.insert(chat_id.to_string());
+        }
+        let (msg_id, conversation_id) =
+            self.message_contexts.lock().await.get(chat_id)?.clone();
+        if msg_id.is_empty() || conversation_id.is_empty() {
+            return None;
+        }
+        Some((msg_id, conversation_id))
+    }
+
     /// Resolve a `downloadCode` to a URL and cache the bytes.
     async fn download_media_code(
         &self,
@@ -389,6 +471,40 @@ pub fn normalize_markdown(text: &str) -> String {
     out.join("\n")
 }
 
+/// hermes `_send_emotion` endpoint selection (SDK `robot_1_0`
+/// `robotReplyEmotion` / `robotRecallEmotion` paths).
+pub fn emotion_endpoint(recall: bool) -> &'static str {
+    if recall {
+        "/v1.0/robot/emotion/recall"
+    } else {
+        "/v1.0/robot/emotion/reply"
+    }
+}
+
+/// hermes `_send_emotion` kwargs → JSON body (`emotion_type` 2 = text
+/// emoji; `text_emotion` mirrors the SDK's
+/// `RobotReplyEmotionRequestTextEmotion`).
+pub fn emotion_payload(
+    robot_code: &str,
+    open_msg_id: &str,
+    open_conversation_id: &str,
+    emoji_name: &str,
+) -> Value {
+    json!({
+        "robotCode": robot_code,
+        "openMsgId": open_msg_id,
+        "openConversationId": open_conversation_id,
+        "emotionType": 2,
+        "emotionName": emoji_name,
+        "textEmotion": {
+            "emotionId": EMOTION_ID,
+            "emotionName": emoji_name,
+            "text": emoji_name,
+            "backgroundId": EMOTION_BACKGROUND_ID,
+        },
+    })
+}
+
 /// Entry point spawned by `run_messaging`.
 pub async fn run(
     cfg: DingTalkConfig,
@@ -420,6 +536,8 @@ pub async fn run(
         dedup: Mutex::new(HashMap::new()),
         access_token: Mutex::new((String::new(), std::time::Instant::now())),
         mention_regexes,
+        message_contexts: Mutex::new(HashMap::new()),
+        done_emoji_fired: Mutex::new(HashSet::new()),
     });
     crate::messaging::register_platform_sender(
         "dingtalk",
@@ -578,15 +696,41 @@ async fn handle_bot_message(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-    if runtime.is_duplicate(&msg_id).await {
-        return;
-    }
-
     let conversation_id = payload
         .get("conversationId")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let robot_code = payload
+        .get("robotCode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // hermes fires the 🤔Thinking text-emoji fire-and-forget on the raw
+    // CALLBACK frame — before dedup and gates (`_send_emotion(...,
+    // recall=False)` in the stream handler). Mirror that ordering; the
+    // reaction is idempotent on DingTalk's side.
+    if !msg_id.is_empty() && !conversation_id.is_empty() {
+        let rt = runtime.clone();
+        let code = if robot_code.is_empty() {
+            runtime.cfg.client_id.clone()
+        } else {
+            robot_code.clone()
+        };
+        let mid = msg_id.clone();
+        let cid = conversation_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = rt.send_emotion(&code, &mid, &cid, THINKING_EMOJI, false).await {
+                eprintln!("[dingtalk] Thinking reaction failed: {e}");
+            }
+        });
+    }
+
+    if runtime.is_duplicate(&msg_id).await {
+        return;
+    }
+
     let conversation_type = payload
         .get("conversationType")
         .and_then(|v| v.as_str())
@@ -605,11 +749,6 @@ async fn handle_bot_message(
         .unwrap_or_else(|| sender_id.clone());
     let sender_staff_id = payload
         .get("senderStaffId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let robot_code = payload
-        .get("robotCode")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -659,6 +798,13 @@ async fn handle_bot_message(
             }
         }
     }
+
+    // Stash the inbound ids for the post-reply 🥳Done swap (hermes
+    // `_message_contexts[chat_id] = message` +
+    // `_done_emoji_fired.discard(chat_id)`).
+    runtime
+        .record_message_context(&chat_id, &msg_id, &conversation_id)
+        .await;
 
     let session_webhook = payload
         .get("sessionWebhook")
@@ -714,6 +860,30 @@ async fn handle_bot_message(
     if !reply_text.trim().is_empty() {
         if let Err(e) = runtime.send_markdown(&chat_id, &reply_text).await {
             eprintln!("[dingtalk] reply failed: {e}");
+        } else if let Some((target_msg, target_conv)) = runtime.take_done_reaction(&chat_id).await
+        {
+            // hermes `_fire_done_reaction`: recall 🤔Thinking, then add
+            // 🥳Done — once per inbound message.
+            let rt = runtime.clone();
+            let code = if robot_code.is_empty() {
+                runtime.cfg.client_id.clone()
+            } else {
+                robot_code.clone()
+            };
+            tokio::spawn(async move {
+                if let Err(e) = rt
+                    .send_emotion(&code, &target_msg, &target_conv, THINKING_EMOJI, true)
+                    .await
+                {
+                    eprintln!("[dingtalk] Thinking recall failed: {e}");
+                }
+                if let Err(e) = rt
+                    .send_emotion(&code, &target_msg, &target_conv, DONE_EMOJI, false)
+                    .await
+                {
+                    eprintln!("[dingtalk] Done reaction failed: {e}");
+                }
+            });
         }
     }
 }
@@ -933,6 +1103,27 @@ impl crate::messaging::PlatformSender for DingTalkSender {
 mod tests {
     use super::*;
 
+    fn test_runtime() -> Runtime {
+        Runtime {
+            cfg: ResolvedDingTalk {
+                client_id: String::new(),
+                client_secret: String::new(),
+                require_mention: false,
+                free_response_chats: Vec::new(),
+                allowed_chats: Vec::new(),
+                allowed_users: Vec::new(),
+                mention_patterns: Vec::new(),
+            },
+            client: reqwest::Client::new(),
+            session_webhooks: Mutex::new(HashMap::new()),
+            dedup: Mutex::new(HashMap::new()),
+            access_token: Mutex::new((String::new(), std::time::Instant::now())),
+            mention_regexes: Vec::new(),
+            message_contexts: Mutex::new(HashMap::new()),
+            done_emoji_fired: Mutex::new(HashSet::new()),
+        }
+    }
+
     #[test]
     fn webhook_url_validation() {
         assert!(is_dingtalk_webhook_url(
@@ -1010,6 +1201,8 @@ mod tests {
             dedup: Mutex::new(HashMap::new()),
             access_token: Mutex::new((String::new(), std::time::Instant::now())),
             mention_regexes: vec![regex::Regex::new("^小马").unwrap()],
+            message_contexts: Mutex::new(HashMap::new()),
+            done_emoji_fired: Mutex::new(HashSet::new()),
         };
         // allowed_chats hard gate
         assert!(!runtime.should_process("hi", true, "other-chat", true));
@@ -1042,6 +1235,8 @@ mod tests {
             dedup: Mutex::new(HashMap::new()),
             access_token: Mutex::new((String::new(), std::time::Instant::now())),
             mention_regexes: Vec::new(),
+            message_contexts: Mutex::new(HashMap::new()),
+            done_emoji_fired: Mutex::new(HashSet::new()),
         };
         assert!(runtime.is_user_allowed("x", "manager123"));
         assert!(runtime.is_user_allowed("MANAGER123", ""));
@@ -1088,8 +1283,58 @@ mod tests {
             dedup: Mutex::new(HashMap::new()),
             access_token: Mutex::new((String::new(), std::time::Instant::now())),
             mention_regexes: Vec::new(),
+            message_contexts: Mutex::new(HashMap::new()),
+            done_emoji_fired: Mutex::new(HashSet::new()),
         };
         assert!(!runtime.is_duplicate("m1").await);
         assert!(runtime.is_duplicate("m1").await);
+    }
+
+    #[test]
+    fn emotion_endpoint_selection() {
+        assert_eq!(emotion_endpoint(false), "/v1.0/robot/emotion/reply");
+        assert_eq!(emotion_endpoint(true), "/v1.0/robot/emotion/recall");
+    }
+
+    #[test]
+    fn emotion_payload_matches_sdk_schema() {
+        let payload = emotion_payload("rc", "msg1", "conv1", THINKING_EMOJI);
+        assert_eq!(payload["robotCode"], "rc");
+        assert_eq!(payload["openMsgId"], "msg1");
+        assert_eq!(payload["openConversationId"], "conv1");
+        assert_eq!(payload["emotionType"], 2);
+        assert_eq!(payload["emotionName"], THINKING_EMOJI);
+        let text = &payload["textEmotion"];
+        assert_eq!(text["emotionId"], "2659900");
+        assert_eq!(text["emotionName"], THINKING_EMOJI);
+        assert_eq!(text["text"], THINKING_EMOJI);
+        assert_eq!(text["backgroundId"], "im_bg_1");
+    }
+
+    #[tokio::test]
+    async fn done_reaction_swap_is_idempotent_per_chat() {
+        let runtime = test_runtime();
+        runtime.record_message_context("chat1", "m1", "c1").await;
+        assert_eq!(
+            runtime.take_done_reaction("chat1").await,
+            Some(("m1".to_string(), "c1".to_string()))
+        );
+        // Second call for the same inbound is suppressed (hermes
+        // `_done_emoji_fired`).
+        assert_eq!(runtime.take_done_reaction("chat1").await, None);
+        // A new inbound message resets the cycle.
+        runtime.record_message_context("chat1", "m2", "c1").await;
+        assert_eq!(
+            runtime.take_done_reaction("chat1").await,
+            Some(("m2".to_string(), "c1".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn done_reaction_requires_context() {
+        let runtime = test_runtime();
+        assert_eq!(runtime.take_done_reaction("ghost").await, None);
+        runtime.record_message_context("empty", "", "").await;
+        assert_eq!(runtime.take_done_reaction("empty").await, None);
     }
 }
