@@ -2258,12 +2258,132 @@ pub fn load_onboard_credentials(home: &Path) -> Option<Value> {
     serde_json::from_str(&raw).ok()
 }
 
+/// Apply the setup-wizard choices to `<home>/config.toml` (hermes
+/// `_setup_qqbot` `save_env_value` writes, expressed in ulnclaw's TOML
+/// config): enables `[messaging.qq]`, sets the DM policy + allowlist,
+/// preserving every other key in the file.
+pub fn apply_setup_to_config(
+    home: &Path,
+    dm_policy: &str,
+    allow_from: &[String],
+) -> std::result::Result<(), String> {
+    let path = home.join("config.toml");
+    let mut root = if path.exists() {
+        crate::config_cmd::load_toml(&path)?
+    } else {
+        toml::Value::Table(Default::default())
+    };
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| "config.toml is not a table".to_string())?;
+    let messaging = table
+        .entry("messaging")
+        .or_insert_with(|| toml::Value::Table(Default::default()));
+    let messaging = messaging
+        .as_table_mut()
+        .ok_or_else(|| "[messaging] is not a table".to_string())?;
+    let qq = messaging
+        .entry("qq")
+        .or_insert_with(|| toml::Value::Table(Default::default()));
+    let qq = qq
+        .as_table_mut()
+        .ok_or_else(|| "[messaging.qq] is not a table".to_string())?;
+    qq.insert("enabled".into(), toml::Value::Boolean(true));
+    qq.insert("dm_policy".into(), toml::Value::String(dm_policy.to_string()));
+    qq.insert(
+        "allow_from".into(),
+        toml::Value::Array(
+            allow_from
+                .iter()
+                .map(|entry| toml::Value::String(entry.clone()))
+                .collect(),
+        ),
+    );
+    crate::config_cmd::save_toml(&path, &root)
+}
+
+/// Set `key = value` in `<home>/.env` (creating the file if missing,
+/// replacing an existing line for the key otherwise) — ulnclaw's
+/// `save_env_value` parity for home-channel persistence.
+pub fn upsert_env_value(
+    home: &Path,
+    key: &str,
+    value: &str,
+) -> std::result::Result<std::path::PathBuf, String> {
+    let path = home.join(".env");
+    let mut lines: Vec<String> = match std::fs::read_to_string(&path) {
+        Ok(existing) => existing.lines().map(String::from).collect(),
+        Err(_) => Vec::new(),
+    };
+    let new_line = format!("{}={}", key, value);
+    let prefix = format!("{}=", key);
+    let mut replaced = false;
+    for line in lines.iter_mut() {
+        if line.trim_start().starts_with(&prefix) {
+            *line = new_line.clone();
+            replaced = true;
+            break;
+        }
+    }
+    if !replaced {
+        lines.push(new_line);
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    std::fs::write(&path, out).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    Ok(path)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_apply_setup_to_config_merges_existing_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[model]\nprovider = \"test\"\n\n[messaging.qq]\napp_id = \"123\"\n",
+        )
+        .unwrap();
+        apply_setup_to_config(dir.path(), "allowlist", &["u1".into(), "u2".into()]).unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        let value: toml::Value = toml::from_str(&raw).unwrap();
+        let qq = &value["messaging"]["qq"];
+        assert_eq!(qq["enabled"].as_bool(), Some(true));
+        assert_eq!(qq["dm_policy"].as_str(), Some("allowlist"));
+        assert_eq!(qq["allow_from"].as_array().unwrap().len(), 2);
+        // Pre-existing keys survive the merge.
+        assert_eq!(qq["app_id"].as_str(), Some("123"));
+        assert_eq!(value["model"]["provider"].as_str(), Some("test"));
+    }
+
+    #[test]
+    fn test_apply_setup_to_config_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        apply_setup_to_config(dir.path(), "open", &[]).unwrap();
+        let value: toml::Value =
+            toml::from_str(&std::fs::read_to_string(dir.path().join("config.toml")).unwrap())
+                .unwrap();
+        assert_eq!(value["messaging"]["qq"]["dm_policy"].as_str(), Some("open"));
+    }
+
+    #[test]
+    fn test_upsert_env_value_creates_and_replaces() {
+        let dir = tempfile::tempdir().unwrap();
+        upsert_env_value(dir.path(), "QQBOT_HOME_CHANNEL", "openid-1").unwrap();
+        let raw = std::fs::read_to_string(dir.path().join(".env")).unwrap();
+        assert_eq!(raw, "QQBOT_HOME_CHANNEL=openid-1\n");
+        // Replace in place, other lines untouched.
+        std::fs::write(dir.path().join(".env"), "OTHER=1\nQQBOT_HOME_CHANNEL=old\nTAIL=2\n").unwrap();
+        upsert_env_value(dir.path(), "QQBOT_HOME_CHANNEL", "openid-2").unwrap();
+        let raw = std::fs::read_to_string(dir.path().join(".env")).unwrap();
+        assert_eq!(raw, "OTHER=1\nQQBOT_HOME_CHANNEL=openid-2\nTAIL=2\n");
+    }
+
+
     use super::*;
 
     fn cfg() -> QQBotConfig {

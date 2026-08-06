@@ -4958,10 +4958,20 @@ enum QqAction {
         #[arg(long, default_value = "600")]
         timeout: u64,
     },
+    /// Full interactive QQ Bot setup wizard (hermes `_setup_qqbot`):
+    /// scan-to-configure or manual credentials, DM security policy
+    /// (pairing / open / allowlist) and home-channel selection,
+    /// persisted to [messaging.qq] + <home>/.env
+    Setup {
+        /// QR registration timeout in seconds (hermes default 600)
+        #[arg(long, default_value = "600")]
+        timeout: u64,
+    },
 }
 
 async fn qq_cmd(action: QqAction) -> Result<(), String> {
     match action {
+        QqAction::Setup { timeout } => qq_setup_wizard(timeout).await,
         QqAction::Login { timeout } => {
             let home = ulnclaw::config::ulnclaw_home();
             match ulnclaw::qqbot::qr_register(timeout).await? {
@@ -4984,6 +4994,251 @@ async fn qq_cmd(action: QqAction) -> Result<(), String> {
         }
     }
 }
+// ---------------------------------------------------------------------------
+// QQ Bot setup wizard (hermes `_setup_qqbot` in hermes_cli/gateway.py)
+// ---------------------------------------------------------------------------
+
+/// Read one line from stdin with a prompt and optional default.
+fn qq_prompt_line(prompt: &str, default: &str) -> Result<String, String> {
+    if default.is_empty() {
+        print!("  {}: ", prompt);
+    } else {
+        print!("  {} [{}]: ", prompt, default);
+    }
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+        return Ok(default.to_string());
+    }
+    let trimmed = line.trim();
+    Ok(if trimmed.is_empty() {
+        default.to_string()
+    } else {
+        trimmed.to_string()
+    })
+}
+
+/// Hidden input for secrets (crossterm raw mode; falls back to plain
+/// echo when the terminal cannot go raw, e.g. pipes).
+fn qq_prompt_hidden(prompt: &str) -> Result<String, String> {
+    use crossterm::event::{Event, KeyCode, KeyEventKind};
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+    print!("  {}: ", prompt);
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    if enable_raw_mode().is_err() {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+        println!();
+        return Ok(line.trim().to_string());
+    }
+    let mut value = String::new();
+    loop {
+        match crossterm::event::read() {
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => match key.code {
+                KeyCode::Enter => break,
+                KeyCode::Backspace => {
+                    value.pop();
+                }
+                KeyCode::Char(c) => value.push(c),
+                KeyCode::Esc => {
+                    disable_raw_mode().ok();
+                    println!();
+                    return Ok(String::new());
+                }
+                _ => {}
+            },
+            Err(e) => {
+                disable_raw_mode().ok();
+                return Err(e.to_string());
+            }
+            _ => {}
+        }
+    }
+    disable_raw_mode().ok();
+    println!();
+    Ok(value)
+}
+
+/// y/N prompt returning the choice (default when EOF/blank).
+fn qq_prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
+    let suffix = if default { "[Y/n]" } else { "[y/N]" };
+    let answer = qq_prompt_line(&format!("{} {}", prompt, suffix), "")?;
+    Ok(match answer.trim().to_lowercase().as_str() {
+        "y" | "yes" => true,
+        "n" | "no" => false,
+        _ => default,
+    })
+}
+
+/// Numbered-choice prompt; returns the selected index (default on
+/// blank/EOF, re-asks on invalid input).
+fn qq_prompt_choice(prompt: &str, choices: &[&str], default_index: usize) -> Result<usize, String> {
+    println!();
+    println!("  {}", prompt);
+    for (idx, choice) in choices.iter().enumerate() {
+        println!("    {}. {}", idx + 1, choice);
+    }
+    loop {
+        let answer = qq_prompt_line(
+            &format!("Choice [{}]", default_index + 1),
+            "",
+        )?;
+        if answer.trim().is_empty() {
+            return Ok(default_index);
+        }
+        if let Ok(n) = answer.trim().parse::<usize>() {
+            if n >= 1 && n <= choices.len() {
+                return Ok(n - 1);
+            }
+        }
+        println!("  Please enter a number between 1 and {}.", choices.len());
+    }
+}
+
+async fn qq_setup_wizard(timeout: u64) -> Result<(), String> {
+    let home = ulnclaw::config::ulnclaw_home();
+    println!();
+    println!("  ─── 🐧 QQ Bot Setup ───");
+
+    // Already configured? (env credentials or a saved onboard file)
+    let env_app_id = std::env::var("QQ_APP_ID").ok().filter(|v| !v.trim().is_empty());
+    let env_secret = std::env::var("QQ_CLIENT_SECRET")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let has_saved = ulnclaw::qqbot::load_onboard_credentials(&home).is_some();
+    if (env_app_id.is_some() && env_secret.is_some()) || has_saved {
+        println!();
+        println!("  ✓ QQ Bot is already configured.");
+        if !qq_prompt_yes_no("  Reconfigure QQ Bot?", false)? {
+            return Ok(());
+        }
+    }
+
+    // ── Choose setup method ──
+    let method = qq_prompt_choice(
+        "How would you like to set up QQ Bot?",
+        &[
+            "Scan QR code to add bot automatically (recommended)",
+            "Enter existing App ID and App Secret manually",
+        ],
+        0,
+    )?;
+
+    let mut credentials: Option<ulnclaw::qqbot::QQOnboardCredentials> = None;
+    if method == 0 {
+        match ulnclaw::qqbot::qr_register(timeout).await {
+            Ok(creds) => credentials = creds,
+            Err(e) => {
+                println!("  ⚠ QR setup failed: {e}. Continuing with manual input.");
+            }
+        }
+        if credentials.is_none() {
+            println!("  ℹ QR setup did not complete. Continuing with manual input.");
+        }
+    }
+
+    // ── Manual credential input ──
+    if credentials.is_none() {
+        println!();
+        println!("  ℹ Go to https://q.qq.com to register a QQ Bot application.");
+        println!("  ℹ Note your App ID and App Secret from the application page.");
+        println!();
+        let app_id = qq_prompt_line("App ID", "")?;
+        if app_id.is_empty() {
+            println!("  ⚠ Skipped — QQ Bot won't work without an App ID.");
+            return Ok(());
+        }
+        let client_secret = qq_prompt_hidden("App Secret")?;
+        if client_secret.is_empty() {
+            println!("  ⚠ Skipped — QQ Bot won't work without an App Secret.");
+            return Ok(());
+        }
+        credentials = Some(ulnclaw::qqbot::QQOnboardCredentials {
+            app_id,
+            client_secret,
+            user_openid: String::new(),
+        });
+    }
+    let credentials = credentials.expect("credentials resolved above");
+
+    // ── Save core credentials ──
+    ulnclaw::qqbot::save_onboard_credentials(&home, &credentials)?;
+
+    // ── DM security policy ──
+    let access = qq_prompt_choice(
+        "How should direct messages be authorized?",
+        &[
+            "Use DM pairing approval (recommended)",
+            "Allow all direct messages",
+            "Only allow listed user OpenIDs",
+        ],
+        0,
+    )?;
+    let (dm_policy, allow_from) = match access {
+        0 => {
+            let mut allow_from: Vec<String> = Vec::new();
+            if !credentials.user_openid.is_empty() {
+                println!();
+                if qq_prompt_yes_no(
+                    &format!("  Add yourself ({}) to the allow list?", credentials.user_openid),
+                    true,
+                )? {
+                    allow_from.push(credentials.user_openid.clone());
+                    println!("  ✓ Allow list set to {}", credentials.user_openid);
+                }
+            }
+            println!("  ✓ DM pairing enabled.");
+            println!("  ℹ Unknown users can request access; approve with `ulnclaw pairing approve`.");
+            ("pairing", allow_from)
+        }
+        1 => {
+            println!("  ⚠ Open DM access enabled for QQ Bot.");
+            ("open", Vec::new())
+        }
+        _ => {
+            let default_allow = credentials.user_openid.clone();
+            let allowlist = qq_prompt_line("Allowed user OpenIDs (comma-separated)", &default_allow)?;
+            let allow_from: Vec<String> = allowlist
+                .split(',')
+                .map(|entry| entry.trim().to_string())
+                .filter(|entry| !entry.is_empty())
+                .collect();
+            println!("  ✓ Allowlist saved.");
+            ("allowlist", allow_from)
+        }
+    };
+
+    // ── Persist policy into [messaging.qq] ──
+    ulnclaw::qqbot::apply_setup_to_config(&home, dm_policy, &allow_from)?;
+
+    // ── Home channel ──
+    if !credentials.user_openid.is_empty() {
+        println!();
+        if qq_prompt_yes_no(
+            &format!("  Use your QQ user ID ({}) as the home channel?", credentials.user_openid),
+            true,
+        )? {
+            ulnclaw::qqbot::upsert_env_value(&home, "QQBOT_HOME_CHANNEL", &credentials.user_openid)?;
+            println!("  ✓ Home channel set to {}", credentials.user_openid);
+        }
+    } else {
+        println!();
+        let home_channel = qq_prompt_line("Home channel OpenID (for cron/notifications, or empty)", "")?;
+        if !home_channel.is_empty() {
+            ulnclaw::qqbot::upsert_env_value(&home, "QQBOT_HOME_CHANNEL", &home_channel)?;
+            println!("  ✓ Home channel set to {}", home_channel);
+        }
+    }
+
+    println!();
+    println!("  ✓ 🐧 QQ Bot configured!");
+    println!("  ℹ App ID: {}", credentials.app_id);
+    println!("  ℹ Policy persisted to {}", home.join("config.toml").display());
+    Ok(())
+}
+
 /// Google Chat per-user OAuth CLI (hermes
 /// `python -m plugins.platforms.google_chat.oauth`). The Chat API's
 /// media.upload endpoint rejects service accounts, so each user grants
