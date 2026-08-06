@@ -1097,6 +1097,19 @@ pub async fn run_messaging(
     }
     if msg.google_chat.enabled {
         crate::google_chat::register(&msg.google_chat);
+        if !msg
+            .google_chat
+            .resolve()
+            .pubsub_subscription
+            .trim()
+            .is_empty()
+        {
+            let dispatcher = dispatcher.clone();
+            let pairing = pairing.clone();
+            tasks.push(tokio::spawn(async move {
+                crate::google_chat::run_pubsub(dispatcher, pairing).await;
+            }));
+        }
     }
     if msg.buzz.enabled {
         let cfg = msg.buzz.clone();

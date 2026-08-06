@@ -425,7 +425,7 @@ mod tests {
 
     #[test]
     fn bridge_command_matches_hermes_argv() {
-        let mut cmd = build_bridge_command(
+        let cmd = build_bridge_command(
             std::path::Path::new("/usr/local/bin/raft"),
             "work",
             "http://127.0.0.1:8080/webhooks/raft/wake",
