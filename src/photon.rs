@@ -22,7 +22,11 @@
 //! with leading-wake-word stripping, typing indicator with a 5 s
 //! per-chat cooldown. Outbound: URL-only replies ride `/send-richlink`
 //! with plain-text fallback, markdown format hint (`PHOTON_MARKDOWN`
-//! kill-switch), hermes 8000-char cap. Reactions are not ported.
+//! kill-switch), hermes 8000-char cap. Reactions (iMessage tapbacks):
+//! opt-in lifecycle tapbacks via `PHOTON_REACTIONS` (👀 while
+//! processing, swapped for 👍/👎 on completion), sidecar `/react` +
+//! `/unreact`, and inbound tapbacks on the bot's own messages routed
+//! to the agent as `reaction:added:<emoji>` synthetic text.
 
 use crate::messaging::{Dispatcher, MediaAttachment, MessageEvent};
 use futures::StreamExt;
@@ -49,6 +53,11 @@ const TYPING_COOLDOWN_SECS: u64 = 5;
 const RECENT_CHATS_CAP: usize = 200;
 /// hermes `_SENT_IDS_MAX`.
 const SENT_IDS_CAP: usize = 1000;
+/// Lifecycle tapbacks (hermes `_OK_EMOJI` / `_FAIL_EMOJI` / the 👀
+/// `on_processing_start` hook).
+const REACT_PROCESSING: &str = "👀";
+const REACT_OK: &str = "👍";
+const REACT_FAIL: &str = "👎";
 
 /// `[messaging.photon]` — Photon adapter (hermes `platforms.photon`
 /// plugin config + `PHOTON_*` env vars).
@@ -73,6 +82,10 @@ pub struct PhotonConfig {
     /// Wake-word regexes for group gating (fallback
     /// `PHOTON_MENTION_PATTERNS`; empty = hermes default).
     pub mention_patterns: Vec<String>,
+    /// Opt-in lifecycle tapbacks — iMessage is a personal-texting
+    /// channel and a tapback on every text is noisy (fallback
+    /// `PHOTON_REACTIONS`; hermes `_reactions_enabled`).
+    pub reactions: bool,
 }
 
 impl Default for PhotonConfig {
@@ -86,6 +99,7 @@ impl Default for PhotonConfig {
             home_channel: String::new(),
             require_mention: false,
             mention_patterns: Vec::new(),
+            reactions: false,
         }
     }
 }
@@ -118,6 +132,8 @@ pub struct ResolvedPhoton {
     pub mention_regexes: Vec<Regex>,
     /// hermes `_markdown_enabled` (`PHOTON_MARKDOWN`, default on).
     pub markdown: bool,
+    /// hermes `_reactions_enabled` (`PHOTON_REACTIONS`, default off).
+    pub reactions: bool,
 }
 
 /// hermes `_DEFAULT_MENTION_PATTERNS`, rewritten without lookbehind
@@ -180,6 +196,9 @@ impl PhotonConfig {
             markdown: env_trim("PHOTON_MARKDOWN")
                 .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no"))
                 .unwrap_or(true),
+            reactions: env_trim("PHOTON_REACTIONS")
+                .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(self.reactions),
         }
     }
 }
@@ -303,6 +322,77 @@ impl Runtime {
             req.bearer_auth(&self.cfg.token)
         }
     }
+
+    /// hermes `_add_reaction` — sidecar `/react` tapback. Soft-fails
+    /// (false), never blocks the message flow.
+    async fn add_reaction(&self, chat_id: &str, message_id: &str, emoji: &str) -> bool {
+        let url = format!("{}/react", self.cfg.sidecar_url);
+        let payload = json!({ "spaceId": chat_id, "messageId": message_id, "emoji": emoji });
+        match self
+            .authed(self.client.post(&url))
+            .timeout(API_TIMEOUT)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => true,
+            Ok(resp) => {
+                eprintln!("[photon] add_reaction failed: HTTP {}", resp.status());
+                false
+            }
+            Err(e) => {
+                eprintln!("[photon] add_reaction failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// hermes `_remove_reaction` — sidecar `/unreact` (retract our
+    /// tapback). Soft-fails (false).
+    async fn remove_reaction(&self, chat_id: &str, message_id: &str) -> bool {
+        let url = format!("{}/unreact", self.cfg.sidecar_url);
+        let payload = json!({ "spaceId": chat_id, "messageId": message_id });
+        match self
+            .authed(self.client.post(&url))
+            .timeout(API_TIMEOUT)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => true,
+            Ok(resp) => {
+                eprintln!("[photon] remove_reaction failed: HTTP {}", resp.status());
+                false
+            }
+            Err(e) => {
+                eprintln!("[photon] remove_reaction failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// hermes lifecycle ack: swap the 👀 progress tapback for the
+    /// result (remove-then-add keeps the sidecar's reaction-handle
+    /// slot coherent).
+    async fn swap_processing_reaction(&self, chat_id: &str, message_id: &str, result_emoji: &str) {
+        let _ = self.remove_reaction(chat_id, message_id).await;
+        let _ = self.add_reaction(chat_id, message_id, result_emoji).await;
+    }
+}
+
+/// hermes `_normalize_chat_key` — a DM space is addressable both by
+/// its chat GUID (`any;-;+1555…`) and the bare E.164 phone; normalize
+/// to the phone so last-inbound tracking matches both forms.
+pub fn normalize_chat_key(chat_id: &str) -> String {
+    if let Some(phone) = chat_id.strip_prefix("any;-;") {
+        if phone.starts_with('+')
+            && phone.len() >= 7
+            && phone[1..].chars().all(|c| c.is_ascii_digit())
+        {
+            return phone.to_string();
+        }
+    }
+    chat_id.to_string()
 }
 
 /// hermes `_url_only_candidate`: only exact http(s) URL messages become
@@ -655,7 +745,50 @@ async fn handle_inbound(
     if let Some(content) = event.get("content").filter(|v| v.is_object()) {
         let ctype = content.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if ctype == "reaction" {
-            return; // not ported
+            // hermes: route only tapbacks on messages WE sent — those
+            // are implicitly addressed to the bot (human↔human tapbacks
+            // are not for us). Checked before the mention gate: a
+            // tapback never carries a wake word.
+            let target_id = content
+                .get("targetMessageId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ours = content.get("targetDirection").and_then(|v| v.as_str())
+                == Some("outbound")
+                || (!target_id.is_empty() && runtime.is_own_send(&target_id).await);
+            if !ours {
+                return;
+            }
+            if !runtime.cfg.allow_all_users
+                && !runtime
+                    .cfg
+                    .allowed_users
+                    .iter()
+                    .any(|u| u == &sender_id || u == "*")
+            {
+                // No pairing offers for reactions — silently skip
+                // unauthorized reactors.
+                if pairing
+                    .as_ref()
+                    .map(|store| !store.is_approved("photon", &sender_id))
+                    .unwrap_or(true)
+                {
+                    return;
+                }
+            }
+            let emoji = content.get("emoji").and_then(|v| v.as_str()).unwrap_or("");
+            let reaction_event = MessageEvent {
+                platform: "photon".into(),
+                chat_id: space_id.clone(),
+                sender_id: sender_id.clone(),
+                sender_name: sender_id.clone(),
+                text: format!("reaction:added:{emoji}"),
+                message_id: message_id.clone(),
+                attachments: Vec::new(),
+            };
+            let _ = dispatch_photon_event(runtime, dispatcher, reaction_event, &space_id).await;
+            return;
         }
         let mut attachments: Vec<MediaAttachment> = Vec::new();
         let text = parse_content_node(content, &mut attachments).unwrap_or_default();
@@ -796,7 +929,7 @@ async fn handle_inbound(
 
     runtime.send_typing(&space_id).await;
 
-    let mut gate_event = MessageEvent {
+    let gate_event = MessageEvent {
         platform: "photon".into(),
         chat_id: space_id.clone(),
         sender_id: sender_id.clone(),
@@ -806,13 +939,44 @@ async fn handle_inbound(
         } else {
             text
         },
-        message_id,
+        message_id: message_id.clone(),
         attachments: parsed.attachments,
     };
-    if !crate::messaging::pre_gateway_dispatch_gate_public(&mut gate_event).await {
-        return;
+    // Lifecycle tapback: 👀 while the agent works, swapped for 👍/👎 on
+    // completion (hermes `on_processing_start` /
+    // `on_processing_complete`; `PHOTON_REACTIONS` opt-in).
+    if runtime.cfg.reactions {
+        let _ = runtime
+            .add_reaction(&space_id, &message_id, REACT_PROCESSING)
+            .await;
     }
-    let outcome = match dispatcher.handle_event(gate_event).await {
+    let ok = dispatch_photon_event(runtime, dispatcher, gate_event, &space_id).await;
+    if runtime.cfg.reactions {
+        runtime
+            .swap_processing_reaction(
+                &space_id,
+                &message_id,
+                if ok { REACT_OK } else { REACT_FAIL },
+            )
+            .await;
+    }
+}
+
+/// Shared dispatch tail for regular and synthetic (reaction) events.
+/// Returns false when the agent turn errored — that drives the 👎
+/// lifecycle tapback.
+async fn dispatch_photon_event(
+    runtime: &Arc<Runtime>,
+    dispatcher: &Arc<Dispatcher>,
+    mut event: MessageEvent,
+    space_id: &str,
+) -> bool {
+    if !crate::messaging::pre_gateway_dispatch_gate_public(&mut event).await {
+        return true;
+    }
+    let result = dispatcher.handle_event(event).await;
+    let ok = result.is_ok();
+    let outcome = match result {
         Ok(o) => o,
         Err(e) => crate::messaging::DispatchOutcome {
             reply: format!("error: {e}"),
@@ -827,14 +991,15 @@ async fn handle_inbound(
     full.push_str(&outcome.reply);
     let (reply_text, media_paths) = crate::messaging::extract_media_tags(&full);
     for path in &media_paths {
-        send_attachment(runtime, &space_id, path).await;
+        send_attachment(runtime, space_id, path).await;
     }
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        if let Err(e) = send_message(runtime, &space_id, &reply_text).await {
+        if let Err(e) = send_message(runtime, space_id, &reply_text).await {
             eprintln!("[photon] reply to {space_id} failed: {e}");
         }
     }
+    ok
 }
 
 /// hermes `_sidecar_send`: URL-only replies ride `/send-richlink` with
@@ -1084,5 +1249,39 @@ mod tests {
             guess_mime_from_path("/tmp/blob.bin"),
             "application/octet-stream"
         );
+    }
+
+    #[test]
+    fn chat_key_normalization_dm_guids() {
+        // DM chat GUIDs collapse to the bare E.164 phone.
+        assert_eq!(normalize_chat_key("any;-;+15551234567"), "+15551234567");
+        // Too-short digit runs and non-phones stay as-is.
+        assert_eq!(normalize_chat_key("any;-;+12345"), "any;-;+12345");
+        assert_eq!(normalize_chat_key("any;-;abc"), "any;-;abc");
+        // Group GUIDs and phones pass through untouched.
+        assert_eq!(
+            normalize_chat_key("chat1234567890"),
+            "chat1234567890"
+        );
+        assert_eq!(normalize_chat_key("+15551234567"), "+15551234567");
+    }
+
+    #[test]
+    fn reactions_env_gate() {
+        let _guard = crate::models_dev::test_env_lock();
+        std::env::remove_var("PHOTON_REACTIONS");
+        assert!(!PhotonConfig::default().resolve().reactions);
+        std::env::set_var("PHOTON_REACTIONS", "on");
+        assert!(PhotonConfig::default().resolve().reactions);
+        std::env::set_var("PHOTON_REACTIONS", "false");
+        assert!(!PhotonConfig::default().resolve().reactions);
+        std::env::remove_var("PHOTON_REACTIONS");
+    }
+
+    #[test]
+    fn lifecycle_emoji_set_matches_hermes() {
+        assert_eq!(REACT_PROCESSING, "👀");
+        assert_eq!(REACT_OK, "👍");
+        assert_eq!(REACT_FAIL, "👎");
     }
 }
