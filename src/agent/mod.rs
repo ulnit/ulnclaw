@@ -793,10 +793,57 @@ impl Agent {
 
                 let tool_results = self.execute_tool_calls(&response.tool_calls).await?;
 
-                for (tool_call, result) in response.tool_calls.iter().zip(tool_results.iter()) {
+                // Three-layer tool-result persistence (hermes tool_executor
+                // parity, P233): serialize each result, persist oversized
+                // outputs to the sandbox as preview+path, then enforce the
+                // aggregate per-turn budget.
+                let mut result_contents: Vec<String> = tool_results
+                    .iter()
+                    .map(|result| serde_json::to_string(result).unwrap_or_default())
+                    .collect();
+                {
+                    let budget = crate::tool_result_storage::BudgetConfig::default();
+                    let backend =
+                        crate::environments::resolve(&self.context.config.terminal).ok();
+                    for (content, tool_call) in result_contents
+                        .iter_mut()
+                        .zip(response.tool_calls.iter())
+                    {
+                        *content = crate::tool_result_storage::maybe_persist_tool_result(
+                            content,
+                            &tool_call.function.name,
+                            &tool_call.id,
+                            backend.as_ref(),
+                            &budget,
+                            None,
+                            None,
+                        )
+                        .await;
+                    }
+                    let call_ids: Vec<String> = response
+                        .tool_calls
+                        .iter()
+                        .map(|tool_call| tool_call.id.clone())
+                        .collect();
+                    crate::tool_result_storage::enforce_turn_budget(
+                        &mut result_contents,
+                        &call_ids,
+                        backend.as_ref(),
+                        &budget,
+                        None,
+                    )
+                    .await;
+                }
+
+                for ((tool_call, result), content) in response
+                    .tool_calls
+                    .iter()
+                    .zip(tool_results.iter())
+                    .zip(result_contents.into_iter())
+                {
                     let tool_message = Message {
                         role: Role::Tool,
-                        content: Some(serde_json::to_string(result).unwrap_or_default()),
+                        content: Some(content),
                         tool_calls: None,
                         tool_call_id: Some(tool_call.id.clone()),
                         name: Some(tool_call.function.name.clone()),

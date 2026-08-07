@@ -24,7 +24,7 @@ skill sync + local OAuth upstream proxy, and a Tauri desktop GUI (`desktop/`).
 - **🧰 Toolsets** — hermes-compatible grouping (`coding`, `web`, `file`, `safe`, `debugging`, ...) with composition and enable/disable policy
 - **🛡️ Approval system** — command normalization, hardline floor (auto-block), confirm-before-run for costly operations; REPL prompts plus gateway run approvals over HTTP with fail-closed timeout and persisted `always` grants
 - **💾 SQLite state** — sessions/messages with FTS5 full-text search, lineage (parent/child sessions), cron jobs, kanban board; offline non-destructive `sessions recover` for damaged databases (rowid salvage, orphan-session reconstruction, FTS rebuild)
-- **🗜️ Context compression** — budget-triggered middle-turn summarization via a secondary model call
+- **🗜️ Context compression** — budget-triggered middle-turn summarization via a secondary model call, plus three-layer tool-result persistence: oversized tool outputs (>100K chars, `read_file` exempt) are saved to `ulnclaw-results/` through the terminal backend and swapped for a preview + path, with a 200K-char per-turn aggregate budget spilling the largest results first
 - **🤝 Delegation** — parallel sub-agents with isolated contexts and depth limits; top-level delegations run fire-and-forget in the background (live transcripts under `cache/delegation/live/`) and one consolidated result re-enters the conversation when the batch finishes; dispatches and results persist in the SQLite delegation registry, so finished work survives restarts (rows still running after a crash recover as terminal "outcome unknown" reports)
 - **🧬 Mixture of Agents** — `[moa]` presets fan a prompt out to reference models in parallel and synthesize their answers via an aggregator (`ulnclaw moa run/list/delete`, REPL `/moa`); set `[model] provider = "moa"` to run the entire agent loop on a preset (persistent facade with per-turn reference caching, `save_traces` JSONL traces, `privacy_filter` PII redaction)
 - **🗺️ Model catalog** — models.dev-backed multi-provider inventory with a three-tier cache (memory → disk → network with 5-min failure backoff): `ulnclaw models providers|list|info|refresh`, gateway `/api/model/options` multi-provider picker inventory + `?refresh=true`, `ULNCLAW_MODELS_DEV_URL` mirror override
@@ -297,7 +297,7 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 - **🧰 工具集** —— hermes 兼容分组（`coding`、`web`、`file`、`safe`、`debugging`……），支持组合与启用/禁用策略
 - **🛡️ 审批系统** —— 命令归一化、硬性底线（自动阻止）、高成本操作先确认再执行；REPL 提示 + 网关 HTTP 运行审批（fail-closed 超时、`always` 授权持久化）
 - **💾 SQLite 状态库** —— 会话/消息 FTS5 全文检索、会话血缘（父子会话）、定时任务、kanban 看板；受损数据库的离线非破坏性 `sessions recover`（rowid 抢救、孤儿会话重建、FTS 重建）
-- **🗜️ 上下文压缩** —— 预算触发，中段对话经二次模型调用摘要
+- **🗜️ 上下文压缩** —— 预算触发，中段对话经二次模型调用摘要，外加三层工具结果持久化：超大工具输出（>10 万字符，`read_file` 豁免）经 terminal backend 存入 `ulnclaw-results/` 并替换为预览 + 路径，单轮 20 万字符聚合预算优先溢出最大结果
 - **🤝 委派** —— 并行子代理，隔离上下文，深度限制；顶层委派后台即发即忘（实时记录在 `cache/delegation/live/`），整批完成后以单条汇总结果重回会话；派发与结果持久化于 SQLite 委派登记表，完成的工作可跨重启保留（崩溃后仍在运行的委派以终态 "outcome unknown" 报告恢复投递）
 - **🧬 混合智能体（MoA）** —— `[moa]` 预设将提示词并行扇出给参考模型，经聚合器综合（`ulnclaw moa run/list/delete`、REPL `/moa`）；设置 `[model] provider = "moa"` 可让整个 agent 循环跑在预设上（持久门面：按轮参考缓存、`save_traces` JSONL trace、`privacy_filter` PII 脱敏）
 - **🗺️ 模型目录** —— models.dev 多 provider 清单，三级缓存（内存 → 磁盘 → 网络失败退避 5 分钟）：`ulnclaw models providers|list|info|refresh`、网关 `/api/model/options` 多 provider 选择器清单 + `?refresh=true`、`ULNCLAW_MODELS_DEV_URL` 镜像覆盖

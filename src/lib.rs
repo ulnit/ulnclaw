@@ -178,6 +178,7 @@ pub mod status;
 pub mod think_scrubber;
 pub mod tips;
 pub mod title_generator;
+pub mod tool_result_storage;
 pub mod tools;
 pub mod toolsets;
 pub mod tui_text;
