@@ -31,6 +31,7 @@ export interface CommandPaletteHooks {
   exportSession(format: "md" | "html"): Promise<void>;
   openSettings(): void;
   refreshSessions(): void | Promise<void>;
+  restartGateway(): void | Promise<void>;
 }
 
 /** Subsequence fuzzy score (higher = better, null = no match). */
@@ -141,6 +142,7 @@ export class CommandPalette {
       { id: "export-html", label: t.palette.exportHtml, group: t.palette.sessionGroup, run: () => hooks.exportSession("html") },
       { id: "refresh", label: t.palette.refreshSessions, group: t.palette.gatewayGroup, run: () => hooks.refreshSessions() },
       { id: "settings", label: t.palette.openSettings, group: t.palette.gatewayGroup, hint: "Ctrl/Cmd+,", run: () => hooks.openSettings() },
+      { id: "restart-gateway", label: t.palette.restartGateway, group: t.palette.gatewayGroup, run: () => hooks.restartGateway() },
     ];
     const current = hooks.currentSessionId();
     for (const session of hooks.sessions()) {

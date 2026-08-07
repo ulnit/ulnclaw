@@ -64,6 +64,7 @@ export interface Translations {
     fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
     manageProcess: string; replayOnboarding: string; cancel: string; save: string;
+    restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string;
   };
   session: {
@@ -268,7 +269,7 @@ export interface Translations {
     goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; goToWebhooks: string; goToRuns: string; goToSkills: string; goToSessions: string; goToModels: string; goToPlugins: string; goToPairing: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
-    openSettings: string; refreshSessions: string;
+    openSettings: string; refreshSessions: string; restartGateway: string;
     hintFreshChat: string; hintArtifacts: string; hintLearning: string; switchTo: string;
   };
   artifacts: {
@@ -311,7 +312,7 @@ const en: Translations = {
     settingsTitle: "Gateway settings", gatewayUrl: "Gateway URL",
     apiKey: "API key (optional, [gateway] key)", bearerToken: "bearer token",
     manageProcess: "Manage the gateway process (start/stop with the app)",
-    replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save",
+    replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save", restartGateway: "Restart gateway", restartDone: "Gateway restarted.", restartFailed: "Gateway restart timed out.", restartUnavailable: "The gateway is not managed here — restart it where it runs.",
     settingsTheme: "Theme", settingsFont: "Font",
   },
   session: {
@@ -665,7 +666,7 @@ const en: Translations = {
     renameSession: "Rename session…", deleteSession: "Delete session…",
     exportMd: "Export session (Markdown)", exportHtml: "Export session (HTML)",
     browseArtifacts: "Browse artifacts…", learningGraph: "Learning graph…",
-    openSettings: "Open gateway settings…", refreshSessions: "Refresh session list",
+    openSettings: "Open gateway settings…", refreshSessions: "Refresh session list", restartGateway: "Restart gateway",
     hintFreshChat: "start a fresh chat", hintArtifacts: "links, files, images",
     hintLearning: "learned skills + memory", switchTo: "Switch to: {title}",
   },
@@ -735,7 +736,7 @@ const zh: Translations = {
     settingsTitle: "网关设置", gatewayUrl: "网关 URL",
     apiKey: "API 密钥（可选，[gateway] key）", bearerToken: "bearer 令牌",
     manageProcess: "管理网关进程（随应用启动/停止）",
-    replayOnboarding: "重放引导", cancel: "取消", save: "保存",
+    replayOnboarding: "重放引导", cancel: "取消", save: "保存", restartGateway: "重启网关", restartDone: "网关已重启。", restartFailed: "网关重启超时。", restartUnavailable: "此环境不管理网关——请在网关运行处重启。",
     settingsTheme: "主题", settingsFont: "字体",
   },
   session: {
@@ -1089,7 +1090,7 @@ const zh: Translations = {
     renameSession: "重命名会话…", deleteSession: "删除会话…",
     exportMd: "导出会话（Markdown）", exportHtml: "导出会话（HTML）",
     browseArtifacts: "浏览工件…", learningGraph: "学习图谱…",
-    openSettings: "打开网关设置…", refreshSessions: "刷新会话列表",
+    openSettings: "打开网关设置…", refreshSessions: "刷新会话列表", restartGateway: "重启网关",
     hintFreshChat: "开始全新聊天", hintArtifacts: "链接、文件、图片",
     hintLearning: "已学技能 + 记忆", switchTo: "切换到：{title}",
   },
@@ -1159,7 +1160,7 @@ const zhHant: Translations = {
     settingsTitle: "閘道設定", gatewayUrl: "閘道 URL",
     apiKey: "API 金鑰（選填，[gateway] key）", bearerToken: "bearer 權杖",
     manageProcess: "管理閘道程序（隨應用程式啟動/停止）",
-    replayOnboarding: "重播引導", cancel: "取消", save: "儲存",
+    replayOnboarding: "重播引導", cancel: "取消", save: "儲存", restartGateway: "重啟閘道", restartDone: "閘道已重啟。", restartFailed: "閘道重啟逾時。", restartUnavailable: "此環境不管理閘道——請在閘道執行處重啟。",
     settingsTheme: "主題", settingsFont: "字型",
   },
   session: {
@@ -1513,7 +1514,7 @@ const zhHant: Translations = {
     renameSession: "重新命名工作階段…", deleteSession: "刪除工作階段…",
     exportMd: "匯出工作階段（Markdown）", exportHtml: "匯出工作階段（HTML）",
     browseArtifacts: "瀏覽工件…", learningGraph: "學習圖譜…",
-    openSettings: "開啟閘道設定…", refreshSessions: "重新整理工作階段清單",
+    openSettings: "開啟閘道設定…", refreshSessions: "重新整理工作階段清單", restartGateway: "重啟閘道",
     hintFreshChat: "開始全新聊天", hintArtifacts: "連結、檔案、圖片",
     hintLearning: "已學技能 + 記憶", switchTo: "切換至：{title}",
   },
@@ -1583,7 +1584,7 @@ const ja: Translations = {
     settingsTitle: "ゲートウェイ設定", gatewayUrl: "ゲートウェイ URL",
     apiKey: "API キー（任意、[gateway] key）", bearerToken: "bearer トークン",
     manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）",
-    replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存",
+    replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存", restartGateway: "ゲートウェイを再起動", restartDone: "ゲートウェイを再起動しました。", restartFailed: "ゲートウェイの再起動がタイムアウトしました。", restartUnavailable: "この環境はゲートウェイを管理していません — 実行場所で再起動してください。",
     settingsTheme: "テーマ", settingsFont: "フォント",
   },
   session: {
@@ -1937,7 +1938,7 @@ const ja: Translations = {
     renameSession: "セッション名を変更…", deleteSession: "セッションを削除…",
     exportMd: "セッションをエクスポート（Markdown）", exportHtml: "セッションをエクスポート（HTML）",
     browseArtifacts: "成果物を閲覧…", learningGraph: "学習グラフ…",
-    openSettings: "ゲートウェイ設定を開く…", refreshSessions: "セッション一覧を更新",
+    openSettings: "ゲートウェイ設定を開く…", refreshSessions: "セッション一覧を更新", restartGateway: "ゲートウェイを再起動",
     hintFreshChat: "新しいチャットを開始", hintArtifacts: "リンク、ファイル、画像",
     hintLearning: "学習済みスキル + メモリ", switchTo: "切り替え先：{title}",
   },
@@ -2007,7 +2008,7 @@ const ar: Translations = {
     settingsTitle: "إعدادات البوابة", gatewayUrl: "عنوان البوابة",
     apiKey: "مفتاح API (اختياري، [gateway] key)", bearerToken: "رمز bearer",
     manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)",
-    replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ",
+    replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ", restartGateway: "إعادة تشغيل البوابة", restartDone: "تمت إعادة تشغيل البوابة.", restartFailed: "انتهت مهلة إعادة تشغيل البوابة.", restartUnavailable: "البوابة غير مُدارة هنا — أعد تشغيلها حيث تعمل.",
     settingsTheme: "السمة", settingsFont: "الخط",
   },
   session: {
@@ -2361,7 +2362,7 @@ const ar: Translations = {
     renameSession: "إعادة تسمية الجلسة…", deleteSession: "حذف الجلسة…",
     exportMd: "تصدير الجلسة (Markdown)", exportHtml: "تصدير الجلسة (HTML)",
     browseArtifacts: "تصفح المخرجات…", learningGraph: "رسم التعلم…",
-    openSettings: "فتح إعدادات البوابة…", refreshSessions: "تحديث قائمة الجلسات",
+    openSettings: "فتح إعدادات البوابة…", refreshSessions: "تحديث قائمة الجلسات", restartGateway: "إعادة تشغيل البوابة",
     hintFreshChat: "بدء دردشة جديدة", hintArtifacts: "روابط وملفات وصور",
     hintLearning: "مهارات متعلَّمة + ذاكرة", switchTo: "التبديل إلى: {title}",
   },

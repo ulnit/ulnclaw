@@ -113,6 +113,7 @@ const el = {
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
   settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
+  settingsRestart: document.getElementById("settings-restart") as HTMLButtonElement,
   attachFile: document.getElementById("attach-file") as HTMLButtonElement,
   fsDialog: document.getElementById("fs-dialog") as HTMLDialogElement,
   fsUp: document.getElementById("fs-up") as HTMLButtonElement,
@@ -1051,6 +1052,46 @@ function installHotkeys(): void {
   });
 }
 
+/** P343: restart the managed gateway child — stop, respawn, wait for
+ * health, then refresh the session list. Only available when the shell
+ * actually manages the gateway (Tauri + manage toggle). */
+async function restartGateway(): Promise<boolean> {
+  if (!state.bridge || state.managedPid === null) {
+    notifyError(t.chrome.restartUnavailable);
+    return false;
+  }
+  const bridge = state.bridge;
+  try {
+    await bridge.stopGateway(state.managedPid);
+  } catch {
+    // Best effort: a stale pid still clears below.
+  }
+  state.managedPid = null;
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const binary = await bridge.findBinary();
+  if (!binary) {
+    notifyError(t.chrome.restartUnavailable);
+    return false;
+  }
+  const port = await bridge.defaultPort();
+  try {
+    state.managedPid = await bridge.spawnGateway(binary, port);
+  } catch (error) {
+    notifyError(fmt(t.boot.spawnFailed, { error }));
+    return false;
+  }
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (state.client && (await state.client.health())) {
+      notifySuccess(t.chrome.restartDone);
+      await refreshSessions();
+      return true;
+    }
+  }
+  notifyError(t.chrome.restartFailed);
+  return false;
+}
+
 async function start(): Promise<void> {
   // Translate the static chrome for any persisted non-en locale (P251).
   applyStatic();
@@ -1102,6 +1143,12 @@ async function start(): Promise<void> {
   void bootPoll();
   void loadAppearance();
 
+  // P343: gateway restart affordance — only when the shell manages the
+  // gateway child (browser-tab mode has nothing to restart).
+  el.settingsRestart.hidden = !(state.bridge && state.settings.manage);
+  el.settingsRestart.onclick = () => {
+    void restartGateway();
+  };
   el.settingsOnboarding.onclick = () => {
     el.settings.close();
     void state.onboarding!.maybeOpen(true);
@@ -1479,6 +1526,9 @@ async function start(): Promise<void> {
     switchView,
     openSettings: () => el.settingsBtn.click(),
     refreshSessions: () => refreshSessions(),
+    restartGateway: () => {
+      void restartGateway();
+    },
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
