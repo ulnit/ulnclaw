@@ -200,6 +200,7 @@ export interface Translations {
   storagePanel: { title: string; size: string; contents: string; counts: string; path: string; optimize: string; optimizeTitle: string; optimizing: string; optimized: string; optimizeFailed: string; };
   systemPanel: { title: string; version: string; platform: string; uptime: string; contents: string; sessionsWord: string; messagesWord: string; runsWord: string; jobs: string; enabledWord: string; disabledWord: string; plugins: string; home: string; config: string; desktopManaged: string; };
   metricsPanel: { title: string; summary: string; };
+  egressPanel: { title: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -490,6 +491,7 @@ const en: Translations = {
   storagePanel: { title: "Session store", size: "Database size", contents: "Contents", counts: "{sessions} sessions · {messages} messages", path: "Path", optimize: "Optimize", optimizeTitle: "Merge FTS segments and VACUUM the session store (ulnclaw sessions optimize)", optimizing: "Optimizing…", optimized: "{indexes} index(es) merged · {before} → {after}", optimizeFailed: "Optimize failed: {error}" },
   systemPanel: { title: "System", version: "Version", platform: "Platform", uptime: "Uptime", contents: "Store", sessionsWord: "sessions", messagesWord: "messages", runsWord: "active runs", jobs: "Cron jobs", enabledWord: "enabled", disabledWord: "disabled", plugins: "Plugins", home: "Home", config: "Config", desktopManaged: "desktop-managed" },
   metricsPanel: { title: "Prometheus metrics", summary: "Show raw /metrics exposition" },
+  egressPanel: { title: "Egress proxy" },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -830,6 +832,7 @@ const zh: Translations = {
   storagePanel: { title: "会话存储", size: "数据库大小", contents: "内容", counts: "{sessions} 个会话 · {messages} 条消息", path: "路径", optimize: "优化", optimizeTitle: "合并 FTS 段并 VACUUM 会话存储（等同 ulnclaw sessions optimize）", optimizing: "优化中…", optimized: "已合并 {indexes} 个索引 · {before} → {after}", optimizeFailed: "优化失败:{error}" },
   systemPanel: { title: "系统", version: "版本", platform: "平台", uptime: "运行时长", contents: "存储", sessionsWord: "会话", messagesWord: "消息", runsWord: "活动运行", jobs: "定时任务", enabledWord: "启用", disabledWord: "禁用", plugins: "插件", home: "主目录", config: "配置", desktopManaged: "桌面托管" },
   metricsPanel: { title: "Prometheus 指标", summary: "显示 /metrics 原始输出" },
+  egressPanel: { title: "出站代理" },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -1170,6 +1173,7 @@ const zhHant: Translations = {
   storagePanel: { title: "會話儲存", size: "資料庫大小", contents: "內容", counts: "{sessions} 個會話 · {messages} 則訊息", path: "路徑", optimize: "最佳化", optimizeTitle: "合併 FTS 段並 VACUUM 會話儲存（等同 ulnclaw sessions optimize）", optimizing: "最佳化中…", optimized: "已合併 {indexes} 個索引 · {before} → {after}", optimizeFailed: "最佳化失敗:{error}" },
   systemPanel: { title: "系統", version: "版本", platform: "平台", uptime: "執行時長", contents: "儲存", sessionsWord: "會話", messagesWord: "訊息", runsWord: "活動執行", jobs: "排程工作", enabledWord: "啟用", disabledWord: "停用", plugins: "外掛", home: "主目錄", config: "設定", desktopManaged: "桌面託管" },
   metricsPanel: { title: "Prometheus 指標", summary: "顯示 /metrics 原始輸出" },
+  egressPanel: { title: "出站代理" },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -1510,6 +1514,7 @@ const ja: Translations = {
   storagePanel: { title: "セッションストア", size: "データベースサイズ", contents: "内容", counts: "{sessions} セッション · {messages} メッセージ", path: "パス", optimize: "最適化", optimizeTitle: "FTS セグメントをマージしセッションストアを VACUUM（ulnclaw sessions optimize と同等）", optimizing: "最適化中…", optimized: "{indexes} 件のインデックスをマージ · {before} → {after}", optimizeFailed: "最適化に失敗しました: {error}" },
   systemPanel: { title: "システム", version: "バージョン", platform: "プラットフォーム", uptime: "稼働時間", contents: "ストア", sessionsWord: "セッション", messagesWord: "メッセージ", runsWord: "実行中", jobs: "cron ジョブ", enabledWord: "有効", disabledWord: "無効", plugins: "プラグイン", home: "ホーム", config: "設定", desktopManaged: "デスクトップ管理" },
   metricsPanel: { title: "Prometheus メトリクス", summary: "/metrics 生の出力を表示" },
+  egressPanel: { title: "エグレスプロキシ" },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1850,6 +1855,7 @@ const ar: Translations = {
   storagePanel: { title: "مخزن الجلسات", size: "حجم قاعدة البيانات", contents: "المحتويات", counts: "{sessions} جلسة · {messages} رسالة", path: "المسار", optimize: "تحسين", optimizeTitle: "دمج مقاطع FTS وتفريغ مخزن الجلسات (يعادل ulnclaw sessions optimize)", optimizing: "جارٍ التحسين…", optimized: "تم دمج {indexes} فهرسًا · {before} ← {after}", optimizeFailed: "فشل التحسين: {error}" },
   systemPanel: { title: "النظام", version: "الإصدار", platform: "المنصة", uptime: "مدة التشغيل", contents: "المخزن", sessionsWord: "جلسة", messagesWord: "رسالة", runsWord: "تشغيل نشط", jobs: "مهام cron", enabledWord: "مفعلة", disabledWord: "معطلة", plugins: "الإضافات", home: "المجلد الرئيسي", config: "الإعدادات", desktopManaged: "بإدارة سطح المكتب" },
   metricsPanel: { title: "مقاييس Prometheus", summary: "عرض إخراج /metrics الخام" },
+  egressPanel: { title: "وكيل الخروج" },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",

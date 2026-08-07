@@ -993,6 +993,21 @@ async fn insights(
     }
 }
 
+/// `GET /api/egress/status` — egress-proxy status text (same
+/// `format_status_text` the `/egress` slash command and CLI print;
+/// tokens always redacted). Desktop Doctor egress panel.
+async fn egress_status(State(_state): State<Arc<GatewayState>>) -> Response {
+    let result = tokio::task::spawn_blocking(|| crate::egress_cmd::format_status_text(false)).await;
+    match result {
+        Ok(text) => Json(json!({"text": text})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("egress status task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/system` — gateway/system facts for the desktop Doctor
 /// system panel: version, platform, home/config paths, uptime, process
 /// id and store/run/cron/plugins counts (ulnclaw extension; hermes
@@ -1379,6 +1394,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/insights", get(insights))
+        .route("/api/egress/status", get(egress_status))
         .route("/api/system", get(system_info))
         .route("/api/pairing", get(pairing_status))
         .route("/api/pairing/approve", post(pairing_approve))
@@ -9063,6 +9079,20 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_egress_status_endpoint_returns_text() {
+        let app = router(test_state());
+
+        let (status, _) = get_json(app.clone(), "/api/egress/status", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app, "/api/egress/status", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let text = body["text"].as_str().expect("text");
+        assert!(text.contains("Egress proxy status"));
+        assert!(text.contains("Enabled:"));
     }
 
     #[tokio::test]

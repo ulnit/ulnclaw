@@ -908,6 +908,14 @@ export class GatewayClient {
     return response.text();
   }
 
+  /** GET /api/egress/status — egress-proxy status text (tokens redacted). */
+  async egressStatus(): Promise<string> {
+    const response = await fetch(this.endpoint("/api/egress/status"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`egress HTTP ${response.status}`);
+    const value = await response.json();
+    return typeof value.text === "string" ? value.text : "";
+  }
+
   /** GET /api/system — gateway/system facts for the Doctor panel. */
   async systemInfo(): Promise<SystemInfo> {
     const response = await fetch(this.endpoint("/api/system"), { headers: this.headers() });

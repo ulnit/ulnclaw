@@ -62,6 +62,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="kanbanPanel.title">Kanban diagnostics</h3>
         <div id="kanban-rows"></div>
       </section>
+      <section id="doctor-egress" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="egressPanel.title">Egress proxy</h3>
+        <pre id="egress-body" class="logs-body"></pre>
+      </section>
       <section id="doctor-metrics" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="metricsPanel.title">Prometheus metrics</h3>
         <details id="metrics-details">
@@ -101,6 +105,7 @@ export class DoctorWidget {
     this.loadStorage().catch(() => undefined);
     this.loadKanban().catch(() => undefined);
     this.loadMetrics().catch(() => undefined);
+    this.loadEgress().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
       this.logsTimer = window.setInterval(() => {
@@ -580,6 +585,23 @@ export class DoctorWidget {
           rows.appendChild(row);
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** Egress-proxy status text (tokens redacted server-side). */
+  private async loadEgress(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-egress") as HTMLElement;
+    const body = this.root.querySelector("#egress-body") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      body.textContent = await client.egressStatus();
       section.hidden = false;
     } catch {
       section.hidden = true;
