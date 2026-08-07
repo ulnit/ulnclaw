@@ -12,6 +12,7 @@ import { ConfigWidget } from "./config-view";
 import { DoctorWidget } from "./doctor-view";
 import { WebhooksWidget } from "./webhooks";
 import { RunsWidget } from "./runs";
+import { SkillsWidget } from "./skills-view";
 import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
 import { ModelPickerOverlay } from "./model-picker";
@@ -70,6 +71,7 @@ const state = {
   doctor: null as DoctorWidget | null,
   webhooks: null as WebhooksWidget | null,
   runs: null as RunsWidget | null,
+  skillsView: null as SkillsWidget | null,
   pet: null as PetOverlay | null,
   hatch: null as HatchOverlay | null,
   picker: null as ModelPickerOverlay | null,
@@ -79,7 +81,7 @@ const state = {
   learning: null as LearningOverlay | null,
   onboarding: null as OnboardingOverlay | null,
   sessionPicker: null as SessionPickerDialog | null,
-  view: "chat" as "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs",
+  view: "chat" as "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills",
 };
 
 const el = {
@@ -576,7 +578,7 @@ function attachmentNote(): string {
 // ---------------------------------------------------------------------------
 
 let desktopEventsController: AbortController | null = null;
-let activeSwitchView: ((view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs") => void) | null = null;
+let activeSwitchView: ((view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills") => void) | null = null;
 
 interface DesktopEnvelope {
   session_id: string;
@@ -609,7 +611,7 @@ function transcriptText(): string {
 
 function handleDesktopEvent(envelope: DesktopEnvelope): void {
   const payload = envelope.payload ?? {};
-  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs") =>
+  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills") =>
     activeSwitchView?.(view);
   switch (envelope.event) {
     case "preview.open": {
@@ -620,7 +622,7 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
     }
     case "pane.reveal": {
       const pane = String(payload.pane ?? "chat");
-      if (pane === "kanban" || pane === "projects" || pane === "jobs" || pane === "usage" || pane === "config" || pane === "doctor" || pane === "webhooks" || pane === "runs") {
+      if (pane === "kanban" || pane === "projects" || pane === "jobs" || pane === "usage" || pane === "config" || pane === "doctor" || pane === "webhooks" || pane === "runs" || pane === "skills") {
         switchView(pane);
       } else {
         switchView("chat");
@@ -901,6 +903,7 @@ async function start(): Promise<void> {
   const doctorMain = document.getElementById("doctor")!;
   const webhooksMain = document.getElementById("webhooks")!;
   const runsMain = document.getElementById("runs")!;
+  const skillsMain = document.getElementById("skills")!;
   const tabChat = document.getElementById("tab-chat") as HTMLButtonElement;
   const tabKanban = document.getElementById("tab-kanban") as HTMLButtonElement;
   const tabProjects = document.getElementById("tab-projects") as HTMLButtonElement;
@@ -910,6 +913,7 @@ async function start(): Promise<void> {
   const tabDoctor = document.getElementById("tab-doctor") as HTMLButtonElement;
   const tabWebhooks = document.getElementById("tab-webhooks") as HTMLButtonElement;
   const tabRuns = document.getElementById("tab-runs") as HTMLButtonElement;
+  const tabSkills = document.getElementById("tab-skills") as HTMLButtonElement;
   state.kanban = new KanbanWidget(kanbanMain, () => state.client);
   state.kanban.mount();
   state.projects = new ProjectsWidget(projectsMain, () => state.client);
@@ -926,7 +930,9 @@ async function start(): Promise<void> {
   state.webhooks.mount();
   state.runs = new RunsWidget(runsMain, () => state.client);
   state.runs.mount();
-  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs") => {
+  state.skillsView = new SkillsWidget(skillsMain, () => state.client);
+  state.skillsView.mount();
+  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills") => {
     if (view !== "chat") state.findBar?.close();
     state.view = view;
     chatMain.hidden = view !== "chat";
@@ -938,6 +944,7 @@ async function start(): Promise<void> {
     doctorMain.hidden = view !== "doctor";
     webhooksMain.hidden = view !== "webhooks";
     runsMain.hidden = view !== "runs";
+    skillsMain.hidden = view !== "skills";
     tabChat.classList.toggle("active", view === "chat");
     tabKanban.classList.toggle("active", view === "kanban");
     tabProjects.classList.toggle("active", view === "projects");
@@ -947,6 +954,7 @@ async function start(): Promise<void> {
     tabDoctor.classList.toggle("active", view === "doctor");
     tabWebhooks.classList.toggle("active", view === "webhooks");
     tabRuns.classList.toggle("active", view === "runs");
+    tabSkills.classList.toggle("active", view === "skills");
     if (view === "kanban") {
       state.kanban!.start();
     } else {
@@ -987,6 +995,11 @@ async function start(): Promise<void> {
     } else {
       state.runs!.stop();
     }
+    if (view === "skills") {
+      state.skillsView!.start();
+    } else {
+      state.skillsView!.stop();
+    }
   };
   tabChat.onclick = () => switchView("chat");
   tabKanban.onclick = () => switchView("kanban");
@@ -997,6 +1010,7 @@ async function start(): Promise<void> {
   tabDoctor.onclick = () => switchView("doctor");
   tabWebhooks.onclick = () => switchView("webhooks");
   tabRuns.onclick = () => switchView("runs");
+  tabSkills.onclick = () => switchView("skills");
 
   // Desktop bridge events (P231) — see startDesktopEvents.
   activeSwitchView = switchView;

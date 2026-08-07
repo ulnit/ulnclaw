@@ -153,9 +153,10 @@ dialog menu button { border-radius: 8px; padding: 6px 14px; border: 1px solid #2
 dialog menu button[value="default"] { background: var(--accent); border-color: var(--accent); color: white; }
 
 /* ---- view tabs ---- */
-.view-tabs { display: flex; gap: 4px; padding: 0 10px 8px; }
+.view-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 8px; }
+.view-tabs .tab { flex: 1 1 auto; min-width: 4.5em; }
 .view-tabs .tab {
-  flex: 1; padding: 6px 0; border: 1px solid var(--border, #333);
+  padding: 6px 0; border: 1px solid var(--border, #333);
   background: transparent; color: inherit; border-radius: 6px; cursor: pointer;
 }
 .view-tabs .tab.active { background: var(--accent, #4a7); color: #fff; border-color: transparent; }
@@ -1113,3 +1114,18 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .run-approval-reason { font-size: 12.5px; opacity: 0.75; margin-bottom: 6px; }
 .run-approval-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .run-approval-resolved { margin-top: 6px; font-size: 12px; opacity: 0.6; }
+
+/* Skills view (P280) */
+.skills-list { padding: 0 16px 8px; display: flex; flex-direction: column; gap: 8px; }
+.skill-card { border: 1px solid rgba(128,128,128,0.25); border-radius: 8px; padding: 8px 12px; }
+.skill-head { display: flex; align-items: center; gap: 10px; }
+.skill-name { font-weight: 600; font-family: var(--mono, monospace); }
+.skill-category { font-size: 11.5px; border: 1px solid rgba(128,128,128,0.35); border-radius: 10px; padding: 0 8px; opacity: 0.75; }
+.skill-desc { font-size: 13px; opacity: 0.85; margin-top: 3px; }
+.skill-path { font-size: 11.5px; opacity: 0.55; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolset-state { font-size: 11.5px; border-radius: 10px; padding: 0 8px; }
+.toolset-state.on { color: #2ecc40; border: 1px solid rgba(46,204,64,0.4); }
+.toolset-state.off { opacity: 0.55; border: 1px solid rgba(128,128,128,0.35); }
+.toolset-tools summary { cursor: pointer; font-size: 12.5px; opacity: 0.8; margin-top: 4px; }
+.toolset-tools-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.toolset-tools-list code { font-size: 11.5px; background: rgba(128,128,128,0.12); padding: 1px 6px; border-radius: 4px; }

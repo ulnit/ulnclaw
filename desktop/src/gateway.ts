@@ -86,6 +86,15 @@ export interface ModelOptionsPayload {
 export interface SkillRow {
   name: string;
   description: string;
+  category?: string;
+  path?: string;
+}
+
+export interface ToolsetRow {
+  name: string;
+  description: string;
+  enabled: boolean;
+  tools: string[];
 }
 
 export interface ToolCardEvent {
@@ -695,6 +704,18 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`usage HTTP ${response.status}`);
     return (await response.json()) as UsagePayload;
+  }
+
+  /** GET /v1/toolsets — toolsets with resolved tool lists. */
+  async listToolsets(): Promise<ToolsetRow[]> {
+    try {
+      const response = await fetch(this.endpoint("/v1/toolsets"), { headers: this.headers() });
+      if (!response.ok) return [];
+      const value = await response.json();
+      return (value.data || []) as ToolsetRow[];
+    } catch {
+      return [];
+    }
   }
 
   /** GET /v1/runs — tracked async runs (with pending approvals). */
