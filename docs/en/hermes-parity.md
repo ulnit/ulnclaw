@@ -596,9 +596,18 @@ value).
 
 Deliberately not ported (hermes surfaces outside the local-agent scope):
 the Electron desktop app itself (ulnclaw ships the Tauri `desktop/`
-shell instead — its dashboard widgets are ported: kanban, projects, jobs,
+shell instead — its applicable surfaces are ported: kanban, projects, jobs,
 pet/hatch overlays, model picker, find-in-chat, command palette, artifacts
-browser, learning view);
+browser, learning view, notification stacks, connecting overlay, first-run
+onboarding, i18n + language switcher, model-visibility dialog, boot-failure
+overlay, session picker, chat intro and the activity timer);
+the desktop cosmetic/Electron-only surfaces (particles backdrop, idle-mount,
+haptics provider, page loader, skeletons, error boundary, the pane-shell
+multi-pane layout, the desktop-install overlay, remote-display banner,
+billing banner, first-run remote-gateway form, prompt-overlays sudo/secret
+RPC capture — the gateway exposes no such mid-turn RPCs — and the
+assistant-ui rich-rendering stack: markdown/shiki/code-editor/diff/
+image-generation cards, which exceed the scoped-twin policy for the shell);
 Python plugin imports/entry-point packages and the provider registrations
 they carry (ulnclaw's plugin system uses the shell-hook wire protocol +
 directory plugins with the git install/update/remove lifecycle instead);

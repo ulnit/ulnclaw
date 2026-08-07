@@ -503,7 +503,8 @@ Bitwarden / 1Password）、computer-use（cua-driver）、子进程插件系统�
 布局，无旧布局可迁移）。`-c <会话名>` 标题查找已于 P232 移植。
 
 有意不移植（超出本地 agent 范围的 hermes 面）：Electron
-桌面应用本身（ulnclaw 改以 Tauri `desktop/` 外壳交付——其仪表盘挂件均已移植：kanban、projects、jobs、宠物/孵化悬浮层、模型挑选器、聊天内查找、命令面板、工件浏览器、学习视图）；Python 插件导入/entry-point 包及其携带的
+桌面应用本身（ulnclaw 改以 Tauri `desktop/` 外壳交付——其适用界面均已移植：kanban、projects、jobs、宠物/孵化悬浮层、模型挑选器、聊天内查找、命令面板、工件浏览器、学习视图、通知栈、连接遮罩、首次启动引导、i18n + 语言切换器、模型可见性对话框、启动失败遮罩、会话挑选器、聊天引言与活动计时器）；
+桌面装饰/Electron 专有面（particles 背景、idle-mount、haptics provider、页面加载器、骨架屏、错误边界、pane-shell 多面板布局、desktop-install 遮罩、远程显示横幅、计费横幅、首次运行远程网关表单、prompt-overlays sudo/密钥 RPC 捕获——网关无此类回合中 RPC——以及 assistant-ui 富渲染栈：markdown/shiki/代码编辑器/diff/图像生成卡片，超出外壳精简对位策略）；Python 插件导入/entry-point 包及其携带的
 provider 注册（ulnclaw 插件体系改用 shell 钩子线协议 + 目录插件，并含 git
 install/update/remove 生命周期）；Nous 门户专属的订阅门控与组织提案审批流程（OAuth/同步为
 provider 无关）；xAI 凭证池代理适配器（依赖 `hermes auth add` 凭证池面）；
