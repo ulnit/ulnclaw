@@ -7,7 +7,10 @@
   --accent: #4f8cff;
   --ok: #3ecf8e;
   --bad: #ff6b6b;
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --border: var(--border);
+  --hover: var(--hover);
+  --font-stack: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-stack);
 }
 
 * { box-sizing: border-box; }
@@ -18,7 +21,7 @@ body { background: var(--bg); color: var(--text); }
 
 #sidebar {
   background: var(--panel);
-  border-right: 1px solid #0b0f14;
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 12px;
@@ -61,7 +64,7 @@ button.ghost { background: none; border: none; color: var(--dim); }
 #chat { display: flex; flex-direction: column; min-width: 0; }
 #chat-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 12px 18px; border-bottom: 1px solid #0b0f14; background: var(--panel);
+  padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--panel);
 }
 #model-badge { font-size: 12px; color: var(--dim); cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 #model-badge:hover { background: var(--panel-2); color: var(--text); }
@@ -80,10 +83,10 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .bubble.streaming::after { content: "▍"; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
-#composer { display: flex; gap: 10px; padding: 14px 18px; border-top: 1px solid #0b0f14; background: var(--panel); position: relative; }
+#composer { display: flex; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--border); background: var(--panel); position: relative; }
 .slash-pop {
   position: absolute; left: 18px; right: 100px; bottom: calc(100% + 6px);
-  background: var(--panel); border: 1px solid #2a3442; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--hover); border-radius: 10px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); max-height: 260px; overflow-y: auto;
   z-index: 30; padding: 4px;
 }
@@ -98,7 +101,7 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 18px 0; background: var(--panel); }
 .attach-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
-  background: var(--panel-2); border: 1px solid #2a3442; border-radius: 14px;
+  background: var(--panel-2); border: 1px solid var(--hover); border-radius: 14px;
   font-size: 12px; color: var(--dim); max-width: 320px;
 }
 .attach-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
@@ -106,7 +109,7 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .attach-chip button:hover { color: var(--text); }
 
 .tool-cards { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
-.tool-card { border: 1px solid #2a3442; border-radius: 10px; background: var(--panel-2); overflow: hidden; }
+.tool-card { border: 1px solid var(--hover); border-radius: 10px; background: var(--panel-2); overflow: hidden; }
 .tool-card-head {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer;
   font-size: 12px; color: var(--dim); user-select: none;
@@ -127,17 +130,17 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .tool-card-body .label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); margin-bottom: 3px; }
 .tool-progress {
   padding: 4px 18px; font-size: 12px; color: var(--dim);
-  border-top: 1px solid #0b0f14; background: var(--panel);
+  border-top: 1px solid var(--border); background: var(--panel);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #input {
   flex: 1; resize: none; background: var(--panel-2); color: var(--text);
-  border: 1px solid #2a3442; border-radius: 10px; padding: 10px 12px; font: inherit;
+  border: 1px solid var(--hover); border-radius: 10px; padding: 10px 12px; font: inherit;
 }
 #input:focus { outline: none; border-color: var(--accent); }
 
 dialog {
-  background: var(--panel); color: var(--text); border: 1px solid #2a3442;
+  background: var(--panel); color: var(--text); border: 1px solid var(--hover);
   border-radius: 12px; padding: 20px; min-width: 380px;
 }
 dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
@@ -145,11 +148,11 @@ dialog h2 { margin: 0 0 14px; font-size: 16px; }
 dialog label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 13px; color: var(--dim); }
 dialog label.check { flex-direction: row; align-items: center; gap: 8px; }
 dialog input[type="text"], dialog input[type="password"] {
-  background: var(--panel-2); color: var(--text); border: 1px solid #2a3442;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--hover);
   border-radius: 8px; padding: 8px 10px; font: inherit;
 }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 8px 0 0; }
-dialog menu button { border-radius: 8px; padding: 6px 14px; border: 1px solid #2a3442; background: var(--panel-2); color: var(--text); }
+dialog menu button { border-radius: 8px; padding: 6px 14px; border: 1px solid var(--hover); background: var(--panel-2); color: var(--text); }
 dialog menu button[value="default"] { background: var(--accent); border-color: var(--accent); color: white; }
 
 /* ---- view tabs ---- */
@@ -241,17 +244,17 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
 .hatch-body { display: flex; flex-direction: column; gap: 12px; }
 .hatch-body textarea {
   width: 100%; resize: vertical; background: var(--panel-2); color: var(--text);
-  border: 1px solid #2a3442; border-radius: 8px; padding: 8px 10px; font: inherit;
+  border: 1px solid var(--hover); border-radius: 8px; padding: 8px 10px; font: inherit;
 }
 .hatch-hint { margin: 0; font-size: 13px; color: var(--dim); line-height: 1.5; }
 .hatch-options { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .hatch-options label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); margin: 0; }
 .hatch-options select, .hatch-options input {
-  background: var(--panel-2); color: var(--text); border: 1px solid #2a3442;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--hover);
   border-radius: 8px; padding: 5px 8px; font: inherit;
 }
 .hatch-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-.hatch-actions button { border-radius: 8px; padding: 6px 14px; border: 1px solid #2a3442; background: var(--panel-2); color: var(--text); cursor: pointer; }
+.hatch-actions button { border-radius: 8px; padding: 6px 14px; border: 1px solid var(--hover); background: var(--panel-2); color: var(--text); cursor: pointer; }
 .hatch-actions button.primary { background: var(--accent); border-color: var(--accent); color: white; }
 .hatch-actions button:disabled { opacity: 0.5; cursor: default; }
 .hatch-spinner {
@@ -325,7 +328,7 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
 #project-create form { display: flex; flex-direction: column; gap: 10px; min-width: 340px; }
 #project-create label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85em; }
 #project-create input[type="text"] {
-  background: var(--panel-2); color: var(--text); border: 1px solid #2a3442;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--hover);
   border-radius: 8px; padding: 6px 10px;
 }
 .session-project-badge {
@@ -364,7 +367,7 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
 #job-create form { display: flex; flex-direction: column; gap: 10px; min-width: 380px; }
 #job-create label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85em; }
 #job-create input, #job-create textarea {
-  background: var(--panel-2); color: var(--text); border: 1px solid #2a3442;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--hover);
   border-radius: 8px; padding: 6px 10px; font-family: inherit;
 }
 
@@ -382,7 +385,7 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
   border-radius: 8px; padding: 8px 10px;
 }
 .model-picker-provider {
-  border: 1px solid #2a3442; border-radius: 10px; padding: 8px 10px;
+  border: 1px solid var(--hover); border-radius: 10px; padding: 8px 10px;
   display: flex; flex-direction: column; gap: 4px;
 }
 .model-picker-provider-head {
@@ -404,14 +407,14 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
 .find-bar {
   position: absolute; top: 46px; right: 14px; z-index: 30;
   display: flex; align-items: center; gap: 6px;
-  background: var(--panel-2); border: 1px solid #2a3442; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--hover); border-radius: 10px;
   padding: 6px 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 .find-bar input {
-  background: var(--bg); color: var(--text); border: 1px solid #2a3442;
+  background: var(--bg); color: var(--text); border: 1px solid var(--hover);
   border-radius: 7px; padding: 5px 9px; font: inherit; font-size: 13px; width: 210px;
 }
-.find-step { border-radius: 7px; padding: 3px 8px; border: 1px solid #2a3442; background: transparent; color: var(--text); cursor: pointer; }
+.find-step { border-radius: 7px; padding: 3px 8px; border: 1px solid var(--hover); background: transparent; color: var(--text); cursor: pointer; }
 .find-step:hover { background: var(--bg); }
 .find-count { font-size: 12px; color: var(--dim); min-width: 34px; text-align: center; }
 mark.find-hit { background: #b58900; color: #111; border-radius: 2px; }
@@ -424,7 +427,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   max-height: 70vh;
   margin-top: 10vh;
   padding: 0;
-  border: 1px solid #0b0f14;
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
   color: var(--text);
@@ -438,7 +441,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   background: var(--panel-2);
   color: var(--text);
   border: none;
-  border-bottom: 1px solid #0b0f14;
+  border-bottom: 1px solid var(--border);
   outline: none;
 }
 .command-palette-list { overflow-y: auto; max-height: calc(70vh - 44px); padding: 6px; }
@@ -468,7 +471,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   width: min(760px, 94vw);
   max-height: 84vh;
   padding: 0;
-  border: 1px solid #0b0f14;
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
   color: var(--text);
@@ -480,7 +483,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid #0b0f14;
+  border-bottom: 1px solid var(--border);
 }
 .artifacts-header h2 { margin: 0; font-size: 16px; }
 .artifacts-body { display: flex; flex-direction: column; max-height: calc(84vh - 49px); }
@@ -490,7 +493,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   gap: 6px;
   align-items: center;
   padding: 10px 16px;
-  border-bottom: 1px solid #0b0f14;
+  border-bottom: 1px solid var(--border);
 }
 .artifacts-filter {
   background: var(--panel-2);
@@ -507,7 +510,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   flex: 1;
   background: var(--panel-2);
   color: var(--text);
-  border: 1px solid #0b0f14;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 5px 10px;
   font-size: 13px;
@@ -562,7 +565,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   width: min(820px, 94vw);
   max-height: 86vh;
   padding: 0;
-  border: 1px solid #0b0f14;
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
   color: var(--text);
@@ -574,7 +577,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   align-items: baseline;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid #0b0f14;
+  border-bottom: 1px solid var(--border);
 }
 .learning-header h2 { margin: 0; font-size: 16px; }
 .learning-sub { color: var(--dim); font-size: 12px; }
@@ -603,7 +606,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   gap: 6px;
   align-items: center;
   padding: 6px 16px 10px;
-  border-bottom: 1px solid #0b0f14;
+  border-bottom: 1px solid var(--border);
 }
 .learning-filter {
   background: var(--panel-2);
@@ -620,7 +623,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   flex: 1;
   background: var(--panel-2);
   color: var(--text);
-  border: 1px solid #0b0f14;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 5px 10px;
   font-size: 13px;
@@ -645,7 +648,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   width: min(680px, 90vw);
   max-height: 82vh;
   padding: 0;
-  border: 1px solid #0b0f14;
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
   color: var(--text);
@@ -657,7 +660,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  border-bottom: 1px solid #0b0f14;
+  border-bottom: 1px solid var(--border);
 }
 .learning-node-head h3 { margin: 0; font-size: 14px; flex: 1; }
 .learning-node-kind {
@@ -687,7 +690,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   gap: 8px;
   justify-content: flex-end;
   padding: 10px 14px;
-  border-top: 1px solid #0b0f14;
+  border-top: 1px solid var(--border);
 }
 .learning-node-actions button.danger { background: var(--bad); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
 .learning-node-actions button.danger:disabled { opacity: 0.5; cursor: default; }
@@ -881,13 +884,13 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .language-btn { display: inline-flex; align-items: center; gap: 6px; }
 .language-pop {
   position: fixed; z-index: 60; width: 230px;
-  background: var(--panel); border: 1px solid #2a3442; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--hover); border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); padding: 6px;
 }
 .language-search {
   width: 100%; box-sizing: border-box; margin-bottom: 6px;
   background: var(--panel-2); color: var(--text);
-  border: 1px solid #2a3442; border-radius: 8px; padding: 6px 8px; font-size: 13px;
+  border: 1px solid var(--hover); border-radius: 8px; padding: 6px 8px; font-size: 13px;
 }
 .language-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .language-item {
@@ -905,7 +908,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 /* Model visibility dialog (P252) */
 .model-picker-edit-visible { margin-left: auto; font-size: 11px; }
 .model-visibility-dialog {
-  background: var(--panel); color: var(--text); border: 1px solid #2a3442;
+  background: var(--panel); color: var(--text); border: 1px solid var(--hover);
   border-radius: 12px; padding: 0; width: min(420px, 92vw);
 }
 .model-visibility-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
@@ -915,7 +918,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .model-visibility-search input {
   width: 100%; box-sizing: border-box;
   background: var(--panel-2); color: var(--text);
-  border: 1px solid #2a3442; border-radius: 8px; padding: 6px 8px; font-size: 12px;
+  border: 1px solid var(--hover); border-radius: 8px; padding: 6px 8px; font-size: 12px;
 }
 .model-visibility-body { max-height: 55vh; overflow-y: auto; padding: 0 6px 6px; }
 .mv-provider { padding: 2px 0; }
@@ -937,7 +940,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .mv-fast { font-size: 10px; color: #5c6b82; }
 .model-visibility-footer {
   display: flex; justify-content: space-between; gap: 8px;
-  padding: 8px 10px; border-top: 1px solid #0b0f14;
+  padding: 8px 10px; border-top: 1px solid var(--border);
 }
 
 /* Boot-failure recovery overlay (P253) */
@@ -949,7 +952,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 #boot-failure-overlay[hidden] { display: none; }
 .boot-failure-card {
   max-width: 420px; padding: 26px 28px; text-align: center;
-  background: var(--panel); border: 1px solid #2a3442; border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--hover); border-radius: 14px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 .boot-failure-glyph { font-size: 34px; margin-bottom: 10px; }
@@ -959,7 +962,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 
 /* Session picker (P254) */
 .session-picker-dialog {
-  background: var(--panel); color: var(--text); border: 1px solid #2a3442;
+  background: var(--panel); color: var(--text); border: 1px solid var(--hover);
   border-radius: 12px; padding: 0; width: min(560px, 92vw); top: 14vh;
 }
 .session-picker-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
@@ -967,7 +970,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .session-picker-dialog input {
   display: block; width: calc(100% - 28px); margin: 0 14px 8px;
   background: var(--panel-2); color: var(--text);
-  border: 1px solid #2a3442; border-radius: 8px; padding: 7px 9px; font-size: 13px;
+  border: 1px solid var(--hover); border-radius: 8px; padding: 7px 9px; font-size: 13px;
 }
 .session-picker-list { max-height: min(24rem, 60vh); overflow-y: auto; padding: 0 6px 8px; }
 .session-picker-row {
@@ -1004,7 +1007,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 }
 .usage-card {
   background: var(--panel-2);
-  border: 1px solid #0b0f14;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 14px;
 }
@@ -1015,7 +1018,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .usage-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
 .usage-table th {
   text-align: left; opacity: 0.6; font-weight: 500;
-  border-bottom: 1px solid #0b0f14; padding: 6px 8px;
+  border-bottom: 1px solid var(--border); padding: 6px 8px;
 }
 .usage-table td { padding: 7px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
 .usage-table .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -1048,7 +1051,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .insights-controls input[type="search"] {
   background: var(--panel-2);
   color: var(--text);
-  border: 1px solid var(--border, #2a3442);
+  border: 1px solid var(--border, var(--hover));
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 0.9em;
@@ -1080,7 +1083,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .sessions-view-listcol input[type="search"] {
   background: var(--panel-2);
   color: var(--text);
-  border: 1px solid var(--border, #2a3442);
+  border: 1px solid var(--border, var(--hover));
   border-radius: 8px;
   padding: 7px 10px;
   font: inherit;
@@ -1128,7 +1131,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .sessions-view-transcript {
   overflow-y: auto;
   min-height: 0;
-  border: 1px solid var(--border, #2a3442);
+  border: 1px solid var(--border, var(--hover));
   border-radius: 10px;
   padding: 14px 16px;
   background: var(--panel-2);
@@ -1136,7 +1139,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .sessions-view-meta {
   font-size: 0.78em;
   opacity: 0.6;
-  border-bottom: 1px solid var(--border, #2a3442);
+  border-bottom: 1px solid var(--border, var(--hover));
   padding-bottom: 8px;
   margin-bottom: 12px;
 }
@@ -1178,7 +1181,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .models-view-current { font-size: 0.9em; opacity: 0.85; }
 .models-view-current code { font-family: var(--mono, monospace); font-size: 0.95em; }
 .models-view-provider {
-  border: 1px solid var(--border, #2a3442);
+  border: 1px solid var(--border, var(--hover));
   border-radius: 10px;
   padding: 10px 14px;
   margin-bottom: 12px;
@@ -1188,7 +1191,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .models-view-badge {
   display: inline-block;
   font-size: 0.72em;
-  border: 1px solid var(--border, #2a3442);
+  border: 1px solid var(--border, var(--hover));
   border-radius: 10px;
   padding: 1px 8px;
   margin-left: 4px;
@@ -1206,7 +1209,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 
 /* Plugins view */
 .plugins-view-row {
-  border: 1px solid var(--border, #2a3442);
+  border: 1px solid var(--border, var(--hover));
   border-radius: 10px;
   padding: 10px 14px;
   margin-bottom: 10px;
@@ -1221,7 +1224,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 
 /* Pairing view */
 .pairing-view-platform {
-  border: 1px solid var(--border, #2a3442);
+  border: 1px solid var(--border, var(--hover));
   border-radius: 10px;
   padding: 8px 14px;
   margin-bottom: 12px;
@@ -1383,3 +1386,59 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .fs-entry.dir { font-weight: 600; }
 .job-delivery-error { color: var(--bad, #a04545); }
 .config-env-row { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+
+/* ---------------------------------------------------------------------
+   Dashboard themes (P331, hermes /api/dashboard/theme parity). Each
+   theme overrides the semantic variables; the frontend owns the actual
+   palettes, the gateway only persists the active selection.
+   --------------------------------------------------------------------- */
+html[data-theme="default"] {
+  --bg: #0e1416; --panel: #141c1f; --panel-2: #1b262a; --text: #d8e6e4;
+  --dim: #7f979b; --accent: #2dd4bf; --border: #0a0f11; --hover: #223238;
+}
+html[data-theme="default-large"] {
+  --bg: #0e1416; --panel: #141c1f; --panel-2: #1b262a; --text: #d8e6e4;
+  --dim: #7f979b; --accent: #2dd4bf; --border: #0a0f11; --hover: #223238;
+  zoom: 1.12;
+}
+html[data-theme="nous-blue"] {
+  --bg: #faf6ee; --panel: #f1ead9; --panel-2: #e9e0cc; --text: #1c2733;
+  --dim: #5a6b7e; --accent: #2455e6; --border: #d8cdb4; --hover: #e2d8c2;
+}
+html[data-theme="midnight"] {
+  --bg: #0d0b1e; --panel: #151230; --panel-2: #1e1a42; --text: #dcd8f5;
+  --dim: #8a84b8; --accent: #7c6cff; --border: #090716; --hover: #2a2555;
+}
+html[data-theme="ember"] {
+  --bg: #160e0c; --panel: #1f1410; --panel-2: #2a1a14; --text: #f0dcd2;
+  --dim: #a98a7a; --accent: #e0513f; --border: #120a08; --hover: #3a221a;
+}
+html[data-theme="mono"] {
+  --bg: #121212; --panel: #181818; --panel-2: #202020; --text: #e0e0e0;
+  --dim: #8a8a8a; --accent: #c8c8c8; --border: #0a0a0a; --hover: #2c2c2c;
+}
+html[data-theme="cyberpunk"] {
+  --bg: #030803; --panel: #06110a; --panel-2: #0a1a10; --text: #b8ffd8;
+  --dim: #4d8a66; --accent: #00ff66; --border: #02120a; --hover: #103822;
+}
+html[data-theme="rose"] {
+  --bg: #1a1216; --panel: #241a20; --panel-2: #2e222a; --text: #f2e4e8;
+  --dim: #b092a0; --accent: #f2a0b8; --border: #140d11; --hover: #3a2a34;
+}
+
+/* Font overrides (P331, hermes /api/dashboard/font parity). Stacks fall
+   back to local/system fonts — no webfont downloads in the lean shell. */
+html[data-font="system-sans"] { --font-stack: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+html[data-font="system-serif"] { --font-stack: Georgia, "Times New Roman", serif; }
+html[data-font="system-mono"] { --font-stack: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; }
+html[data-font="inter"] { --font-stack: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; }
+html[data-font="ibm-plex-sans"] { --font-stack: "IBM Plex Sans", system-ui, sans-serif; }
+html[data-font="work-sans"] { --font-stack: "Work Sans", system-ui, sans-serif; }
+html[data-font="atkinson-hyperlegible"] { --font-stack: "Atkinson Hyperlegible", system-ui, sans-serif; }
+html[data-font="dm-sans"] { --font-stack: "DM Sans", system-ui, sans-serif; }
+html[data-font="spectral"] { --font-stack: "Spectral", Georgia, serif; }
+html[data-font="fraunces"] { --font-stack: "Fraunces", Georgia, serif; }
+html[data-font="source-serif"] { --font-stack: "Source Serif 4", "Source Serif Pro", Georgia, serif; }
+html[data-font="jetbrains-mono"] { --font-stack: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; }
+html[data-font="ibm-plex-mono"] { --font-stack: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; }
+html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, Consolas, monospace; }

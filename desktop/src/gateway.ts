@@ -573,6 +573,13 @@ export interface FsEntry {
   isDirectory: boolean;
 }
 
+/** Dashboard theme row from GET /api/dashboard/themes (P331). */
+export interface DashboardTheme {
+  name: string;
+  label: string;
+  description: string;
+}
+
 /** Credential pool entry from GET /api/credentials/pool (P330). */
 export interface CredentialPoolEntry {
   index: number;
@@ -1556,6 +1563,48 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
     return typeof value.dataUrl === "string" ? value.dataUrl : "";
+  }
+
+  /** GET /api/dashboard/themes — theme catalog + active theme (P331). */
+  async dashboardThemes(): Promise<{ themes: DashboardTheme[]; active: string }> {
+    const response = await fetch(this.endpoint("/api/dashboard/themes"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `themes HTTP ${response.status}`);
+    return value as { themes: DashboardTheme[]; active: string };
+  }
+
+  /** PUT /api/dashboard/theme — persist the active theme (P331). */
+  async dashboardSetTheme(name: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/dashboard/theme"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ name }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `themes HTTP ${response.status}`);
+  }
+
+  /** GET /api/dashboard/font — active font override (P331). */
+  async dashboardFont(): Promise<string> {
+    const response = await fetch(this.endpoint("/api/dashboard/font"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `font HTTP ${response.status}`);
+    return typeof value.font === "string" ? value.font : "theme";
+  }
+
+  /** PUT /api/dashboard/font — persist the font override (P331). */
+  async dashboardSetFont(font: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/dashboard/font"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ font }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `font HTTP ${response.status}`);
   }
 
   /** GET /api/credentials/pool — pooled provider credentials (P330). */

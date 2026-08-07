@@ -840,6 +840,9 @@ pub struct UlncLawConfig {
     /// Presentation toggles for GUI hosts (hermes `display:`).
     #[serde(default)]
     pub display: DisplayConfig,
+    /// Dashboard theme/font persistence (hermes `dashboard:`).
+    #[serde(default)]
+    pub dashboard: DashboardConfig,
     /// X (Twitter) search via xAI (hermes `x_search:`).
     #[serde(default)]
     pub x_search: XSearchConfig,
@@ -1083,6 +1086,27 @@ pub struct DisplayConfig {
     /// Petdex mascot display settings (hermes `display.pet.*`).
     #[serde(default)]
     pub pet: PetDisplayConfig,
+}
+
+/// `[dashboard]` — web/desktop dashboard appearance persistence (hermes
+/// `dashboard:` theme/font keys). The frontend owns the actual theme
+/// definitions; the backend only stores the active selection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DashboardConfig {
+    /// Active dashboard theme name; blank/unset = `default`.
+    pub theme: String,
+    /// Font override id; `theme` = use the theme's own font.
+    pub font: String,
+}
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        DashboardConfig {
+            theme: "default".to_string(),
+            font: "theme".to_string(),
+        }
+    }
 }
 
 /// `[display.pet]` — petdex mascot display (hermes `display.pet.*`).

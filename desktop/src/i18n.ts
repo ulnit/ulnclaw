@@ -63,6 +63,7 @@ export interface Translations {
     attachTitle: string; fsTitle: string; fsUpTitle: string; fsEmpty: string; fsFailed: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
     manageProcess: string; replayOnboarding: string; cancel: string; save: string;
+    settingsTheme: string; settingsFont: string;
   };
   session: {
     titlePrompt: string; renamed: string; renameFailed: string; deleteConfirm: string;
@@ -305,6 +306,7 @@ const en: Translations = {
     apiKey: "API key (optional, [gateway] key)", bearerToken: "bearer token",
     manageProcess: "Manage the gateway process (start/stop with the app)",
     replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save",
+    settingsTheme: "Theme", settingsFont: "Font",
   },
   session: {
     titlePrompt: "Session title:", renamed: "Session renamed.",
@@ -726,6 +728,7 @@ const zh: Translations = {
     apiKey: "API 密钥（可选，[gateway] key）", bearerToken: "bearer 令牌",
     manageProcess: "管理网关进程（随应用启动/停止）",
     replayOnboarding: "重放引导", cancel: "取消", save: "保存",
+    settingsTheme: "主题", settingsFont: "字体",
   },
   session: {
     titlePrompt: "会话标题：", renamed: "会话已重命名。",
@@ -1147,6 +1150,7 @@ const zhHant: Translations = {
     apiKey: "API 金鑰（選填，[gateway] key）", bearerToken: "bearer 權杖",
     manageProcess: "管理閘道程序（隨應用程式啟動/停止）",
     replayOnboarding: "重播引導", cancel: "取消", save: "儲存",
+    settingsTheme: "主題", settingsFont: "字型",
   },
   session: {
     titlePrompt: "工作階段標題：", renamed: "已重新命名工作階段。",
@@ -1568,6 +1572,7 @@ const ja: Translations = {
     apiKey: "API キー（任意、[gateway] key）", bearerToken: "bearer トークン",
     manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）",
     replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存",
+    settingsTheme: "テーマ", settingsFont: "フォント",
   },
   session: {
     titlePrompt: "セッションタイトル：", renamed: "セッション名を変更しました。",
@@ -1989,6 +1994,7 @@ const ar: Translations = {
     apiKey: "مفتاح API (اختياري، [gateway] key)", bearerToken: "رمز bearer",
     manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)",
     replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ",
+    settingsTheme: "السمة", settingsFont: "الخط",
   },
   session: {
     titlePrompt: "عنوان الجلسة:", renamed: "أُعيدت تسمية الجلسة.",

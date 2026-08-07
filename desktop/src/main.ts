@@ -110,6 +110,8 @@ const el = {
   settingUrl: document.getElementById("setting-url") as HTMLInputElement,
   settingKey: document.getElementById("setting-key") as HTMLInputElement,
   settingManage: document.getElementById("setting-manage") as HTMLInputElement,
+  settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
+  settingFont: document.getElementById("setting-font") as HTMLSelectElement,
   settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
   attachFile: document.getElementById("attach-file") as HTMLButtonElement,
   fsDialog: document.getElementById("fs-dialog") as HTMLDialogElement,
@@ -699,6 +701,61 @@ async function handlePasteImages(event: ClipboardEvent): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Dashboard appearance — theme/font persistence over /api/dashboard/*
+// (P331, hermes parity). The gateway stores the selection; the shell owns
+// the palettes (style.css data-theme/data-font blocks).
+// ---------------------------------------------------------------------------
+
+const FONT_IDS = [
+  "theme", "system-sans", "system-serif", "system-mono", "inter",
+  "ibm-plex-sans", "work-sans", "atkinson-hyperlegible", "dm-sans",
+  "spectral", "fraunces", "source-serif", "jetbrains-mono",
+  "ibm-plex-mono", "space-mono",
+];
+
+function applyTheme(name: string): void {
+  document.documentElement.dataset.theme = name;
+}
+
+function applyFont(font: string): void {
+  if (font === "theme") delete document.documentElement.dataset.font;
+  else document.documentElement.dataset.font = font;
+}
+
+async function loadAppearance(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const payload = await state.client.dashboardThemes();
+    el.settingTheme.innerHTML = "";
+    for (const theme of payload.themes) {
+      const option = document.createElement("option");
+      option.value = theme.name;
+      option.textContent = theme.label;
+      option.title = theme.description;
+      el.settingTheme.appendChild(option);
+    }
+    el.settingTheme.value = payload.active;
+    applyTheme(payload.active);
+  } catch {
+    /* gateway without P331 endpoints — keep the default look */
+  }
+  try {
+    const font = await state.client.dashboardFont();
+    el.settingFont.innerHTML = "";
+    for (const id of FONT_IDS) {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = id;
+      el.settingFont.appendChild(option);
+    }
+    el.settingFont.value = FONT_IDS.includes(font) ? font : "theme";
+    applyFont(font);
+  } catch {
+    /* see above */
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Gateway filesystem picker -> /api/fs/* -> /api/uploads (P329, hermes parity)
 // ---------------------------------------------------------------------------
 
@@ -1029,6 +1086,7 @@ async function start(): Promise<void> {
     showBootFailure(() => void bootPoll(), () => el.settingsBtn.click());
   };
   void bootPoll();
+  void loadAppearance();
 
   el.settingsOnboarding.onclick = () => {
     el.settings.close();
@@ -1109,6 +1167,17 @@ async function start(): Promise<void> {
     startDesktopEvents();
     void pollHealth();
     void refreshSessions();
+    void loadAppearance();
+  });
+  el.settingTheme.addEventListener("change", () => {
+    const name = el.settingTheme.value;
+    applyTheme(name);
+    state.client?.dashboardSetTheme(name).catch(() => undefined);
+  });
+  el.settingFont.addEventListener("change", () => {
+    const font = el.settingFont.value;
+    applyFont(font);
+    state.client?.dashboardSetFont(font).catch(() => undefined);
   });
 
   // View tabs: chat / kanban / projects / jobs.

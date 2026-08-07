@@ -41,7 +41,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::Deserialize;
@@ -862,6 +862,127 @@ async fn config_put(Json(body): Json<ConfigPutBody>) -> Response {
         "note": "restart the gateway to apply changes to the running process",
     }))
     .into_response()
+}
+
+/// Built-in dashboard themes (hermes `_BUILTIN_DASHBOARD_THEMES`). The
+/// frontend owns the full definitions; the backend ships name/label/
+/// description and stores the active selection.
+const DASHBOARD_THEMES: &[(&str, &str, &str)] = &[
+    ("default", "Hermes Teal", "Classic dark teal — the canonical Hermes look"),
+    ("default-large", "Hermes Teal (Large)", "Hermes Teal with bigger fonts and roomier spacing"),
+    ("nous-blue", "Nous Blue", "Light mode — vivid Nous-blue accents on cream canvas"),
+    ("midnight", "Midnight", "Deep blue-violet with cool accents"),
+    ("ember", "Ember", "Warm crimson and bronze — forge vibes"),
+    ("mono", "Mono", "Clean grayscale — minimal and focused"),
+    ("cyberpunk", "Cyberpunk", "Neon green on black — matrix terminal"),
+    ("rose", "Rosé", "Soft pink and warm ivory — easy on the eyes"),
+];
+
+/// Curated font-override ids (hermes `_FONT_CHOICES`); `"theme"` clears
+/// the override. Unknown ids coerce to `"theme"` instead of 400 so a
+/// stale client can't wedge the picker.
+const DASHBOARD_FONT_CHOICES: &[&str] = &[
+    "system-sans",
+    "system-serif",
+    "system-mono",
+    "inter",
+    "ibm-plex-sans",
+    "work-sans",
+    "atkinson-hyperlegible",
+    "dm-sans",
+    "spectral",
+    "fraunces",
+    "source-serif",
+    "jetbrains-mono",
+    "ibm-plex-mono",
+    "space-mono",
+];
+
+fn normalize_dashboard_font(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if DASHBOARD_FONT_CHOICES.contains(&trimmed) {
+        trimmed.to_string()
+    } else {
+        "theme".to_string()
+    }
+}
+
+/// Persist one dotted key into config.toml (round-trip rewrite, same
+/// mechanism as `PUT /api/config`).
+fn persist_dashboard_key(key: &str, value: &str) -> std::result::Result<PathBuf, String> {
+    let path = crate::config_cmd::config_path();
+    let mut toml_value = crate::config_cmd::load_toml(&path)?;
+    crate::config_cmd::set_nested(
+        &mut toml_value,
+        key,
+        toml::Value::String(value.to_string()),
+    )?;
+    crate::config_cmd::save_toml(&path, &toml_value)?;
+    Ok(path)
+}
+
+/// Read a dotted key from the live config.toml (hermes `load_config()`
+/// per-request semantics, so theme/font sets reflect immediately without
+/// a gateway restart).
+fn read_dashboard_value(key: &str) -> Option<String> {
+    let path = crate::config_cmd::config_path();
+    let toml_value = crate::config_cmd::load_toml(&path).ok()?;
+    let mut current = &toml_value;
+    for part in key.split('.') {
+        current = current.get(part)?;
+    }
+    current
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// `GET /api/dashboard/themes` — built-in theme catalog + active theme
+/// (hermes parity; user YAML themes from `<home>/dashboard-themes/` stay
+/// unported — no YAML dependency in ulnclaw yet).
+async fn dashboard_themes(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = state.agent.context().config.clone();
+    let themes: Vec<Value> = DASHBOARD_THEMES
+        .iter()
+        .map(|(name, label, description)| {
+            json!({ "name": name, "label": label, "description": description })
+        })
+        .collect();
+    let active = read_dashboard_value("dashboard.theme")
+        .unwrap_or_else(|| config.dashboard.theme.trim().to_string());
+    let active = if active.is_empty() { "default".to_string() } else { active };
+    Json(json!({ "themes": themes, "active": active }))
+}
+
+/// `PUT /api/dashboard/theme` — set + persist the active theme.
+async fn dashboard_theme_set(Json(body): Json<Value>) -> Response {
+    let name = body["name"].as_str().unwrap_or_default().trim().to_string();
+    if name.is_empty() {
+        return bad_request("theme name is required", None);
+    }
+    if let Err(e) = persist_dashboard_key("dashboard.theme", &name) {
+        return server_error(&e);
+    }
+    Json(json!({ "ok": true, "theme": name })).into_response()
+}
+
+/// `GET /api/dashboard/font` — active font override (`"theme"` = the
+/// theme's own font).
+async fn dashboard_font_get(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = state.agent.context().config.clone();
+    let raw = read_dashboard_value("dashboard.font").unwrap_or(config.dashboard.font.clone());
+    let font = normalize_dashboard_font(&raw);
+    Json(json!({ "font": font }))
+}
+
+/// `PUT /api/dashboard/font` — set + persist the font override; unknown
+/// ids coerce to `"theme"` (hermes contract).
+async fn dashboard_font_set(Json(body): Json<Value>) -> Response {
+    let font = normalize_dashboard_font(body["font"].as_str().unwrap_or_default());
+    if let Err(e) = persist_dashboard_key("dashboard.font", &font) {
+        return server_error(&e);
+    }
+    Json(json!({ "ok": true, "font": font })).into_response()
 }
 
 /// Query parameters for `GET /api/doctor`.
@@ -2815,6 +2936,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/memory/reset", post(memory_reset_api))
         .route("/api/update/check", get(update_check_api))
         .route("/api/update", post(update_apply_api))
+        .route("/api/dashboard/themes", get(dashboard_themes))
+        .route("/api/dashboard/theme", put(dashboard_theme_set))
+        .route("/api/dashboard/font", get(dashboard_font_get).put(dashboard_font_set))
         .route("/api/doctor", get(doctor_report))
         .route("/api/ops/security-audit", get(ops_security_audit))
         .route("/api/ops/prompt-size", get(ops_prompt_size))
@@ -11831,6 +11955,69 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
 
         // Pool file persisted under the temp home.
         assert!(tmp.path().join("credentials-pool.json").exists());
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_theme_font_endpoints() {
+        // Theme/font persistence resolves config.toml through ULNCLAW_HOME.
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Catalog: eight built-ins, default active.
+        let (status, body) = get_json(app.clone(), "/api/dashboard/themes", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let themes = body["themes"].as_array().unwrap();
+        assert_eq!(themes.len(), 8);
+        assert_eq!(body["active"], "default");
+        let names: Vec<&str> = themes.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"cyberpunk"));
+        assert!(names.contains(&"nous-blue"));
+
+        // Set theme persists to config.toml and reflects immediately.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/dashboard/theme", Some(token),
+            json!({"name": "midnight"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["theme"], "midnight");
+        let (_, body) = get_json(app.clone(), "/api/dashboard/themes", Some(token)).await;
+        assert_eq!(body["active"], "midnight");
+        let raw = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(raw.contains("midnight"), "config.toml: {}", raw);
+
+        // Empty name rejected.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/dashboard/theme", Some(token), json!({"name": " "}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Font: default "theme", curated id accepted, unknown coerced.
+        let (status, body) = get_json(app.clone(), "/api/dashboard/font", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["font"], "theme");
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/dashboard/font", Some(token),
+            json!({"font": "jetbrains-mono"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["font"], "jetbrains-mono");
+        let (_, body) = get_json(app.clone(), "/api/dashboard/font", Some(token)).await;
+        assert_eq!(body["font"], "jetbrains-mono");
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/dashboard/font", Some(token), json!({"font": "bogus"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["font"], "theme");
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
