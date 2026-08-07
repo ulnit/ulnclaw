@@ -17,6 +17,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+pub mod schema_cache;
+
 /// Configuration for one MCP server (from config.toml [[mcp.servers]]).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct McpServerConfig {
@@ -26,6 +28,11 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Lazy startup (hermes `mcp_servers.<name>.lazy`): when a matching
+    /// schema-cache entry exists, register the tools WITHOUT spawning the
+    /// server; the child is started on first tool call.
+    #[serde(default)]
+    pub lazy: bool,
 }
 
 /// A running MCP server connection (stdio JSON-RPC).
@@ -44,7 +51,7 @@ impl McpClient {
         cmd.args(&config.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(if std::env::var("ULNCLAW_MCP_DEBUG").is_ok() { Stdio::inherit() } else { Stdio::null() });
         for (key, value) in &config.env {
             cmd.env(key, value);
         }
@@ -210,10 +217,16 @@ pub async fn register_mcp_server(
     let tools = client.list_tools().await?;
     let client = Arc::new(Mutex::new(client));
     let mut count = 0usize;
-    for tool_def in tools {
+    let mut cache_payload: Vec<Value> = Vec::new();
+    for tool_def in &tools {
         let Some(remote_name) = tool_def.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
+        cache_payload.push(json!({
+            "name": remote_name,
+            "description": tool_def.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+            "inputSchema": tool_def.get("inputSchema").cloned().unwrap_or_else(|| json!({})),
+        }));
         let description = tool_def
             .get("description")
             .and_then(|v| v.as_str())
@@ -253,5 +266,405 @@ pub async fn register_mcp_server(
         );
         count += 1;
     }
+    // Write-through schema cache (hermes mcp_tool.py #56832 +
+    // mcp_schema_cache.py): refresh the on-disk manifest after a live
+    // connect so the next startup can lazily register this server without
+    // spawning it. Cache failures never break registration.
+    if count > 0 {
+        if let Err(e) = schema_cache::write_cache_entry(
+            &config.name,
+            &schema_cache::config_fingerprint(config),
+            &cache_payload,
+            &[],
+        ) {
+            eprintln!("[mcp] {}: schema cache write failed: {}", config.name, e);
+        }
+    }
     Ok(count)
+}
+
+/// Shared state of one lazily-registered MCP server (hermes
+/// `_lazy_server_configs` + the lazy branch of
+/// `_get_connected_server_for_call`).
+struct LazyServer {
+    config: McpServerConfig,
+    /// Connected client, spawned on first use.
+    client: Mutex<Option<McpClient>>,
+    /// Tool names registered from the cache manifest (for reconciliation).
+    cached_names: Mutex<Vec<String>>,
+    /// Live tool names discovered on first connect (None until connected).
+    live_names: Mutex<Option<std::collections::BTreeSet<String>>>,
+}
+
+static LAZY_SERVERS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Arc<LazyServer>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Register one MCP server, lazily when possible (hermes
+/// `_register_from_cache_sync` + `_resolve_server_lazy`).
+///
+/// With `lazy = true` and a schema-cache entry whose fingerprint matches
+/// the current config, the tools are registered from the cached manifest
+/// and the server process is only spawned on the first tool call.
+/// Otherwise this falls back to the eager `register_mcp_server` (which
+/// write-through-fills the cache for the next startup).
+pub async fn register_mcp_server_lazy(
+    registry: &mut ToolRegistry,
+    config: &McpServerConfig,
+) -> Result<usize> {
+    if !config.lazy {
+        return register_mcp_server(registry, config).await;
+    }
+    let fingerprint = schema_cache::config_fingerprint(config);
+    let Some(entry) = schema_cache::get_cached_entry(&config.name, &fingerprint) else {
+        return register_mcp_server(registry, config).await;
+    };
+    let state = Arc::new(LazyServer {
+        config: config.clone(),
+        client: Mutex::new(None),
+        cached_names: Mutex::new(Vec::new()),
+        live_names: Mutex::new(None),
+    });
+    let mut count = 0usize;
+    for raw in schema_cache::tools_from_cache_entry(&entry) {
+        let Some(remote_name) = raw.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let description = raw
+            .get("description")
+            .and_then(|v| v.as_str())
+            .filter(|d| !d.is_empty())
+            .unwrap_or("(no description)")
+            .to_string();
+        let parameters = raw
+            .get("inputSchema")
+            .cloned()
+            .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+        let qualified = format!("mcp__{}__{}", config.name, remote_name);
+        let remote_name = remote_name.to_string();
+        state.cached_names.lock().await.push(remote_name.clone());
+        let state = state.clone();
+        registry.register(
+            tool(qualified)
+                .description(format!("[MCP {}] {}", config.name, description))
+                .parameters(parameters)
+                .handler(move |args, _ctx: Arc<ToolContext>| {
+                    let state = state.clone();
+                    let remote_name = remote_name.clone();
+                    async move { lazy_call(state, &remote_name, args).await }
+                })
+                .toolset(format!("mcp:{}", config.name))
+                .emoji("🔗")
+                .build()?,
+        );
+        count += 1;
+    }
+    if count > 0 {
+        LAZY_SERVERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(config.name.clone(), state);
+        eprintln!(
+            "[mcp] {} (lazy): registered {} tool(s) from schema cache",
+            config.name, count
+        );
+    }
+    Ok(count)
+}
+
+/// First-use connect + call for a lazily-registered MCP tool (hermes
+/// `_ensure_lazy_server_connected`).
+async fn lazy_call(state: Arc<LazyServer>, remote_name: &str, args: Value) -> Result<Value> {
+    let mut guard = state.client.lock().await;
+    if guard.is_none() {
+        // Same OSV malware preflight as the eager path — it guards the
+        // spawn, so it must run here where the spawn actually happens.
+        if let Some(reason) =
+            osv::check_package_for_malware(&state.config.command, &state.config.args).await
+        {
+            return Err(AgentError::config(format!(
+                "MCP server '{}' refused: {}",
+                state.config.name, reason
+            )));
+        }
+        eprintln!("[mcp] {}: lazy start on first use", state.config.name);
+        let mut client = McpClient::connect(&state.config).await?;
+        let live_tools = client.list_tools().await?;
+        let live_names: std::collections::BTreeSet<String> = live_tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        let cached_names: std::collections::BTreeSet<String> =
+            state.cached_names.lock().await.iter().cloned().collect();
+        if live_names != cached_names {
+            // Stale manifest: refresh the on-disk entry from the live list
+            // so the next startup registers the right set. Phantom tools
+            // stay registered for this process (ulnclaw handlers hold no
+            // registry handle to deregister mid-run; hermes deregisters
+            // them) but fail fast below.
+            let payload: Vec<Value> = live_tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "name": t.get("name").cloned().unwrap_or(Value::Null),
+                        "description": t.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                        "inputSchema": t.get("inputSchema").cloned().unwrap_or_else(|| json!({})),
+                    })
+                })
+                .collect();
+            if let Err(e) = schema_cache::write_cache_entry(
+                &state.config.name,
+                &schema_cache::config_fingerprint(&state.config),
+                &payload,
+                &[],
+            ) {
+                eprintln!(
+                    "[mcp] {}: schema cache refresh failed: {}",
+                    state.config.name, e
+                );
+            } else {
+                eprintln!(
+                    "[mcp] {}: live tool list differs from schema cache; cache refreshed",
+                    state.config.name
+                );
+            }
+        }
+        *state.live_names.lock().await = Some(live_names);
+        *guard = Some(client);
+    }
+    if let Some(live) = state.live_names.lock().await.as_ref() {
+        if !live.contains(remote_name) {
+            return Err(AgentError::Tool(format!(
+                "MCP server '{}' no longer provides tool '{}' (stale cached schema; cache refreshed on connect)",
+                state.config.name, remote_name
+            )));
+        }
+    }
+    let client = guard.as_mut().expect("connected above");
+    let result = client.call_tool(remote_name, args).await?;
+    // MCP results: {content: [{type: text, text}], isError}
+    if result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let text = result
+            .pointer("/content/0/text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown MCP error");
+        return Ok(json!({"success": false, "error": text}));
+    }
+    Ok(result)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::ToolContext;
+    use std::io::Write;
+
+    /// Minimal stdio MCP server (initialize / tools/list / tools/call)
+    /// used to exercise the live + lazy paths without external deps.
+    const FAKE_SERVER_PY: &str = r#"#!/usr/bin/env python3
+import json, sys
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    method = msg.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"],
+              "result": {"serverInfo": {"name": "fake"},
+                         "protocolVersion": "2024-11-05"}})
+    elif method == "tools/list":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"tools": [
+            {"name": "echo", "description": "echo tool",
+             "inputSchema": {"type": "object",
+                             "properties": {"text": {"type": "string"}}}}
+        ]}})
+    elif method == "tools/call":
+        params = msg.get("params") or {}
+        text = str((params.get("arguments") or {}).get("text"))
+        send({"jsonrpc": "2.0", "id": msg["id"],
+              "result": {"content": [{"type": "text", "text": "echo:" + text}],
+                         "isError": False}})
+"#;
+
+    fn python3_available() -> bool {
+        std::process::Command::new("python3")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn write_fake_server(dir: &std::path::Path) -> std::path::PathBuf {
+        let script = dir.join("fake_mcp_server.py");
+        let mut f = std::fs::File::create(&script).unwrap();
+        f.write_all(FAKE_SERVER_PY.as_bytes()).unwrap();
+        script
+    }
+
+    fn fake_config(script: &std::path::Path, name: &str, lazy: bool) -> McpServerConfig {
+        McpServerConfig {
+            name: name.to_string(),
+            command: "python3".into(),
+            args: vec![script.display().to_string()],
+            env: HashMap::new(),
+            lazy,
+        }
+    }
+
+    #[tokio::test]
+    async fn live_registration_writes_through_cache() {
+        if !python3_available() {
+            eprintln!("skipping: python3 not available");
+            return;
+        }
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_fake_server(tmp.path());
+        let config = fake_config(&script, "live-srv", false);
+        // Point the cache at this test's home.
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let mut registry = ToolRegistry::new();
+        let count = register_mcp_server(&mut registry, &config).await.unwrap();
+        assert_eq!(count, 1);
+        assert!(registry.has("mcp__live-srv__echo"));
+
+        // Write-through: a matching cache entry now exists.
+        let fp = schema_cache::config_fingerprint(&config);
+        let entry = schema_cache::get_cached_entry("live-srv", &fp).expect("cache written");
+        let tools = schema_cache::tools_from_cache_entry(&entry);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].get("name").and_then(|v| v.as_str()), Some("echo"));
+
+        // The registered tool actually talks to the server.
+        let ctx = Arc::new(ToolContext::default());
+        let result = registry
+            .dispatch("mcp__live-srv__echo", json!({"text": "hi"}), ctx)
+            .await
+            .unwrap();
+        assert_eq!(result.pointer("/content/0/text").and_then(|v| v.as_str()), Some("echo:hi"));
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn lazy_registration_serves_from_cache_without_spawning() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        // Command does not exist — registration can only succeed from cache.
+        let config = McpServerConfig {
+            name: "lazy-srv".into(),
+            command: "/nonexistent/ulnclaw-fake-mcp".into(),
+            args: vec![],
+            env: HashMap::new(),
+            lazy: true,
+        };
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        // No cache yet: falls back to the live path, which fails.
+        let mut registry = ToolRegistry::new();
+        assert!(register_mcp_server_lazy(&mut registry, &config).await.is_err());
+
+        // Seed a matching cache entry: registration succeeds without spawn.
+        let fp = schema_cache::config_fingerprint(&config);
+        schema_cache::write_cache_entry(
+            "lazy-srv",
+            &fp,
+            &[json!({
+                "name": "cached_tool",
+                "description": "from cache",
+                "inputSchema": {"type": "object", "properties": {}}
+            })],
+            &[],
+        )
+        .unwrap();
+        let count = register_mcp_server_lazy(&mut registry, &config).await.unwrap();
+        assert_eq!(count, 1);
+        assert!(registry.has("mcp__lazy-srv__cached_tool"));
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn lazy_first_use_connects_reconciles_and_rejects_phantoms() {
+        if !python3_available() {
+            eprintln!("skipping: python3 not available");
+            return;
+        }
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_fake_server(tmp.path());
+        let config = fake_config(&script, "recon-srv", true);
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        // Seed a stale manifest: real tool "echo" + phantom tool "ghost".
+        let fp = schema_cache::config_fingerprint(&config);
+        schema_cache::write_cache_entry(
+            "recon-srv",
+            &fp,
+            &[
+                json!({"name": "echo", "description": "echo tool",
+                       "inputSchema": {"type": "object", "properties": {}}}),
+                json!({"name": "ghost", "description": "gone server-side",
+                       "inputSchema": {"type": "object", "properties": {}}}),
+            ],
+            &[],
+        )
+        .unwrap();
+
+        let mut registry = ToolRegistry::new();
+        let count = register_mcp_server_lazy(&mut registry, &config).await.unwrap();
+        assert_eq!(count, 2, "both cached tools register without spawning");
+
+        let ctx = Arc::new(ToolContext::default());
+        // First real call spawns the server and works.
+        let result = registry
+            .dispatch("mcp__recon-srv__echo", json!({"text": "lazy"}), ctx.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            result.pointer("/content/0/text").and_then(|v| v.as_str()),
+            Some("echo:lazy")
+        );
+        // Phantom tool fails fast with a stale-schema error.
+        let err = registry
+            .dispatch("mcp__recon-srv__ghost", json!({}), ctx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no longer provides"), "{}", err);
+
+        // The cache entry was reconciled to the live (single) tool.
+        let entry = schema_cache::get_cached_entry("recon-srv", &fp).unwrap();
+        let cached_tools = schema_cache::tools_from_cache_entry(&entry);
+        let names: Vec<&str> = cached_tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(names, vec!["echo"]);
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
 }

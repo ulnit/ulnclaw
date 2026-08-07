@@ -524,12 +524,14 @@ mod tests {
             command: "npx".to_string(),
             args: vec!["-y".into(), "mcp-fs@1.0.0".into()],
             env: Default::default(),
+            lazy: false,
         });
         config.mcp.servers.push(crate::mcp::McpServerConfig {
             name: "local".to_string(),
             command: "/opt/bin/server".to_string(),
             args: vec![],
             env: Default::default(),
+            lazy: false,
         });
         let components = discover_mcp_components(&config);
         assert_eq!(components.len(), 1);

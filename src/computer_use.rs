@@ -214,6 +214,7 @@ where
             command: driver.clone(),
             args,
             env: cua_driver_child_env(cfg),
+            lazy: false,
         };
         let mut client = McpClient::connect(&server_cfg).await.map_err(|e| {
             AgentError::Tool(format!("cua-driver MCP connect failed: {e}"))
@@ -1258,6 +1259,7 @@ pub async fn health_report(cfg: &ComputerUseConfig) -> Result<Value> {
         command: driver,
         args,
         env: cua_driver_child_env(cfg),
+        lazy: false,
     };
     let mut client = McpClient::connect(&server_cfg)
         .await

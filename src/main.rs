@@ -2605,7 +2605,7 @@ async fn make_agent_in(
 
     // MCP servers: connect and register their tools (hermes mcp_tool.py).
     for server in &config.mcp.servers {
-        match ulnclaw::mcp::register_mcp_server(&mut registry, server).await {
+        match ulnclaw::mcp::register_mcp_server_lazy(&mut registry, server).await {
             Ok(count) => eprintln!("[mcp] {}: {} tools registered", server.name, count),
             Err(e) => eprintln!("[mcp] {}: unavailable ({})", server.name, e),
         }
