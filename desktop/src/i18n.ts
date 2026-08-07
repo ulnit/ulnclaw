@@ -155,6 +155,7 @@ export interface Translations {
     count: string; none: string; loadFailed: string; hooksWord: string; toolsWord: string;
     disabledBadge: string; enable: string; disable: string; noConfigHooks: string;
     toggleFailed: string; configHooksTitle: string;
+    hooksRevoke: string; hooksAcceptAll: string; hooksAllowlist: string;
   };
   pairingView: {
     count: string; none: string; loadFailed: string; clearPending: string; lockedOut: string;
@@ -450,6 +451,8 @@ const en: Translations = {
     disabledBadge: "disabled", enable: "Enable", disable: "Disable",
     noConfigHooks: "No [hooks] shell hooks configured.", toggleFailed: "Toggle failed: {error}",
     configHooksTitle: "Config shell hooks",
+    hooksRevoke: "Revoke", hooksAcceptAll: "Accept all pending",
+    hooksAllowlist: "Consent allowlist: {count} entries",
   },
   pairingView: {
     count: "{platforms} platform(s) · {pending} pending", none: "No pairing activity yet — unknown senders who DM an enabled bot receive a pairing code.",
@@ -862,6 +865,8 @@ const zh: Translations = {
     disabledBadge: "已禁用", enable: "启用", disable: "禁用",
     noConfigHooks: "未配置 [hooks] 外壳钩子。", toggleFailed: "切换失败:{error}",
     configHooksTitle: "配置外壳钩子",
+    hooksRevoke: "吹销", hooksAcceptAll: "批准全部待批",
+    hooksAllowlist: "同意白名单：{count} 条",
   },
   pairingView: {
     count: "{platforms} 个平台 · {pending} 个待批", none: "暂无配对活动——向已启用机器人私聊的陌生发送者会收到配对码。",
@@ -1274,6 +1279,8 @@ const zhHant: Translations = {
     disabledBadge: "已停用", enable: "啟用", disable: "停用",
     noConfigHooks: "未設定 [hooks] 殼層掛鉤。", toggleFailed: "切換失敗:{error}",
     configHooksTitle: "設定殼層掛鉤",
+    hooksRevoke: "撤銷", hooksAcceptAll: "批准全部待批",
+    hooksAllowlist: "同意白名單：{count} 條",
   },
   pairingView: {
     count: "{platforms} 個平台 · {pending} 個待批", none: "暫無配對活動——向已啟用機器人私訊的陌生傳送者會收到配對碼。",
@@ -1686,6 +1693,8 @@ const ja: Translations = {
     disabledBadge: "無効", enable: "有効化", disable: "無効化",
     noConfigHooks: "[hooks] シェルフックは未設定です。", toggleFailed: "切り替えに失敗しました: {error}",
     configHooksTitle: "設定シェルフック",
+    hooksRevoke: "取り消し", hooksAcceptAll: "保留中をすべて承認",
+    hooksAllowlist: "同意アローリスト: {count} 件",
   },
   pairingView: {
     count: "{platforms} プラットフォーム · 保留 {pending} 件", none: "ペアリングはまだありません — 有効なボットに DM した未知の送信者にはペアリングコードが届きます。",
@@ -2098,6 +2107,8 @@ const ar: Translations = {
     disabledBadge: "معطلة", enable: "تفعيل", disable: "تعطيل",
     noConfigHooks: "لا توجد خطافات [hooks] مهيأة.", toggleFailed: "فشل التبديل: {error}",
     configHooksTitle: "خطافات الصدفة المهيأة",
+    hooksRevoke: "إلغاء", hooksAcceptAll: "قبول الكل المعلق",
+    hooksAllowlist: "قائمة الموافقة: {count} إدخالات",
   },
   pairingView: {
     count: "{platforms} منصة · {pending} معلقة", none: "لا يوجد نشاط اقتران بعد — المرسلون غير المعروفين الذين يراسلون بوتًا مفعّلًا يتلقون رمز اقتران.",

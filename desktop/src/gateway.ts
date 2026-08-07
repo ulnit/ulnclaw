@@ -566,6 +566,14 @@ export interface McpOAuthFlow {
   tools?: { name: string; description?: string | null }[];
 }
 
+/** Shell-hook consent census from GET /api/ops/hooks (P326). */
+export interface HooksConsentPayload {
+  hooks: { event: string; command: string; known: boolean; consented: boolean; state: string }[];
+  valid_events: string[];
+  auto_accept: boolean;
+  allowlist: { path: string; entries: number };
+}
+
 /** Log-file inventory row from GET /api/logs (P325). */
 export interface LogFileInfo {
   name: string;
@@ -1262,6 +1270,37 @@ export class GatewayClient {
   }
 
   /** GET /api/logs/tail — tail of gateway.log with optional min level. */
+  /** GET /api/ops/hooks — shell-hook consent census (P326). */
+  async hooksConsent(): Promise<HooksConsentPayload> {
+    const response = await fetch(this.endpoint("/api/ops/hooks"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`hooks HTTP ${response.status}`);
+    return (await response.json()) as HooksConsentPayload;
+  }
+
+  /** POST /api/ops/hooks/accept-all — consent to every configured hook (P326). */
+  async hooksAcceptAll(): Promise<number> {
+    const response = await fetch(this.endpoint("/api/ops/hooks/accept-all"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: "{}",
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `hooks accept HTTP ${response.status}`);
+    return typeof value.accepted === "number" ? value.accepted : 0;
+  }
+
+  /** POST /api/ops/hooks/revoke — revoke consent for a hook command (P326). */
+  async hooksRevoke(command: string): Promise<number> {
+    const response = await fetch(this.endpoint("/api/ops/hooks/revoke"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ command }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `hooks revoke HTTP ${response.status}`);
+    return typeof value.removed === "number" ? value.removed : 0;
+  }
+
   /** GET /api/logs — log-file inventory (P325). */
   async logsList(): Promise<{ dir: string; files: LogFileInfo[] }> {
     const response = await fetch(this.endpoint("/api/logs"), { headers: this.headers() });

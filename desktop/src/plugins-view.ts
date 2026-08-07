@@ -119,20 +119,79 @@ export class PluginsViewWidget {
       }
     }
 
-    const events = Object.entries(payload.config_hooks || {});
-    if (events.length === 0) {
-      hooks.innerHTML = `<p class="empty">${escapeHtml(v.noConfigHooks)}</p>`;
-    } else {
-      hooks.innerHTML = events
-        .map(
-          ([event, commands]) => `
-            <div class="monitoring-row">
-              <span class="monitoring-label">${escapeHtml(event)}</span>
-              <span class="monitoring-value">${escapeHtml(commands.join(" · "))}</span>
-            </div>`,
-        )
-        .join("");
+    hooks.innerHTML = "";
+    this.renderHooksConsent(hooks).catch(() => {
+      const events = Object.entries(payload.config_hooks || {});
+      if (events.length === 0) {
+        hooks.innerHTML = `<p class="empty">${escapeHtml(v.noConfigHooks)}</p>`;
+      } else {
+        hooks.innerHTML = events
+          .map(
+            ([event, commands]) => `
+              <div class="monitoring-row">
+                <span class="monitoring-label">${escapeHtml(event)}</span>
+                <span class="monitoring-value">${escapeHtml(commands.join(" · "))}</span>
+              </div>`,
+          )
+          .join("");
+      }
+    });
+  }
+
+  /** Consent-aware hooks census over /api/ops/hooks (P326). */
+  private async renderHooksConsent(hooks: HTMLElement): Promise<void> {
+    const client = this.client();
+    if (!client) throw new Error("offline");
+    const v = t.pluginsView;
+    const consent = await client.hooksConsent();
+    hooks.innerHTML = "";
+    if (consent.hooks.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = v.noConfigHooks;
+      hooks.appendChild(empty);
     }
+    for (const hook of consent.hooks) {
+      const row = document.createElement("div");
+      row.className = "monitoring-row";
+      row.innerHTML = `
+        <span class="monitoring-label">${escapeHtml(hook.event)}</span>
+        <span class="monitoring-value">${escapeHtml(hook.command)}</span>
+        <span class="jobs-counts">${escapeHtml(hook.state)}</span>
+      `;
+      if (hook.consented) {
+        const revoke = document.createElement("button");
+        revoke.className = "ghost danger";
+        revoke.textContent = v.hooksRevoke;
+        revoke.addEventListener("click", () => {
+          client
+            .hooksRevoke(hook.command)
+            .then(() => this.refresh())
+            .catch(() => undefined);
+        });
+        row.appendChild(revoke);
+      }
+      hooks.appendChild(row);
+    }
+    const footer = document.createElement("div");
+    footer.className = "monitoring-row";
+    const pending = consent.hooks.some((hook) => hook.state === "pending");
+    footer.innerHTML = `<span class="monitoring-value">${escapeHtml(
+      v.hooksAllowlist.replace("{count}", String(consent.allowlist.entries)),
+    )}</span>`;
+    if (pending) {
+      const accept = document.createElement("button");
+      accept.className = "ghost";
+      accept.textContent = v.hooksAcceptAll;
+      accept.addEventListener("click", () => {
+        client
+          .hooksAcceptAll()
+          .then(() => this.refresh())
+          .catch(() => undefined);
+      });
+      footer.appendChild(accept);
+    }
+    hooks.appendChild(footer);
   }
 
   private async toggle(name: string, currentlyDisabled: boolean): Promise<void> {

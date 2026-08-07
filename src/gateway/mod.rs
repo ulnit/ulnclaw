@@ -1072,6 +1072,82 @@ async fn memory_reset_api(
     Json(json!({ "ok": true, "deleted": deleted })).into_response()
 }
 
+/// `GET /api/ops/hooks` — configured shell hooks with consent posture
+/// (hermes `/api/ops/hooks` parity, ulnclaw consent model): per-command
+/// state (consented / pending / unknown-event), the valid event names,
+/// and the allowlist census.
+async fn ops_hooks_list(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let home = state.agent.context().home.clone();
+    let config = state.agent.context().config.clone();
+    let allowlist = crate::plugins::allowlist_entries(&home);
+    let mut events: Vec<(&String, &Vec<String>)> = config.hooks.events.iter().collect();
+    events.sort_by(|a, b| a.0.cmp(b.0));
+    let mut hooks = Vec::new();
+    for (event, commands) in events {
+        let known = crate::plugins::VALID_HOOKS.contains(&event.as_str());
+        for command in commands {
+            let key = format!("{event}\t{command}");
+            let consented = allowlist.iter().any(|entry| entry == &key);
+            let state_label = if !known {
+                "unknown-event"
+            } else if consented {
+                "consented"
+            } else {
+                "pending"
+            };
+            hooks.push(json!({
+                "event": event,
+                "command": command,
+                "known": known,
+                "consented": consented,
+                "state": state_label,
+            }));
+        }
+    }
+    Json(json!({
+        "hooks": hooks,
+        "valid_events": crate::plugins::VALID_HOOKS,
+        "auto_accept": config.hooks.auto_accept,
+        "allowlist": {
+            "path": home.join("shell-hooks-allowlist.json"),
+            "entries": allowlist.len(),
+        },
+    }))
+}
+
+/// `POST /api/ops/hooks/accept-all` — consent to every configured hook
+/// command at once (`ulnclaw hooks` consent-flow parity).
+async fn ops_hooks_accept_all(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let home = state.agent.context().home.clone();
+    let config = state.agent.context().config.clone();
+    let accepted = crate::plugins::accept_all_hooks(&home, &config);
+    Json(json!({ "ok": true, "accepted": accepted }))
+}
+
+#[derive(Debug, Deserialize)]
+struct HooksRevokeRequest {
+    command: String,
+}
+
+/// `POST /api/ops/hooks/revoke` — revoke consent for every allowlist
+/// entry whose command matches (`ulnclaw hooks revoke` parity).
+async fn ops_hooks_revoke(
+    State(state): State<Arc<GatewayState>>,
+    Json(request): Json<HooksRevokeRequest>,
+) -> Response {
+    let command = request.command.trim().to_string();
+    if command.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "command is required" })),
+        )
+            .into_response();
+    }
+    let home = state.agent.context().home.clone();
+    let removed = crate::plugins::revoke_allowlist(&home, &command);
+    Json(json!({ "ok": true, "removed": removed })).into_response()
+}
+
 /// `GET /api/ops/security-audit` — in-process parity of
 /// `ulnclaw security audit --json`: scans MCP servers that pin a package
 /// version (npx pkg@ver / uvx pkg==ver) against OSV. Hermes
@@ -2126,6 +2202,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/ops/security-audit", get(ops_security_audit))
         .route("/api/ops/prompt-size", get(ops_prompt_size))
         .route("/api/ops/dump", get(ops_dump))
+        .route("/api/ops/hooks", get(ops_hooks_list))
+        .route("/api/ops/hooks/accept-all", post(ops_hooks_accept_all))
+        .route("/api/ops/hooks/revoke", post(ops_hooks_revoke))
         .route("/api/monitoring", get(monitoring_status))
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/logs", get(logs_api))
@@ -10766,6 +10845,73 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ops_hooks_endpoints_list_accept_revoke() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        std::fs::write(
+            dir.path().join("shell-hooks-allowlist.json"),
+            "{\"accepted\": [\"on_session_start\\techo hi\"]}",
+        )
+        .unwrap();
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/ops/hooks", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // List reports valid events + the allowlist census.
+        let (status, body) = get_json(app.clone(), "/api/ops/hooks", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["valid_events"].as_array().unwrap().len() > 5);
+        assert_eq!(body["allowlist"]["entries"], 1);
+        assert!(body["hooks"].as_array().is_some());
+
+        // Accept-all with no configured hooks accepts nothing.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/ops/hooks/accept-all",
+            "{}",
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["accepted"], 0);
+
+        // Revoke requires a command.
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/ops/hooks/revoke",
+            Some(r#"{"command": "  "}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Revoke removes the seeded entry.
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/ops/hooks/revoke",
+            Some(r#"{"command": "echo hi"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["removed"], 1);
+        let (_, body) = get_json(app, "/api/ops/hooks", Some("sekret")).await;
+        assert_eq!(body["allowlist"]["entries"], 0);
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
