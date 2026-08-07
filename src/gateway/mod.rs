@@ -900,6 +900,105 @@ async fn doctor_report(
     .into_response()
 }
 
+/// `GET /api/update/check` — non-applying update check (hermes
+/// `/api/hermes/update/check` parity): fetches upstream and reports how far
+/// behind the install is without changing anything.
+async fn update_check_api() -> Json<Value> {
+    let payload = tokio::task::spawn_blocking(|| {
+        let Some(root) = crate::update::find_repo_root() else {
+            return json!({
+                "install_method": "unknown",
+                "current_version": env!("CARGO_PKG_VERSION"),
+                "behind": null,
+                "update_available": false,
+                "can_apply": false,
+                "update_command": "",
+                "error": "no git checkout found",
+            });
+        };
+        let install_method = crate::dump::detect_install_method(&root);
+        let version = crate::dump::version_string(&root);
+        let can_apply = install_method == "git";
+        let update_command = if can_apply { "ulnclaw update" } else { "" };
+        let opts = crate::update::UpdateOptions {
+            check: true,
+            branch: None,
+            yes: true,
+        };
+        match crate::update::check_update(&root, &opts) {
+            Ok((outcome, log)) => {
+                let (behind, update_available) = match &outcome {
+                    crate::update::CheckOutcome::UpToDate => (json!(0), false),
+                    crate::update::CheckOutcome::Behind { count, .. } => {
+                        (json!(count), *count > 0)
+                    }
+                    crate::update::CheckOutcome::BehindShallow { .. } => (json!(-1), true),
+                };
+                json!({
+                    "install_method": install_method,
+                    "current_version": version,
+                    "behind": behind,
+                    "update_available": update_available,
+                    "can_apply": can_apply,
+                    "update_command": update_command,
+                    "log": log,
+                })
+            }
+            Err(err) => json!({
+                "install_method": install_method,
+                "current_version": version,
+                "behind": null,
+                "update_available": false,
+                "can_apply": can_apply,
+                "update_command": update_command,
+                "error": err,
+            }),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| json!({ "error": "update check task failed" }));
+    Json(payload)
+}
+
+/// `POST /api/update` — apply the pending update in place (hermes
+/// `/api/hermes/update` parity): stash → fetch → fast-forward → rebuild.
+async fn update_apply_api() -> Response {
+    let result = tokio::task::spawn_blocking(|| {
+        let Some(root) = crate::update::find_repo_root() else {
+            return Err("no git checkout found".to_string());
+        };
+        let opts = crate::update::UpdateOptions {
+            check: false,
+            branch: None,
+            yes: true,
+        };
+        crate::update::apply_update(&root, &opts)
+    })
+    .await;
+    match result {
+        Ok(Ok(report)) => Json(json!({
+            "ok": true,
+            "old_sha": report.old_sha,
+            "new_sha": report.new_sha,
+            "new_commits": report.new_commits,
+            "rebuilt": report.rebuilt,
+            "rebuild_output": report.rebuild_output,
+            "log": report.log_lines,
+        }))
+        .into_response(),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/memory` — persistent-memory status (hermes `/api/memory`
 /// parity): builtin provider posture plus the per-file census (sizes,
 /// bullet-entry counts) and configured char limits.
@@ -1894,6 +1993,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/env", get(env_list).put(env_set).delete(env_delete))
         .route("/api/memory", get(memory_status_api))
         .route("/api/memory/reset", post(memory_reset_api))
+        .route("/api/update/check", get(update_check_api))
+        .route("/api/update", post(update_apply_api))
         .route("/api/doctor", get(doctor_report))
         .route("/api/ops/security-audit", get(ops_security_audit))
         .route("/api/ops/prompt-size", get(ops_prompt_size))
@@ -10448,6 +10549,21 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_update_endpoints_auth_gate() {
+        let app = router(test_state());
+        let (status, _) = get_json(app.clone(), "/api/update/check", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let request = axum::http::Request::builder()
+            .uri("/api/update")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

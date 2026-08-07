@@ -488,6 +488,29 @@ export interface EnvVarInfo {
   in_process_env: boolean;
 }
 
+/** Update-check result from GET /api/update/check (P324). */
+export interface UpdateCheckResult {
+  install_method: string;
+  current_version: string;
+  behind: number | null;
+  update_available: boolean;
+  can_apply: boolean;
+  update_command: string;
+  log?: string[];
+  error?: string;
+}
+
+/** Update-apply report from POST /api/update (P324). */
+export interface UpdateApplyResult {
+  ok: boolean;
+  old_sha: string | null;
+  new_sha: string | null;
+  new_commits: number;
+  rebuilt: boolean;
+  rebuild_output: string | null;
+  log: string[];
+}
+
 /** Persistent-memory status from GET /api/memory (P323). */
 export interface MemoryStatus {
   active: string;
@@ -1395,6 +1418,24 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `env delete HTTP ${response.status}`);
+  }
+
+  /** GET /api/update/check — non-applying update check (P324). */
+  async updateCheck(): Promise<UpdateCheckResult> {
+    const response = await fetch(this.endpoint("/api/update/check"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`update check HTTP ${response.status}`);
+    return (await response.json()) as UpdateCheckResult;
+  }
+
+  /** POST /api/update — apply the pending update in place (P324). */
+  async updateApply(): Promise<UpdateApplyResult> {
+    const response = await fetch(this.endpoint("/api/update"), {
+      method: "POST",
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `update HTTP ${response.status}`);
+    return value as UpdateApplyResult;
   }
 
   /** GET /api/memory — persistent-memory status census (P323). */

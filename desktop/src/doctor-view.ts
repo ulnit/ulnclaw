@@ -90,6 +90,15 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="learningPanel.title">Learning graph</h3>
         <div id="learning-rows"></div>
       </section>
+      <section id="doctor-update" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="updatePanel.title">Update</h3>
+        <div class="logs-controls">
+          <button id="update-check-btn" class="ghost" data-i18n="updatePanel.check">Check for updates</button>
+          <button id="update-apply-btn" class="ghost danger" data-i18n="updatePanel.apply" hidden>Apply update</button>
+          <span id="update-status" class="config-note"></span>
+        </div>
+        <pre id="update-body" class="logs-body" hidden></pre>
+      </section>
       <section id="doctor-ops" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="opsPanel.title">Ops actions</h3>
         <div class="logs-controls">
@@ -135,6 +144,12 @@ export class DoctorWidget {
     this.root.querySelector("#ops-dump-btn")!.addEventListener("click", () => {
       this.runOps("dump").catch(() => undefined);
     });
+    this.root.querySelector("#update-check-btn")!.addEventListener("click", () => {
+      this.checkUpdate().catch(() => undefined);
+    });
+    this.root.querySelector("#update-apply-btn")!.addEventListener("click", () => {
+      this.applyUpdate().catch(() => undefined);
+    });
   }
 
   start(): void {
@@ -154,6 +169,7 @@ export class DoctorWidget {
     this.loadChannels().catch(() => undefined);
     this.loadLearning().catch(() => undefined);
     this.loadOps().catch(() => undefined);
+    this.loadUpdate().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
       this.logsTimer = window.setInterval(() => {
@@ -982,6 +998,68 @@ export class DoctorWidget {
       section.hidden = false;
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** Show the update panel when a gateway is connected (P324). */
+  private async loadUpdate(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-update") as HTMLElement;
+    section.hidden = !client;
+  }
+
+  /** GET /api/update/check and render the outcome (P324). */
+  private async checkUpdate(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const note = this.root.querySelector("#update-status") as HTMLElement;
+    const body = this.root.querySelector("#update-body") as HTMLPreElement;
+    const applyBtn = this.root.querySelector("#update-apply-btn") as HTMLButtonElement;
+    note.textContent = t.updatePanel.checking;
+    body.hidden = true;
+    applyBtn.hidden = true;
+    try {
+      const result = await client.updateCheck();
+      let headline: string;
+      if (result.error) {
+        headline = t.updatePanel.checkFailed.replace("{error}", result.error);
+      } else if (result.behind === 0) {
+        headline = `${t.updatePanel.upToDate} (${result.current_version})`;
+      } else if (result.behind === -1) {
+        headline = t.updatePanel.behindShallow;
+      } else {
+        headline = t.updatePanel.behind
+          .replace("{count}", String(result.behind ?? 0))
+          .replace("{version}", result.current_version);
+      }
+      note.textContent = headline;
+      if (result.log && result.log.length) {
+        body.textContent = result.log.join("\n");
+        body.hidden = false;
+      }
+      applyBtn.hidden = !(result.update_available && result.can_apply);
+    } catch (error) {
+      note.textContent = t.updatePanel.checkFailed.replace("{error}", String(error));
+    }
+  }
+
+  /** POST /api/update after confirmation and render the report (P324). */
+  private async applyUpdate(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (!window.confirm(t.updatePanel.applyConfirm)) return;
+    const note = this.root.querySelector("#update-status") as HTMLElement;
+    const body = this.root.querySelector("#update-body") as HTMLPreElement;
+    note.textContent = t.updatePanel.applying;
+    try {
+      const report = await client.updateApply();
+      note.textContent = t.updatePanel.applyDone
+        .replace("{commits}", String(report.new_commits))
+        .replace("{sha}", (report.new_sha || "").slice(0, 8));
+      body.textContent = report.log.join("\n");
+      body.hidden = false;
+    } catch (error) {
+      note.textContent = t.updatePanel.applyFailed.replace("{error}", String(error));
     }
   }
 

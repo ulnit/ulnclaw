@@ -227,6 +227,7 @@ export interface Translations {
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   opsPanel: { title: string; securityAudit: string; promptSize: string; dump: string; running: string; auditClean: string; failed: string; };
+  updatePanel: { title: string; check: string; apply: string; checking: string; applying: string; upToDate: string; behind: string; behindShallow: string; checkFailed: string; applyConfirm: string; applyDone: string; applyFailed: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -578,6 +579,16 @@ const en: Translations = {
     dump: "Debug dump", running: "Running {action}\u2026",
     auditClean: "No findings ({total} component(s) scanned).",
     failed: "{action} failed: {error}",
+  },
+  updatePanel: {
+    title: "Update", check: "Check for updates", apply: "Apply update",
+    checking: "Checking for updates\u2026", applying: "Applying update (fetch + rebuild)\u2026",
+    upToDate: "Up to date", behind: "{count} commit(s) behind upstream (current: {version})",
+    behindShallow: "Behind upstream by an unknown count (shallow clone)",
+    checkFailed: "Update check failed: {error}",
+    applyConfirm: "Apply the update now? This fast-forwards the checkout and rebuilds.",
+    applyDone: "Updated: {commits} new commit(s), now at {sha}",
+    applyFailed: "Update failed: {error}",
   },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
@@ -981,6 +992,16 @@ const zh: Translations = {
     auditClean: "未发现问题（已扫描 {total} 个组件）。",
     failed: "{action} 失败：{error}",
   },
+  updatePanel: {
+    title: "更新", check: "检查更新", apply: "应用更新",
+    checking: "正在检查更新…", applying: "正在应用更新（拉取 + 重新构建）…",
+    upToDate: "已是最新版本", behind: "落后上游 {count} 个提交（当前：{version}）",
+    behindShallow: "落后上游的提交数未知（浅克隆）",
+    checkFailed: "更新检查失败：{error}",
+    applyConfirm: "现在应用更新？将快进检出并重新构建。",
+    applyDone: "已更新：新增 {commits} 个提交，当前 {sha}",
+    applyFailed: "更新失败：{error}",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -1382,6 +1403,16 @@ const zhHant: Translations = {
     dump: "除錯傾印", running: "正在執行 {action}…",
     auditClean: "未發現問題（已掃描 {total} 個元件）。",
     failed: "{action} 失敗：{error}",
+  },
+  updatePanel: {
+    title: "更新", check: "檢查更新", apply: "套用更新",
+    checking: "正在檢查更新…", applying: "正在套用更新（拉取 + 重新建置）…",
+    upToDate: "已是最新版本", behind: "落後上游 {count} 個提交（目前：{version}）",
+    behindShallow: "落後上游的提交數未知（淺層複製）",
+    checkFailed: "更新檢查失敗：{error}",
+    applyConfirm: "現在套用更新？將快進簽出並重新建置。",
+    applyDone: "已更新：新增 {commits} 個提交，目前 {sha}",
+    applyFailed: "更新失敗：{error}",
   },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
@@ -1785,6 +1816,16 @@ const ja: Translations = {
     auditClean: "所見なし（{total} 個のコンポーネントをスキャン済み）。",
     failed: "{action} に失敗しました: {error}",
   },
+  updatePanel: {
+    title: "アップデート", check: "更新を確認", apply: "更新を適用",
+    checking: "更新を確認中…", applying: "更新を適用中（フェッチ + リビルド）…",
+    upToDate: "最新です", behind: "アップストリームより {count} コミット遅れ（現在: {version}）",
+    behindShallow: "遅れコミット数不明（shallow クローン）",
+    checkFailed: "更新確認に失敗しました: {error}",
+    applyConfirm: "今すぐ更新を適用しますか？チェックアウトを早送りしてリビルドします。",
+    applyDone: "更新完了: 新規 {commits} コミット、現在 {sha}",
+    applyFailed: "更新に失敗しました: {error}",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -2186,6 +2227,16 @@ const ar: Translations = {
     dump: "تفريغ التشخيص", running: "جارٍ تشغيل {action}…",
     auditClean: "لا نتائج (تم فحص {total} مكوّنًا).",
     failed: "فشل {action}: {error}",
+  },
+  updatePanel: {
+    title: "التحديث", check: "التحقق من التحديثات", apply: "تطبيق التحديث",
+    checking: "جارٍ التحقق من التحديثات…", applying: "جارٍ تطبيق التحديث (جلب + إعادة بناء)…",
+    upToDate: "محدّث", behind: "متأخر {count} التزامًا عن المنبع (الحالي: {version})",
+    behindShallow: "عدد الالتزامات المتأخرة غير معروف (استنساخ ضحل)",
+    checkFailed: "فشل التحقق من التحديث: {error}",
+    applyConfirm: "تطبيق التحديث الآن؟ سيتم تقديم السحب وإعادة البناء.",
+    applyDone: "تم التحديث: {commits} التزامات جديدة، الآن عند {sha}",
+    applyFailed: "فشل التحديث: {error}",
   },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
