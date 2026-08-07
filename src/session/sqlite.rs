@@ -110,6 +110,31 @@ pub struct SessionRow {
     pub output_tokens: i64,
 }
 
+/// One gateway platform-conversation row for the MCP channel bridge
+/// (hermes mcp_serve `_row_to_index_entry` input shape).
+#[derive(Debug, Clone)]
+pub struct PlatformSessionRow {
+    pub id: String,
+    pub source: String,
+    pub user_id: Option<String>,
+    pub session_key: String,
+    pub title: Option<String>,
+    pub started_at: f64,
+    pub last_activity_at: Option<f64>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+}
+
+/// One stored message with its row id + timestamp (hermes
+/// `SessionDB.get_messages` dict shape for the MCP bridge).
+#[derive(Debug, Clone)]
+pub struct MessageRow {
+    pub id: i64,
+    pub role: String,
+    pub content: String,
+    pub timestamp: f64,
+}
+
 /// A SQLite-backed session store.
 pub struct SqliteSessionStore {
     conn: Mutex<Connection>,
@@ -1131,6 +1156,76 @@ impl SqliteSessionStore {
             sessions.push(row.map_err(|e| AgentError::session(e.to_string()))?);
         }
         Ok(sessions)
+    }
+
+    /// Gateway platform conversations for the MCP channel bridge (hermes
+    /// mcp_serve `_load_sessions_index_from_db`): rows whose routing key
+    /// marks a platform chat (`platform-<name>-<chat>`). ulnclaw stores
+    /// the key as the row id (session_key stays NULL on legacy rows), so
+    /// both columns are considered. Newest activity first.
+    pub fn list_platform_sessions(&self, limit: usize) -> Result<Vec<PlatformSessionRow>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, source, user_id, session_key, title, started_at,
+                        last_activity_at, input_tokens, output_tokens
+                 FROM sessions
+                 WHERE COALESCE(session_key, id) LIKE 'platform-%' AND archived = 0
+                 ORDER BY COALESCE(last_activity_at, started_at) DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                let id: String = row.get(0)?;
+                let session_key: Option<String> = row.get(3)?;
+                Ok(PlatformSessionRow {
+                    id: id.clone(),
+                    source: row.get(1)?,
+                    user_id: row.get(2)?,
+                    session_key: session_key.unwrap_or(id),
+                    title: row.get(4)?,
+                    started_at: row.get(5)?,
+                    last_activity_at: row.get(6)?,
+                    input_tokens: row.get(7)?,
+                    output_tokens: row.get(8)?,
+                })
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AgentError::session(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// Messages of a session with row ids and timestamps (hermes
+    /// `get_messages` for the MCP bridge): chronological order, every
+    /// role included.
+    pub fn load_message_rows(&self, session_id: &str) -> Result<Vec<MessageRow>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, role, COALESCE(content, ''), timestamp
+                 FROM messages WHERE session_id = ?1 AND active = 1
+                 ORDER BY id ASC",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(MessageRow {
+                    id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    timestamp: row.get(3)?,
+                })
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AgentError::session(e.to_string()))?);
+        }
+        Ok(out)
     }
 
     /// All-time totals across every stored session:

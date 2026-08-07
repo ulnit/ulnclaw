@@ -370,6 +370,14 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// MCP channel bridge — expose messaging conversations to MCP clients (hermes mcp)
+    Mcp {
+        /// Subcommand: serve (stdio MCP server)
+        args: Vec<String>,
+        /// Verbose request/response logging on stderr
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Remove ulnclaw: code, PATH entries, wrappers (hermes uninstall)
     Uninstall {
         /// Full uninstall — also wipe ~/.ulnclaw configs/sessions/logs
@@ -2453,6 +2461,15 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 println!("{out}");
             }
             Ok(())
+        }
+        Commands::Mcp { args, verbose } => {
+            match args.first().map(String::as_str) {
+                Some("serve") => ulnclaw::mcp_serve::run_stdio(verbose)
+                    .await
+                    .map_err(|e| e.to_string()),
+                Some(other) => Err(format!("unknown mcp subcommand: {other} (expected: serve)")),
+                None => Err("usage: ulnclaw mcp serve [--verbose]".to_string()),
+            }
         }
         Commands::Uninstall { full, dry_run, yes } => uninstall_cmd(full, dry_run, yes),
         Commands::Fallback { args, yes } => {

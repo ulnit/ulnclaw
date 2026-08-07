@@ -358,12 +358,7 @@ async fn handle_send(args: &Value) -> Value {
             }
         }
     }
-    let Some(sender) = crate::messaging::platform_sender(&platform) else {
-        return error_payload(&format!(
-            "Platform '{platform}' is not configured. Set up credentials in \
-             ~/.ulnclaw/config.yaml or environment variables."
-        ));
-    };
+    let sender = crate::messaging::platform_sender(&platform);
     let mut used_home_channel = false;
     if chat_id.is_none() {
         match home_channel(&platform) {
@@ -390,25 +385,35 @@ async fn handle_send(args: &Value) -> Value {
     } else {
         cleaned.trim().to_string()
     };
-
-    if !media_paths.is_empty() {
-        if sender.send_media(&chat_id, &cleaned, &media_paths).await {
-            // Native delivery handled text + media.
-        } else {
-            // No native media path: deliver the prose plus an honest text
-            // description of the attachments.
-            if !cleaned.trim().is_empty() {
-                sender.send_text(&chat_id, cleaned.trim()).await;
-            }
-            let description = describe_media_for_mirror(&media_paths);
-            if !description.is_empty() {
-                sender.send_text(&chat_id, &description).await;
-            }
-        }
-    } else if !mirror_text.is_empty() {
-        sender.send_text(&chat_id, &mirror_text).await;
-    } else {
+    if mirror_text.is_empty() {
         return error_payload("No deliverable text or media remained after processing MEDIA tags");
+    }
+
+    if let Some(sender) = sender {
+        if !media_paths.is_empty() {
+            if sender.send_media(&chat_id, &cleaned, &media_paths).await {
+                // Native delivery handled text + media.
+            } else {
+                // No native media path: deliver the prose plus an honest
+                // text description of the attachments.
+                if !cleaned.trim().is_empty() {
+                    sender.send_text(&chat_id, cleaned.trim()).await;
+                }
+                let description = describe_media_for_mirror(&media_paths);
+                if !description.is_empty() {
+                    sender.send_text(&chat_id, &description).await;
+                }
+            }
+        } else {
+            sender.send_text(&chat_id, &mirror_text).await;
+        }
+    } else {
+        // Standalone path (hermes `_send_to_platform` direct-API sends for
+        // cron / `hermes send` / MCP bridge contexts): REST delivery for
+        // Telegram/Discord/Slack without a live adapter loop.
+        if let Err(error) = standalone_send(&platform, &chat_id, &cleaned, &media_paths).await {
+            return error_payload(&error);
+        }
     }
 
     let mut result = json!({
@@ -422,6 +427,69 @@ async fn handle_send(args: &Value) -> Value {
         ));
     }
     result
+}
+
+/// Standalone direct-API delivery for platforms whose adapter loop is not
+/// running in this process (hermes `_send_to_platform` standalone path).
+/// Telegram/Discord/Slack ride plain REST; other platforms need a live
+/// gateway adapter.
+async fn standalone_send(
+    platform: &str,
+    chat_id: &str,
+    text: &str,
+    media: &[PathBuf],
+) -> Result<(), String> {
+    let config = crate::config::UlncLawConfig::load(None)
+        .map_err(|e| format!("Failed to load gateway config: {e}"))?;
+    match platform {
+        "telegram" => {
+            let Some(token) =
+                crate::messaging::resolve_telegram_token_public(&config.messaging.telegram)
+            else {
+                return Err("Platform 'telegram' is not configured. Set up credentials in                             ~/.ulnclaw/config.toml (messaging.telegram.bot_token) or                             TELEGRAM_BOT_TOKEN."
+                    .to_string());
+            };
+            let client = reqwest::Client::new();
+            if media.is_empty() {
+                crate::messaging::telegram_send_public(&client, &token, chat_id, text).await;
+            } else {
+                crate::messaging::telegram_send_media_public(&client, &token, chat_id, text, media)
+                    .await;
+            }
+            Ok(())
+        }
+        "discord" => {
+            let Some(token) =
+                crate::messaging::resolve_discord_token_public(&config.messaging.discord)
+            else {
+                return Err("Platform 'discord' is not configured. Set up credentials in                             ~/.ulnclaw/config.toml (messaging.discord.bot_token) or                             DISCORD_BOT_TOKEN."
+                    .to_string());
+            };
+            if media.is_empty() {
+                crate::messaging::discord_send_public(&token, chat_id, text).await;
+            } else {
+                crate::messaging::discord_send_media_public(&token, chat_id, text, media).await;
+            }
+            Ok(())
+        }
+        "slack" => {
+            let Some(token) =
+                crate::messaging::resolve_slack_bot_token_public(&config.messaging.slack)
+            else {
+                return Err("Platform 'slack' is not configured. Set up credentials in                             ~/.ulnclaw/config.toml (messaging.slack.bot_token) or                             SLACK_BOT_TOKEN."
+                    .to_string());
+            };
+            if media.is_empty() {
+                crate::messaging::slack_send_public(&token, chat_id, text).await;
+            } else {
+                crate::messaging::slack_send_media_public(&token, chat_id, text, media).await;
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "Platform '{platform}' is not configured. Set up credentials in              ~/.ulnclaw/config.toml or environment variables."
+        )),
+    }
 }
 
 /// Tool availability gate (hermes `_check_send_message`): available when a
@@ -634,6 +702,14 @@ mod tests {
             error.contains("not configured") || error.contains("Could not resolve"),
             "unexpected: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn standalone_unknown_platform_errors() {
+        let error = standalone_send("carrier-pigeon", "123", "hi", &[])
+            .await
+            .unwrap_err();
+        assert!(error.contains("not configured"));
     }
 
     #[tokio::test]

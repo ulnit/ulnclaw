@@ -185,6 +185,15 @@ pub fn last_message_id_for(platform: &str, chat_id: &str) -> Option<String> {
         .filter(|id| !id.is_empty())
 }
 
+/// Directory entry for one specific chat (MCP bridge enrichment —
+/// hermes `lookup_channel_type` plus the friendly name).
+pub fn channel_info(platform: &str, chat_id: &str) -> Option<ChannelEntry> {
+    let dir = state().lock().unwrap();
+    dir.platforms
+        .get(&platform.to_lowercase())
+        .and_then(|entries| entries.iter().find(|entry| entry.id == chat_id).cloned())
+}
+
 /// hermes `_normalize_channel_query`.
 fn normalize_query(value: &str) -> String {
     value.trim().trim_start_matches('#').trim().to_lowercase()

@@ -1573,6 +1573,64 @@ pub async fn slack_send_public(token: &str, channel: &str, text: &str) {
     slack::post_message(token, channel, text).await
 }
 
+/// Public media wrapper (standalone send_message / MCP bridge): Telegram
+/// photo/document delivery with hermes caption-split semantics.
+pub async fn telegram_send_media_public(
+    client: &reqwest::Client,
+    token: &str,
+    chat_id: &str,
+    text: &str,
+    paths: &[std::path::PathBuf],
+) -> bool {
+    if paths.is_empty() {
+        return false;
+    }
+    let (caption, body) = telegram::media_caption_split(text, paths, 1024);
+    if !body.trim().is_empty() {
+        telegram::send_message(client, token, chat_id, &body).await;
+    }
+    for (idx, path) in paths.iter().enumerate() {
+        let cap = if idx == 0 { caption.as_deref() } else { None };
+        if crate::media_cache::mime_for_ext(path).starts_with("image/") {
+            telegram::send_photo(client, token, chat_id, path, cap).await;
+        } else {
+            telegram::send_document(client, token, chat_id, path, cap).await;
+        }
+    }
+    true
+}
+
+/// Public media wrapper (standalone send_message / MCP bridge): one
+/// multipart Discord message with content + attachments.
+pub async fn discord_send_media_public(
+    token: &str,
+    channel_id: &str,
+    text: &str,
+    paths: &[std::path::PathBuf],
+) -> bool {
+    discord::send_media_message(token, channel_id, text, paths).await
+}
+
+/// Public media wrapper (standalone send_message / MCP bridge): body
+/// text via chat.postMessage, then one native upload per file.
+pub async fn slack_send_media_public(
+    token: &str,
+    channel: &str,
+    text: &str,
+    paths: &[std::path::PathBuf],
+) -> bool {
+    if paths.is_empty() {
+        return false;
+    }
+    if !text.trim().is_empty() {
+        slack::post_message(token, channel, text.trim()).await;
+    }
+    for path in paths {
+        slack::upload_file(token, channel, path).await;
+    }
+    true
+}
+
 // ---------------------------------------------------------------------------
 // Telegram — Bot API long-polling
 // ---------------------------------------------------------------------------
