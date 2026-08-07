@@ -34,6 +34,7 @@ export class SessionsViewWidget {
     this.root.innerHTML = `
       <header id="sessions-view-header">
         <span id="sessions-view-count" class="jobs-counts"></span>
+        <span id="sessions-view-stats" class="config-note" hidden></span>
         <span class="spacer"></span>
         <button id="sessions-view-rename" class="ghost" data-i18n-title="sessionsView.renameTitle" hidden>✎</button>
         <button id="sessions-view-delete" class="ghost" data-i18n-title="sessionsView.deleteTitle" hidden>🗑</button>
@@ -116,6 +117,7 @@ export class SessionsViewWidget {
         t.sessionsView.count.replace("{count}", String(this.all.length));
       this.renderList();
       this.status("");
+      this.loadStats().catch(() => undefined);
     } catch (error) {
       this.status(
         t.sessionsView.loadFailed.replace(
@@ -125,6 +127,32 @@ export class SessionsViewWidget {
         true,
       );
     }
+  }
+
+  /** Store census from /api/storage (P312): sessions/messages/disk. */
+  private async loadStats(): Promise<void> {
+    const client = this.client();
+    const el = this.root.querySelector("#sessions-view-stats") as HTMLElement;
+    if (!client) {
+      el.hidden = true;
+      return;
+    }
+    try {
+      const stats = await client.storageStats();
+      el.textContent = t.sessionsView.stats
+        .replace("{sessions}", String(stats.sessions))
+        .replace("{messages}", String(stats.messages))
+        .replace("{size}", this.fmtBytes(stats.size_bytes + stats.wal_bytes));
+      el.hidden = false;
+    } catch {
+      el.hidden = true;
+    }
+  }
+
+  private fmtBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   private async runSearch(): Promise<void> {

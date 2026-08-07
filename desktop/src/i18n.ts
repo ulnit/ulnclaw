@@ -134,6 +134,7 @@ export interface Translations {
     renameTitle: string; renamePrompt: string; renamed: string; renameFailed: string;
     exportHtmlTitle: string;
     msgCount: string; project: string; source: string;
+    stats: string;
   };
   modelsView: {
     count: string; current: string; catalog: string; providersLower: string; stale: string;
@@ -390,7 +391,7 @@ const en: Translations = {
     loadFailed: "Failed to load sessions: {error}",
     transcriptFailed: "Failed to load transcript: {error}",
     emptyTranscript: "This session has no messages.",
-    exportTitle: "Export selected session as Markdown", exportHtmlTitle: "Export selected session as standalone HTML", msgCount: "{count} messages", project: "project", source: "source",
+    exportTitle: "Export selected session as Markdown", exportHtmlTitle: "Export selected session as standalone HTML", msgCount: "{count} messages", project: "project", source: "source", stats: "{sessions} sessions \u00b7 {messages} messages \u00b7 {size} on disk",
     exportFailed: "Export failed.",
     roleUser: "User", roleAssistant: "Assistant", roleTool: "Tool", roleSystem: "System",
     recap: "Recap", recapTitle: "Show or hide the gateway-built session recap", recapFailed: "Recap failed: {error}",
@@ -733,7 +734,7 @@ const zh: Translations = {
     loadFailed: "加载会话列表失败:{error}",
     transcriptFailed: "加载转录失败:{error}",
     emptyTranscript: "该会话没有消息。",
-    exportTitle: "将选中会话导出为 Markdown", exportHtmlTitle: "将选中会话导出为独立 HTML", msgCount: "{count} 条消息", project: "项目", source: "来源",
+    exportTitle: "将选中会话导出为 Markdown", exportHtmlTitle: "将选中会话导出为独立 HTML", msgCount: "{count} 条消息", project: "项目", source: "来源", stats: "{sessions} 个会话 \u00b7 {messages} 条消息 \u00b7 磁盘占用 {size}",
     exportFailed: "导出失败。",
     roleUser: "用户", roleAssistant: "助手", roleTool: "工具", roleSystem: "系统",
     recap: "回顾", recapTitle: "显示/隐藏网关生成的会话回顾", recapFailed: "生成回顾失败:{error}",
@@ -1076,7 +1077,7 @@ const zhHant: Translations = {
     loadFailed: "載入會話列表失敗:{error}",
     transcriptFailed: "載入轉錄失敗:{error}",
     emptyTranscript: "該會話沒有訊息。",
-    exportTitle: "將選取會話匯出為 Markdown", exportHtmlTitle: "將選取會話匯出為獨立 HTML", msgCount: "{count} 則訊息", project: "專案", source: "來源",
+    exportTitle: "將選取會話匯出為 Markdown", exportHtmlTitle: "將選取會話匯出為獨立 HTML", msgCount: "{count} 則訊息", project: "專案", source: "來源", stats: "{sessions} 個會話 \u00b7 {messages} 則訊息 \u00b7 磁碟佔用 {size}",
     exportFailed: "匯出失敗。",
     roleUser: "使用者", roleAssistant: "助理", roleTool: "工具", roleSystem: "系統",
     recap: "回顧", recapTitle: "顯示/隱藏閘道產生的會話回顧", recapFailed: "產生回顧失敗:{error}",
@@ -1419,7 +1420,7 @@ const ja: Translations = {
     loadFailed: "セッションの読み込みに失敗しました: {error}",
     transcriptFailed: "トランスクリプトの読み込みに失敗しました: {error}",
     emptyTranscript: "このセッションにはメッセージがありません。",
-    exportTitle: "選択したセッションを Markdown でエクスポート", exportHtmlTitle: "選択したセッションを単体 HTML でエクスポート", msgCount: "{count} メッセージ", project: "プロジェクト", source: "ソース",
+    exportTitle: "選択したセッションを Markdown でエクスポート", exportHtmlTitle: "選択したセッションを単体 HTML でエクスポート", msgCount: "{count} メッセージ", project: "プロジェクト", source: "ソース", stats: "{sessions} セッション \u00b7 {messages} メッセージ \u00b7 ディスク {size}",
     exportFailed: "エクスポートに失敗しました。",
     roleUser: "ユーザー", roleAssistant: "アシスタント", roleTool: "ツール", roleSystem: "システム",
     recap: "リキャップ", recapTitle: "ゲートウェイ生成のセッション要約を表示/非表示", recapFailed: "リキャップに失敗しました: {error}",
@@ -1762,7 +1763,7 @@ const ar: Translations = {
     loadFailed: "فشل تحميل الجلسات: {error}",
     transcriptFailed: "فشل تحميل النص: {error}",
     emptyTranscript: "لا توجد رسائل في هذه الجلسة.",
-    exportTitle: "تصدير الجلسة المحددة بصيغة Markdown", exportHtmlTitle: "تصدير الجلسة المحددة بصيغة HTML مستقلة", msgCount: "{count} رسالة", project: "المشروع", source: "المصدر",
+    exportTitle: "تصدير الجلسة المحددة بصيغة Markdown", exportHtmlTitle: "تصدير الجلسة المحددة بصيغة HTML مستقلة", msgCount: "{count} رسالة", project: "المشروع", source: "المصدر", stats: "{sessions} جلسة \u00b7 {messages} رسالة \u00b7 {size} على القرص",
     exportFailed: "فشل التصدير.",
     roleUser: "المستخدم", roleAssistant: "المساعد", roleTool: "أداة", roleSystem: "النظام",
     recap: "ملخص", recapTitle: "إظهار أو إخفاء ملخص الجلسة المُنشأ من البوابة", recapFailed: "فشل الملخص: {error}",
