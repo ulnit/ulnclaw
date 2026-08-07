@@ -3482,8 +3482,82 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /kanban [list|show|create|done|block|unblock|comment|boards]   coordination board (hermes /kanban)\n  /egress [--show-tokens]   Docker egress proxy status (hermes /egress)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /kanban [list|show|create|done|block|unblock|comment|boards]   coordination board (hermes /kanban)\n  /egress [--show-tokens]   Docker egress proxy status (hermes /egress)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /reload-mcp     reload MCP servers from config (prompt-cache warning + confirm)\n  /quit           exit"
             );
+        }
+        "/reload-mcp" => {
+            // hermes /reload-mcp: rebuilds the MCP tool surface. That
+            // invalidates the provider prompt cache, so confirm first
+            // unless approvals.mcp_reload_confirm = false (persisted by
+            // the "always" choice).
+            let confirm_required = agent.tool_context().config.approvals.mcp_reload_confirm;
+            if confirm_required {
+                println!("⚠️  /reload-mcp — prompt cache invalidation warning");
+                println!("   Reloading MCP servers rebuilds the tool set for this session and");
+                println!("   invalidates the provider prompt cache; the next message re-sends");
+                println!("   full input tokens (expensive on long-context / high-reasoning models).");
+                print!("   Approve [o]nce / [a]lways / [c]ancel? ");
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer).ok();
+                let choice = match answer.trim().to_lowercase().as_str() {
+                    "o" | "once" | "y" | "yes" => "once",
+                    "a" | "always" => "always",
+                    _ => "cancel",
+                };
+                if choice == "cancel" {
+                    println!("🟡 /reload-mcp cancelled. MCP tools unchanged.");
+                    return Ok(true);
+                }
+                if choice == "always" {
+                    match ulnclaw::config_cmd::set_config_value(
+                        "approvals.mcp_reload_confirm",
+                        "false",
+                        false,
+                    ) {
+                        Ok(_) => println!("🔒 Future /reload-mcp calls will run without confirmation."),
+                        Err(e) => println!("⚠️  Couldn't persist opt-out ({}); reloading once.", e),
+                    }
+                }
+            }
+            println!("🔄 Reloading MCP servers...");
+            // Re-read config.toml fresh so newly added/edited servers apply.
+            match ulnclaw::config::UlncLawConfig::load(None) {
+                Ok(fresh_config) => {
+                    let report = agent.reload_mcp(&fresh_config).await;
+                    println!("{}", ulnclaw::mcp::format_reload_report(&report));
+                    // Inject a note at the END of the conversation so the
+                    // model knows tools changed (appended last to preserve
+                    // the prompt-cache prefix).
+                    let mut change_parts: Vec<String> = Vec::new();
+                    if !report.added.is_empty() {
+                        change_parts.push(format!("Added servers: {}", report.added.join(", ")));
+                    }
+                    if !report.removed.is_empty() {
+                        change_parts.push(format!("Removed servers: {}", report.removed.join(", ")));
+                    }
+                    if !report.reconnected.is_empty() {
+                        change_parts.push(format!(
+                            "Reconnected servers: {}",
+                            report.reconnected.join(", ")
+                        ));
+                    }
+                    if change_parts.is_empty() {
+                        change_parts.push("server list unchanged".to_string());
+                    }
+                    history.push(Message {
+                        role: Role::User,
+                        content: Some(format!(
+                            "[system note] MCP tools were just reloaded ({}). {} tool(s) now available.",
+                            change_parts.join("; "),
+                            report.tool_count
+                        )),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    });
+                }
+                Err(e) => println!("reload failed: {}", e),
+            }
         }
         "/history" => {
             println!("{} messages in current conversation.", history.len());

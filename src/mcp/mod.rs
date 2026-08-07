@@ -453,6 +453,101 @@ async fn lazy_call(state: Arc<LazyServer>, remote_name: &str, args: Value) -> Re
 }
 
 
+/// Outcome of an MCP reload (hermes `_reload_mcp` change report).
+#[derive(Debug, Default)]
+pub struct ReloadReport {
+    pub reconnected: Vec<String>,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub tool_count: usize,
+}
+
+/// Reload MCP servers: drop every registered `mcp:*` tool, then reconnect
+/// from the (freshly loaded) config (hermes `_reload_mcp`). The registry
+/// is read live on every LLM call, so the rebuilt surface takes effect on
+/// the next turn without a snapshot refresh.
+pub async fn reload_mcp_servers(
+    registry: &mut ToolRegistry,
+    config: &crate::config::UlncLawConfig,
+) -> ReloadReport {
+    let mut report = ReloadReport::default();
+
+    // Capture old server names, then unregister all mcp tools.
+    let old_servers: Vec<String> = registry
+        .toolset_names()
+        .into_iter()
+        .filter(|t| t.starts_with("mcp:"))
+        .map(|t| t.trim_start_matches("mcp:").to_string())
+        .collect();
+    for toolset in registry
+        .toolset_names()
+        .into_iter()
+        .filter(|t| t.starts_with("mcp:"))
+    {
+        let names: Vec<String> = registry
+            .toolset_tools(&toolset)
+            .into_iter()
+            .map(|t| t.definition.name.clone())
+            .collect();
+        for name in names {
+            registry.unregister(&name);
+        }
+    }
+
+    // Reconnect from the fresh config.
+    let mut connected: Vec<String> = Vec::new();
+    for server in &config.mcp.servers {
+        match register_mcp_server_lazy(registry, server).await {
+            Ok(count) => {
+                report.tool_count += count;
+                connected.push(server.name.clone());
+            }
+            Err(e) => eprintln!("[mcp] {}: unavailable ({})", server.name, e),
+        }
+    }
+
+    for name in &connected {
+        if old_servers.contains(name) {
+            report.reconnected.push(name.clone());
+        } else {
+            report.added.push(name.clone());
+        }
+    }
+    for name in &old_servers {
+        if !connected.contains(name) {
+            report.removed.push(name.clone());
+        }
+    }
+    report.reconnected.sort();
+    report.added.sort();
+    report.removed.sort();
+    report
+}
+
+/// Render the reload change report (hermes `_reload_mcp` output lines).
+pub fn format_reload_report(report: &ReloadReport) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if !report.reconnected.is_empty() {
+        lines.push(format!("  ♻️  Reconnected: {}", report.reconnected.join(", ")));
+    }
+    if !report.added.is_empty() {
+        lines.push(format!("  ➕ Added: {}", report.added.join(", ")));
+    }
+    if !report.removed.is_empty() {
+        lines.push(format!("  ➖ Removed: {}", report.removed.join(", ")));
+    }
+    if report.reconnected.is_empty() && report.added.is_empty() && report.removed.is_empty() {
+        lines.push("  No MCP servers connected.".to_string());
+    } else {
+        let servers = report.reconnected.len() + report.added.len();
+        lines.push(format!(
+            "  🔧 {} tool(s) available from {} server(s)",
+            report.tool_count, servers
+        ));
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,6 +692,49 @@ while True:
         let count = register_mcp_server_lazy(&mut registry, &config).await.unwrap();
         assert_eq!(count, 1);
         assert!(registry.has("mcp__lazy-srv__cached_tool"));
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_reconnects_and_reports_changes() {
+        if !python3_available() {
+            eprintln!("skipping: python3 not available");
+            return;
+        }
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_fake_server(tmp.path());
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let server_a = fake_config(&script, "srv-a", false);
+        let mut config = crate::config::UlncLawConfig::default();
+        config.mcp.servers.push(server_a.clone());
+
+        let mut registry = ToolRegistry::new();
+        assert_eq!(register_mcp_server(&mut registry, &server_a).await.unwrap(), 1);
+
+        // Reload with the same server list: reconnect, no adds/removes.
+        let report = reload_mcp_servers(&mut registry, &config).await;
+        assert_eq!(report.reconnected, vec!["srv-a"]);
+        assert!(report.added.is_empty());
+        assert!(report.removed.is_empty());
+        assert_eq!(report.tool_count, 1);
+        assert!(registry.has("mcp__srv-a__echo"));
+
+        // Reload with the server removed: reports removal, tool is gone.
+        config.mcp.servers.clear();
+        let report = reload_mcp_servers(&mut registry, &config).await;
+        assert_eq!(report.removed, vec!["srv-a"]);
+        assert!(report.reconnected.is_empty());
+        assert_eq!(report.tool_count, 0);
+        assert!(!registry.has("mcp__srv-a__echo"));
+        let formatted = format_reload_report(&report);
+        assert!(formatted.contains("Removed: srv-a"), "{}", formatted);
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

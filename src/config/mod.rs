@@ -1224,10 +1224,20 @@ pub struct ApprovalsConfig {
     /// mode=off bypass (hermes `approvals.deny`).
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Require confirmation before `/reload-mcp` — reloading rebuilds the
+    /// tool surface and invalidates the provider prompt cache. "Always
+    /// Approve" persists `false` here (hermes
+    /// `approvals.mcp_reload_confirm`, default true).
+    #[serde(default = "default_mcp_reload_confirm")]
+    pub mcp_reload_confirm: bool,
 }
 
 fn default_denial_breaker_threshold() -> usize {
     3
+}
+
+fn default_mcp_reload_confirm() -> bool {
+    true
 }
 
 impl Default for ApprovalsConfig {
@@ -1239,6 +1249,7 @@ impl Default for ApprovalsConfig {
             smart_policy: String::new(),
             denial_breaker_threshold: default_denial_breaker_threshold(),
             deny: Vec::new(),
+            mcp_reload_confirm: default_mcp_reload_confirm(),
         }
     }
 }

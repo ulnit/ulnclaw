@@ -183,6 +183,7 @@ pub mod tool_result_storage;
 pub mod tools;
 pub mod toolsets;
 pub mod tirith;
+pub mod slash_confirm;
 pub mod tui_text;
 pub mod update;
 pub mod uninstall;

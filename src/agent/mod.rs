@@ -408,6 +408,18 @@ impl Agent {
         self.tools.try_lock().map(|r| r.names()).unwrap_or_default()
     }
 
+    /// Reconnect all MCP servers from a freshly loaded config and rebuild
+    /// the `mcp:*` tool surface in place (hermes `_reload_mcp`). The
+    /// registry is read live on every LLM call, so the new surface takes
+    /// effect on the next turn without a snapshot refresh.
+    pub async fn reload_mcp(
+        &self,
+        config: &crate::config::UlncLawConfig,
+    ) -> crate::mcp::ReloadReport {
+        let mut registry = self.tools.lock().await;
+        crate::mcp::reload_mcp_servers(&mut registry, config).await
+    }
+
     /// Enabled toolset names on this agent (banner display).
     pub fn toolset_names(&self) -> Vec<String> {
         self.tools
@@ -1912,6 +1924,7 @@ mod tests {
             smart_policy: String::new(),
             denial_breaker_threshold: 3,
             deny: Vec::new(),
+            mcp_reload_confirm: true,
         }
     }
 
