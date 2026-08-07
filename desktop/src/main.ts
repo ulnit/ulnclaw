@@ -648,6 +648,95 @@ function startDesktopEvents(): void {
   void loop();
 }
 
+// ---------------------------------------------------------------------------
+// Global hotkeys (P258) — the applicable subset of hermes' keybind table
+// (lib/keybinds/actions.ts): composer type-to-focus, model picker, new
+// session, session cycling, session picker, settings, sidebar toggle.
+// ---------------------------------------------------------------------------
+
+function anyDialogOpen(): boolean {
+  return document.querySelector("dialog[open]") !== null;
+}
+
+function isTypingTarget(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  if (!target) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
+function cycleSession(direction: 1 | -1): void {
+  const ids = [...state.sessions]
+    .sort((a, b) => b.last_activity_at - a.last_activity_at)
+    .slice(0, 100)
+    .map((session) => session.id);
+  if (!ids.length) return;
+  const index = state.current ? ids.indexOf(state.current.id) : -1;
+  const nextId = ids[(index + direction + ids.length) % ids.length];
+  const session = state.sessions.find((row) => row.id === nextId);
+  if (session) void openSession(session);
+}
+
+function installHotkeys(): void {
+  window.addEventListener("keydown", (event) => {
+    const mod = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    // mod+shift+m — model picker (hermes composer.modelPicker chord).
+    if (mod && event.shiftKey && key === "m") {
+      event.preventDefault();
+      if (state.current) void state.picker?.open();
+      return;
+    }
+    // mod+shift+f — session picker (hermes session.focusSearch chord).
+    if (mod && event.shiftKey && key === "f") {
+      event.preventDefault();
+      state.sessionPicker?.open();
+      return;
+    }
+    // mod+, — settings (hermes nav.settings chord).
+    if (mod && !event.shiftKey && event.key === ",") {
+      event.preventDefault();
+      el.settingsBtn.click();
+      return;
+    }
+    // mod+b — toggle sidebar (hermes view.toggleSidebar chord).
+    if (mod && !event.shiftKey && key === "b") {
+      event.preventDefault();
+      document.getElementById("app")!.classList.toggle("no-sidebar");
+      return;
+    }
+    if (anyDialogOpen() || isTypingTarget(event)) return;
+    // mod+n / bare shift+N — new session (hermes session.new defaults).
+    if (
+      (mod && !event.shiftKey && !event.altKey && key === "n") ||
+      (!mod && !event.ctrlKey && !event.altKey && event.key === "N")
+    ) {
+      event.preventDefault();
+      el.newSession.click();
+      return;
+    }
+    // ctrl+tab / ctrl+shift+tab — cycle sessions (hermes session.next/prev).
+    if (event.ctrlKey && !event.metaKey && event.key === "Tab") {
+      event.preventDefault();
+      cycleSession(event.shiftKey ? -1 : 1);
+      return;
+    }
+    // Type-to-focus: bare Enter focuses the composer; printable keys
+    // focus and forward the character (hermes composer.focus parity —
+    // '/' lands the slash-completion popup immediately).
+    if (!mod && !event.altKey && event.key === "Enter") {
+      event.preventDefault();
+      el.input.focus();
+      return;
+    }
+    if (!mod && !event.altKey && event.key.length === 1) {
+      event.preventDefault();
+      el.input.focus();
+      el.input.value += event.key;
+    }
+  });
+}
+
 async function start(): Promise<void> {
   // Translate the static chrome for any persisted non-en locale (P251).
   applyStatic();
@@ -932,6 +1021,8 @@ async function start(): Promise<void> {
     state.jobs?.rerender();
     state.findBar?.rerender();
   });
+
+  installHotkeys();
 
   await pollHealth();
   await refreshSessions();

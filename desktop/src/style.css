@@ -988,3 +988,6 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 }
 .chat-intro-headline { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
 .chat-intro-body { font-size: 13px; color: #8fa3c0; line-height: 1.6; }
+
+/* Sidebar toggle (P258, hermes view.toggleSidebar) */
+#app.no-sidebar #sidebar { display: none; }
