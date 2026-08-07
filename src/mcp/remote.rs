@@ -28,9 +28,24 @@ const REQUEST_TIMEOUT_SECS: u64 = 30;
 type PendingMap = HashMap<u64, oneshot::Sender<Result<Value>>>;
 
 /// 401 recovery hook: returns a fresh bearer token (hermes
-/// `MCPOAuthManager.handle_401` wiring point).
+/// `MCPOAuthManager.handle_401` wiring point). Receives the FAILED
+/// access token so recoveries can be deduped per token (hermes
+/// `pending_401` keying).
 pub type ReauthFn = std::sync::Arc<
-    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>
+    dyn Fn(
+            Option<String>,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Pre-request disk-watch hook (hermes `HermesMCPOAuthProvider` pre-flow
+/// `invalidate_if_disk_changed`): one cheap stat() per request; returns
+/// a fresh token when an external process refreshed the tokens file,
+/// `None` otherwise.
+pub type TokenWatchFn = std::sync::Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
         + Send
         + Sync,
 >;
@@ -52,6 +67,8 @@ pub struct RemoteMcpClient {
     bearer: Arc<Mutex<Option<String>>>,
     /// One-shot-per-request 401 recovery hook.
     reauth: Arc<Mutex<Option<ReauthFn>>>,
+    /// Pre-request token disk-watch hook (cross-process refresh pickup).
+    token_watch: Arc<Mutex<Option<TokenWatchFn>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +138,7 @@ impl RemoteMcpClient {
         headers: &HashMap<String, String>,
         bearer: Option<String>,
         reauth: Option<ReauthFn>,
+        token_watch: Option<TokenWatchFn>,
     ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
@@ -138,6 +156,7 @@ impl RemoteMcpClient {
             transport: if is_sse { Transport::Sse } else { Transport::StreamableHttp },
             bearer: Arc::new(Mutex::new(bearer)),
             reauth: Arc::new(Mutex::new(reauth)),
+            token_watch: Arc::new(Mutex::new(token_watch)),
         };
 
         let init = json!({
@@ -325,6 +344,13 @@ impl RemoteMcpClient {
             }
             request
         };
+        // Pre-request disk watch: pick up tokens an external process
+        // refreshed on disk (hermes pre-flow invalidate_if_disk_changed).
+        if let Some(watch) = self.token_watch.lock().await.clone() {
+            if let Some(fresh) = watch().await {
+                *self.bearer.lock().await = Some(fresh);
+            }
+        }
         let mut request = send(self.bearer.lock().await.clone());
         if let Some(session_id) = self.session_id.lock().await.clone() {
             request = request.header("Mcp-Session-Id", session_id);
@@ -340,11 +366,14 @@ impl RemoteMcpClient {
             return Ok(response);
         }
         // 401 — ask the recovery hook for a fresh token, retry once.
+        // Pass the FAILED token so the manager can dedupe thundering-herd
+        // 401s (hermes handle_401 keying).
+        let failed_token = self.bearer.lock().await.clone();
         let hook = self.reauth.lock().await.clone();
         let Some(hook) = hook else {
             return Ok(response);
         };
-        let fresh = hook().await?;
+        let fresh = hook(failed_token).await?;
         *self.bearer.lock().await = Some(fresh.clone());
         let mut request = send(Some(fresh));
         if let Some(session_id) = self.session_id.lock().await.clone() {
@@ -537,7 +566,7 @@ mod tests {
         });
 
         let url = format!("http://127.0.0.1:{}/mcp", port);
-        let client = RemoteMcpClient::connect(&url, None, &HashMap::new(), None, None)
+        let client = RemoteMcpClient::connect(&url, None, &HashMap::new(), None, None, None)
             .await
             .expect("streamable connect");
         assert_eq!(
@@ -629,7 +658,7 @@ mod tests {
         });
 
         let url = format!("http://127.0.0.1:{}/sse", port);
-        let client = RemoteMcpClient::connect(&url, Some("sse"), &HashMap::new(), None, None)
+        let client = RemoteMcpClient::connect(&url, Some("sse"), &HashMap::new(), None, None, None)
             .await
             .expect("sse connect");
         let tools = client.list_tools().await.unwrap();
@@ -682,9 +711,12 @@ mod tests {
             axum::serve(listener, Router::new().route("/mcp", post(rpc))).await.ok();
         });
 
-        let reauth: ReauthFn = Arc::new(|| {
+        static FAILED_TOKENS: tokio::sync::Mutex<Vec<Option<String>>> =
+            tokio::sync::Mutex::const_new(Vec::new());
+        let reauth: ReauthFn = Arc::new(|failed: Option<String>| {
             Box::pin(async move {
                 REAUTH_CALLS.fetch_add(1, Ordering::SeqCst);
+                FAILED_TOKENS.lock().await.push(failed);
                 Ok("fresh-token".to_string())
             })
         });
@@ -696,11 +728,15 @@ mod tests {
             &HashMap::new(),
             Some("stale-token".into()),
             Some(reauth),
+            None,
         )
         .await
         .expect("connect recovers from 401");
         assert!(client.list_tools().await.unwrap().is_empty());
         assert!(REAUTH_CALLS.load(Ordering::SeqCst) >= 1);
+        // The hook received the FAILED token (hermes pending_401 keying).
+        let seen = FAILED_TOKENS.lock().await;
+        assert!(seen.iter().any(|t| t.as_deref() == Some("stale-token")), "{seen:?}");
     }
 
     #[test]

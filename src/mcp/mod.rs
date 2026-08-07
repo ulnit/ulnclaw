@@ -19,6 +19,7 @@ use tokio::sync::Mutex;
 
 pub mod dashboard_oauth;
 pub mod oauth;
+pub mod oauth_manager;
 pub mod remote;
 pub mod schema_cache;
 
@@ -346,6 +347,7 @@ async fn connect_any(config: &McpServerConfig) -> Result<AnyMcpClient> {
     if let Some(url) = &config.url {
         let mut bearer: Option<String> = None;
         let mut reauth: Option<remote::ReauthFn> = None;
+        let mut token_watch: Option<remote::TokenWatchFn> = None;
         if config.auth.as_deref() == Some("oauth") {
             // OAuth 2.1 + PKCE (hermes mcp_oauth.py): initial token now,
             // recovery hook on 401. Full flows need a human; unattended
@@ -358,22 +360,55 @@ async fn connect_any(config: &McpServerConfig) -> Result<AnyMcpClient> {
                 oauth::get_access_token(&home, &config.name, url, &config.oauth, interactive)
                     .await?,
             );
+            // Baseline the disk-watch watermark at the token we just
+            // obtained (hermes MCPOAuthManager last_mtime_ns seeding).
+            oauth_manager::manager().note_mtime(&home, &config.name);
+
             let hook_home = home.clone();
             let hook_name = config.name.clone();
             let hook_url = url.clone();
             let hook_cfg = config.oauth.clone();
-            // Per-server mutex dedupes concurrent 401 recoveries (hermes
-            // MCPOAuthManager in-flight futures).
-            let inflight = Arc::new(tokio::sync::Mutex::new(()));
-            reauth = Some(Arc::new(move || {
+            // 401 recovery through the process-wide OAuth manager: dedupe
+            // by failed token + external-refresh short-circuit (hermes
+            // MCPOAuthManager.handle_401).
+            reauth = Some(Arc::new(move |failed_token: Option<String>| {
                 let home = hook_home.clone();
                 let name = hook_name.clone();
                 let url = hook_url.clone();
                 let cfg = hook_cfg.clone();
-                let inflight = inflight.clone();
                 Box::pin(async move {
-                    let _guard = inflight.lock().await;
-                    oauth::recover_token(&home, &name, &url, &cfg, interactive).await
+                    let rec_home = home.clone();
+                    let rec_name = name.clone();
+                    let rec_url = url.clone();
+                    let rec_cfg = cfg.clone();
+                    oauth_manager::manager()
+                        .handle_401(&home, &name, failed_token.as_deref(), move || {
+                            async move {
+                                oauth::recover_token(&rec_home, &rec_name, &rec_url, &rec_cfg, interactive)
+                                    .await
+                            }
+                        })
+                        .await
+                })
+            }));
+
+            // Pre-request disk watch: one stat() per request picks up
+            // tokens refreshed by another process (hermes
+            // HermesMCPOAuthProvider pre-flow reload).
+            let watch_home = home.clone();
+            let watch_name = config.name.clone();
+            token_watch = Some(Arc::new(move || {
+                let home = watch_home.clone();
+                let name = watch_name.clone();
+                Box::pin(async move {
+                    if oauth_manager::manager().invalidate_if_disk_changed(&home, &name) {
+                        if let Some(tokens) = oauth::load_tokens(&home, &name) {
+                            if tokens.is_valid() {
+                                return Some(tokens.access_token);
+                            }
+                        }
+                    }
+                    None
                 })
             }));
         }
@@ -383,6 +418,7 @@ async fn connect_any(config: &McpServerConfig) -> Result<AnyMcpClient> {
             &config.headers,
             bearer,
             reauth,
+            token_watch,
         )
         .await?;
         return Ok(AnyMcpClient::Remote(client));

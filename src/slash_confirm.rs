@@ -180,6 +180,15 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    /// The pending-confirmation registry is process-global; serialize the
+    /// tests that mutate it (parallel clear_all/register otherwise race).
+    fn confirm_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     fn echo_handler(counter: Arc<AtomicUsize>) -> ConfirmHandler {
         Box::new(move |choice| {
             let counter = counter.clone();
@@ -192,6 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_and_resolve_once() {
+        let _guard = confirm_test_lock();
         clear_all_for_tests();
         let counter = Arc::new(AtomicUsize::new(0));
         register("sess1", "c1", "reload-mcp", echo_handler(counter.clone()));
@@ -210,6 +220,7 @@ mod tests {
 
     #[tokio::test]
     async fn double_resolve_runs_handler_once() {
+        let _guard = confirm_test_lock();
         clear_all_for_tests();
         let counter = Arc::new(AtomicUsize::new(0));
         register("sess2", "c1", "reload-mcp", echo_handler(counter.clone()));
@@ -222,6 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn mismatched_confirm_id_is_ignored() {
+        let _guard = confirm_test_lock();
         clear_all_for_tests();
         let counter = Arc::new(AtomicUsize::new(0));
         register("sess3", "newer", "reload-mcp", echo_handler(counter.clone()));
@@ -236,6 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_entry_is_rejected() {
+        let _guard = confirm_test_lock();
         clear_all_for_tests();
         let counter = Arc::new(AtomicUsize::new(0));
         register("sess4", "c1", "reload-mcp", echo_handler(counter.clone()));
@@ -246,6 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn newer_registration_supersedes() {
+        let _guard = confirm_test_lock();
         clear_all_for_tests();
         let counter = Arc::new(AtomicUsize::new(0));
         register("sess5", "c1", "reload-mcp", echo_handler(counter.clone()));
@@ -261,6 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_and_clear_if_stale() {
+        let _guard = confirm_test_lock();
         clear_all_for_tests();
         let counter = Arc::new(AtomicUsize::new(0));
         register("sess6", "c1", "reload-mcp", echo_handler(counter.clone()));

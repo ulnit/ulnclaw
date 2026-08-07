@@ -5427,6 +5427,7 @@ async fn run_dashboard_mcp_oauth(
             &server.headers,
             Some(token),
             None,
+            None,
         )
         .await?;
         let tools = client.list_tools().await?;
