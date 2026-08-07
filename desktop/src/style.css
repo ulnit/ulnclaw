@@ -841,3 +841,37 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   transform: translateY(10px);
 }
 .connecting-sub { color: #8fa3c0; font-size: 13px; }
+
+/* ── Onboarding overlay (P250, hermes onboarding parity) ── */
+#onboarding {
+  border: 1px solid #3a4d6e;
+  border-radius: 14px;
+  background: #131c2b;
+  color: #dce6f5;
+  padding: 28px 32px;
+  width: min(34rem, calc(100vw - 3rem));
+  text-align: center;
+}
+#onboarding::backdrop { background: rgba(5, 9, 16, 0.72); }
+.onb-glyph { font-size: 44px; margin-bottom: 6px; }
+.onb-title { margin: 0 0 14px; font-size: 20px; }
+.onb-text { font-size: 13px; color: #b9c8de; line-height: 1.55; margin: 8px 0; }
+.onb-list { text-align: left; font-size: 13px; color: #b9c8de; margin: 10px auto; max-width: 26rem; }
+.onb-list li { margin: 4px 0; }
+.onb-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.onb-providers { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; max-height: 16rem; overflow: auto; }
+.onb-provider {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid #2b3c58;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  text-align: left;
+}
+.onb-provider.onb-ok { border-color: #45845a; }
+.onb-provider-name { font-weight: 600; }
+.onb-provider-status { color: #8fa3c0; font-size: 12px; }
+.onb-provider.onb-ok .onb-provider-status { color: #7fc79a; }
+.onb-recheck { margin-top: 4px; }

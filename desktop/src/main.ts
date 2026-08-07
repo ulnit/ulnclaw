@@ -16,6 +16,7 @@ import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
 import { notifyError, notifySuccess } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
+import { OnboardingOverlay } from "./onboarding";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -60,6 +61,7 @@ const state = {
   palette: null as CommandPalette | null,
   artifacts: null as ArtifactsOverlay | null,
   learning: null as LearningOverlay | null,
+  onboarding: null as OnboardingOverlay | null,
   view: "chat" as "chat" | "kanban" | "projects" | "jobs",
 };
 
@@ -80,6 +82,7 @@ const el = {
   settingUrl: document.getElementById("setting-url") as HTMLInputElement,
   settingKey: document.getElementById("setting-key") as HTMLInputElement,
   settingManage: document.getElementById("setting-manage") as HTMLInputElement,
+  settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
 };
 
 function renderSessions(): void {
@@ -627,9 +630,11 @@ async function start(): Promise<void> {
   // Cold-boot connecting overlay (hermes gateway-connecting-overlay
   // parity): show while the gateway is unreachable, poll until healthy,
   // then run the exit choreography. Never resurrects after first success.
+  state.onboarding = new OnboardingOverlay(() => state.client);
   void (async () => {
     if (await state.client!.health()) {
       hideConnecting();
+      void state.onboarding!.maybeOpen();
       return;
     }
     showConnecting();
@@ -637,6 +642,7 @@ async function start(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 500));
       if (await state.client!.health()) {
         hideConnecting();
+        void state.onboarding!.maybeOpen();
         return;
       }
     }
@@ -646,6 +652,11 @@ async function start(): Promise<void> {
       "The desktop shell polls /health once the gateway is up; managed mode spawns it automatically when the ulnclaw binary is on PATH."
     );
   })();
+
+  el.settingsOnboarding.onclick = () => {
+    el.settings.close();
+    void state.onboarding!.maybeOpen(true);
+  };
 
   el.newSession.onclick = async () => {
     state.current = null;
