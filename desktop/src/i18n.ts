@@ -68,7 +68,7 @@ export interface Translations {
     errorPrefix: string; modelLockTitle: string; gatewayModelTitle: string;
     reachable: string; unreachable: string; removeAttachment: string; uploadFailed: string; projectBadge: string;
   };
-  tools: { running: string; done: string; arguments: string; result: string; fallbackName: string };
+  tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
   slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; skillFallback: string; resume: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
     failureTitle: string; retry: string; openSettings: string; dismiss: string };
@@ -184,7 +184,7 @@ const en: Translations = {
     uploadFailed: "Clipboard upload failed: {error}",
     projectBadge: "Project: {project}",
   },
-  tools: { running: "running…", done: "done", arguments: "arguments", result: "result", fallbackName: "tool" },
+  tools: { running: "running…", done: "done", thinking: "thinking", arguments: "arguments", result: "result", fallbackName: "tool" },
   slash: {
     help: "gateway slash commands", skills: "list skills", tools: "list enabled tools",
     recap: "recap this session", title: "show or set the session title",
@@ -383,7 +383,7 @@ const zh: Translations = {
     uploadFailed: "剪贴板上传失败：{error}",
     projectBadge: "项目：{project}",
   },
-  tools: { running: "运行中…", done: "完成", arguments: "参数", result: "结果", fallbackName: "工具" },
+  tools: { running: "运行中…", done: "完成", thinking: "思考中", arguments: "参数", result: "结果", fallbackName: "工具" },
   slash: {
     help: "网关斜杠命令", skills: "列出技能", tools: "列出已启用工具",
     recap: "回顾本会话", title: "查看或设置会话标题",
@@ -582,7 +582,7 @@ const zhHant: Translations = {
     uploadFailed: "剪貼簿上傳失敗：{error}",
     projectBadge: "專案：{project}",
   },
-  tools: { running: "執行中…", done: "完成", arguments: "參數", result: "結果", fallbackName: "工具" },
+  tools: { running: "執行中…", done: "完成", thinking: "思考中", arguments: "參數", result: "結果", fallbackName: "工具" },
   slash: {
     help: "閘道斜線命令", skills: "列出技能", tools: "列出已啟用工具",
     recap: "回顧本工作階段", title: "檢視或設定工作階段標題",
@@ -781,7 +781,7 @@ const ja: Translations = {
     uploadFailed: "クリップボードのアップロードに失敗：{error}",
     projectBadge: "プロジェクト：{project}",
   },
-  tools: { running: "実行中…", done: "完了", arguments: "引数", result: "結果", fallbackName: "ツール" },
+  tools: { running: "実行中…", done: "完了", thinking: "思考中", arguments: "引数", result: "結果", fallbackName: "ツール" },
   slash: {
     help: "ゲートウェイのスラッシュコマンド", skills: "スキル一覧", tools: "有効なツール一覧",
     recap: "このセッションの要約", title: "セッションタイトルを表示/設定",
@@ -980,7 +980,7 @@ const ar: Translations = {
     uploadFailed: "فشل رفع الحافظة: {error}",
     projectBadge: "المشروع: {project}",
   },
-  tools: { running: "قيد التشغيل…", done: "تم", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },
+  tools: { running: "قيد التشغيل…", done: "تم", thinking: "يفكر", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },
   slash: {
     help: "أوامر البوابة المائلة", skills: "قائمة المهارات", tools: "قائمة الأدوات المفعّلة",
     recap: "تلخيص هذه الجلسة", title: "عرض عنوان الجلسة أو تعيينه",

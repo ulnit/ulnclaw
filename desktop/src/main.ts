@@ -22,6 +22,7 @@ import { LanguageSwitcher } from "./language-switcher";
 import { OnboardingOverlay } from "./onboarding";
 import { SessionPickerDialog } from "./session-picker";
 import { clearIntro, renderIntro } from "./intro";
+import { ActivityTimer, formatElapsed } from "./activity-timer";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -263,6 +264,16 @@ async function sendTurn(): Promise<void> {
   const row = bubble.parentElement!;
   el.messages.insertBefore(cards, row);
   const cardsByCallId = new Map<string, HTMLElement>();
+  const cardStartedAt = new Map<string, number>();
+  // Activity timer (P256, hermes activity-timer parity): elapsed ticks
+  // in the progress strip — tool line when one is live, else thinking.
+  const turnTimer = new ActivityTimer();
+  let lastToolLine = "";
+  turnTimer.start((secs) => {
+    const base = lastToolLine || t.tools.thinking;
+    el.toolProgress.textContent = `${base} · ${formatElapsed(secs)}`;
+    el.toolProgress.hidden = false;
+  });
   try {
     await state.client.chatStream(
       state.current.id,
@@ -272,7 +283,8 @@ async function sendTurn(): Promise<void> {
         el.messages.scrollTop = el.messages.scrollHeight;
       },
       (tool, status) => {
-        el.toolProgress.textContent = `⚙ ${tool} — ${status}`;
+        lastToolLine = `⚙ ${tool} — ${status}`;
+        el.toolProgress.textContent = `${lastToolLine} · ${formatElapsed(turnTimer.elapsedSeconds())}`;
         el.toolProgress.hidden = false;
         const running = [...cardsByCallId.values()]
           .reverse()
@@ -295,6 +307,7 @@ async function sendTurn(): Promise<void> {
           const status = document.createElement("span");
           status.className = "status";
           status.textContent = t.tools.running;
+          cardStartedAt.set(toolEvent.callId, Date.now());
           head.append(caret, name, status);
           const body = document.createElement("div");
           body.className = "tool-card-body";
@@ -315,7 +328,11 @@ async function sendTurn(): Promise<void> {
           if (card) {
             card.classList.remove("running");
             card.classList.add("done");
-            card.querySelector(".status")!.textContent = t.tools.done;
+            const started = cardStartedAt.get(toolEvent.callId);
+            const secs = started === undefined
+              ? 0
+              : Math.max(0, Math.floor((Date.now() - started) / 1000));
+            card.querySelector(".status")!.textContent = `${t.tools.done} · ${formatElapsed(secs)}`;
             if (toolEvent.result) {
               const body = card.querySelector(".tool-card-body")!;
               const label = document.createElement("div");
@@ -336,6 +353,7 @@ async function sendTurn(): Promise<void> {
     bubble.classList.remove("streaming");
     bubble.textContent = fmt(t.session.errorPrefix, { error });
   } finally {
+    turnTimer.stop();
     state.busy = false;
     el.send.disabled = false;
     el.toolProgress.hidden = true;
