@@ -393,6 +393,35 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Slack integration helpers (hermes slack)
+    Slack {
+        /// Subcommand: manifest (generate a Slack app manifest with the gateway commands as native slashes)
+        subcommand: Option<String>,
+        /// Write the manifest to PATH instead of stdout (no path: <home>/slack-manifest.json)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        write: Option<String>,
+        /// Override the bot display name (default: Ulnclaw)
+        #[arg(long)]
+        name: Option<String>,
+        /// Override the bot description
+        #[arg(long)]
+        description: Option<String>,
+        /// Override the long app description (175-4000 characters)
+        #[arg(long)]
+        long_description: Option<String>,
+        /// Read the long app description from a UTF-8 file
+        #[arg(long)]
+        long_description_file: Option<String>,
+        /// Emit only the features.slash_commands array (for merging into an existing manifest)
+        #[arg(long)]
+        slashes_only: bool,
+        /// Omit Slack AI Assistant mode (flat DM surface, inline slash commands)
+        #[arg(long)]
+        no_assistant: bool,
+        /// Use Slack's Agent messaging experience instead of the legacy Assistant one
+        #[arg(long)]
+        agent_view: bool,
+    },
     /// Run the agent across a JSONL dataset of prompts in parallel with checkpointing (hermes batch_runner.py)
     Batch {
         /// Dataset file — JSONL, each line {"prompt": "...", ...}
@@ -2530,6 +2559,53 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             quiet,
             json,
         } => send_cmd(to, message, file, subject, list, quiet, json).await,
+        Commands::Slack {
+            subcommand,
+            write,
+            name,
+            description,
+            long_description,
+            long_description_file,
+            slashes_only,
+            no_assistant,
+            agent_view,
+        } => {
+            match subcommand.as_deref() {
+                Some("manifest") => {
+                    let opts = ulnclaw::slack_cli::ManifestOptions {
+                        name,
+                        description,
+                        long_description,
+                        long_description_file,
+                        slashes_only,
+                        no_assistant,
+                        agent_view,
+                        write: write.map(|p| {
+                            if p.is_empty() {
+                                None
+                            } else {
+                                Some(p)
+                            }
+                        }),
+                    };
+                    let code = ulnclaw::slack_cli::run_manifest_command(
+                        &opts,
+                        &ulnclaw::config::ulnclaw_home(),
+                    );
+                    std::process::exit(code);
+                }
+                Some(other) => {
+                    eprintln!("Unknown slack subcommand: {other}");
+                    std::process::exit(1);
+                }
+                None => {
+                    eprintln!(
+                        "usage: ulnclaw slack <subcommand>\n\nsubcommands:\n  manifest   Generate a Slack app manifest with every gateway\n             command registered as a native slash\n\nRun `ulnclaw slack manifest -h` for details."
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
         Commands::Batch {
             dataset_file,
             batch_size,

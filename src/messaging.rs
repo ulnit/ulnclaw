@@ -789,6 +789,34 @@ impl Dispatcher {
         if event.text.trim() == "/reload-mcp" {
             return self.handle_reload_mcp_command(&key, &event).await;
         }
+        // Direct slash commands (hermes gateway/slash_commands.py direct
+        // set): answer without an LLM turn; skill/bundle slashes expand
+        // into scaffolded agent turns. Runs before the busy check — these
+        // never consume a turn slot.
+        let mut event = event;
+        if event.text.trim().starts_with('/') {
+            let home = self.agent.context().home.clone();
+            match crate::platform_slash::resolve(
+                &self.agent,
+                &self.store,
+                &home,
+                &key,
+                &event.text,
+            )
+            .await
+            {
+                Some(crate::platform_slash::PlatformSlashOutcome::Direct(reply)) => {
+                    return Ok(DispatchOutcome {
+                        reply,
+                        transcript_echoes: Vec::new(),
+                    });
+                }
+                Some(crate::platform_slash::PlatformSlashOutcome::AgentTurn(message)) => {
+                    event.text = message;
+                }
+                None => {}
+            }
+        }
         // Stray approval commands with nothing pending keep their
         // historical reply instead of reaching the model.
         if let Some(cmd) = parse_approval_command(&event.text) {
@@ -4418,6 +4446,22 @@ pub mod slack {
                 .await;
                 continue;
             }
+            // Native Slack slash commands arrive as `slash_commands`
+            // envelopes when the app manifest (ulnclaw slack manifest)
+            // registers them. Dispatch them like chat text and answer via
+            // the payload's response_url (hermes slack adapter slash flow).
+            if envelope_type == "slash_commands" {
+                let payload = envelope.get("payload").cloned().unwrap_or(json!({}));
+                handle_slash_envelope(
+                    cfg,
+                    bot_token,
+                    payload,
+                    pairing.as_deref(),
+                    dispatcher.clone(),
+                )
+                .await;
+                continue;
+            }
             if envelope_type != "events_api" {
                 continue;
             }
@@ -4567,6 +4611,148 @@ pub mod slack {
     }
 
     /// chat.postMessage with Slack's ~40k limit chunked at 3500 chars.
+    /// One native slash-command envelope (hermes slack adapter
+    /// `_handle_slash_command`): auth-gate, dispatch the command text
+    /// through the normal platform path, and deliver the reply via
+    /// `response_url` (replace_original) with a postMessage fallback.
+    async fn handle_slash_envelope(
+        cfg: &SlackConfig,
+        bot_token: &str,
+        payload: Value,
+        pairing: Option<&crate::pairing::PairingStore>,
+        dispatcher: Arc<Dispatcher>,
+    ) {
+        let command = payload
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if command.is_empty() {
+            return;
+        }
+        let text = payload
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let user_id = payload
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let channel_id = payload
+            .get("channel_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let response_url = payload
+            .get("response_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if channel_id.is_empty() {
+            return;
+        }
+
+        // The /ulnclaw catch-all passes the raw text through to the agent;
+        // named slashes keep their leading "/" so the direct-command layer
+        // recognizes them (hermes /hermes <subcommand> mapping parity).
+        let dispatch_text = if command == "/ulnclaw" {
+            text.clone()
+        } else {
+            format!("{command} {text}").trim().to_string()
+        };
+        if dispatch_text.is_empty() {
+            return;
+        }
+
+        let mut message_event = MessageEvent {
+            platform: "slack".into(),
+            chat_id: channel_id.clone(),
+            sender_id: user_id.clone(),
+            sender_name: user_id.clone(),
+            text: dispatch_text,
+            message_id: String::new(),
+            attachments: Vec::new(),
+        };
+        // Plugin gate before auth (hermes ordering).
+        if !pre_gateway_dispatch_gate(&mut message_event).await {
+            return;
+        }
+        let authorized = allowlisted(&cfg.allowed_channel_ids, &channel_id)
+            || pairing
+                .map(|store| store.is_approved("slack", &user_id))
+                .unwrap_or(false);
+        if !authorized {
+            eprintln!(
+                "[slack] refusing slash command from channel {channel_id} — add it to \
+                 messaging.slack.allowed_channel_ids or approve a pairing code"
+            );
+            if let Some(store) = pairing {
+                if let Some(reply) = pairing_offer(store, "slack", &user_id, &user_id) {
+                    deliver_slash_reply(bot_token, &channel_id, &response_url, &reply, true).await;
+                }
+            }
+            return;
+        }
+
+        let bot_token = bot_token.to_string();
+        tokio::spawn(async move {
+            let outcome = match dispatcher.handle_event(message_event).await {
+                Ok(outcome) => outcome,
+                Err(e) => crate::messaging::DispatchOutcome {
+                    reply: format!("error: {e}"),
+                    transcript_echoes: Vec::new(),
+                },
+            };
+            // Echoes (STT transcripts) post as ordinary messages; the final
+            // reply replaces the original slash invocation via response_url.
+            for echo in &outcome.transcript_echoes {
+                post_message(&bot_token, &channel_id, echo).await;
+            }
+            let (reply_text, media_paths) = extract_media_tags(&outcome.reply);
+            if !reply_text.trim().is_empty() {
+                deliver_slash_reply(&bot_token, &channel_id, &response_url, &reply_text, true).await;
+            }
+            for path in media_paths {
+                upload_file(&bot_token, &channel_id, &path).await;
+            }
+        });
+    }
+
+    /// Deliver one slash-command reply: prefer the payload's `response_url`
+    /// (`replace_original` semantics — hermes `_replace_slash_response`),
+    /// falling back to chat.postMessage when the URL is missing or the POST
+    /// fails. Only `replace_original=true` for the final message; earlier
+    /// deliveries must not clobber it.
+    async fn deliver_slash_reply(
+        bot_token: &str,
+        channel: &str,
+        response_url: &str,
+        text: &str,
+        replace_original: bool,
+    ) {
+        if !response_url.is_empty() {
+            let client = reqwest::Client::new();
+            let body = json!({
+                "text": text,
+                "replace_original": replace_original,
+                "response_type": "in_channel",
+            });
+            match client.post(response_url).json(&body).send().await {
+                Ok(resp) if resp.status().is_success() => return,
+                Ok(resp) => eprintln!(
+                    "[slack] response_url POST returned {}",
+                    resp.status()
+                ),
+                Err(e) => eprintln!("[slack] response_url POST failed: {e}"),
+            }
+        }
+        post_message(bot_token, channel, text).await;
+    }
+
     pub async fn post_message(bot_token: &str, channel: &str, text: &str) {
         let client = reqwest::Client::new();
         for chunk in chunk_text(text, 3500) {
