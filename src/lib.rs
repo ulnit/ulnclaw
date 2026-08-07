@@ -180,6 +180,7 @@ pub mod secrets_cache;
 pub mod secrets_cmd;
 pub mod gui_cmd;
 pub mod webhook_subscriptions;
+pub mod whatsapp_cloud_setup;
 pub mod model_cmd;
 pub mod setup_cmd;
 pub mod security_audit;

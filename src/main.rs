@@ -348,6 +348,8 @@ enum Commands {
         /// Action: status (default)
         action: Option<String>,
     },
+    /// WhatsApp Business Cloud API setup wizard (hermes whatsapp-cloud)
+    WhatsappCloud,
     /// Dynamic webhook subscriptions: subscribe/list/remove/test (hermes webhook)
     Webhook {
         #[command(subcommand)]
@@ -2666,6 +2668,13 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                     std::process::exit(2);
                 }
             }
+        }
+        Commands::WhatsappCloud => {
+            let code = ulnclaw::whatsapp_cloud_setup::run_wizard()?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
         }
         Commands::Webhook { action } => {
             use ulnclaw::webhook_subscriptions as whs;
