@@ -370,6 +370,29 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Send a message to a configured messaging platform from scripts/cron/CI (hermes send)
+    Send {
+        /// Delivery target: 'platform' (home channel), 'platform:chat_id', 'platform:#channel-name'
+        #[arg(short = 't', long)]
+        to: Option<String>,
+        /// Message text — with --list it acts as the platform filter. Omitted: read from --file or stdin
+        message: Option<String>,
+        /// Read the message body from PATH ('-' forces stdin)
+        #[arg(short = 'f', long)]
+        file: Option<String>,
+        /// Prepend a subject/header line before the message body
+        #[arg(short = 's', long)]
+        subject: Option<String>,
+        /// List available targets instead of sending
+        #[arg(short = 'l', long)]
+        list: bool,
+        /// Suppress stdout on success (exit code only)
+        #[arg(short = 'q', long)]
+        quiet: bool,
+        /// Emit the raw JSON result
+        #[arg(long)]
+        json: bool,
+    },
     /// Run the agent across a JSONL dataset of prompts in parallel with checkpointing (hermes batch_runner.py)
     Batch {
         /// Dataset file — JSONL, each line {"prompt": "...", ...}
@@ -2495,6 +2518,15 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             }
             Ok(())
         }
+        Commands::Send {
+            to,
+            message,
+            file,
+            subject,
+            list,
+            quiet,
+            json,
+        } => send_cmd(to, message, file, subject, list, quiet, json).await,
         Commands::Batch {
             dataset_file,
             batch_size,
@@ -2811,6 +2843,222 @@ async fn make_agent_in(
     // Wire the runners now that the agent is in an Arc.
     agent.wire_runners();
     Ok(agent)
+}
+
+
+/// `ulnclaw send` — pipe text from shell scripts to any configured
+/// messaging platform (hermes `hermes_cli/send_cmd.py`): no LLM, no agent
+/// loop, bot-token platforms need no running gateway. Exit codes: 0 ok,
+/// 1 delivery/backend error, 2 usage error.
+async fn send_cmd(
+    to: Option<String>,
+    message: Option<String>,
+    file: Option<String>,
+    subject: Option<String>,
+    list: bool,
+    quiet: bool,
+    json_mode: bool,
+) -> Result<(), String> {
+    const USAGE_EXIT: i32 = 2;
+    const FAILURE_EXIT: i32 = 1;
+
+    // --list short-circuits everything else (the positional doubles as the
+    // platform filter, hermes argparse behavior).
+    if list {
+        let filter = message.as_deref().map(str::trim).filter(|f| !f.is_empty());
+        let code = send_list_targets(filter, json_mode).await;
+        std::process::exit(code);
+    }
+
+    let Some(target) = to.filter(|t| !t.trim().is_empty()) else {
+        eprintln!(
+            "ulnclaw send: --to PLATFORM[:channel[:thread]] is required\n\
+             Examples:\n\
+             \x20 ulnclaw send --to telegram \"hello\"\n\
+             \x20 ulnclaw send --to discord:#ops --file report.md\n\
+             \x20 ulnclaw send --list      # list available targets"
+        );
+        std::process::exit(USAGE_EXIT);
+    };
+
+    // Message body: positional → --file (or '-' for stdin) → piped stdin.
+    let mut body: Option<String> = message.clone();
+    if body.is_none() {
+        if let Some(path) = &file {
+            body = Some(if path == "-" {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                    .map_err(|e| e.to_string())?;
+                buf
+            } else {
+                std::fs::read_to_string(path).map_err(|e| {
+                    format!("cannot read --file {}: {e}", path)
+                })?
+            });
+        } else if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                .map_err(|e| e.to_string())?;
+            if !buf.trim().is_empty() {
+                body = Some(buf);
+            }
+        }
+    }
+    let Some(mut body) = body.filter(|body| !body.trim().is_empty()) else {
+        eprintln!(
+            "ulnclaw send: no message provided. Pass text as a positional \
+             argument, use --file PATH, or pipe data via stdin."
+        );
+        std::process::exit(USAGE_EXIT);
+    };
+    if let Some(subject) = subject.filter(|s| !s.is_empty()) {
+        body = format!("{subject}\n\n{}", body.trim_start());
+    }
+
+    let result = ulnclaw::send_message_tool::run_send_message(serde_json::json!({
+        "action": "send",
+        "target": target,
+        "message": body,
+    }))
+    .await;
+
+    if json_mode {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+    } else if !quiet {
+        if let Some(error) = result.get("error").and_then(serde_json::Value::as_str) {
+            eprintln!("ulnclaw send: {error}");
+        } else if result.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            match result.get("note").and_then(serde_json::Value::as_str) {
+                Some(note) => println!("{note}"),
+                None => println!("sent"),
+            }
+        } else {
+            println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        }
+    }
+
+    let failed = result.get("error").is_some()
+        || !(result.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false)
+            || result.get("skipped").is_some());
+    std::process::exit(if failed { FAILURE_EXIT } else { 0 });
+}
+
+/// hermes `_list_targets`: channel directory ∪ configured-but-undiscovered
+/// platforms, optional platform filter, human or --json rendering.
+async fn send_list_targets(filter: Option<&str>, json_mode: bool) -> i32 {
+    let mut platforms: std::collections::BTreeMap<String, Vec<serde_json::Value>> =
+        std::collections::BTreeMap::new();
+    for (platform, entry) in ulnclaw::channel_directory::list_channels(None) {
+        platforms.entry(platform).or_default().push(serde_json::json!({
+            "id": entry.id,
+            "name": entry.name,
+            "type": entry.chat_type,
+        }));
+    }
+    // Merge configured-but-undiscovered platforms (hermes
+    // get_connected_platforms merge) so --list never hides a working target.
+    if let Ok(config) = ulnclaw::config::UlncLawConfig::load(None) {
+        let configured: Vec<(&str, bool)> = vec![
+            ("telegram", config.messaging.telegram.enabled),
+            ("discord", config.messaging.discord.enabled),
+            ("slack", config.messaging.slack.enabled),
+            ("signal", config.messaging.signal.enabled),
+            ("weixin", config.messaging.weixin.enabled),
+            ("qq", config.messaging.qq.enabled),
+            ("yuanbao", config.messaging.yuanbao.enabled),
+            ("email", config.messaging.email.enabled),
+            ("mattermost", config.messaging.mattermost.enabled),
+            ("matrix", config.messaging.matrix.enabled),
+            ("dingtalk", config.messaging.dingtalk.enabled),
+            ("wecom", config.messaging.wecom.enabled),
+            ("feishu", config.messaging.feishu.enabled),
+            ("homeassistant", config.messaging.homeassistant.enabled),
+            ("sms", config.messaging.sms.enabled),
+            ("whatsapp", config.messaging.whatsapp.enabled),
+            ("irc", config.messaging.irc.enabled),
+            ("ntfy", config.messaging.ntfy.enabled),
+            ("simplex", config.messaging.simplex.enabled),
+            ("teams", config.messaging.teams.enabled),
+            ("line", config.messaging.line.enabled),
+            ("google_chat", config.messaging.google_chat.enabled),
+            ("buzz", config.messaging.buzz.enabled),
+            ("photon", config.messaging.photon.enabled),
+            ("raft", config.messaging.raft.enabled),
+            ("a2a", config.messaging.a2a.enabled),
+        ];
+        for (name, enabled) in configured {
+            if enabled {
+                platforms.entry(name.to_string()).or_default();
+            }
+        }
+    }
+
+    if let Some(filter) = filter {
+        let key = filter.to_lowercase();
+        let filtered: std::collections::BTreeMap<String, Vec<serde_json::Value>> = platforms
+            .into_iter()
+            .filter(|(name, _)| name.to_lowercase() == key)
+            .collect();
+        if filtered.is_empty() {
+            eprintln!(
+                "ulnclaw send: no targets found for platform '{filter}'. \
+                 Configured: (none matched)"
+            );
+            return 1;
+        }
+        platforms = filtered;
+    }
+
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"platforms": platforms}))
+                .unwrap_or_default()
+        );
+        return 0;
+    }
+    if platforms.is_empty() {
+        println!("No messaging platforms connected or no channels discovered yet.");
+        return 0;
+    }
+    println!("Available messaging targets:\n");
+    for (platform, entries) in &platforms {
+        let title = {
+            let mut chars = platform.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        };
+        if entries.is_empty() {
+            println!("{title}:");
+            println!(
+                "  (no channels discovered yet — send directly with {platform}:<chat_id>, \
+                 or bare '{platform}' for the home channel)"
+            );
+            println!();
+            continue;
+        }
+        println!("{title}:");
+        for entry in entries {
+            let id = entry.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
+            let name = entry.get("name").and_then(serde_json::Value::as_str).unwrap_or("");
+            let chat_type = entry.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
+            let label = if platform == "discord" {
+                format!("#{name}")
+            } else if !chat_type.is_empty() {
+                format!("{name} ({chat_type})")
+            } else {
+                name.to_string()
+            };
+            println!("  {platform}:{label}");
+            let _ = id;
+        }
+        println!();
+    }
+    println!("Use these as the \"target\" parameter when sending.");
+    println!("Bare platform name (e.g. \"telegram\") sends to home channel.");
+    0
 }
 
 async fn one_shot(
