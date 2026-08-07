@@ -644,6 +644,43 @@ fn redact_config_value(value: &mut Value, prefix: &str, redacted: &mut Vec<Strin
 /// `GET /api/config` — config.toml as nested JSON with secret-looking
 /// leaves redacted, plus the .env key names present on disk (names only,
 /// never values). Desktop Config view backing endpoint (ulnclaw extension).
+/// `GET /api/config/raw` — raw config.toml text with comments
+/// preserved (hermes `/api/config/raw` parity).
+async fn config_raw_get() -> Response {
+    let path = crate::config_cmd::config_path();
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => Json(json!({"toml": text, "path": path.display().to_string()})).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("config.toml not readable: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ConfigRawPutBody {
+    toml_text: String,
+}
+
+/// `PUT /api/config/raw` — validate then atomically replace config.toml
+/// (hermes `saveConfigRaw` parity). Invalid TOML is rejected with the
+/// parse error; the write goes through a tmp-file rename.
+async fn config_raw_put(Json(body): Json<ConfigRawPutBody>) -> Response {
+    if let Err(e) = body.toml_text.parse::<toml::Value>() {
+        return bad_request(&format!("invalid TOML: {e}"), Some("invalid_request"));
+    }
+    let path = crate::config_cmd::config_path();
+    let tmp = path.with_extension("toml.tmp");
+    if let Err(e) = tokio::fs::write(&tmp, &body.toml_text).await {
+        return server_error(&format!("write failed: {e}"));
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, &path).await {
+        return server_error(&format!("rename failed: {e}"));
+    }
+    Json(json!({"ok": true, "path": path.display().to_string()})).into_response()
+}
+
 async fn config_get() -> Response {
     let path = crate::config_cmd::config_path();
     let toml_value = match crate::config_cmd::load_toml(&path) {
@@ -1589,6 +1626,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/metrics", get(metrics))
         .route("/api/usage", get(usage))
         .route("/api/config", get(config_get).put(config_put))
+        .route("/api/config/raw", get(config_raw_get).put(config_raw_put))
         .route("/api/doctor", get(doctor_report))
         .route("/api/monitoring", get(monitoring_status))
         .route("/api/logs/tail", get(logs_tail))
@@ -9901,6 +9939,60 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["stats"]["scanned"], 0);
         assert_eq!(body["days"], 7);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_raw_get_put_roundtrip() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "# comment preserved\n[model]\nname = \"test-model\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/config/raw", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // GET returns the raw text with comments.
+        let (status, body) = get_json(app.clone(), "/api/config/raw", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["toml"].as_str().unwrap().contains("# comment preserved"));
+
+        // Invalid TOML is rejected.
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/config/raw",
+            Some(r#"{"toml_text": "this is [ not toml"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Valid TOML replaces the file atomically.
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/config/raw",
+            Some(r#"{"toml_text": "[gateway]\nport = 8787\n"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let written = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(written.contains("port = 8787"));
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

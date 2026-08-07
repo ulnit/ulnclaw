@@ -1275,6 +1275,27 @@ export class GatewayClient {
     return (value.results || []) as SessionSearchHit[];
   }
 
+  /** GET /api/config/raw — raw config.toml text with comments (P318). */
+  async configRaw(): Promise<{ toml: string; path: string }> {
+    const response = await fetch(this.endpoint("/api/config/raw"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `config raw HTTP ${response.status}`);
+    return value as { toml: string; path: string };
+  }
+
+  /** PUT /api/config/raw — validate + atomically replace config.toml. */
+  async saveConfigRaw(tomlText: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/config/raw"), {
+      method: "PUT",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ toml_text: tomlText }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `config raw save HTTP ${response.status}`);
+  }
+
   /** GET /api/checkpoints/status — checkpoint store census (P317). */
   async checkpointsStatus(): Promise<CheckpointStoreStatus> {
     const response = await fetch(this.endpoint("/api/checkpoints/status"), {

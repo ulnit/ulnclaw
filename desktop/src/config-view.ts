@@ -49,6 +49,7 @@ export class ConfigWidget {
         <span id="config-file" class="jobs-counts"></span>
         <span id="config-pending" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <button id="config-raw" class="ghost" data-i18n="config.rawButton">Raw TOML…</button>
         <button id="config-reload" class="ghost" data-i18n="config.reload">Reload</button>
         <button id="config-save" class="primary" data-i18n="config.save">Save</button>
       </header>
@@ -67,7 +68,25 @@ export class ConfigWidget {
         <div id="config-env-chips" class="config-env-chips"></div>
         <p class="config-note" data-i18n="config.envKeysNote"></p>
       </div>
+      <dialog id="config-raw-dialog" class="config-raw-dialog">
+        <h2 data-i18n="config.rawTitle">Raw config.toml</h2>
+        <textarea id="config-raw-text" spellcheck="false"></textarea>
+        <p id="config-raw-status" class="config-note"></p>
+        <menu>
+          <button id="config-raw-cancel" class="ghost" data-i18n="chrome.cancel">Cancel</button>
+          <button id="config-raw-save" class="primary" data-i18n="config.rawSave">Save raw</button>
+        </menu>
+      </dialog>
     `;
+    this.root.querySelector("#config-raw")!.addEventListener("click", () => {
+      this.openRaw().catch(() => undefined);
+    });
+    this.root.querySelector("#config-raw-cancel")!.addEventListener("click", () => {
+      (this.root.querySelector("#config-raw-dialog") as HTMLDialogElement).close();
+    });
+    this.root.querySelector("#config-raw-save")!.addEventListener("click", () => {
+      this.saveRaw().catch(() => undefined);
+    });
     this.root.querySelector("#config-reload")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
     });
@@ -90,6 +109,50 @@ export class ConfigWidget {
 
   stop(): void {
     /* nothing polls */
+  }
+
+  /** Raw TOML editor (P318): hermes /api/config/raw parity — the
+   * flattened editor drops comments, this one keeps the file verbatim. */
+  private async openRaw(): Promise<void> {
+    const client = this.client();
+    const dialog = this.root.querySelector("#config-raw-dialog") as HTMLDialogElement;
+    const text = this.root.querySelector("#config-raw-text") as HTMLTextAreaElement;
+    const status = this.root.querySelector("#config-raw-status") as HTMLElement;
+    status.textContent = "";
+    text.value = "";
+    dialog.showModal();
+    if (!client) {
+      status.textContent = t.config.notConnected;
+      return;
+    }
+    try {
+      const raw = await client.configRaw();
+      text.value = raw.toml;
+    } catch (error) {
+      status.textContent = t.config.loadFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async saveRaw(): Promise<void> {
+    const client = this.client();
+    const text = this.root.querySelector("#config-raw-text") as HTMLTextAreaElement;
+    const status = this.root.querySelector("#config-raw-status") as HTMLElement;
+    if (!client) return;
+    if (!window.confirm(t.config.rawConfirm)) return;
+    try {
+      await client.saveConfigRaw(text.value);
+      (this.root.querySelector("#config-raw-dialog") as HTMLDialogElement).close();
+      await this.refresh();
+      this.status(t.config.rawSaved);
+    } catch (error) {
+      status.textContent = t.config.rawFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   private status(message: string, isError = false): void {
