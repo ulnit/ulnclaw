@@ -17,17 +17,36 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+pub mod remote;
 pub mod schema_cache;
 
 /// Configuration for one MCP server (from config.toml [[mcp.servers]]).
+///
+/// Stdio servers set `command` (+ args/env); remote servers set `url`
+/// (and optionally `transport = "sse"` for the pre-2025-03-26 protocol,
+/// plus static `headers` such as `Authorization`). Hermes parity —
+/// `mcp_tool.py` accepts both shapes.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct McpServerConfig {
     pub name: String,
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Remote server URL — when set, the server speaks Streamable HTTP
+    /// (or SSE with `transport = "sse"`) instead of stdio.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// `"sse"` selects the SSE transport; anything else (absent) uses
+    /// Streamable HTTP for `url` servers.
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// Static headers sent on every remote request (hermes
+    /// `mcp_servers.<name>.headers`, e.g. bearer tokens).
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
     /// Lazy startup (hermes `mcp_servers.<name>.lazy`): when a matching
     /// schema-cache entry exists, register the tools WITHOUT spawning the
     /// server; the child is started on first tool call.
@@ -197,12 +216,36 @@ impl Drop for McpClient {
     }
 }
 
-/// Register all tools of one MCP server into the registry.
-/// Tool names are prefixed `mcp__<server>__`.
-pub async fn register_mcp_server(
-    registry: &mut ToolRegistry,
-    config: &McpServerConfig,
-) -> Result<usize> {
+/// Either MCP transport behind one interface.
+pub enum AnyMcpClient {
+    Stdio(McpClient),
+    Remote(remote::RemoteMcpClient),
+}
+
+impl AnyMcpClient {
+    pub async fn list_tools(&mut self) -> Result<Vec<Value>> {
+        match self {
+            AnyMcpClient::Stdio(c) => c.list_tools().await,
+            AnyMcpClient::Remote(c) => c.list_tools().await,
+        }
+    }
+
+    pub async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
+        match self {
+            AnyMcpClient::Stdio(c) => c.call_tool(name, arguments).await,
+            AnyMcpClient::Remote(c) => c.call_tool(name, arguments).await,
+        }
+    }
+}
+
+/// Connect one server using the transport its config selects.
+async fn connect_any(config: &McpServerConfig) -> Result<AnyMcpClient> {
+    if let Some(url) = &config.url {
+        let client =
+            remote::RemoteMcpClient::connect(url, config.transport.as_deref(), &config.headers)
+                .await?;
+        return Ok(AnyMcpClient::Remote(client));
+    }
     // OSV malware preflight for npx/uvx-launched servers (hermes
     // `tools/osv_check.py`): only confirmed MAL-* advisories block.
     if let Some(reason) =
@@ -213,7 +256,17 @@ pub async fn register_mcp_server(
             config.name, reason
         )));
     }
-    let mut client = McpClient::connect(config).await?;
+    let client = McpClient::connect(config).await?;
+    Ok(AnyMcpClient::Stdio(client))
+}
+
+/// Register all tools of one MCP server into the registry.
+/// Tool names are prefixed `mcp__<server>__`.
+pub async fn register_mcp_server(
+    registry: &mut ToolRegistry,
+    config: &McpServerConfig,
+) -> Result<usize> {
+    let mut client = connect_any(config).await?;
     let tools = client.list_tools().await?;
     let client = Arc::new(Mutex::new(client));
     let mut count = 0usize;
@@ -289,7 +342,7 @@ pub async fn register_mcp_server(
 struct LazyServer {
     config: McpServerConfig,
     /// Connected client, spawned on first use.
-    client: Mutex<Option<McpClient>>,
+    client: Mutex<Option<AnyMcpClient>>,
     /// Tool names registered from the cache manifest (for reconciliation).
     cached_names: Mutex<Vec<String>>,
     /// Live tool names discovered on first connect (None until connected).
@@ -376,18 +429,11 @@ pub async fn register_mcp_server_lazy(
 async fn lazy_call(state: Arc<LazyServer>, remote_name: &str, args: Value) -> Result<Value> {
     let mut guard = state.client.lock().await;
     if guard.is_none() {
-        // Same OSV malware preflight as the eager path — it guards the
-        // spawn, so it must run here where the spawn actually happens.
-        if let Some(reason) =
-            osv::check_package_for_malware(&state.config.command, &state.config.args).await
-        {
-            return Err(AgentError::config(format!(
-                "MCP server '{}' refused: {}",
-                state.config.name, reason
-            )));
-        }
+        // connect_any runs the OSV malware preflight for stdio servers —
+        // it guards the spawn, so it happens here where the spawn
+        // actually happens (hermes lazy-connect ordering).
         eprintln!("[mcp] {}: lazy start on first use", state.config.name);
-        let mut client = McpClient::connect(&state.config).await?;
+        let mut client = connect_any(&state.config).await?;
         let live_tools = client.list_tools().await?;
         let live_names: std::collections::BTreeSet<String> = live_tools
             .iter()
@@ -613,6 +659,9 @@ while True:
             command: "python3".into(),
             args: vec![script.display().to_string()],
             env: HashMap::new(),
+            url: None,
+            transport: None,
+            headers: HashMap::new(),
             lazy,
         }
     }
@@ -667,6 +716,9 @@ while True:
             command: "/nonexistent/ulnclaw-fake-mcp".into(),
             args: vec![],
             env: HashMap::new(),
+            url: None,
+            transport: None,
+            headers: HashMap::new(),
             lazy: true,
         };
         let prev = std::env::var("ULNCLAW_HOME").ok();

@@ -524,6 +524,9 @@ mod tests {
             command: "npx".to_string(),
             args: vec!["-y".into(), "mcp-fs@1.0.0".into()],
             env: Default::default(),
+            url: None,
+            transport: None,
+            headers: Default::default(),
             lazy: false,
         });
         config.mcp.servers.push(crate::mcp::McpServerConfig {
@@ -531,6 +534,9 @@ mod tests {
             command: "/opt/bin/server".to_string(),
             args: vec![],
             env: Default::default(),
+            url: None,
+            transport: None,
+            headers: Default::default(),
             lazy: false,
         });
         let components = discover_mcp_components(&config);

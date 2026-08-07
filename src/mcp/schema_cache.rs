@@ -32,15 +32,15 @@ pub fn cache_path_in(home: &Path) -> PathBuf {
 /// Stable hash of the connection-defining parts of an MCP server config.
 ///
 /// Same payload shape as hermes `config_fingerprint` (sorted keys, compact
-/// separators, sha256 hex[:16]). ulnclaw servers are stdio-only, so
-/// `transport` is pinned to "stdio" and `url`/`tools` filters stay in the
-/// payload for format compatibility with hermes cache files.
+/// separators, sha256 hex[:16]). `url`/`transport` carry the real values
+/// for remote servers (Streamable HTTP / SSE); the tools filters stay in
+/// the payload for format compatibility with hermes cache files.
 pub fn config_fingerprint(config: &super::McpServerConfig) -> String {
     let payload = json!({
         "command": config.command,
         "args": config.args,
-        "url": Value::Null,
-        "transport": "stdio",
+        "url": config.url,
+        "transport": config.transport.as_deref().unwrap_or(if config.url.is_some() { "streamable-http" } else { "stdio" }),
         "tools_include": [],
         "tools_exclude": [],
     });
@@ -199,6 +199,9 @@ mod tests {
             command: command.into(),
             args: args.into_iter().map(String::from).collect(),
             env: HashMap::new(),
+            url: None,
+            transport: None,
+            headers: HashMap::new(),
             lazy: false,
         }
     }
@@ -211,6 +214,21 @@ mod tests {
         // Pinned vector computed with hermes' python
         // json.dumps(payload, sort_keys=True) + sha256 hex[:16].
         assert_eq!(fp, "d0970df106c2dcd7");
+    }
+
+    #[test]
+    fn fingerprint_covers_remote_url_and_transport() {
+        let mut stdio_cfg = cfg("echo", vec![]);
+        let mut http_cfg = cfg("", vec![]);
+        http_cfg.url = Some("https://mcp.example.com/sse".into());
+        let mut sse_cfg = http_cfg.clone();
+        sse_cfg.transport = Some("sse".into());
+        // url and transport both participate in the fingerprint.
+        assert_ne!(config_fingerprint(&stdio_cfg), config_fingerprint(&http_cfg));
+        assert_ne!(config_fingerprint(&http_cfg), config_fingerprint(&sse_cfg));
+        // Same url but different command stays distinct too.
+        stdio_cfg.url = Some("https://mcp.example.com/sse".into());
+        assert_ne!(config_fingerprint(&stdio_cfg), config_fingerprint(&http_cfg));
     }
 
     #[test]
