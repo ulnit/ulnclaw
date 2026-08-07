@@ -279,6 +279,17 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface BrowserStatus {
+  configured: boolean;
+  backend?: string;
+  source?: string;
+  endpoint?: string | null;
+  mode?: string;
+  managed_running?: boolean;
+  available?: boolean;
+  vnc_url?: string | null;
+}
+
 export interface DelegationRow {
   id: string;
   status: string;
@@ -728,6 +739,15 @@ export class GatewayClient {
     } catch {
       return [];
     }
+  }
+
+  /** GET /v1/browser/status — CDP browser configuration state. */
+  async browserStatus(): Promise<BrowserStatus> {
+    const response = await fetch(this.endpoint("/v1/browser/status"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`browser status HTTP ${response.status}`);
+    return (await response.json()) as BrowserStatus;
   }
 
   /** GET /v1/delegations — async delegations (live + persisted history). */

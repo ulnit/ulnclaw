@@ -37,6 +37,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="monitoring.title">Gateway monitoring</h3>
         <div id="monitoring-rows"></div>
       </section>
+      <section id="doctor-browser" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
+        <div id="browser-rows"></div>
+      </section>
     `;
     this.root.querySelector("#doctor-run")!.addEventListener("click", () => {
       this.run().catch(() => undefined);
@@ -48,6 +52,7 @@ export class DoctorWidget {
       this.run().catch(() => undefined);
     }
     this.loadMonitoring().catch(() => undefined);
+    this.loadBrowser().catch(() => undefined);
   }
 
   stop(): void {
@@ -137,6 +142,52 @@ export class DoctorWidget {
       note.className = "config-note";
       note.textContent = status.scope;
       rows.appendChild(note);
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadBrowser(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-browser") as HTMLElement;
+    const rows = this.root.querySelector("#browser-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const status = await client.browserStatus();
+      rows.innerHTML = "";
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      const entries: [string, string][] = [
+        [t.browserPanel.configured, status.configured ? on : off],
+      ];
+      if (status.configured) {
+        if (status.backend) entries.push([t.browserPanel.backend, status.backend]);
+        if (status.mode) entries.push([t.browserPanel.mode, status.mode]);
+        if (status.source) entries.push([t.browserPanel.source, status.source]);
+        if (status.endpoint) entries.push([t.browserPanel.endpoint, status.endpoint]);
+        if (status.backend === "camofox") {
+          entries.push([t.browserPanel.available, status.available ? on : off]);
+          if (status.vnc_url) entries.push([t.browserPanel.vnc, status.vnc_url]);
+        } else if (status.mode === "managed") {
+          entries.push([t.browserPanel.managedRunning, status.managed_running ? on : off]);
+        }
+      }
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
       section.hidden = false;
     } catch {
       section.hidden = true;

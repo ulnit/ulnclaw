@@ -146,6 +146,10 @@ export interface Translations {
     count: string; skillsTitle: string; toolsetsTitle: string; noSkills: string;
     noToolsets: string; loadFailed: string; enabled: string; disabled: string; tools: string;
   };
+  browserPanel: {
+    title: string; configured: string; backend: string; mode: string; source: string;
+    endpoint: string; available: string; vnc: string; managedRunning: string;
+  };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -368,6 +372,11 @@ const en: Translations = {
     noSkills: "No skills installed in ~/.ulnclaw/skills yet.",
     noToolsets: "No toolsets reported.", loadFailed: "Failed to load: {error}",
     enabled: "enabled", disabled: "disabled", tools: "Tools",
+  },
+  browserPanel: {
+    title: "Browser (CDP)", configured: "Configured", backend: "Backend",
+    mode: "Mode", source: "Source", endpoint: "Endpoint",
+    available: "Available", vnc: "VNC URL", managedRunning: "Managed browser running",
   },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
@@ -642,6 +651,11 @@ const zh: Translations = {
     noToolsets: "没有报告的工具集。", loadFailed: "加载失败：{error}",
     enabled: "已启用", disabled: "未启用", tools: "工具",
   },
+  browserPanel: {
+    title: "浏览器（CDP）", configured: "已配置", backend: "后端",
+    mode: "模式", source: "来源", endpoint: "端点",
+    available: "可用", vnc: "VNC 地址", managedRunning: "托管浏览器运行中",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -914,6 +928,11 @@ const zhHant: Translations = {
     noSkills: "~/.ulnclaw/skills 中還沒有安裝技能。",
     noToolsets: "沒有報告的工具集。", loadFailed: "載入失敗：{error}",
     enabled: "已啟用", disabled: "未啟用", tools: "工具",
+  },
+  browserPanel: {
+    title: "瀏覽器（CDP）", configured: "已設定", backend: "後端",
+    mode: "模式", source: "來源", endpoint: "端點",
+    available: "可用", vnc: "VNC 位址", managedRunning: "託管瀏覽器執行中",
   },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
@@ -1188,6 +1207,11 @@ const ja: Translations = {
     noToolsets: "ツールセットは報告されていません。", loadFailed: "読み込みに失敗：{error}",
     enabled: "有効", disabled: "無効", tools: "ツール",
   },
+  browserPanel: {
+    title: "ブラウザ（CDP）", configured: "設定済み", backend: "バックエンド",
+    mode: "モード", source: "ソース", endpoint: "エンドポイント",
+    available: "利用可能", vnc: "VNC URL", managedRunning: "管理ブラウザ実行中",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1460,6 +1484,11 @@ const ar: Translations = {
     noSkills: "لا توجد مهارات مثبتة في ~/.ulnclaw/skills بعد.",
     noToolsets: "لا توجد مجموعات أدوات مبلغ عنها.", loadFailed: "فشل التحميل: {error}",
     enabled: "مفعلة", disabled: "معطلة", tools: "الأدوات",
+  },
+  browserPanel: {
+    title: "المتصفح (CDP)", configured: "مهيأ", backend: "الخلفية",
+    mode: "الوضع", source: "المصدر", endpoint: "نقطة النهاية",
+    available: "متاح", vnc: "عنوان VNC", managedRunning: "المتصفح المُدار يعمل",
   },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
