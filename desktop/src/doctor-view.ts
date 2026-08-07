@@ -50,6 +50,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="mcpPanel.title">MCP servers</h3>
         <div id="mcp-rows"></div>
       </section>
+      <section id="doctor-storage" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="storagePanel.title">Session store</h3>
+        <div id="storage-rows"></div>
+      </section>
       <section id="doctor-kanban" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="kanbanPanel.title">Kanban diagnostics</h3>
         <div id="kanban-rows"></div>
@@ -82,6 +86,7 @@ export class DoctorWidget {
     this.loadMonitoring().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
+    this.loadStorage().catch(() => undefined);
     this.loadKanban().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
@@ -310,6 +315,104 @@ export class DoctorWidget {
     }
     note.textContent = message;
     note.classList.toggle("error", isError);
+  }
+
+  private fmtBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  /** Session-store footprint + one-click optimize (FTS merge + VACUUM,
+   * same work as `ulnclaw sessions optimize`). */
+  private async loadStorage(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-storage") as HTMLElement;
+    const rows = this.root.querySelector("#storage-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const stats = await client.storageStats();
+      rows.innerHTML = "";
+      const sizeRow = document.createElement("div");
+      sizeRow.className = "monitoring-row";
+      const sizeLabel = document.createElement("span");
+      sizeLabel.className = "monitoring-label";
+      sizeLabel.textContent = t.storagePanel.size;
+      const sizeValue = document.createElement("span");
+      sizeValue.className = "monitoring-value";
+      sizeValue.textContent = `${this.fmtBytes(stats.size_bytes)}${
+        stats.wal_bytes > 0 ? ` + ${this.fmtBytes(stats.wal_bytes)} WAL` : ""
+      }`;
+      sizeRow.append(sizeLabel, sizeValue);
+      rows.appendChild(sizeRow);
+
+      const countsRow = document.createElement("div");
+      countsRow.className = "monitoring-row";
+      const countsLabel = document.createElement("span");
+      countsLabel.className = "monitoring-label";
+      countsLabel.textContent = t.storagePanel.contents;
+      const countsValue = document.createElement("span");
+      countsValue.className = "monitoring-value";
+      countsValue.textContent = t.storagePanel.counts
+        .replace("{sessions}", String(stats.sessions))
+        .replace("{messages}", String(stats.messages));
+      countsRow.append(countsLabel, countsValue);
+      rows.appendChild(countsRow);
+
+      const pathRow = document.createElement("div");
+      pathRow.className = "monitoring-row";
+      const pathLabel = document.createElement("span");
+      pathLabel.className = "monitoring-label";
+      pathLabel.textContent = t.storagePanel.path;
+      const pathValue = document.createElement("span");
+      pathValue.className = "monitoring-value";
+      pathValue.textContent = stats.db_path;
+      pathValue.title = stats.db_path;
+      pathRow.append(pathLabel, pathValue);
+      rows.appendChild(pathRow);
+
+      const actionRow = document.createElement("div");
+      actionRow.className = "monitoring-row";
+      const spacer = document.createElement("span");
+      spacer.className = "monitoring-label";
+      const optimize = document.createElement("button");
+      optimize.className = "ghost";
+      optimize.textContent = t.storagePanel.optimize;
+      optimize.title = t.storagePanel.optimizeTitle;
+      const note = document.createElement("span");
+      note.className = "config-note storage-note";
+      optimize.addEventListener("click", async () => {
+        const current = this.client();
+        if (!current) return;
+        optimize.disabled = true;
+        optimize.textContent = t.storagePanel.optimizing;
+        try {
+          const result = await current.storageOptimize();
+          note.textContent = t.storagePanel.optimized
+            .replace("{indexes}", String(result.merged_indexes))
+            .replace("{before}", this.fmtBytes(result.before_bytes))
+            .replace("{after}", this.fmtBytes(result.after_bytes));
+          this.loadStorage().catch(() => undefined);
+        } catch (error) {
+          note.textContent = t.storagePanel.optimizeFailed.replace(
+            "{error}",
+            error instanceof Error ? error.message : String(error),
+          );
+          note.classList.add("error");
+          optimize.disabled = false;
+          optimize.textContent = t.storagePanel.optimize;
+        }
+      });
+      actionRow.append(spacer, optimize, note);
+      rows.appendChild(actionRow);
+
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
   }
 
   /** Kanban diagnostics: boards with open/total counts, current-board

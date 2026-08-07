@@ -919,6 +919,63 @@ async fn insights(
     }
 }
 
+/// `GET /api/storage` — session-store footprint: logical database size,
+/// WAL size, session/message counts and the on-disk path (desktop Doctor
+/// storage panel; ulnclaw extension).
+async fn storage_status(State(state): State<Arc<GatewayState>>) -> Response {
+    let store = state.store.clone();
+    let stats = tokio::task::spawn_blocking(move || {
+        let home = crate::config::ulnclaw_home();
+        let db_path = home.join("state.db");
+        let file_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+        let size_bytes = store.logical_size_bytes().unwrap_or(file_bytes);
+        let wal_bytes = std::fs::metadata(home.join("state.db-wal"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        json!({
+            "db_path": db_path.to_string_lossy(),
+            "size_bytes": size_bytes,
+            "wal_bytes": wal_bytes,
+            "sessions": store.count_sessions().unwrap_or(0),
+            "messages": store.count_messages().unwrap_or(0),
+        })
+    })
+    .await
+    .unwrap_or_else(|e| json!({"error": format!("storage task failed: {e}")}));
+    Json(stats).into_response()
+}
+
+/// `POST /api/storage/optimize` — FTS segment merge + WAL checkpoint +
+/// VACUUM over the session store (same work as `ulnclaw sessions
+/// optimize`; desktop Doctor storage panel).
+async fn storage_optimize(State(state): State<Arc<GatewayState>>) -> Response {
+    let store = state.store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let before_bytes = store.logical_size_bytes().unwrap_or(0);
+        let merged = store.optimize_storage()?;
+        let after_bytes = store.logical_size_bytes().unwrap_or(before_bytes);
+        Ok::<Value, crate::error::AgentError>(json!({
+            "merged_indexes": merged,
+            "before_bytes": before_bytes,
+            "after_bytes": after_bytes,
+        }))
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(crate::error::AgentError::Tool(format!(
+            "optimize task failed: {e}"
+        )))
+    });
+    match result {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
     let router = Router::new()
@@ -936,6 +993,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/insights", get(insights))
+        .route("/api/storage", get(storage_status))
+        .route("/api/storage/optimize", post(storage_optimize))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
         .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
         .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
@@ -8429,6 +8488,73 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["empty"], false);
         assert_eq!(body["overview"]["total_sessions"], 1);
         assert!(body["overview"]["total_tokens"].as_i64().unwrap() >= 0);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_storage_endpoints_report_and_optimize() {
+        // Seed a temp store so size/count fields have real values; the
+        // gateway state must sit on that same store.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(dir.path().join("state.db")).expect("store"),
+        );
+        let id = store.create_session("cli", Some("test-model"), None).unwrap();
+        store
+            .append_message(
+                &id,
+                &crate::provider::Message {
+                    role: crate::provider::Role::User,
+                    content: Some("storage panel".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let provider = Arc::new(
+            OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let agent = Agent::new(provider, ToolRegistry::new()).with_store(store);
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "test-model".into(),
+            "test".into(),
+            Some("sekret".into()),
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+        let app = router(state);
+
+        let (status, _) = get_json(app.clone(), "/api/storage", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app.clone(), "/api/storage", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["sessions"], 1);
+        assert_eq!(body["messages"], 1);
+        assert!(body["size_bytes"].as_u64().unwrap() > 0);
+        assert!(body["db_path"].as_str().unwrap().ends_with("state.db"));
+
+        let (status, body) =
+            post_json(app, "/api/storage/optimize", "{}", "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["merged_indexes"].as_i64().is_some());
+        assert!(body["before_bytes"].as_u64().is_some());
+        assert!(body["after_bytes"].as_u64().is_some());
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

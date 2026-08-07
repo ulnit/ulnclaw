@@ -305,6 +305,20 @@ export interface InsightsReport {
   activity: { peak_hour: number | null; peak_weekday: number | null };
 }
 
+export interface StorageStats {
+  db_path: string;
+  size_bytes: number;
+  wal_bytes: number;
+  sessions: number;
+  messages: number;
+}
+
+export interface StorageOptimizeResult {
+  merged_indexes: number;
+  before_bytes: number;
+  after_bytes: number;
+}
+
 export interface McpServerRow {
   name: string;
   kind: "stdio" | "http" | "sse";
@@ -806,6 +820,23 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`mcp servers HTTP ${response.status}`);
     const value = await response.json();
     return (value.servers || []) as McpServerRow[];
+  }
+
+  /** GET /api/storage — session-store footprint for the Doctor panel. */
+  async storageStats(): Promise<StorageStats> {
+    const response = await fetch(this.endpoint("/api/storage"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`storage HTTP ${response.status}`);
+    return (await response.json()) as StorageStats;
+  }
+
+  /** POST /api/storage/optimize — FTS merge + VACUUM the session store. */
+  async storageOptimize(): Promise<StorageOptimizeResult> {
+    const response = await fetch(this.endpoint("/api/storage/optimize"), {
+      method: "POST",
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`optimize HTTP ${response.status}`);
+    return (await response.json()) as StorageOptimizeResult;
   }
 
   /** POST /api/mcp/servers/:name/auth — start an OAuth flow for an MCP server. */
