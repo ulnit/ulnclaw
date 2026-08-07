@@ -141,6 +141,7 @@ export interface Translations {
     result: string; approvalTitle: string; approveOnce: string; approveSession: string;
     approveAlways: string; deny: string; approveFailed: string; stopFailed: string;
     delegationsTitle: string; noDelegations: string; loading: string; noResult: string;
+    approvalWaitingTitle: string; approvalWaitingBody: string; viewRuns: string;
   };
   skillsView: {
     count: string; skillsTitle: string; toolsetsTitle: string; noSkills: string;
@@ -364,6 +365,7 @@ const en: Translations = {
     approveOnce: "Once", approveSession: "Session", approveAlways: "Always", deny: "Deny",
     approveFailed: "Approval failed: {error}", stopFailed: "Stop failed: {error}",
     delegationsTitle: "Delegations", noDelegations: "No async delegations dispatched yet.",
+    approvalWaitingTitle: "Approval needed", approvalWaitingBody: "Run {id} is waiting for approval: {command}", viewRuns: "Open Runs",
     loading: "Loading…", noResult: "No result recorded.",
   },
   skillsView: {
@@ -642,6 +644,7 @@ const zh: Translations = {
     approveOnce: "一次", approveSession: "本会话", approveAlways: "始终", deny: "拒绝",
     approveFailed: "批准失败：{error}", stopFailed: "停止失败：{error}",
     delegationsTitle: "委派", noDelegations: "还没有派发的异步委派。",
+    approvalWaitingTitle: "需要批准", approvalWaitingBody: "运行 {id} 正在等待批准：{command}", viewRuns: "打开运行",
     loading: "加载中…", noResult: "没有记录结果。",
   },
   skillsView: {
@@ -920,6 +923,7 @@ const zhHant: Translations = {
     approveOnce: "一次", approveSession: "本工作階段", approveAlways: "始終", deny: "拒絕",
     approveFailed: "核准失敗：{error}", stopFailed: "停止失敗：{error}",
     delegationsTitle: "委派", noDelegations: "還沒有派發的非同步委派。",
+    approvalWaitingTitle: "需要核准", approvalWaitingBody: "執行 {id} 正在等待核准：{command}", viewRuns: "開啟執行",
     loading: "載入中…", noResult: "沒有記錄結果。",
   },
   skillsView: {
@@ -1198,6 +1202,7 @@ const ja: Translations = {
     approveOnce: "今回", approveSession: "セッション", approveAlways: "常に", deny: "拒否",
     approveFailed: "承認に失敗：{error}", stopFailed: "停止に失敗：{error}",
     delegationsTitle: "委任", noDelegations: "ディスパッチされた非同期委任はありません。",
+    approvalWaitingTitle: "承認が必要です", approvalWaitingBody: "実行 {id} が承認待ちです：{command}", viewRuns: "実行を開く",
     loading: "読み込み中…", noResult: "結果は記録されていません。",
   },
   skillsView: {
@@ -1476,6 +1481,7 @@ const ar: Translations = {
     approveOnce: "مرة", approveSession: "الجلسة", approveAlways: "دائمًا", deny: "رفض",
     approveFailed: "فشل الاعتماد: {error}", stopFailed: "فشل الإيقاف: {error}",
     delegationsTitle: "التفويضات", noDelegations: "لا توجد تفويضات غير متزامنة مرسلة بعد.",
+    approvalWaitingTitle: "مطلوب موافقة", approvalWaitingBody: "التشغيل {id} بانتظار الموافقة: {command}", viewRuns: "فتح التشغيلات",
     loading: "جارٍ التحميل…", noResult: "لم تسجل نتيجة.",
   },
   skillsView: {

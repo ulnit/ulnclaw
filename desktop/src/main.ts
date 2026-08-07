@@ -20,7 +20,7 @@ import { FindBar } from "./find-bar";
 import { CommandPalette } from "./command-palette";
 import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
-import { notifyError, notifySuccess } from "./notifications";
+import { notify, notifyError, notifySuccess } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
 import { resolveBootFailure, showBootFailure } from "./boot-failure";
 import { applyStatic, fmt, onLocaleChange, t } from "./i18n";
@@ -419,6 +419,70 @@ function refreshModelBadge(): void {
     el.modelBadge.title = t.session.gatewayModelTitle;
   }
   el.modelBadge.classList.toggle("locked", !!locked);
+}
+
+// P283: background watcher — polls `/v1/runs` and raises a sticky
+// warning toast (plus a system notification when permitted) whenever a
+// run starts waiting for approval, with an action that opens the Runs
+// view. Notified run ids are remembered in localStorage so a restart
+// does not re-alert for the same gate.
+const APPROVAL_WATCH_KEY = "ulnclaw.approval.notified";
+const APPROVAL_WATCH_INTERVAL_MS = 15_000;
+const APPROVAL_WATCH_CAP = 200;
+
+function rememberedApprovalRuns(): Set<string> {
+  try {
+    const raw = localStorage.getItem(APPROVAL_WATCH_KEY);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    /* corrupted storage — start fresh */
+  }
+  return new Set();
+}
+
+function rememberApprovalRun(runId: string): void {
+  const seen = rememberedApprovalRuns();
+  seen.add(runId);
+  const trimmed = [...seen].slice(-APPROVAL_WATCH_CAP);
+  localStorage.setItem(APPROVAL_WATCH_KEY, JSON.stringify(trimmed));
+}
+
+async function watchApprovalsOnce(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const runs = await state.client.listRuns();
+    const seen = rememberedApprovalRuns();
+    for (const run of runs) {
+      if (run.status !== "waiting_for_approval" || seen.has(run.run_id)) continue;
+      rememberApprovalRun(run.run_id);
+      const command = run.approval?.command || "";
+      notify({
+        kind: "warning",
+        title: t.runs.approvalWaitingTitle,
+        message: t.runs.approvalWaitingBody
+          .replace("{id}", run.run_id.slice(0, 8))
+          .replace("{command}", command),
+        durationMs: 0,
+        action: {
+          label: t.runs.viewRuns,
+          onClick: () => activeSwitchView?.("runs"),
+        },
+      });
+      if ("Notification" in window && Notification.permission === "granted") {
+        try {
+          new Notification(t.runs.approvalWaitingTitle, { body: command });
+        } catch {
+          /* system notifications unavailable (e.g. insecure context) */
+        }
+      }
+    }
+  } catch {
+    /* gateway offline — the health dot already reports it */
+  }
+}
+
+function startApprovalWatcher(): void {
+  window.setInterval(() => void watchApprovalsOnce(), APPROVAL_WATCH_INTERVAL_MS);
 }
 
 async function pollHealth(): Promise<void> {
@@ -1142,6 +1206,7 @@ async function start(): Promise<void> {
   state.skills = (await state.client.listSkills()) || [];
   setInterval(() => void pollHealth(), 10000);
   setInterval(() => void refreshSessions(), 30000);
+  startApprovalWatcher();
 }
 
 // Stop a managed gateway when the window closes.
