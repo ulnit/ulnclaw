@@ -8319,11 +8319,38 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                         .set_session_archived(id, true)
                         .map_err(|e| e.to_string())
                 };
+                // P278: conversation preview callback — first user +
+                // assistant messages of the highlighted session, loaded
+                // through a fresh store connection (the picker may outlive
+                // this scope's borrow of `store`).
+                let preview_home = home.clone();
+                let preview = move |id: &str| {
+                    let preview_store =
+                        SqliteSessionStore::open(preview_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    let messages = preview_store
+                        .load_messages(id)
+                        .map_err(|e| e.to_string())?;
+                    let mut exchange: Vec<(String, Option<String>)> = Vec::new();
+                    for message in &messages {
+                        let role = match message.role {
+                            ulnclaw::provider::Role::User => "you",
+                            ulnclaw::provider::Role::Assistant => "assistant",
+                            _ => continue,
+                        };
+                        exchange.push((role.to_string(), message.content.clone()));
+                        if exchange.len() >= 2 {
+                            break;
+                        }
+                    }
+                    Ok(exchange)
+                };
                 match run_session_browse_tui(
                     rows.clone(),
                     project_by_session.clone(),
                     Some(&reload),
                     Some(&archive),
+                    Some(&preview),
                 ) {
                     Ok(selected) => selected,
                     Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
@@ -8588,6 +8615,7 @@ fn run_session_browse_tui(
     mut projects: std::collections::HashMap<String, String>,
     reload: Option<&dyn Fn() -> Result<(Vec<ulnclaw::session::sqlite::BrowseRow>, std::collections::HashMap<String, String>), String>>,
     archive: Option<&dyn Fn(&str) -> Result<(), String>>,
+    preview: Option<&dyn Fn(&str) -> Result<Vec<(String, Option<String>)>, String>>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -8634,6 +8662,11 @@ fn run_session_browse_tui(
     let mut show_help = false;
     let mut confirm_archive = false;
     let mut notice: Option<String> = None;
+    // P278: on-demand conversation preview for the details pane — loaded
+    // per highlighted session, cached by id, toggled with F3.
+    let mut show_preview = preview.is_some();
+    let mut preview_cache: std::collections::HashMap<String, Vec<(String, Option<String>)>> =
+        std::collections::HashMap::new();
 
     loop {
         // Tab cycles "all sources" plus each distinct source present in
@@ -8711,7 +8744,7 @@ fn run_session_browse_tui(
             queue!(
                 out,
                 SetForegroundColor(Color::Yellow),
-                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F2 sort  F1 help  F5 reload  F8 archive  Esc quit"),
+                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F2 sort  F3 preview  F1 help  F5 reload  F8 archive  Esc quit"),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -8819,11 +8852,38 @@ fn run_session_browse_tui(
             )
             .map_err(|e| e.to_string())?;
             if let Some(selected_row) = filtered.get(cursor_idx) {
-                let pane_lines = browse_details_pane_lines(
+                let mut pane_lines = browse_details_pane_lines(
                     selected_row,
                     projects.get(&selected_row.id).map(String::as_str),
                     content_w,
                 );
+                // P278: first-exchange preview under the metadata.
+                if show_preview {
+                    if let Some(preview_fn) = preview {
+                        let exchange = match preview_cache.get(&selected_row.id) {
+                            Some(cached) => cached.clone(),
+                            None => {
+                                let loaded =
+                                    preview_fn(&selected_row.id).unwrap_or_default();
+                                preview_cache
+                                    .insert(selected_row.id.clone(), loaded.clone());
+                                if preview_cache.len() > 64 {
+                                    preview_cache.clear();
+                                }
+                                loaded
+                            }
+                        };
+                        let text =
+                            ulnclaw::tui_text::browse_conversation_preview(&exchange, 160);
+                        if !text.is_empty() {
+                            pane_lines.push(String::new());
+                            pane_lines.push("\u{2500} conversation \u{2500}".to_string());
+                            pane_lines.extend(
+                                ulnclaw::tui_text::wrap_display_text(&text, content_w),
+                            );
+                        }
+                    }
+                }
                 let max_lines = rows_h.saturating_sub(3);
                 for (offset, line) in pane_lines.iter().take(max_lines).enumerate() {
                     queue!(
@@ -9025,6 +9085,16 @@ fn run_session_browse_tui(
                         cursor_idx = 0;
                         scroll_offset = 0;
                     }
+                    KeyCode::F(3) => {
+                        // P278: toggle the conversation preview pane.
+                        if preview.is_some() {
+                            show_preview = !show_preview;
+                        }
+                    }
+                    KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // P278: Ctrl+L forces a redraw (stray output, resize
+                        // artifacts) — the loop repaints unconditionally.
+                    }
                     KeyCode::F(1) => {
                         // P224: keybinding help overlay.
                         show_help = true;
@@ -9076,6 +9146,9 @@ fn run_session_browse_tui(
                     _ => {}
                 }
             }
+            // P278: terminal resize falls through to the next loop pass,
+            // which recomputes the viewport from the fresh terminal size.
+            Event::Resize(_, _) => {}
             _ => {}
         }
     }

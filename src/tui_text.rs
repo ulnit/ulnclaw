@@ -134,6 +134,30 @@ mod tests {
     }
 }
 
+/// Render the first user/assistant exchange of a session for the browse
+/// details pane (P278): role-labelled snippets, each truncated to
+/// `per_message_chars` display chars with an ellipsis. Empty or
+/// content-less exchanges render as an empty string.
+pub fn browse_conversation_preview(
+    exchange: &[(String, Option<String>)],
+    per_message_chars: usize,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for (role, content) in exchange {
+        let Some(text) = content.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+            continue;
+        };
+        let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let truncated: String = if flat.chars().count() > per_message_chars {
+            flat.chars().take(per_message_chars).collect::<String>() + "\u{2026}"
+        } else {
+            flat
+        };
+        lines.push(format!("{role}: {truncated}"));
+    }
+    lines.join("\n")
+}
+
 /// Keybinding table for the raw-mode session browser help overlay
 /// (P224 interaction upgrade). `(key, description)` pairs in display
 /// order; the TUI renders them as a dismissible overlay.
@@ -150,9 +174,11 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("Tab", "cycle the source filter (all \u{2192} cli \u{2192} cron \u{2192} \u{2026})"),
         ("Shift+Tab", "cycle the source filter backwards"),
         ("F2", "toggle recent-first \u{2194} alphabetical sort"),
+        ("F3", "toggle the conversation preview in the details pane"),
         ("F5", "reload the session list from disk"),
         ("F8", "archive the highlighted session (y confirms)"),
         ("F1", "toggle this help overlay"),
+        ("Ctrl+L", "redraw the screen"),
         ("Ctrl+C", "quit"),
     ]
 }
@@ -178,6 +204,26 @@ mod browse_tui_upgrade_tests {
         }
         // Every entry has a non-empty description.
         assert!(entries.iter().all(|(_, d)| !d.is_empty()));
+    }
+
+    #[test]
+    fn browse_conversation_preview_renders_and_truncates() {
+        let exchange = vec![
+            ("you".to_string(), Some("Fix the   build\nplease".to_string())),
+            ("assistant".to_string(), Some("On it — running cargo build.".to_string())),
+            ("tool".to_string(), None),
+        ];
+        let preview = super::browse_conversation_preview(&exchange, 12);
+        let lines: Vec<&str> = preview.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("you: Fix the"));
+        assert!(lines[0].ends_with("\u{2026}"));
+        assert!(lines[1].starts_with("assistant: On it \u{2014} run"));
+        // Short content stays whole.
+        let short = super::browse_conversation_preview(&exchange, 500);
+        assert!(short.contains("you: Fix the build please"));
+        // No usable content → empty string.
+        assert_eq!(super::browse_conversation_preview(&[("tool".to_string(), None)], 100), "");
     }
 
     #[test]
