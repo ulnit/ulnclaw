@@ -247,7 +247,8 @@ enum Commands {
         action: Option<CuratorAction>,
     },
     /// What Hermes has learned, on a timeline — learned skills & memories
-    /// (hermes `hermes journey`)
+    /// (hermes `hermes journey`; hermes aliases `learning` / `memory-graph`)
+    #[command(visible_alias = "learning", visible_alias = "memory-graph")]
     Journey {
         #[command(subcommand)]
         action: Option<JourneyAction>,
@@ -347,6 +348,20 @@ enum Commands {
         /// Action: status (default)
         action: Option<String>,
     },
+    /// Launch the desktop GUI — Tauri app in `desktop/` (hermes gui/desktop)
+    #[command(visible_alias = "desktop")]
+    Gui {
+        /// Explicit path to the ulnclaw-desktop binary
+        #[arg(long)]
+        binary: Option<std::path::PathBuf>,
+        /// Run the frontend dev server (`npm run tauri dev`) instead
+        #[arg(long)]
+        dev: bool,
+    },
+    /// OAuth device-flow login (alias for `auth login`; hermes login)
+    Login,
+    /// Remove stored OAuth tokens (alias for `auth logout`; hermes logout)
+    Logout,
     /// Interactive provider + model picker (hermes model)
     Model {
         /// Clear the models.dev picker cache before selecting
@@ -2596,6 +2611,23 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 }
             }
         }
+        Commands::Gui { binary, dev } => {
+            if dev {
+                let pid = ulnclaw::gui_cmd::launch_dev(&ulnclaw::gui_cmd::repo_root())?;
+                println!("✓ Desktop dev server starting (pid {pid}).");
+                Ok(())
+            } else {
+                let bin = ulnclaw::gui_cmd::resolve_binary(
+                    binary.as_deref(),
+                    &ulnclaw::gui_cmd::repo_root(),
+                )?;
+                let pid = ulnclaw::gui_cmd::launch(&bin)?;
+                println!("✓ Desktop GUI launched: {} (pid {pid})", bin.display());
+                Ok(())
+            }
+        }
+        Commands::Login => auth_cmd(&config, AuthAction::Login).await,
+        Commands::Logout => auth_cmd(&config, AuthAction::Logout).await,
         Commands::Model { refresh } => ulnclaw::model_cmd::run_model_picker(refresh),
         Commands::Setup { section, quick, reset, non_interactive } => {
             ulnclaw::setup_cmd::run_setup(section.as_deref(), quick, reset, non_interactive)
