@@ -991,3 +991,41 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 
 /* Sidebar toggle (P258, hermes view.toggleSidebar) */
 #app.no-sidebar #sidebar { display: none; }
+
+/* ── Usage view (token-accounting dashboard) ─────────────────────────── */
+#usage { padding: 16px 20px; overflow-y: auto; }
+#usage-header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.usage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.usage-card {
+  background: var(--panel-2);
+  border: 1px solid #0b0f14;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.usage-card-value { font-size: 1.5em; font-weight: 600; }
+.usage-card-label { opacity: 0.75; font-size: 0.85em; margin-top: 2px; }
+.usage-card-detail { opacity: 0.5; font-size: 0.75em; margin-top: 4px; word-break: break-word; }
+.usage-section-title { margin: 4px 0 10px; font-size: 1em; opacity: 0.85; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+.usage-table th {
+  text-align: left; opacity: 0.6; font-weight: 500;
+  border-bottom: 1px solid #0b0f14; padding: 6px 8px;
+}
+.usage-table td { padding: 7px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+.usage-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-table th.num { text-align: right; }
+.usage-total { font-weight: 600; }
+.usage-session-cell { max-width: 320px; }
+.usage-session-title { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-bar-track {
+  display: block; height: 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06); margin-top: 4px; overflow: hidden;
+}
+.usage-bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+.usage-table .muted { opacity: 0.55; }
+#usage .empty { opacity: 0.6; padding: 12px 0; }

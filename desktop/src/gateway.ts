@@ -229,6 +229,39 @@ export interface CronJob {
 
 const SETTINGS_KEY = "ulnclaw.gateway";
 
+export interface UsageSessionRow {
+  id: string;
+  source: string;
+  model: string;
+  title: string | null;
+  started_at: number | null;
+  ended_at: number | null;
+  end_reason: string | null;
+  message_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface UsagePayload {
+  process: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    tool_calls: number;
+    requests: { chat_completions: number; responses: number; session_chats: number };
+    runs: { started: number; completed: number; failed: number };
+  };
+  store: {
+    sessions: number;
+    messages: number;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+  };
+  sessions: UsageSessionRow[];
+}
+
 export function loadSettings(): GatewaySettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -552,6 +585,14 @@ export class GatewayClient {
   }
 
   /** Installed skills (drives the composer's /slash completion). */
+  async usage(limit = 50): Promise<UsagePayload> {
+    const response = await fetch(this.endpoint(`/api/usage?limit=${limit}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`usage HTTP ${response.status}`);
+    return (await response.json()) as UsagePayload;
+  }
+
   async listSkills(): Promise<SkillRow[]> {
     try {
       const response = await fetch(this.endpoint("/v1/skills"), { headers: this.headers() });

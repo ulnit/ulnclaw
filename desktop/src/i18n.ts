@@ -56,7 +56,7 @@ export function fmt(template: string, vars: Record<string, unknown>): string {
 
 export interface Translations {
   chrome: {
-    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string;
+    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
@@ -101,6 +101,15 @@ export interface Translations {
     create: string; createFailed: string; counts: string; empty: string; meta: string;
     runsLeft: string; deleteConfirm: string;
   };
+  usage: {
+    windowNote: string; perSession: string; empty: string;
+    totalTokens: string; input: string; output: string;
+    sessions: string; messages: string; processTokens: string;
+    prompt: string; completion: string; toolCalls: string;
+    requests: string; runs: string; completed: string; failed: string;
+    colSession: string; colModel: string; colMessages: string;
+    colInput: string; colOutput: string; colTotal: string; colStarted: string;
+  };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -125,7 +134,7 @@ export interface Translations {
   palette: {
     placeholder: string; noMatches: string; navigate: string; sessionGroup: string;
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
-    goToProjects: string; goToJobs: string; newSession: string; switchSession: string;
+    goToProjects: string; goToJobs: string; goToUsage: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
@@ -158,7 +167,7 @@ export interface Translations {
 
 const en: Translations = {
   chrome: {
-    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs",
+    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage",
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
@@ -251,6 +260,17 @@ const en: Translations = {
     meta: "next: {next} · last: {last}", runsLeft: " · {count} run(s) left",
     deleteConfirm: "Delete job “{name}”?",
   },
+  usage: {
+    windowNote: "Token accounting · last {count} sessions",
+    perSession: "Per-session breakdown",
+    empty: "No sessions recorded yet.",
+    totalTokens: "Total tokens (store)", input: "in", output: "out",
+    sessions: "Sessions", messages: "messages", processTokens: "Gateway tokens",
+    prompt: "prompt", completion: "completion", toolCalls: "Tool calls",
+    requests: "API requests", runs: "Async runs", completed: "completed", failed: "failed",
+    colSession: "Session", colModel: "Model", colMessages: "Msgs",
+    colInput: "Input", colOutput: "Output", colTotal: "Total", colStarted: "Started",
+  },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -294,7 +314,7 @@ const en: Translations = {
     placeholder: "Type a command… (Esc to close)", noMatches: "No matching commands",
     navigate: "Navigate", sessionGroup: "Session", sessionsGroup: "Sessions",
     gatewayGroup: "Gateway", goToChat: "Go to Chat", goToKanban: "Go to Kanban",
-    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)",
+    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage",
     newSession: "New session", switchSession: "Switch session",
     findInChat: "Find in chat", modelForSession: "Model for this session…",
     resumeSession: "Resume session… (/resume)",
@@ -357,7 +377,7 @@ const en: Translations = {
 
 const zh: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量",
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
@@ -450,6 +470,17 @@ const zh: Translations = {
     meta: "下次：{next} · 上次：{last}", runsLeft: " · 剩余 {count} 次运行",
     deleteConfirm: "删除任务「{name}」？",
   },
+  usage: {
+    windowNote: "令牌核算 · 最近 {count} 个会话",
+    perSession: "按会话明细",
+    empty: "尚无会话记录。",
+    totalTokens: "总令牌（存储）", input: "入", output: "出",
+    sessions: "会话数", messages: "条消息", processTokens: "网关令牌",
+    prompt: "提示", completion: "补全", toolCalls: "工具调用",
+    requests: "API 请求", runs: "异步运行", completed: "完成", failed: "失败",
+    colSession: "会话", colModel: "模型", colMessages: "消息",
+    colInput: "输入", colOutput: "输出", colTotal: "总计", colStarted: "开始时间",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -493,7 +524,7 @@ const zh: Translations = {
     placeholder: "输入命令…（Esc 关闭）", noMatches: "没有匹配的命令",
     navigate: "导航", sessionGroup: "会话", sessionsGroup: "会话列表",
     gatewayGroup: "网关", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往项目", goToJobs: "前往任务（cron）",
+    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量",
     newSession: "新建会话", switchSession: "切换会话",
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
     resumeSession: "恢复会话…（/resume）",
@@ -556,7 +587,7 @@ const zh: Translations = {
 
 const zhHant: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量",
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
@@ -649,6 +680,17 @@ const zhHant: Translations = {
     meta: "下次：{next} · 上次：{last}", runsLeft: " · 剩餘 {count} 次執行",
     deleteConfirm: "刪除工作「{name}」？",
   },
+  usage: {
+    windowNote: "令牌核算 · 最近 {count} 個工作階段",
+    perSession: "按工作階段明細",
+    empty: "尚無工作階段記錄。",
+    totalTokens: "總令牌（儲存）", input: "入", output: "出",
+    sessions: "工作階段數", messages: "則訊息", processTokens: "閘道令牌",
+    prompt: "提示", completion: "補全", toolCalls: "工具呼叫",
+    requests: "API 請求", runs: "非同步執行", completed: "完成", failed: "失敗",
+    colSession: "工作階段", colModel: "模型", colMessages: "訊息",
+    colInput: "輸入", colOutput: "輸出", colTotal: "總計", colStarted: "開始時間",
+  },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -692,7 +734,7 @@ const zhHant: Translations = {
     placeholder: "輸入命令…（Esc 關閉）", noMatches: "沒有符合的命令",
     navigate: "導覽", sessionGroup: "工作階段", sessionsGroup: "工作階段清單",
     gatewayGroup: "閘道", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往專案", goToJobs: "前往工作（cron）",
+    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量",
     newSession: "新增工作階段", switchSession: "切換工作階段",
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
     resumeSession: "恢復工作階段…（/resume）",
@@ -755,7 +797,7 @@ const zhHant: Translations = {
 
 const ja: Translations = {
   chrome: {
-    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ",
+    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量",
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
@@ -848,6 +890,17 @@ const ja: Translations = {
     meta: "次回：{next} · 前回：{last}", runsLeft: " · 残り {count} 回",
     deleteConfirm: "ジョブ「{name}」を削除しますか？",
   },
+  usage: {
+    windowNote: "トークン集計 · 直近 {count} セッション",
+    perSession: "セッション別内訳",
+    empty: "まだセッションがありません。",
+    totalTokens: "総トークン（ストア）", input: "入力", output: "出力",
+    sessions: "セッション", messages: "メッセージ", processTokens: "ゲートウェイ トークン",
+    prompt: "プロンプト", completion: "補完", toolCalls: "ツール呼び出し",
+    requests: "API リクエスト", runs: "非同期実行", completed: "完了", failed: "失敗",
+    colSession: "セッション", colModel: "モデル", colMessages: "件数",
+    colInput: "入力", colOutput: "出力", colTotal: "合計", colStarted: "開始",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -891,7 +944,7 @@ const ja: Translations = {
     placeholder: "コマンドを入力…（Esc で閉じる）", noMatches: "一致するコマンドがありません",
     navigate: "移動", sessionGroup: "セッション", sessionsGroup: "セッション一覧",
     gatewayGroup: "ゲートウェイ", goToChat: "チャットへ", goToKanban: "カンバンへ",
-    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ",
+    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ",
     newSession: "新規セッション", switchSession: "セッションを切り替え",
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
     resumeSession: "セッションを再開…（/resume）",
@@ -954,7 +1007,7 @@ const ja: Translations = {
 
 const ar: Translations = {
   chrome: {
-    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام",
+    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام",
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
@@ -1047,6 +1100,17 @@ const ar: Translations = {
     meta: "التالية: {next} · الأخيرة: {last}", runsLeft: " · {count} تشغيلات متبقية",
     deleteConfirm: "حذف المهمة «{name}»؟",
   },
+  usage: {
+    windowNote: "إحصاء الرموز · آخر {count} جلسة",
+    perSession: "التفصيل حسب الجلسة",
+    empty: "لا توجد جلسات بعد.",
+    totalTokens: "إجمالي الرموز (المخزن)", input: "دخل", output: "خرج",
+    sessions: "الجلسات", messages: "رسالة", processTokens: "رموز البوابة",
+    prompt: "مطالبات", completion: "إكمالات", toolCalls: "استدعاءات الأدوات",
+    requests: "طلبات API", runs: "تشغيلات غير متزامنة", completed: "اكتملت", failed: "فشلت",
+    colSession: "الجلسة", colModel: "النموذج", colMessages: "رسائل",
+    colInput: "دخل", colOutput: "خرج", colTotal: "الإجمالي", colStarted: "البدء",
+  },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",
@@ -1090,7 +1154,7 @@ const ar: Translations = {
     placeholder: "اكتب أمرًا… (Esc للإغلاق)", noMatches: "لا أوامر مطابقة",
     navigate: "تنقّل", sessionGroup: "الجلسة", sessionsGroup: "الجلسات",
     gatewayGroup: "البوابة", goToChat: "إلى الدردشة", goToKanban: "إلى كانبان",
-    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)",
+    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام",
     newSession: "جلسة جديدة", switchSession: "تبديل الجلسة",
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
     resumeSession: "استئناف جلسة… (/resume)",
