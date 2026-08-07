@@ -493,6 +493,13 @@ export interface WebhookListPayload {
   subscriptions: WebhookSubscription[];
 }
 
+export interface JobDeliveryTarget {
+  id: string;
+  name: string;
+  home_target_set?: boolean;
+  home_env_var?: string | null;
+}
+
 export interface WebhookCreateBody {
   name: string;
   description?: string;
@@ -1506,12 +1513,23 @@ export class GatewayClient {
     return (value?.jobs || []) as CronJob[];
   }
 
+  /** GET /api/jobs/delivery-targets — where cron results can be delivered. */
+  async jobDeliveryTargets(): Promise<JobDeliveryTarget[]> {
+    const response = await fetch(this.endpoint("/api/jobs/delivery-targets"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`delivery targets HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.targets || []) as JobDeliveryTarget[];
+  }
+
   async jobCreate(request: {
     name: string;
     schedule: string;
     prompt: string;
     skills?: string[];
     repeat?: number;
+    deliver?: string;
   }): Promise<CronJob | null> {
     const value = await this.kanbanJson("/api/jobs", {
       method: "POST",

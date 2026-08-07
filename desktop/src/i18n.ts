@@ -101,7 +101,7 @@ export interface Translations {
     delete: string; edit: string; promptPrompt: string; schedulePrompt: string;
     whatShouldAgentDo: string;
     fromNow: string; ago: string; newJob: string; newCronJob: string; nameLabel: string;
-    scheduleLabel: string; promptLabel: string; skillsLabel: string; repeatLabel: string;
+    scheduleLabel: string; promptLabel: string; skillsLabel: string; repeatLabel: string; deliverLabel: string;
     create: string; createFailed: string; counts: string; empty: string; meta: string;
     runsLeft: string; deleteConfirm: string;
   };
@@ -351,7 +351,7 @@ const en: Translations = {
     nameLabel: "Name",
     scheduleLabel: "Schedule (cron expression, @every 30m, or @at unix-ts)",
     promptLabel: "Prompt", skillsLabel: "Skills (comma-separated, optional)",
-    repeatLabel: "Repeat (runs remaining; empty = forever)", create: "Create",
+    repeatLabel: "Repeat (runs remaining; empty = forever)", create: "Create", deliverLabel: "Deliver result to",
     createFailed: "Job creation failed (gateway unreachable or invalid schedule).",
     counts: "{active} active / {total} jobs",
     empty: "No cron jobs yet — create one, or use `ulnclaw cron add` in the terminal.",
@@ -693,7 +693,7 @@ const zh: Translations = {
     nameLabel: "名称",
     scheduleLabel: "调度（cron 表达式、@every 30m 或 @at unix 时间戳）",
     promptLabel: "提示词", skillsLabel: "技能（逗号分隔，可选）",
-    repeatLabel: "重复（剩余运行次数；留空 = 永远）", create: "创建",
+    repeatLabel: "重复（剩余运行次数；留空 = 永远）", create: "创建", deliverLabel: "结果投递到",
     createFailed: "任务创建失败（网关不可达或调度无效）。",
     counts: "{active} 活跃 / 共 {total} 个任务",
     empty: "还没有定时任务 —— 创建一个，或在终端使用 `ulnclaw cron add`。",
@@ -1035,7 +1035,7 @@ const zhHant: Translations = {
     nameLabel: "名稱",
     scheduleLabel: "排程（cron 表示式、@every 30m 或 @at unix 時間戳記）",
     promptLabel: "提示詞", skillsLabel: "技能（逗號分隔，選填）",
-    repeatLabel: "重複（剩餘執行次數；留空 = 永遠）", create: "建立",
+    repeatLabel: "重複（剩餘執行次數；留空 = 永遠）", create: "建立", deliverLabel: "結果投遞到",
     createFailed: "工作建立失敗（閘道不可達或排程無效）。",
     counts: "{active} 活躍 / 共 {total} 個工作",
     empty: "還沒有定時工作 —— 建立一個，或在終端機使用 `ulnclaw cron add`。",
@@ -1377,7 +1377,7 @@ const ja: Translations = {
     nameLabel: "名前",
     scheduleLabel: "スケジュール（cron 式、@every 30m、@at unix-ts）",
     promptLabel: "プロンプト", skillsLabel: "スキル（カンマ区切り、任意）",
-    repeatLabel: "繰り返し（残り実行回数；空 = 無期限）", create: "作成",
+    repeatLabel: "繰り返し（残り実行回数；空 = 無期限）", create: "作成", deliverLabel: "結果の配信先",
     createFailed: "ジョブの作成に失敗（ゲートウェイ到達不能またはスケジュールが無効）。",
     counts: "有効 {active} / 合計 {total} ジョブ",
     empty: "まだ cron ジョブがありません — 作成するか、ターミナルで `ulnclaw cron add` を使用してください。",
@@ -1719,7 +1719,7 @@ const ar: Translations = {
     nameLabel: "الاسم",
     scheduleLabel: "الجدولة (تعبير cron أو @every 30m أو @at unix-ts)",
     promptLabel: "المطالب", skillsLabel: "المهارات (مفصولة بفواصل، اختيارية)",
-    repeatLabel: "التكرار (مرات التشغيل المتبقية؛ فارغ = للأبد)", create: "إنشاء",
+    repeatLabel: "التكرار (مرات التشغيل المتبقية؛ فارغ = للأبد)", create: "إنشاء", deliverLabel: "تسليم النتيجة إلى",
     createFailed: "فشل إنشاء المهمة (البوابة غير متاحة أو الجدولة غير صالحة).",
     counts: "{active} نشطة / {total} مهام",
     empty: "لا مهام cron بعد — أنشئ واحدة أو استخدم `ulnclaw cron add` في الطرفي.",

@@ -54,6 +54,9 @@ export class JobsWidget {
           <label><span data-i18n="jobs.repeatLabel">Repeat (runs remaining; empty = forever)</span>
             <input id="job-create-repeat" type="number" min="1" placeholder="forever" />
           </label>
+          <label><span data-i18n="jobs.deliverLabel">Deliver result to</span>
+            <select id="job-create-deliver"></select>
+          </label>
           <menu>
             <button value="cancel" data-i18n="chrome.cancel">Cancel</button>
             <button id="job-create-save" value="save" data-i18n="jobs.create">Create</button>
@@ -65,6 +68,7 @@ export class JobsWidget {
       void this.refresh();
     (this.root.querySelector("#jobs-new") as HTMLButtonElement).onclick = () => {
       const dialog = this.root.querySelector("#job-create") as HTMLDialogElement;
+      this.populateDeliverTargets().catch(() => undefined);
       dialog.showModal();
     };
     const dialog = this.root.querySelector("#job-create") as HTMLDialogElement;
@@ -96,6 +100,20 @@ export class JobsWidget {
     this.render();
   }
 
+  private async populateDeliverTargets(): Promise<void> {
+    const client = this.client();
+    const select = this.root.querySelector("#job-create-deliver") as HTMLSelectElement;
+    if (!client) return;
+    try {
+      const targets = await client.jobDeliveryTargets();
+      select.innerHTML = targets
+        .map((target) => `<option value="${target.id}">${target.name}</option>`)
+        .join("");
+    } catch {
+      select.innerHTML = `<option value="local">local</option>`;
+    }
+  }
+
   private async createJob(): Promise<void> {
     const client = this.client();
     if (!client) return;
@@ -110,12 +128,14 @@ export class JobsWidget {
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0);
     const repeat = repeatRaw ? Number(repeatRaw) : undefined;
+    const deliver = (this.root.querySelector("#job-create-deliver") as HTMLSelectElement).value;
     const created = await client.jobCreate({
       name,
       schedule,
       prompt,
       skills: skills.length ? skills : undefined,
       repeat: repeat && repeat > 0 ? repeat : undefined,
+      deliver: deliver || undefined,
     });
     if (!created) {
       window.alert(t.jobs.createFailed);
