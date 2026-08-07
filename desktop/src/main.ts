@@ -16,6 +16,7 @@ import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
 import { notifyError, notifySuccess } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
+import { resolveBootFailure, showBootFailure } from "./boot-failure";
 import { applyStatic, fmt, onLocaleChange, t } from "./i18n";
 import { LanguageSwitcher } from "./language-switcher";
 import { OnboardingOverlay } from "./onboarding";
@@ -637,9 +638,12 @@ async function start(): Promise<void> {
   // parity): show while the gateway is unreachable, poll until healthy,
   // then run the exit choreography. Never resurrects after first success.
   state.onboarding = new OnboardingOverlay(() => state.client);
-  void (async () => {
+  // Cold-boot health cycle: poll up to 20 s, then land on the boot-
+  // failure recovery card (P253, hermes boot-failure-overlay parity).
+  const bootPoll = async (): Promise<void> => {
     if (await state.client!.health()) {
       hideConnecting();
+      resolveBootFailure();
       void state.onboarding!.maybeOpen();
       return;
     }
@@ -648,13 +652,15 @@ async function start(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 500));
       if (await state.client!.health()) {
         hideConnecting();
+        resolveBootFailure();
         void state.onboarding!.maybeOpen();
         return;
       }
     }
     hideConnecting();
-    notifyError(t.boot.unreachable, t.boot.unreachableDetail);
-  })();
+    showBootFailure(() => void bootPoll(), () => el.settingsBtn.click());
+  };
+  void bootPoll();
 
   el.settingsOnboarding.onclick = () => {
     el.settings.close();

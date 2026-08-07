@@ -938,3 +938,20 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   display: flex; justify-content: space-between; gap: 8px;
   padding: 8px 10px; border-top: 1px solid #0b0f14;
 }
+
+/* Boot-failure recovery overlay (P253) */
+#boot-failure-overlay {
+  position: fixed; inset: 0; z-index: 55;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(6, 9, 13, 0.82); backdrop-filter: blur(3px);
+}
+#boot-failure-overlay[hidden] { display: none; }
+.boot-failure-card {
+  max-width: 420px; padding: 26px 28px; text-align: center;
+  background: var(--panel); border: 1px solid #2a3442; border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.boot-failure-glyph { font-size: 34px; margin-bottom: 10px; }
+.boot-failure-title { margin: 0 0 8px; font-size: 17px; }
+.boot-failure-description { margin: 0 0 18px; font-size: 13px; color: #8fa3c0; line-height: 1.5; }
+.boot-failure-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }

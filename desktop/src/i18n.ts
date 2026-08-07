@@ -70,7 +70,8 @@ export interface Translations {
   };
   tools: { running: string; done: string; arguments: string; result: string; fallbackName: string };
   slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; skillFallback: string };
-  boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string };
+  boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
+    failureTitle: string; retry: string; openSettings: string; dismiss: string };
   bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string };
   kanban: {
     todo: string; doing: string; done: string; blocked: string;
@@ -190,6 +191,8 @@ const en: Translations = {
     unreachable: "Gateway unreachable — check the gateway URL and API key in Settings.",
     unreachableDetail: "The desktop shell polls /health once the gateway is up; managed mode spawns it automatically when the ulnclaw binary is on PATH.",
     connecting: "CONNECTING", starting: "starting the ulnclaw gateway…",
+    failureTitle: "Desktop boot failed", retry: "Retry",
+    openSettings: "Open settings", dismiss: "Dismiss",
   },
   bridge: {
     preview: "Preview: {label}",
@@ -369,6 +372,8 @@ const zh: Translations = {
     unreachable: "网关不可达 — 请在设置中检查网关 URL 与 API 密钥。",
     unreachableDetail: "网关就绪后桌面外壳会轮询 /health；托管模式在 ulnclaw 二进制位于 PATH 上时会自动拉起网关。",
     connecting: "连接中", starting: "正在启动 ulnclaw 网关…",
+    failureTitle: "桌面启动失败", retry: "重试",
+    openSettings: "打开设置", dismiss: "忽略",
   },
   bridge: {
     preview: "预览：{label}",
@@ -548,6 +553,8 @@ const zhHant: Translations = {
     unreachable: "閘道不可達 — 請在設定中檢查閘道 URL 與 API 金鑰。",
     unreachableDetail: "閘道就緒後桌面外殼會輪詢 /health；託管模式在 ulnclaw 二進位檔位於 PATH 上時會自動啟動閘道。",
     connecting: "連線中", starting: "正在啟動 ulnclaw 閘道…",
+    failureTitle: "桌面啟動失敗", retry: "重試",
+    openSettings: "開啟設定", dismiss: "忽略",
   },
   bridge: {
     preview: "預覽：{label}",
@@ -727,6 +734,8 @@ const ja: Translations = {
     unreachable: "ゲートウェイに到達できません — 設定でゲートウェイ URL と API キーを確認してください。",
     unreachableDetail: "ゲートウェイが起動するとデスクトップシェルは /health をポーリングします。管理モードは ulnclaw バイナリが PATH にあれば自動的に起動します。",
     connecting: "接続中", starting: "ulnclaw ゲートウェイを起動中…",
+    failureTitle: "デスクトップの起動に失敗", retry: "再試行",
+    openSettings: "設定を開く", dismiss: "閉じる",
   },
   bridge: {
     preview: "プレビュー：{label}",
@@ -906,6 +915,8 @@ const ar: Translations = {
     unreachable: "البوابة غير متاحة — تحقق من عنوان البوابة ومفتاح API في الإعدادات.",
     unreachableDetail: "يستطلع سطح المكتب /health بمجرد عمل البوابة؛ ويطلقها الوضع المُدار تلقائيًا عندما يكون ملف ulnclaw على PATH.",
     connecting: "جارٍ الاتصال", starting: "جارٍ تشغيل بوابة ulnclaw…",
+    failureTitle: "فشل تشغيل سطح المكتب", retry: "إعادة المحاولة",
+    openSettings: "فتح الإعدادات", dismiss: "تجاهل",
   },
   bridge: {
     preview: "معاينة: {label}",
