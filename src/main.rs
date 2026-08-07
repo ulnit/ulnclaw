@@ -348,6 +348,11 @@ enum Commands {
         /// Action: status (default)
         action: Option<String>,
     },
+    /// WhatsApp (Baileys bridge) status & diagnostics (hermes whatsapp surface)
+    Whatsapp {
+        /// Action: status (default)
+        action: Option<String>,
+    },
     /// WhatsApp Business Cloud API setup wizard (hermes whatsapp-cloud)
     WhatsappCloud,
     /// Dynamic webhook subscriptions: subscribe/list/remove/test (hermes webhook)
@@ -2665,6 +2670,18 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 }
                 Some(other) => {
                     eprintln!("Unknown monitoring action: {other}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        Commands::Whatsapp { action } => {
+            match action.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+                None | Some("status") => {
+                    print!("{}", ulnclaw::whatsapp::whatsapp_status(&config).await);
+                    Ok(())
+                }
+                Some(other) => {
+                    eprintln!("Unknown whatsapp action: {other}");
                     std::process::exit(2);
                 }
             }

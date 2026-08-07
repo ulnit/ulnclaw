@@ -922,12 +922,173 @@ impl crate::messaging::PlatformSender for WhatsappSender {
     }
 }
 
+// ---------------------------------------------------------------------------
+// `ulnclaw whatsapp status` — read-only bridge diagnostics (lean parity
+// for hermes `hermes whatsapp`, whose wizard role is filled by the
+// gateway-supervised auto-spawn + QR-on-startup flow)
+// ---------------------------------------------------------------------------
+
+/// One-line summary of a bridge `/health` payload (status + identity).
+pub fn health_summary(health: &Value) -> String {
+    let status = health
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    match status {
+        "connected" => {
+            let jid = health
+                .get("botJid")
+                .or_else(|| health.get("jid"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown JID");
+            format!("connected as {jid}")
+        }
+        "qr" => "waiting for QR pairing — scan the QR in bridge.log".to_string(),
+        s if s.contains("pairing") => {
+            format!("{s} — finish pairing in bridge.log")
+        }
+        other => format!("status: {other}"),
+    }
+}
+
+/// Probe the bridge `/health` endpoint with a short timeout.
+async fn probe_health(bridge_url: &str) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("{}/health", bridge_url.trim_end_matches('/')))
+        .send()
+        .await
+        .map_err(|e| format!("unreachable: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+/// Full status report for `ulnclaw whatsapp status`.
+pub async fn whatsapp_status(config: &crate::config::UlncLawConfig) -> String {
+    use crate::whatsapp_bridge as wb;
+    let home = crate::config::ulnclaw_home();
+    let cfg = config.messaging.whatsapp.resolve();
+    let mut out = String::new();
+    out.push_str("WhatsApp (Baileys bridge)\n");
+
+    // Platform state.
+    if config.messaging.whatsapp.enabled {
+        out.push_str(&format!(
+            "  Platform:   enabled (mode: {})\n",
+            if cfg.mode.is_empty() { "self-chat" } else { cfg.mode.as_str() }
+        ));
+    } else {
+        out.push_str("  Platform:   disabled — `ulnclaw config set messaging.whatsapp.enabled true`\n");
+    }
+
+    // Bridge target.
+    let bridge_url = if cfg.bridge_url.is_empty() {
+        format!("http://127.0.0.1:{}", cfg.bridge_port)
+    } else {
+        cfg.bridge_url.clone()
+    };
+    let local = wb::is_local_bridge_target(&bridge_url, cfg.bridge_port);
+    out.push_str(&format!(
+        "  Bridge URL: {} ({})\n",
+        bridge_url,
+        if local && cfg.auto_spawn {
+            "bundled, auto-spawned by the gateway"
+        } else if local {
+            "local, external (auto_spawn off)"
+        } else {
+            "external"
+        }
+    ));
+
+    // Node + script installation (only meaningful for the bundled bridge).
+    if local {
+        match wb::find_node_executable("node") {
+            Some(node) => out.push_str(&format!("  Node.js:    {}\n", node.display())),
+            None => out.push_str("  Node.js:    NOT FOUND — install Node 18+ to run the bridge\n"),
+        }
+        // NB: wb::resolve_bridge_dir() syncs the script on call — the
+        // status command stays read-only and just inspects the path.
+        let bridge_dir = home.join("scripts").join("whatsapp-bridge");
+        if bridge_dir.join("bridge.js").exists() {
+            let fresh = wb::deps_fresh(&bridge_dir);
+            out.push_str(&format!(
+                "  Script dir: {} (deps {})\n",
+                bridge_dir.display(),
+                if fresh { "fresh" } else { "stale — gateway reinstalls on next start" }
+            ));
+        } else {
+            out.push_str(&format!(
+                "  Script dir: {} (not installed yet — gateway syncs it on first start)\n",
+                bridge_dir.display()
+            ));
+        }
+        // Process state from the pidfile.
+        let session_dir = if cfg.session_path.is_empty() {
+            home.join("platforms").join("whatsapp").join("session")
+        } else {
+            std::path::PathBuf::from(&cfg.session_path)
+        };
+        match wb::read_bridge_pidfile(&session_dir) {
+            Some((pid, start)) if wb::pid_exists(pid) => {
+                let ours = wb::bridge_pid_is_ours(pid, &session_dir, start);
+                out.push_str(&format!(
+                    "  Process:    running (pid {}{})\n",
+                    pid,
+                    if ours { "" } else { ", foreign pidfile" }
+                ));
+            }
+            Some((pid, _)) => {
+                out.push_str(&format!("  Process:    stale pidfile (pid {pid} not running)\n"));
+            }
+            None => out.push_str("  Process:    not running (gateway starts it on demand)\n"),
+        }
+    }
+
+    // Live health probe.
+    out.push_str(&format!(
+        "  Health:     {}\n",
+        match probe_health(&bridge_url).await {
+            Ok(health) => health_summary(&health),
+            Err(e) => format!("bridge {e}"),
+        }
+    ));
+
+    // Next steps.
+    if !config.messaging.whatsapp.enabled {
+        out.push_str("\n  Next: enable the platform, then start `ulnclaw gateway` — the\n");
+        out.push_str("  bridge installs and launches automatically; scan the QR code\n");
+        out.push_str("  printed in bridge.log to pair your WhatsApp account.\n");
+    } else {
+        out.push_str("\n  Next: start `ulnclaw gateway` (bridge auto-spawns when local);\n");
+        out.push_str("  watch bridge.log next to the session directory for the QR code.\n");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn msg(json_str: &str) -> Value {
         serde_json::from_str(json_str).unwrap()
+    }
+
+    #[test]
+    fn health_summary_variants() {
+        assert_eq!(
+            health_summary(&msg(r#"{"status":"connected","botJid":"123@s.whatsapp.net"}"#)),
+            "connected as 123@s.whatsapp.net"
+        );
+        assert!(health_summary(&msg(r#"{"status":"connected"}"#)).contains("unknown JID"));
+        assert!(health_summary(&msg(r#"{"status":"qr"}"#)).contains("QR"));
+        assert!(health_summary(&msg(r#"{"status":"pairing-code"}"#)).contains("pairing"));
+        assert!(health_summary(&msg(r#"{"status":"starting"}"#)).contains("starting"));
+        assert!(health_summary(&msg(r#"{}"#)).contains("unknown"));
     }
 
     #[test]
