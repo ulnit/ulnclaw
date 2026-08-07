@@ -68,6 +68,9 @@ skill sync + local OAuth upstream proxy, and a Tauri desktop GUI (`desktop/`).
 ```bash
 cargo build --release --target x86_64-unknown-linux-musl
 
+# Interactive onboarding wizard (provider, terminal, platforms, tools)
+./ulnclaw setup                 # or: ./ulnclaw setup model|terminal|gateway|tools|agent
+
 # Write a default config to ~/.ulnclaw/config.toml
 ./ulnclaw init
 
@@ -369,6 +372,9 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 
 ```bash
 cargo build --release --target x86_64-unknown-linux-musl
+
+# 交互式安装向导（provider、终端、消息平台、工具）
+./ulnclaw setup                 # 或：./ulnclaw setup model|terminal|gateway|tools|agent
 
 # 生成默认配置 ~/.ulnclaw/config.toml
 ./ulnclaw init

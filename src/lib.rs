@@ -178,6 +178,7 @@ pub mod secret_scope;
 pub mod secrets;
 pub mod secrets_cache;
 pub mod secrets_cmd;
+pub mod setup_cmd;
 pub mod security_audit;
 pub mod session;
 pub mod skin;

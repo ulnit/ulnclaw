@@ -347,6 +347,20 @@ enum Commands {
         /// Action: status (default)
         action: Option<String>,
     },
+    /// Interactive onboarding wizard (hermes setup)
+    Setup {
+        /// Section to configure: model, terminal, gateway, tools, agent
+        section: Option<String>,
+        /// Fill only missing items (existing installs)
+        #[arg(long)]
+        quick: bool,
+        /// Reset configuration to defaults before running
+        #[arg(long)]
+        reset: bool,
+        /// Print non-interactive guidance and exit
+        #[arg(long)]
+        non_interactive: bool,
+    },
     /// Generate shell completion scripts (hermes completion)
     Completion {
         /// Shell to generate completions for (bash, zsh, fish, elvish, powershell)
@@ -2575,6 +2589,9 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                     std::process::exit(2);
                 }
             }
+        }
+        Commands::Setup { section, quick, reset, non_interactive } => {
+            ulnclaw::setup_cmd::run_setup(section.as_deref(), quick, reset, non_interactive)
         }
         Commands::Status { all: _, deep } => {
             let opts = ulnclaw::status::StatusOptions { deep };

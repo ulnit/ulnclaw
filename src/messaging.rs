@@ -191,6 +191,58 @@ impl MessagingConfig {
             || self.raft.enabled
             || self.a2a.enabled
     }
+
+    /// Names of every enabled platform section, in config order (setup
+    /// wizard summary + monitoring heartbeat input).
+    pub fn enabled_platform_names(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        let entries: [(&str, bool); 26] = [
+            ("telegram", self.telegram.enabled),
+            ("discord", self.discord.enabled),
+            ("slack", self.slack.enabled),
+            ("signal", self.signal.enabled),
+            ("whatsapp_cloud", self.whatsapp_cloud.enabled),
+            ("msgraph", self.msgraph.enabled),
+            ("webhook", self.webhook.enabled),
+            ("bluebubbles", self.bluebubbles.enabled),
+            ("weixin", self.weixin.enabled),
+            ("qq", self.qq.enabled),
+            ("yuanbao", self.yuanbao.enabled),
+            ("email", self.email.enabled),
+            ("mattermost", self.mattermost.enabled),
+            ("matrix", self.matrix.enabled),
+            ("dingtalk", self.dingtalk.enabled),
+            ("wecom", self.wecom.enabled),
+            ("feishu", self.feishu.enabled),
+            ("homeassistant", self.homeassistant.enabled),
+            ("sms", self.sms.enabled),
+            ("whatsapp", self.whatsapp.enabled),
+            ("irc", self.irc.enabled),
+            ("ntfy", self.ntfy.enabled),
+            ("simplex", self.simplex.enabled),
+            ("teams", self.teams.enabled),
+            ("line", self.line.enabled),
+            ("google_chat", self.google_chat.enabled),
+        ];
+        for (name, enabled) in entries {
+            if enabled {
+                out.push(name);
+            }
+        }
+        if self.buzz.enabled {
+            out.push("buzz");
+        }
+        if self.photon.enabled {
+            out.push("photon");
+        }
+        if self.raft.enabled {
+            out.push("raft");
+        }
+        if self.a2a.enabled {
+            out.push("a2a");
+        }
+        out
+    }
 }
 
 /// `[messaging.telegram]`.
