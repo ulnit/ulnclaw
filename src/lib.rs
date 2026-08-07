@@ -182,6 +182,7 @@ pub mod title_generator;
 pub mod tool_result_storage;
 pub mod tools;
 pub mod toolsets;
+pub mod tirith;
 pub mod tui_text;
 pub mod update;
 pub mod uninstall;

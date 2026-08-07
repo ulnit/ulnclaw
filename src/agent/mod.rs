@@ -1223,17 +1223,50 @@ impl Agent {
                 ),
             }));
         }
-        match classify_command(command) {
+        // Phase 1 (hermes approval.py): gather findings from the pattern
+        // classifier AND the tirith content-level scanner before deciding.
+        let pattern_confirm: Option<String> = match classify_command(command) {
             ApprovalDecision::Allow => None,
-            ApprovalDecision::Block(reason) => Some(serde_json::json!({
-                "success": false,
-                "error": format!(
-                    "BLOCKED: this command matches the hardline safety floor ({}). It cannot be approved. Use a safer alternative.",
-                    reason
-                ),
-            })),
-            ApprovalDecision::Confirm(reason) => {
-                let approvals = self.context.config.approvals.clone();
+            ApprovalDecision::Block(reason) => {
+                return Some(serde_json::json!({
+                    "success": false,
+                    "error": format!(
+                        "BLOCKED: this command matches the hardline safety floor ({}). It cannot be approved. Use a safer alternative.",
+                        reason
+                    ),
+                }));
+            }
+            ApprovalDecision::Confirm(reason) => Some(reason),
+        };
+
+        // Tirith pre-exec content scan (hermes tools/tirith_security.py):
+        // homograph URLs, pipe-to-interpreter, terminal injection, ...
+        // Block and warn both become approvable warnings (hermes semantics
+        // since the "block without prompt" change); operational failures
+        // fail-open/fail-closed inside the wrapper per `tirith_fail_open`.
+        let tirith_command = command.to_string();
+        let tirith_security = self.context.config.security.clone();
+        let tirith_verdict = tokio::task::spawn_blocking(move || {
+            crate::tirith::check_command_security(&tirith_command, &tirith_security)
+        })
+        .await
+        .unwrap_or_default();
+        let tirith_desc = match tirith_verdict.action {
+            crate::tirith::TirithAction::Block | crate::tirith::TirithAction::Warn => {
+                Some(crate::tirith::format_description(&tirith_verdict))
+            }
+            crate::tirith::TirithAction::Allow => None,
+        };
+
+        let reason: String = match (pattern_confirm, tirith_desc) {
+            (Some(pattern), Some(tirith)) => format!("{pattern}; {tirith}"),
+            (Some(pattern), None) => pattern,
+            (None, Some(tirith)) => tirith,
+            (None, None) => return None,
+        };
+
+        {
+            let approvals = self.context.config.approvals.clone();
                 let mode = crate::tools::approval::parse_approval_mode(&approvals.mode);
 
                 // hermes `approvals.mode: off` bypass — the hardline floor
@@ -1356,7 +1389,6 @@ impl Agent {
                         ),
                     }))
                 }
-            }
         }
     }
 

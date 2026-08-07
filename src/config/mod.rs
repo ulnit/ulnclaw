@@ -1090,14 +1090,55 @@ impl Default for PetDisplayConfig {
     }
 }
 
-/// `[security]` — URL safety toggles (port of hermes `security.*`).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// `[security]` — URL safety + tirith scanner (port of hermes `security.*`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecurityConfig {
     /// Allow web tools to fetch private/internal addresses (disables the
     /// SSRF block). Cloud metadata endpoints remain blocked regardless
     /// (hermes `security.allow_private_urls`).
     pub allow_private_urls: bool,
+    /// Enable the tirith pre-exec content scanner (hermes
+    /// `security.tirith_enabled`; env `TIRITH_ENABLED` overrides).
+    #[serde(default = "default_tirith_enabled")]
+    pub tirith_enabled: bool,
+    /// tirith binary: bare name (PATH lookup + auto-install) or explicit
+    /// path (hermes `security.tirith_path`; env `TIRITH_BIN` overrides).
+    #[serde(default = "default_tirith_path")]
+    pub tirith_path: String,
+    /// Scan timeout in seconds (hermes `security.tirith_timeout`; env
+    /// `TIRITH_TIMEOUT` overrides).
+    #[serde(default = "default_tirith_timeout")]
+    pub tirith_timeout: u64,
+    /// Allow commands when tirith cannot run (hermes
+    /// `security.tirith_fail_open`; env `TIRITH_FAIL_OPEN` overrides).
+    #[serde(default = "default_tirith_fail_open")]
+    pub tirith_fail_open: bool,
+}
+
+fn default_tirith_enabled() -> bool {
+    true
+}
+fn default_tirith_path() -> String {
+    "tirith".to_string()
+}
+fn default_tirith_timeout() -> u64 {
+    5
+}
+fn default_tirith_fail_open() -> bool {
+    true
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        SecurityConfig {
+            allow_private_urls: false,
+            tirith_enabled: default_tirith_enabled(),
+            tirith_path: default_tirith_path(),
+            tirith_timeout: default_tirith_timeout(),
+            tirith_fail_open: default_tirith_fail_open(),
+        }
+    }
 }
 
 /// `[tool_output]` — configurable tool-output truncation limits (port of

@@ -2600,6 +2600,10 @@ async fn make_agent_in(
     session_id: Option<String>,
 ) -> Result<Arc<Agent>, String> {
     let provider = build_provider(config, session_id.as_deref())?;
+    // Tirith scanner availability (hermes `_ensure_tirith_security`):
+    // quick PATH/local checks now, network download in a background
+    // thread so startup never blocks.
+    ulnclaw::tirith::ensure_installed(&config.security);
     let mut registry = ToolRegistry::new();
     register_builtin_tools(&mut registry);
 
