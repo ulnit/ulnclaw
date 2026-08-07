@@ -31,9 +31,10 @@ struct Cli {
     /// Resume an existing session by ID or unique prefix (hermes --resume)
     #[arg(short = 'r', long, global = true)]
     resume: Option<String>,
-    /// Continue the most recent session (hermes --continue)
-    #[arg(short = 'c', long, global = true)]
-    continue_last: bool,
+    /// Continue the most recent session; with a value, continue the
+    /// session matching that title or id (hermes --continue [NAME])
+    #[arg(short = 'c', long, global = true, num_args = 0..=1, default_missing_value = "")]
+    continue_last: Option<String>,
     /// Model override for this invocation (hermes -m): wins over the
     /// profile's configured model.
     #[arg(short = 'm', long, global = true)]
@@ -2725,9 +2726,9 @@ async fn one_shot(
     config: &UlncLawConfig,
     prompt: &str,
     resume: Option<String>,
-    continue_last: bool,
+    continue_last: Option<String>,
 ) -> Result<(), String> {
-    let target = resolve_resume_target(resume.as_deref(), continue_last)?;
+    let target = resolve_resume_target(resume.as_deref(), continue_last.as_deref())?;
     let agent = make_agent(config, false, None, target.clone()).await?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     ulnclaw::plugins::fire_session_event(
@@ -2915,26 +2916,51 @@ async fn kanban_goal_loop_for_worker(
 /// (hermes startup resume). Returns `Ok(None)` when neither flag is set.
 fn resolve_resume_target(
     resume: Option<&str>,
-    continue_last: bool,
+    continue_last: Option<&str>,
 ) -> Result<Option<String>, String> {
-    if resume.is_none() && !continue_last {
+    if resume.is_none() && continue_last.is_none() {
         return Ok(None);
     }
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
     let store = SqliteSessionStore::open(home.join("state.db")).map_err(|e| e.to_string())?;
     if let Some(id) = resume {
-        store
+        return store
             .resolve_session_id(id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Session '{}' not found.", id))
-            .map(Some)
-    } else {
-        store
+            .map(Some);
+    }
+    let name = continue_last.unwrap_or("");
+    if name.is_empty() {
+        // `-c` with no value: continue the most recent session.
+        return store
             .latest_session_id()
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "No previous session to continue.".to_string())
-            .map(Some)
+            .map(Some);
     }
+    // `-c NAME` (hermes _resolve_session_by_name_or_id): try exact id /
+    // unique prefix first, then title; project the result forward through
+    // any compression chain so resumes land on the live tip.
+    let resolved = store
+        .resolve_session_id(name)
+        .map_err(|e| e.to_string())?
+        .or_else(|| {
+            store
+                .resolve_session_by_title(name)
+                .ok()
+                .flatten()
+        });
+    let Some(resolved) = resolved else {
+        return Err(format!(
+            "No session found matching '{name}'.\nUse 'ulnclaw sessions list' to see available sessions."
+        ));
+    };
+    let tip = store
+        .compression_tip(&resolved)
+        .map_err(|e| e.to_string())?
+        .unwrap_or(resolved);
+    Ok(Some(tip))
 }
 
 /// Print a random feature tip tinted with the active skin's banner_dim
@@ -3011,7 +3037,7 @@ async fn print_welcome_banner(config: &UlncLawConfig, agent: &Arc<Agent>) {
 async fn chat_repl(
     config: &UlncLawConfig,
     resume: Option<String>,
-    continue_last: bool,
+    continue_last: Option<String>,
 ) -> Result<(), String> {
     // Kick off the git update check while the agent is being constructed
     // (hermes prefetch_update_check on the startup path).
@@ -3021,8 +3047,9 @@ async fn chat_repl(
     let mut session_id = uuid::Uuid::new_v4().to_string();
     let mut history: Vec<Message> = Vec::new();
     let mut resumed_from: Option<String> = None;
-    if resume.is_some() || continue_last {
-        let target = resolve_resume_target(resume.as_deref(), continue_last)?.unwrap();
+    if resume.is_some() || continue_last.is_some() {
+        let target =
+            resolve_resume_target(resume.as_deref(), continue_last.as_deref())?.unwrap();
         let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
         let pre_store =
             SqliteSessionStore::open(home.join("state.db")).map_err(|e| e.to_string())?;

@@ -1443,6 +1443,90 @@ impl SqliteSessionStore {
         }
     }
 
+    /// Resolve a session title to a session id, preferring the latest in
+    /// a lineage (hermes `resolve_session_by_title`): when numbered
+    /// variants ("title #2", "title #3", ...) exist, return the newest
+    /// one; otherwise fall back to the exact-title session. Archived
+    /// sessions are skipped. LIKE wildcards in the query title are
+    /// escaped so `%`/`_` titles match literally.
+    pub fn resolve_session_by_title(&self, title: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let escaped = title
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM sessions WHERE title LIKE ?1 ESCAPE '\\' AND archived = 0
+                 ORDER BY started_at DESC",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let numbered: Vec<String> = stmt
+            .query_map(params![format!("{escaped} #%")], |row| row.get::<_, String>(0))
+            .map_err(|e| AgentError::session(e.to_string()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        if let Some(id) = numbered.into_iter().next() {
+            return Ok(Some(id));
+        }
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM sessions WHERE title = ?1 AND archived = 0
+                 ORDER BY started_at DESC",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let mut rows = stmt
+            .query(params![title])
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        match rows.next().map_err(|e| AgentError::session(e.to_string()))? {
+            Some(row) => row
+                .get::<_, String>(0)
+                .map(Some)
+                .map_err(|e| AgentError::session(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    /// Follow the compression chain forward to the live tip (hermes
+    /// `get_compression_tip`): while a session ended with reason
+    /// `compression` and has a continuation child, move to the newest
+    /// child. Returns the tip id, or `None` when `session_id` is unknown.
+    pub fn compression_tip(&self, session_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut current = session_id.to_string();
+        for _ in 0..1000 {
+            let (end_reason, exists): (Option<String>, bool) = conn
+                .query_row(
+                    "SELECT end_reason, 1 FROM sessions WHERE id = ?1",
+                    params![current],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, true)),
+                )
+                .optional()
+                .map_err(|e| AgentError::session(e.to_string()))?
+                .unwrap_or((None, false));
+            if !exists {
+                return Ok(None);
+            }
+            if end_reason.as_deref() != Some("compression") {
+                return Ok(Some(current));
+            }
+            let child: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM sessions WHERE parent_session_id = ?1
+                     ORDER BY started_at DESC LIMIT 1",
+                    params![current],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|e| AgentError::session(e.to_string()))?;
+            match child {
+                Some(id) => current = id,
+                None => return Ok(Some(current)),
+            }
+        }
+        Ok(Some(current))
+    }
+
     /// Atomic "set the title only if it is still empty" (hermes
     /// `set_auto_title_if_empty`): predicate + write in one statement, so a
     /// manual title set while auto-generation was in flight is never
@@ -1928,6 +2012,106 @@ mod tests {
         let child = store.create_child_session(&parent, "delegate", None).unwrap();
         let child_session = store.load_session(&child).unwrap().unwrap();
         assert_eq!(child_session.parent_id.as_deref(), Some(parent.as_str()));
+    }
+
+    #[test]
+    fn resolve_by_title_prefers_latest_numbered_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteSessionStore::open(dir.path().join("state.db")).unwrap();
+        let base = store.create_session("cli", None, None).unwrap();
+        store.set_session_title(&base, "digest").unwrap();
+        // Simulate an older start for the base row.
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE sessions SET started_at = ?2 WHERE id = ?1",
+                params![base, now() - 100.0],
+            )
+            .unwrap();
+        }
+        let v2 = store.create_session("cli", None, None).unwrap();
+        store.set_session_title(&v2, "digest #2").unwrap();
+        let v3 = store.create_session("cli", None, None).unwrap();
+        store.set_session_title(&v3, "digest #3").unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE sessions SET started_at = ?2 WHERE id = ?1",
+                params![v3, now() - 50.0],
+            )
+            .unwrap();
+        }
+        // Newest numbered variant wins over the exact title.
+        assert_eq!(
+            store.resolve_session_by_title("digest").unwrap().as_deref(),
+            Some(v2.as_str())
+        );
+        // Exact-title fallback when no numbered variants exist.
+        let lone = store.create_session("cli", None, None).unwrap();
+        store.set_session_title(&lone, "standalone").unwrap();
+        assert_eq!(
+            store
+                .resolve_session_by_title("standalone")
+                .unwrap()
+                .as_deref(),
+            Some(lone.as_str())
+        );
+        assert_eq!(store.resolve_session_by_title("nope").unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_by_title_skips_archived_and_escapes_wildcards() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteSessionStore::open(dir.path().join("state.db")).unwrap();
+        let sid = store.create_session("cli", None, None).unwrap();
+        store.set_session_title(&sid, "wild%card_x").unwrap();
+        assert_eq!(
+            store.resolve_session_by_title("wild%card_x").unwrap().as_deref(),
+            Some(sid.as_str())
+        );
+        // The unescaped pattern must not match a different literal title.
+        let other = store.create_session("cli", None, None).unwrap();
+        store.set_session_title(&other, "wildXcard y").unwrap();
+        assert_eq!(
+            store.resolve_session_by_title("wild%card y").unwrap(),
+            None
+        );
+        // Archived sessions are not resolvable by title.
+        store.set_session_archived(&sid, true).unwrap();
+        assert_eq!(store.resolve_session_by_title("wild%card_x").unwrap(), None);
+    }
+
+    #[test]
+    fn compression_tip_walks_chain_to_live_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteSessionStore::open(dir.path().join("state.db")).unwrap();
+        let root = store.create_session("cli", None, None).unwrap();
+        store.end_session(&root, "compression").unwrap();
+        let mid = store.create_child_session(&root, "cli", None).unwrap();
+        store.end_session(&mid, "compression").unwrap();
+        let tip = store.create_child_session(&mid, "cli", None).unwrap();
+        // The tip is live (no end_reason) — the chain projects to it.
+        assert_eq!(
+            store.compression_tip(&root).unwrap().as_deref(),
+            Some(tip.as_str())
+        );
+        assert_eq!(
+            store.compression_tip(&mid).unwrap().as_deref(),
+            Some(tip.as_str())
+        );
+        assert_eq!(
+            store.compression_tip(&tip).unwrap().as_deref(),
+            Some(tip.as_str())
+        );
+        // Unknown session resolves to None.
+        assert_eq!(store.compression_tip("missing").unwrap(), None);
+        // A compressed session without children stays where it is.
+        let orphan = store.create_session("cli", None, None).unwrap();
+        store.end_session(&orphan, "compression").unwrap();
+        assert_eq!(
+            store.compression_tip(&orphan).unwrap().as_deref(),
+            Some(orphan.as_str())
+        );
     }
 
     // --- prune / archive -------------------------------------------------

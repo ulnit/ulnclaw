@@ -74,6 +74,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw chat
 ./ulnclaw chat --resume <session-id>   # resume a session by id or unique prefix (-r)
 ./ulnclaw chat --continue              # continue the most recent session (-c)
+./ulnclaw chat --continue "my task"    # ...or the session matching a title/id
 
 # Management subcommands
 ./ulnclaw tools            # list toolsets and enabled tools
@@ -345,6 +346,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw chat
 ./ulnclaw chat --resume <session-id>   # 按 id 或唯一前缀恢复会话（-r）
 ./ulnclaw chat --continue              # 继续最近一次会话（-c）
+./ulnclaw chat --continue "我的任务"   # ……或按标题/id 匹配的会话
 
 # 管理子命令
 ./ulnclaw tools            # 列出工具集与已启用工具
