@@ -1981,7 +1981,7 @@ mod tests {
         log: Arc<std::sync::Mutex<Vec<(String, String, Value)>>>,
     ) -> String {
         use axum::extract::State;
-        use axum::routing::{patch, post};
+        use axum::routing::post;
         type Log = Arc<std::sync::Mutex<Vec<(String, String, Value)>>>;
         let app = axum::Router::new()
             .route(

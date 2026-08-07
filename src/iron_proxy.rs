@@ -2299,6 +2299,9 @@ mod tests {
     fn subprocess_env_strips_proxy_chain_and_keeps_allowlist() {
         let _guard = crate::models_dev::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        let prev_path = std::env::var("PATH").ok();
+        let prev_proxy = std::env::var("HTTPS_PROXY").ok();
         std::env::set_var("ULNCLAW_HOME", dir.path());
         std::env::set_var("HTTPS_PROXY", "http://corp-proxy:3128");
         std::env::set_var("PATH", "/usr/bin");
@@ -2306,9 +2309,18 @@ mod tests {
         assert!(!env.contains_key("HTTPS_PROXY"));
         assert_eq!(env.get("PATH").map(|s| s.as_str()), Some("/usr/bin"));
         assert_eq!(env.get("NO_COLOR").map(|s| s.as_str()), Some("1"));
-        std::env::remove_var("HTTPS_PROXY");
-        std::env::remove_var("PATH");
-        std::env::remove_var("ULNCLAW_HOME");
+        match prev_proxy {
+            Some(v) => std::env::set_var("HTTPS_PROXY", v),
+            None => std::env::remove_var("HTTPS_PROXY"),
+        }
+        match prev_path {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        match prev_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[test]

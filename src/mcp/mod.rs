@@ -63,6 +63,94 @@ pub struct McpServerConfig {
     pub lazy: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Stdio subprocess environment filtering (hermes mcp_tool.py
+// `_SAFE_ENV_KEYS` / `_build_safe_env` / `_interpolate_env_vars`)
+// ---------------------------------------------------------------------------
+
+/// Baseline variables that never carry secrets (hermes `_SAFE_ENV_KEYS`).
+const SAFE_ENV_KEYS: &[&str] = &[
+    "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR",
+];
+
+/// Windows process/location vars needed by launcher-style tools; no secrets
+/// (hermes `_SAFE_ENV_KEYS_CASE_INSENSITIVE`).
+const SAFE_ENV_KEYS_CASE_INSENSITIVE: &[&str] = &[
+    "ALLUSERSPROFILE", "APPDATA", "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)",
+    "COMMONPROGRAMW6432", "COMPUTERNAME", "COMSPEC", "HOMEDRIVE", "HOMEPATH",
+    "LOCALAPPDATA", "NUMBER_OF_PROCESSORS", "OS", "PATHEXT", "PROCESSOR_ARCHITECTURE",
+    "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "PUBLIC",
+    "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERDOMAIN", "USERNAME",
+    "USERPROFILE", "WINDIR",
+];
+
+/// A variable is "secret-source tagged" when ulnclaw explicitly injected it
+/// via the dotenv layer (`~/.ulnclaw/.env`) — the hermes exception for
+/// credentials the user configured a backend to provide (hermes
+/// `get_secret_source` tagging during dotenv loading).
+fn is_secret_source_var(key: &str) -> bool {
+    let env_file = crate::config::ulnclaw_home().join(".env");
+    crate::config::load_env_file(&env_file).contains_key(key)
+}
+
+/// Build the filtered environment for a stdio MCP subprocess (hermes
+/// `_build_safe_env`): safe baseline + XDG_* + dotenv-tagged secrets from
+/// the process environment, then the server's declared `env` on top.
+/// Prevents leaking unrelated API keys/tokens to MCP servers.
+pub fn build_safe_env(user_env: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    for (key, value) in std::env::vars() {
+        let pass = SAFE_ENV_KEYS.contains(&key.as_str())
+            || SAFE_ENV_KEYS_CASE_INSENSITIVE.contains(&key.to_uppercase().as_str())
+            || key.starts_with("XDG_")
+            || is_secret_source_var(&key);
+        if pass {
+            env.insert(key, value);
+        }
+    }
+    for (key, value) in user_env {
+        env.insert(key.clone(), interpolate_env_value(value));
+    }
+    env
+}
+
+/// Resolve `${VAR}` / Cursor-style `${env:VAR}` placeholders in one config
+/// value (hermes `_interpolate_env_vars` for strings): secret scope first,
+/// then the process environment; unset vars keep the literal placeholder.
+pub fn interpolate_env_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}') {
+            Some(end) => {
+                let mut name = after[..end].trim();
+                if let Some(stripped) = name.strip_prefix("env:") {
+                    name = stripped.trim();
+                }
+                let resolved = crate::secret_scope::get_secret_lenient(name, None)
+                    .filter(|v| !v.is_empty())
+                    .or_else(|| std::env::var(name).ok().filter(|v| !v.is_empty()));
+                match resolved {
+                    Some(v) => out.push_str(&v),
+                    None => {
+                        // Unset vars keep the literal placeholder (hermes).
+                        out.push_str(&rest[start..start + 2 + end + 1]);
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A running MCP server connection (stdio JSON-RPC).
 pub struct McpClient {
     child: Child,
@@ -75,12 +163,17 @@ pub struct McpClient {
 impl McpClient {
     /// Spawn the server and run the initialize handshake.
     pub async fn connect(config: &McpServerConfig) -> Result<Self> {
-        let mut cmd = Command::new(&config.command);
-        cmd.args(&config.args)
+        let command = interpolate_env_value(&config.command);
+        let mut cmd = Command::new(&command);
+        cmd.args(config.args.iter().map(|a| interpolate_env_value(a)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(if std::env::var("ULNCLAW_MCP_DEBUG").is_ok() { Stdio::inherit() } else { Stdio::null() });
-        for (key, value) in &config.env {
+            .stderr(Stdio::null());
+        // Filtered environment (hermes `_build_safe_env`): safe baseline +
+        // dotenv-tagged secrets + the server's declared env only — never
+        // the full parent environment.
+        cmd.env_clear();
+        for (key, value) in build_safe_env(&config.env) {
             cmd.env(key, value);
         }
         // Parent-death watchdog (hermes `mcp_stdio_watchdog.py`, P235):
@@ -673,13 +766,21 @@ while True:
         send({"jsonrpc": "2.0", "id": msg["id"], "result": {"tools": [
             {"name": "echo", "description": "echo tool",
              "inputSchema": {"type": "object",
-                             "properties": {"text": {"type": "string"}}}}
+                             "properties": {"text": {"type": "string"}}}},
+            {"name": "envcheck", "description": "report one env var",
+             "inputSchema": {"type": "object",
+                             "properties": {"name": {"type": "string"}}}}
         ]}})
     elif method == "tools/call":
         params = msg.get("params") or {}
-        text = str((params.get("arguments") or {}).get("text"))
+        args = params.get("arguments") or {}
+        if params.get("name") == "envcheck":
+            import os as _os
+            text = _os.environ.get(str(args.get("name")), "<unset>")
+        else:
+            text = "echo:" + str(args.get("text"))
         send({"jsonrpc": "2.0", "id": msg["id"],
-              "result": {"content": [{"type": "text", "text": "echo:" + text}],
+              "result": {"content": [{"type": "text", "text": text}],
                          "isError": False}})
 "#;
 
@@ -731,15 +832,21 @@ while True:
 
         let mut registry = ToolRegistry::new();
         let count = register_mcp_server(&mut registry, &config).await.unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
         assert!(registry.has("mcp__live-srv__echo"));
+        assert!(registry.has("mcp__live-srv__envcheck"));
 
         // Write-through: a matching cache entry now exists.
         let fp = schema_cache::config_fingerprint(&config);
         let entry = schema_cache::get_cached_entry("live-srv", &fp).expect("cache written");
         let tools = schema_cache::tools_from_cache_entry(&entry);
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].get("name").and_then(|v| v.as_str()), Some("echo"));
+        assert_eq!(tools.len(), 2);
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+            .collect();
+        assert!(names.contains(&"echo"));
+        assert!(names.contains(&"envcheck"));
 
         // The registered tool actually talks to the server.
         let ctx = Arc::new(ToolContext::default());
@@ -802,6 +909,124 @@ while True:
         }
     }
 
+    #[test]
+    fn safe_env_filters_secrets_but_keeps_baseline_and_declared() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+        // Dotenv-tagged secret: present in ~/.ulnclaw/.env -> passes.
+        std::fs::write(tmp.path().join(".env"), "DOTENV_SECRET=from-dotenv\n").unwrap();
+        std::env::set_var("DOTENV_SECRET", "from-dotenv");
+        std::env::set_var("ULNCLAW_MCP_LEAK_TEST", "should-not-pass");
+        std::env::set_var("XDG_TEST_VAR", "xdg-value");
+
+        let mut declared = HashMap::new();
+        declared.insert("DECLARED_KEY".to_string(), "declared-value".to_string());
+        let env = build_safe_env(&declared);
+
+        assert!(env.contains_key("PATH"), "PATH must pass");
+        assert_eq!(env.get("XDG_TEST_VAR").map(String::as_str), Some("xdg-value"));
+        assert_eq!(env.get("DOTENV_SECRET").map(String::as_str), Some("from-dotenv"));
+        assert_eq!(env.get("DECLARED_KEY").map(String::as_str), Some("declared-value"));
+        assert!(!env.contains_key("ULNCLAW_MCP_LEAK_TEST"), "undeclared secret leaked");
+
+        std::env::remove_var("DOTENV_SECRET");
+        std::env::remove_var("ULNCLAW_MCP_LEAK_TEST");
+        std::env::remove_var("XDG_TEST_VAR");
+        match prev_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[test]
+    fn env_interpolation_resolves_and_keeps_unknown() {
+        let _guard = crate::models_dev::test_env_lock();
+        std::env::set_var("ULNCLAW_INTERP_TEST", "resolved");
+        assert_eq!(
+            interpolate_env_value("prefix-${ULNCLAW_INTERP_TEST}-suffix"),
+            "prefix-resolved-suffix"
+        );
+        assert_eq!(
+            interpolate_env_value("${env:ULNCLAW_INTERP_TEST}"),
+            "resolved",
+            "Cursor-style env: prefix"
+        );
+        assert_eq!(
+            interpolate_env_value("${ULNCLAW_INTERP_MISSING}"),
+            "${ULNCLAW_INTERP_MISSING}",
+            "unset vars keep the literal placeholder"
+        );
+        assert_eq!(interpolate_env_value("no placeholders"), "no placeholders");
+        assert_eq!(interpolate_env_value("dangling ${oops"), "dangling ${oops");
+        std::env::remove_var("ULNCLAW_INTERP_TEST");
+    }
+
+    #[tokio::test]
+    async fn stdio_child_sees_filtered_env_only() {
+        if !python3_available() {
+            eprintln!("skipping: python3 not available");
+            return;
+        }
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_fake_server(tmp.path());
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+        std::env::set_var("ULNCLAW_MCP_LEAK_E2E", "leaky");
+
+        let mut config = fake_config(&script, "env-srv", false);
+        config.env.insert("DECLARED_E2E".into(), "visible".into());
+
+        let mut registry = ToolRegistry::new();
+        register_mcp_server(&mut registry, &config).await.unwrap();
+        let ctx = Arc::new(ToolContext::default());
+
+        // Undeclared parent env var is NOT inherited.
+        let result = registry
+            .dispatch(
+                "mcp__env-srv__envcheck",
+                json!({"name": "ULNCLAW_MCP_LEAK_E2E"}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result.pointer("/content/0/text").and_then(|v| v.as_str()),
+            Some("<unset>"),
+            "undeclared parent env must not reach the MCP child"
+        );
+        // Declared env var arrives.
+        let result = registry
+            .dispatch(
+                "mcp__env-srv__envcheck",
+                json!({"name": "DECLARED_E2E"}),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result.pointer("/content/0/text").and_then(|v| v.as_str()),
+            Some("visible")
+        );
+        // Safe baseline (PATH) still present.
+        let result = registry
+            .dispatch("mcp__env-srv__envcheck", json!({"name": "PATH"}), ctx)
+            .await
+            .unwrap();
+        assert_ne!(
+            result.pointer("/content/0/text").and_then(|v| v.as_str()),
+            Some("<unset>")
+        );
+
+        std::env::remove_var("ULNCLAW_MCP_LEAK_E2E");
+        match prev_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
     #[tokio::test]
     async fn reload_reconnects_and_reports_changes() {
         if !python3_available() {
@@ -819,15 +1044,16 @@ while True:
         config.mcp.servers.push(server_a.clone());
 
         let mut registry = ToolRegistry::new();
-        assert_eq!(register_mcp_server(&mut registry, &server_a).await.unwrap(), 1);
+        assert_eq!(register_mcp_server(&mut registry, &server_a).await.unwrap(), 2);
 
         // Reload with the same server list: reconnect, no adds/removes.
         let report = reload_mcp_servers(&mut registry, &config).await;
         assert_eq!(report.reconnected, vec!["srv-a"]);
         assert!(report.added.is_empty());
         assert!(report.removed.is_empty());
-        assert_eq!(report.tool_count, 1);
+        assert_eq!(report.tool_count, 2);
         assert!(registry.has("mcp__srv-a__echo"));
+        assert!(registry.has("mcp__srv-a__envcheck"));
 
         // Reload with the server removed: reports removal, tool is gone.
         config.mcp.servers.clear();
@@ -901,7 +1127,9 @@ while True:
             .iter()
             .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
             .collect();
-        assert_eq!(names, vec!["echo"]);
+        assert!(names.contains(&"echo"));
+        assert!(names.contains(&"envcheck"));
+        assert!(!names.contains(&"ghost"), "phantom tool must be dropped");
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

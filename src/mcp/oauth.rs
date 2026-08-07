@@ -916,7 +916,7 @@ mod tests {
     #[tokio::test]
     async fn full_authorization_flow_end_to_end() {
         use axum::extract::{Form, State};
-        use axum::routing::{get, post};
+        use axum::routing::post;
         use axum::Router;
         use std::sync::Arc;
 
