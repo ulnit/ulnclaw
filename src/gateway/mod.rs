@@ -1606,6 +1606,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/plugins/:name/disable", post(plugin_disable))
         .route("/api/storage", get(storage_status))
         .route("/api/storage/optimize", post(storage_optimize))
+        .route("/api/backups", get(list_backups).post(create_backup))
+        .route("/api/backups/prune", post(prune_backups))
+        .route("/api/backups/:id/restore", post(restore_backup))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
         .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
         .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
@@ -4315,6 +4318,114 @@ async fn export_session(
 /// back the path reference. The agent inspects it with
 /// vision_analyze/read_file — hermes' text-fallback media semantics for
 /// surfaces without native multimodal injection.
+// ── Backup snapshots (hermes /api/ops/backup parity) ───────────────────────
+
+/// `GET /api/backups` — quick-snapshot inventory (`ulnclaw backup list`).
+async fn list_backups(State(state): State<Arc<GatewayState>>) -> Response {
+    let home = state.agent.context().home.clone();
+    let snapshots = tokio::task::spawn_blocking(move || crate::backup::list_quick_snapshots(&home))
+        .await
+        .unwrap_or_default();
+    Json(json!({
+        "object": "ulnclaw.backup_list",
+        "snapshots": snapshots
+            .iter()
+            .map(|s| json!({"id": s.id, "files": s.files, "bytes": s.bytes}))
+            .collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize, Default)]
+struct CreateBackupBody {
+    #[serde(default)]
+    label: Option<String>,
+}
+
+/// `POST /api/backups` — create a quick state snapshot
+/// (`ulnclaw backup --quick`): critical files only (config, state.db,
+/// .env, cron, skills usage, memory).
+async fn create_backup(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CreateBackupBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let label = body.label.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::backup::create_quick_snapshot(&home, label.as_deref(), None, None)
+    })
+    .await;
+    match result {
+        Ok(Ok(Some(id))) => Json(json!({"object": "ulnclaw.backup", "id": id})).into_response(),
+        Ok(Ok(None)) => Json(json!({
+            "object": "ulnclaw.backup",
+            "id": null,
+            "message": "No state files found to snapshot.",
+        }))
+        .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("backup task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PruneBackupsBody {
+    #[serde(default)]
+    keep: Option<usize>,
+}
+
+/// `POST /api/backups/prune` — keep only the newest N snapshots
+/// (`ulnclaw backup prune [keep]`, default 20).
+async fn prune_backups(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<PruneBackupsBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let keep = body.keep.unwrap_or(crate::backup::QUICK_DEFAULT_KEEP);
+    let removed =
+        tokio::task::spawn_blocking(move || crate::backup::prune_quick_snapshots(&home, keep))
+            .await
+            .unwrap_or(0);
+    Json(json!({"object": "ulnclaw.backup_prune", "removed": removed, "keep": keep})).into_response()
+}
+
+/// `POST /api/backups/:id/restore` — overlay a snapshot onto the home
+/// (`ulnclaw backup restore <id>`). 404 when the snapshot is unknown.
+async fn restore_backup(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    let home = state.agent.context().home.clone();
+    let snapshot_id = id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::backup::restore_quick_snapshot(&home, &snapshot_id)
+    })
+    .await;
+    match result {
+        Ok(Ok(true)) => Json(json!({"object": "ulnclaw.backup_restore", "restored": true})).into_response(),
+        Ok(Ok(false)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("snapshot '{id}' not found or empty")})),
+        )
+            .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("restore task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
 // ── Learning graph (hermes web_server /api/learning/* parity) ─────────────
 
 /// GET /api/learning/graph — learned skills + memory chunks with graph
@@ -9362,6 +9473,76 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["count"], 1);
         assert_eq!(body["candidates"][0]["archived"], true);
+    }
+
+    #[tokio::test]
+    async fn test_backup_snapshots_lifecycle() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Seed a critical state file so snapshots have content.
+        std::fs::write(dir.path().join("config.toml"), "# test config\n").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Auth required.
+        let (status, _) = get_json(app.clone(), "/api/backups", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Empty inventory.
+        let (status, body) = get_json(app.clone(), "/api/backups", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["snapshots"].as_array().unwrap().len(), 0);
+
+        // Create labeled snapshots (labels keep ids unique within a second).
+        for label in ["alpha", "beta", "gamma"] {
+            let (status, body) = post_json(
+                app.clone(),
+                "/api/backups",
+                &format!(r#"{{"label": "{label}"}}"#),
+                "sekret",
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(body["id"].as_str().unwrap().ends_with(label));
+        }
+        let (status, body) = get_json(app.clone(), "/api/backups", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let snapshots = body["snapshots"].as_array().unwrap();
+        assert_eq!(snapshots.len(), 3);
+        assert!(snapshots[0]["files"].as_i64().unwrap() >= 1);
+
+        // Restore a known snapshot.
+        let first = snapshots[0]["id"].as_str().unwrap().to_string();
+        let (status, body) = post_json(
+            app.clone(),
+            &format!("/api/backups/{first}/restore"),
+            "{}",
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["restored"], true);
+
+        // Unknown snapshot → 404.
+        let (status, _) =
+            post_json(app.clone(), "/api/backups/nope/restore", "{}", "sekret").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Prune keeps the newest N.
+        let (status, body) =
+            post_json(app.clone(), "/api/backups/prune", r#"{"keep": 1}"#, "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["removed"], 2);
+        let (status, body) = get_json(app, "/api/backups", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["snapshots"].as_array().unwrap().len(), 1);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

@@ -427,6 +427,13 @@ export interface StorageOptimizeResult {
   after_bytes: number;
 }
 
+/** One quick-snapshot row from GET /api/backups (P315). */
+export interface BackupSnapshot {
+  id: string;
+  files: number;
+  bytes: number;
+}
+
 export interface McpServerRow {
   name: string;
   kind: "stdio" | "http" | "sse";
@@ -1221,6 +1228,52 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`search HTTP ${response.status}`);
     const value = await response.json();
     return (value.results || []) as SessionSearchHit[];
+  }
+
+  /** GET /api/backups — quick-snapshot inventory (`backup list`; P315). */
+  async backupsList(): Promise<BackupSnapshot[]> {
+    const response = await fetch(this.endpoint("/api/backups"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`backups HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.snapshots || []) as BackupSnapshot[];
+  }
+
+  /** POST /api/backups — create a quick snapshot (`backup --quick`). */
+  async backupCreate(label?: string): Promise<{ id: string | null; message?: string }> {
+    const response = await fetch(this.endpoint("/api/backups"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify(label ? { label } : {}),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `backup HTTP ${response.status}`);
+    return value as { id: string | null; message?: string };
+  }
+
+  /** POST /api/backups/:id/restore — overlay a snapshot onto home. */
+  async backupRestore(id: string): Promise<void> {
+    const response = await fetch(
+      this.endpoint(`/api/backups/${encodeURIComponent(id)}/restore`),
+      {
+        method: "POST",
+        headers: { ...this.headers(), "content-type": "application/json" },
+        body: "{}",
+      },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `restore HTTP ${response.status}`);
+  }
+
+  /** POST /api/backups/prune — keep only the newest `keep` snapshots. */
+  async backupPrune(keep: number): Promise<number> {
+    const response = await fetch(this.endpoint("/api/backups/prune"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ keep }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `backup prune HTTP ${response.status}`);
+    return (value.removed ?? 0) as number;
   }
 
   /** POST /api/sessions/prune — delete ended sessions by filter

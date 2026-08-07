@@ -211,6 +211,7 @@ export interface Translations {
   egressPanel: { title: string; };
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
+  backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -514,6 +515,16 @@ const en: Translations = {
   egressPanel: { title: "Egress proxy" },
   channelsPanel: { title: "Messaging channels", enabled: "Enabled", disabled: "Disabled", noneEnabled: "(none)" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
+  backupsPanel: {
+    title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
+    labelPrompt: "Optional label for the snapshot:", created: "Snapshot {id} created.",
+    createFailed: "Snapshot failed: {error}", restore: "Restore",
+    restoreConfirm: "Restore snapshot {id}? Current state files are overwritten.",
+    restored: "Snapshot {id} restored. Restart the gateway to pick up restored state.",
+    restoreFailed: "Restore failed: {error}", prune: "Prune\u2026",
+    prunePrompt: "Keep how many newest snapshots?", pruned: "Pruned {count} snapshot(s).",
+    pruneFailed: "Prune failed: {error}",
+  },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -867,6 +878,16 @@ const zh: Translations = {
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "消息通道", enabled: "已启用", disabled: "未启用", noneEnabled: "（无）" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
+  backupsPanel: {
+    title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
+    labelPrompt: "快照标签（可选）：", created: "已创建快照 {id}。",
+    createFailed: "创建快照失败：{error}", restore: "恢复",
+    restoreConfirm: "恢复快照 {id}？当前状态文件将被覆盖。",
+    restored: "已恢复快照 {id}。请重启网关以加载恢复的状态。",
+    restoreFailed: "恢复失败：{error}", prune: "清理\u2026",
+    prunePrompt: "保留多少个最新快照？", pruned: "已清理 {count} 个快照。",
+    pruneFailed: "清理失败：{error}",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -1220,6 +1241,16 @@ const zhHant: Translations = {
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "訊息通道", enabled: "已啟用", disabled: "未啟用", noneEnabled: "（無）" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
+  backupsPanel: {
+    title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
+    labelPrompt: "快照標籤（選填）：", created: "已建立快照 {id}。",
+    createFailed: "建立快照失敗：{error}", restore: "還原",
+    restoreConfirm: "還原快照 {id}？目前狀態檔案將被覆寫。",
+    restored: "已還原快照 {id}。請重啟閘道以載入還原的狀態。",
+    restoreFailed: "還原失敗：{error}", prune: "清理\u2026",
+    prunePrompt: "保留多少個最新快照？", pruned: "已清理 {count} 個快照。",
+    pruneFailed: "清理失敗：{error}",
+  },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -1573,6 +1604,16 @@ const ja: Translations = {
   egressPanel: { title: "エグレスプロキシ" },
   channelsPanel: { title: "メッセージングチャネル", enabled: "有効", disabled: "無効", noneEnabled: "（なし）" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
+  backupsPanel: {
+    title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
+    labelPrompt: "スナップショットのラベル（任意）:", created: "スナップショット {id} を作成しました。",
+    createFailed: "スナップショットに失敗しました: {error}", restore: "復元",
+    restoreConfirm: "スナップショット {id} を復元しますか？現在の状態ファイルは上書きされます。",
+    restored: "スナップショット {id} を復元しました。復元した状態の反映にはゲートウェイを再起動してください。",
+    restoreFailed: "復元に失敗しました: {error}", prune: "枝切り\u2026",
+    prunePrompt: "最新の何件を保持しますか？", pruned: "{count} 件のスナップショットを削除しました。",
+    pruneFailed: "枝切りに失敗しました: {error}",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1926,6 +1967,16 @@ const ar: Translations = {
   egressPanel: { title: "وكيل الخروج" },
   channelsPanel: { title: "قنوات المراسلة", enabled: "مفعلة", disabled: "معطلة", noneEnabled: "(لا شيء)" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
+  backupsPanel: {
+    title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",
+    labelPrompt: "تسمية اللقطة (اختياري):", created: "تم إنشاء اللقطة {id}.",
+    createFailed: "فشل إنشاء اللقطة: {error}", restore: "استعادة",
+    restoreConfirm: "استعادة اللقطة {id}؟ ستُستبدل ملفات الحالة الحالية.",
+    restored: "تمت استعادة اللقطة {id}. أعد تشغيل البوابة لتحميل الحالة المستعادة.",
+    restoreFailed: "فشل الاستعادة: {error}", prune: "تشذيب\u2026",
+    prunePrompt: "كم لقطة أحدث تريد الإبقاء عليها؟", pruned: "تم تشذيب {count} لقطة.",
+    pruneFailed: "فشل التشذيب: {error}",
+  },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",

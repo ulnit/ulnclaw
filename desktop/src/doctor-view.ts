@@ -66,6 +66,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="storagePanel.title">Session store</h3>
         <div id="storage-rows"></div>
       </section>
+      <section id="doctor-backups" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="backupsPanel.title">State snapshots</h3>
+        <div id="backups-rows"></div>
+      </section>
       <section id="doctor-kanban" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="kanbanPanel.title">Kanban diagnostics</h3>
         <div id="kanban-rows"></div>
@@ -119,6 +123,7 @@ export class DoctorWidget {
     this.loadMcp().catch(() => undefined);
     this.loadSystem().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
+    this.loadBackups().catch(() => undefined);
     this.loadKanban().catch(() => undefined);
     this.loadMetrics().catch(() => undefined);
     this.loadEgress().catch(() => undefined);
@@ -427,6 +432,129 @@ export class DoctorWidget {
       section.hidden = false;
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** State snapshots (P315): quick-backup inventory with
+   * create/restore/prune over /api/backups (hermes `backup` parity). */
+  private async loadBackups(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-backups") as HTMLElement;
+    const rows = this.root.querySelector("#backups-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const snapshots = await client.backupsList();
+      rows.innerHTML = "";
+      if (!snapshots.length) {
+        const empty = document.createElement("div");
+        empty.className = "monitoring-row config-note";
+        empty.textContent = t.backupsPanel.empty;
+        rows.appendChild(empty);
+      }
+      for (const snapshot of snapshots) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const label = document.createElement("span");
+        label.className = "monitoring-label";
+        label.textContent = snapshot.id;
+        const value = document.createElement("span");
+        value.className = "monitoring-value";
+        value.textContent = `${snapshot.files} files \u00b7 ${this.fmtBytes(snapshot.bytes)}`;
+        const restore = document.createElement("button");
+        restore.className = "ghost";
+        restore.textContent = t.backupsPanel.restore;
+        restore.onclick = () => this.restoreBackup(snapshot.id);
+        row.append(label, value, restore);
+        rows.appendChild(row);
+      }
+      const actions = document.createElement("div");
+      actions.className = "monitoring-row";
+      const create = document.createElement("button");
+      create.className = "ghost";
+      create.textContent = t.backupsPanel.newSnapshot;
+      create.onclick = () => this.createBackup();
+      const prune = document.createElement("button");
+      prune.className = "ghost";
+      prune.textContent = t.backupsPanel.prune;
+      prune.onclick = () => this.pruneBackups();
+      const status = document.createElement("span");
+      status.className = "config-note";
+      status.id = "backups-status";
+      actions.append(create, prune, status);
+      rows.appendChild(actions);
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private backupStatus(message: string): void {
+    const el = this.root.querySelector("#backups-status");
+    if (el) el.textContent = message;
+  }
+
+  private async createBackup(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const label = window.prompt(t.backupsPanel.labelPrompt, "");
+    if (label === null) return;
+    try {
+      const result = await client.backupCreate(label.trim() || undefined);
+      await this.loadBackups();
+      this.backupStatus(
+        result.id
+          ? t.backupsPanel.created.replace("{id}", result.id)
+          : result.message || "",
+      );
+    } catch (error) {
+      this.backupStatus(
+        t.backupsPanel.createFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  }
+
+  private async restoreBackup(id: string): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (!window.confirm(t.backupsPanel.restoreConfirm.replace("{id}", id))) return;
+    try {
+      await client.backupRestore(id);
+      await this.loadBackups();
+      this.backupStatus(t.backupsPanel.restored.replace("{id}", id));
+    } catch (error) {
+      this.backupStatus(
+        t.backupsPanel.restoreFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  }
+
+  private async pruneBackups(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const raw = window.prompt(t.backupsPanel.prunePrompt, "20");
+    if (raw === null) return;
+    const keep = Number.parseInt(raw, 10);
+    if (!Number.isFinite(keep) || keep < 1) return;
+    try {
+      const removed = await client.backupPrune(keep);
+      await this.loadBackups();
+      this.backupStatus(t.backupsPanel.pruned.replace("{count}", String(removed)));
+    } catch (error) {
+      this.backupStatus(
+        t.backupsPanel.pruneFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
     }
   }
 
