@@ -348,6 +348,11 @@ enum Commands {
         /// Action: status (default)
         action: Option<String>,
     },
+    /// Dynamic webhook subscriptions: subscribe/list/remove/test (hermes webhook)
+    Webhook {
+        #[command(subcommand)]
+        action: Option<WebhookAction>,
+    },
     /// Launch the desktop GUI — Tauri app in `desktop/` (hermes gui/desktop)
     #[command(visible_alias = "desktop")]
     Gui {
@@ -1655,6 +1660,57 @@ enum OnePasswordSecretsAction {
 }
 
 #[derive(Subcommand)]
+enum WebhookAction {
+    /// Create or update a dynamic webhook subscription
+    Subscribe {
+        /// Subscription name (lowercase alphanumeric, hyphens/underscores)
+        name: String,
+        /// Human-readable description
+        #[arg(long)]
+        description: Option<String>,
+        /// Comma-separated event-type filter (empty = all events)
+        #[arg(long)]
+        events: Option<String>,
+        /// HMAC secret (random when omitted)
+        #[arg(long)]
+        secret: Option<String>,
+        /// Prompt template ({body}/{event} substituted)
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Comma-separated skills to attach to the route
+        #[arg(long)]
+        skills: Option<String>,
+        /// Delivery target: log, telegram, discord, slack, whatsapp_cloud
+        #[arg(long)]
+        deliver: Option<String>,
+        /// Chat/channel id for the delivery target
+        #[arg(long)]
+        deliver_chat_id: Option<String>,
+        /// Deliver the rendered prompt directly (no agent turn)
+        #[arg(long)]
+        deliver_only: bool,
+        /// Script command recorded on the route
+        #[arg(long)]
+        script: Option<String>,
+    },
+    /// List dynamic webhook subscriptions
+    List,
+    /// Remove a dynamic webhook subscription
+    Remove {
+        /// Subscription name
+        name: String,
+    },
+    /// POST a signed test payload to a subscription
+    Test {
+        /// Subscription name
+        name: String,
+        /// JSON payload (default: built-in test event)
+        #[arg(long)]
+        payload: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum AuthAction {
     /// Start the RFC 8628 device flow and wait for authorization
     Login,
@@ -2608,6 +2664,45 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 Some(other) => {
                     eprintln!("Unknown monitoring action: {other}");
                     std::process::exit(2);
+                }
+            }
+        }
+        Commands::Webhook { action } => {
+            use ulnclaw::webhook_subscriptions as whs;
+            match action {
+                None => {
+                    println!("Usage: ulnclaw webhook {{subscribe|list|remove|test}}");
+                    println!("Run 'ulnclaw webhook --help' for details.");
+                    Ok(())
+                }
+                Some(WebhookAction::Subscribe {
+                    name, description, events, secret, prompt, skills,
+                    deliver, deliver_chat_id, deliver_only, script,
+                }) => {
+                    if !config.messaging.webhook.enabled {
+                        println!("  Webhook platform is not enabled. Enable it with:");
+                        println!("    ulnclaw config set messaging.webhook.enabled true");
+                        println!("  Then start the gateway: ulnclaw gateway");
+                        return Ok(());
+                    }
+                    let opts = whs::SubscribeOptions {
+                        description, events, secret, prompt, skills,
+                        deliver, deliver_chat_id, deliver_only, script,
+                    };
+                    print!("{}", whs::cmd_subscribe(&name, &opts)?);
+                    Ok(())
+                }
+                Some(WebhookAction::List) => {
+                    print!("{}", whs::cmd_list()?);
+                    Ok(())
+                }
+                Some(WebhookAction::Remove { name }) => {
+                    print!("{}", whs::cmd_remove(&name)?);
+                    Ok(())
+                }
+                Some(WebhookAction::Test { name, payload }) => {
+                    print!("{}", whs::cmd_test(&name, payload.as_deref())?);
+                    Ok(())
                 }
             }
         }

@@ -700,19 +700,26 @@ fn attach_webhook_routes(
         );
         tracing::info!("gateway webhook route mounted: /webhooks/msgraph");
     }
-    if config.messaging.webhook.enabled && !config.messaging.webhook.routes.is_empty() {
-        router = router.route("/webhooks/hook/:name", post(generic_webhook_route));
-        let names: Vec<&str> = config
-            .messaging
-            .webhook
-            .routes
-            .iter()
-            .map(|r| r.name.as_str())
-            .collect();
-        tracing::info!(
-            "gateway webhook route mounted: /webhooks/hook/:name (routes: {})",
-            names.join(", ")
-        );
+    if config.messaging.webhook.enabled {
+        if !config.messaging.webhook.routes.is_empty() {
+            router = router.route("/webhooks/hook/:name", post(generic_webhook_route));
+            let names: Vec<&str> = config
+                .messaging
+                .webhook
+                .routes
+                .iter()
+                .map(|r| r.name.as_str())
+                .collect();
+            tracing::info!(
+                "gateway webhook route mounted: /webhooks/hook/:name (routes: {})",
+                names.join(", ")
+            );
+        }
+        // Dynamic subscriptions — file hot-reloaded per request (hermes
+        // webhook_subscriptions.json). Static platform routes above keep
+        // precedence over the wildcard.
+        router = router.route("/webhooks/:name", post(dynamic_webhook_route));
+        tracing::info!("gateway webhook route mounted: /webhooks/:name (dynamic subscriptions)");
     }
     if config.messaging.bluebubbles.enabled {
         router = router.route("/webhooks/bluebubbles", post(bluebubbles_webhook_route));
@@ -772,10 +779,6 @@ async fn generic_webhook_route(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    use crate::webhook_platforms as wp;
-    let ack = |status: &str| -> Response {
-        (StatusCode::OK, Json(json!({ "status": status, "route": name }))).into_response()
-    };
     let config = &state.agent.context().config;
     let wh = &config.messaging.webhook;
     let Some(route) = wh.routes.iter().find(|r| r.name == name).cloned() else {
@@ -785,6 +788,50 @@ async fn generic_webhook_route(
         )
             .into_response();
     };
+    process_generic_webhook(state, wh.rate_limit, route, headers, body).await
+}
+
+/// Dynamic webhook subscriptions (hermes `webhook_subscriptions.json`):
+/// the file is re-read on every request, so `ulnclaw webhook subscribe`
+/// takes effect without a gateway restart. Mounted at `/webhooks/:name`
+/// (static platform routes keep precedence).
+async fn dynamic_webhook_route(
+    State(state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let config = &state.agent.context().config;
+    let wh = &config.messaging.webhook;
+    let subs = crate::webhook_subscriptions::load_subscriptions();
+    let Some(sub) = subs.get(&name).cloned() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("unknown webhook route '{name}'") })),
+        )
+            .into_response();
+    };
+    let route = crate::webhook_subscriptions::to_webhook_route(&name, &sub);
+    process_generic_webhook(state, wh.rate_limit, route, headers, body).await
+}
+
+/// Shared generic-webhook pipeline (signature check, rate limit,
+/// idempotency, event filter, prompt render, deliver/agent turn) used by
+/// both static config routes (`/webhooks/hook/:name`) and dynamic
+/// subscriptions (`/webhooks/:name`).
+async fn process_generic_webhook(
+    state: Arc<GatewayState>,
+    rate_limit: u32,
+    route: crate::webhook_platforms::WebhookRoute,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    use crate::webhook_platforms as wp;
+    let name = route.name.clone();
+    let ack = |status: &str| -> Response {
+        (StatusCode::OK, Json(json!({ "status": status, "route": name }))).into_response()
+    };
+    let config = &state.agent.context().config;
     if body.len() > WEBHOOK_BODY_LIMIT {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -809,7 +856,7 @@ async fn generic_webhook_route(
             .into_response();
     }
     let runtime = webhook_runtime();
-    if wp::webhook_rate_limited(&runtime, &route.name, wh.rate_limit, now).await {
+    if wp::webhook_rate_limited(&runtime, &route.name, rate_limit, now).await {
         tracing::warn!("[webhook] route '{}' rate limited", route.name);
         return (
             StatusCode::TOO_MANY_REQUESTS,
