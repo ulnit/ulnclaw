@@ -381,6 +381,38 @@ export interface SessionSearchHit {
   snippet: string;
 }
 
+/** POST /api/sessions/prune|archive body (P314) — mirrors the CLI
+ * `sessions prune/archive` filter flags. */
+export interface SessionPruneOptions {
+  older_than?: string;
+  newer_than?: string;
+  before?: string;
+  after?: string;
+  source?: string;
+  title?: string;
+  end_reason?: string;
+  include_archived?: boolean;
+  dry_run?: boolean;
+}
+
+export interface SessionPruneCandidate {
+  id: string;
+  title: string | null;
+  source: string;
+  model: string | null;
+  message_count: number;
+  last_active: number;
+  archived: boolean;
+}
+
+export interface SessionPruneResult {
+  dry_run: boolean;
+  count?: number;
+  affected?: number;
+  describe: string;
+  candidates?: SessionPruneCandidate[];
+}
+
 export interface StorageStats {
   db_path: string;
   size_bytes: number;
@@ -1189,6 +1221,32 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`search HTTP ${response.status}`);
     const value = await response.json();
     return (value.results || []) as SessionSearchHit[];
+  }
+
+  /** POST /api/sessions/prune — delete ended sessions by filter
+   * (hermes `sessions prune` parity; dry_run previews). */
+  async sessionsPrune(options: SessionPruneOptions): Promise<SessionPruneResult> {
+    const response = await fetch(this.endpoint("/api/sessions/prune"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify(options),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `prune HTTP ${response.status}`);
+    return value as SessionPruneResult;
+  }
+
+  /** POST /api/sessions/archive — soft-hide ended sessions by filter
+   * (hermes `sessions archive` parity; recoverable). */
+  async sessionsArchive(options: SessionPruneOptions): Promise<SessionPruneResult> {
+    const response = await fetch(this.endpoint("/api/sessions/archive"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify(options),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `archive HTTP ${response.status}`);
+    return value as SessionPruneResult;
   }
 
   /** POST /api/sessions/:id/fork — copy the session into a new branch. */

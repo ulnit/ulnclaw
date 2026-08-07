@@ -958,6 +958,153 @@ async fn search_sessions(
     }
 }
 
+#[derive(serde::Deserialize, Default)]
+struct SessionPruneBody {
+    #[serde(default)]
+    older_than: Option<String>,
+    #[serde(default)]
+    newer_than: Option<String>,
+    #[serde(default)]
+    before: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    end_reason: Option<String>,
+    #[serde(default)]
+    include_archived: bool,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+fn build_prune_filters(
+    body: &SessionPruneBody,
+) -> std::result::Result<crate::session::filters::PruneFilters, String> {
+    use crate::session::filters::{parse_point_in_time, PruneFilters};
+    let mut filters = PruneFilters::default();
+    if let Some(value) = body.older_than.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        filters.last_active_before = Some(parse_point_in_time(value, "older_than")?);
+    }
+    if let Some(value) = body.newer_than.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        filters.last_active_after = Some(parse_point_in_time(value, "newer_than")?);
+    }
+    if let Some(value) = body.before.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        filters.started_before = Some(parse_point_in_time(value, "before")?);
+    }
+    if let Some(value) = body.after.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        filters.started_after = Some(parse_point_in_time(value, "after")?);
+    }
+    filters.source = body.source.clone().filter(|v| !v.trim().is_empty());
+    filters.title_like = body.title.clone().filter(|v| !v.trim().is_empty());
+    filters.end_reason = body.end_reason.clone().filter(|v| !v.trim().is_empty());
+    Ok(filters)
+}
+
+/// Shared prune/archive worker mirroring the CLI `run_session_prune`:
+/// dry-run previews the candidate list, otherwise applies and reports
+/// the affected count.
+async fn apply_session_prune(
+    state: Arc<GatewayState>,
+    filters: crate::session::filters::PruneFilters,
+    delete: bool,
+    dry_run: bool,
+) -> Response {
+    let store = state.store.clone();
+    let result =
+        tokio::task::spawn_blocking(move || -> std::result::Result<Value, crate::error::AgentError> {
+            let candidates = store.list_prune_candidates(&filters)?;
+            if dry_run {
+                let rows: Vec<Value> = candidates
+                    .iter()
+                    .map(|c| {
+                        json!({
+                            "id": c.id,
+                            "title": c.title,
+                            "source": c.source,
+                            "model": c.model,
+                            "message_count": c.message_count,
+                            "last_active": c.last_active,
+                            "archived": c.archived,
+                        })
+                    })
+                    .collect();
+                return Ok(json!({
+                    "dry_run": true,
+                    "count": candidates.len(),
+                    "describe": filters.describe(),
+                    "candidates": rows,
+                }));
+            }
+            let affected = if delete {
+                store.prune_sessions(&filters)?
+            } else {
+                store.archive_sessions(&filters)?
+            };
+            Ok(json!({
+                "dry_run": false,
+                "affected": affected,
+                "describe": filters.describe(),
+            }))
+        })
+        .await;
+    match result {
+        Ok(Ok(payload)) => Json(payload).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("prune task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/sessions/prune` — delete ended sessions matching filters
+/// (mirrors `ulnclaw sessions prune`). A bare request with no filters
+/// applies hermes' implicit "older than 90 days" cutoff; archived
+/// sessions are skipped unless `include_archived`. `dry_run: true`
+/// previews the candidates without deleting anything.
+async fn prune_sessions(State(state): State<Arc<GatewayState>>, Json(body): Json<SessionPruneBody>) -> Response {
+    let mut filters = match build_prune_filters(&body) {
+        Ok(f) => f,
+        Err(e) => return bad_request(&e, Some("invalid_request")),
+    };
+    if filters.is_empty() {
+        let cutoff = match crate::session::filters::parse_point_in_time("90", "older_than") {
+            Ok(v) => v,
+            Err(e) => return bad_request(&e, Some("invalid_request")),
+        };
+        filters.last_active_before = Some(cutoff);
+    }
+    filters.archived = if body.include_archived { None } else { Some(false) };
+    apply_session_prune(state, filters, true, body.dry_run).await
+}
+
+/// `POST /api/sessions/archive` — soft-hide ended sessions matching
+/// filters (mirrors `ulnclaw sessions archive`; recoverable — nothing
+/// is deleted). Refuses filter-less requests so the whole store cannot
+/// be archived by accident. `dry_run: true` previews.
+async fn archive_sessions(State(state): State<Arc<GatewayState>>, Json(body): Json<SessionPruneBody>) -> Response {
+    let mut filters = match build_prune_filters(&body) {
+        Ok(f) => f,
+        Err(e) => return bad_request(&e, Some("invalid_request")),
+    };
+    if filters.is_empty() {
+        return bad_request(
+            "Refusing to archive every ended session: pass at least one filter (e.g. older_than: \"30d\", source: \"cli\").",
+            Some("invalid_request"),
+        );
+    }
+    filters.archived = Some(false);
+    apply_session_prune(state, filters, false, body.dry_run).await
+}
+
 /// Query parameters for `GET /api/insights`.
 #[derive(Debug, Deserialize)]
 struct InsightsQuery {
@@ -1470,6 +1617,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         )
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions/search", get(search_sessions))
+        .route("/api/sessions/prune", post(prune_sessions))
+        .route("/api/sessions/archive", post(archive_sessions))
         .route(
             "/api/sessions/:id",
             get(get_session).patch(patch_session).delete(delete_session),
@@ -9089,6 +9238,130 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             get_json(app, "/api/sessions/search?q=zebra", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["count"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_session_prune_and_archive_endpoints() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(dir.path().join("state.db")).expect("store"),
+        );
+        // Two ended sessions with fresh activity; prune/archive filters
+        // only ever see rows with ended_at set.
+        let keep = store.create_session("cli", Some("test-model"), None).unwrap();
+        let archive_me = store.create_session("cron", Some("test-model"), None).unwrap();
+        for id in [&keep, &archive_me] {
+            store
+                .append_message(
+                    id,
+                    &crate::provider::Message {
+                        role: crate::provider::Role::User,
+                        content: Some("hello".into()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                )
+                .unwrap();
+            store.end_session(id, "ended").unwrap();
+        }
+
+        let provider = Arc::new(
+            OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let agent = Agent::new(provider, ToolRegistry::new()).with_store(store);
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "test-model".into(),
+            "test".into(),
+            Some("sekret".into()),
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+        let app = router(state);
+
+        // Auth required.
+        let (status, _) = post_json(app.clone(), "/api/sessions/prune", "{}", "").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Dry-run preview matches both fresh ended sessions.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/prune",
+            r#"{"newer_than": "1h", "dry_run": true}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["dry_run"], true);
+        assert_eq!(body["count"], 2);
+        assert_eq!(body["candidates"].as_array().unwrap().len(), 2);
+
+        // Archive refuses filter-less requests.
+        let (status, _) = post_json(app.clone(), "/api/sessions/archive", "{}", "sekret").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Archive the cron session only.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/archive",
+            r#"{"newer_than": "1h", "source": "cron"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["affected"], 1);
+
+        // Archived rows are skipped by prune previews...
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/prune",
+            r#"{"newer_than": "1h", "dry_run": true}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["count"], 1);
+
+        // ...unless include_archived is set.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/prune",
+            r#"{"newer_than": "1h", "include_archived": true, "dry_run": true}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["count"], 2);
+
+        // Real prune deletes the remaining live session.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/prune",
+            r#"{"newer_than": "1h"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["affected"], 1);
+
+        // Nothing fresh remains.
+        let (status, body) = post_json(
+            app,
+            "/api/sessions/prune",
+            r#"{"newer_than": "1h", "include_archived": true, "dry_run": true}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["count"], 1);
+        assert_eq!(body["candidates"][0]["archived"], true);
     }
 
     #[tokio::test]

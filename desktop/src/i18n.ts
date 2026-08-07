@@ -137,6 +137,11 @@ export interface Translations {
     exportHtmlTitle: string;
     msgCount: string; project: string; source: string;
     stats: string;
+    prune: string; archive: string; pruneTitle: string; archiveTitle: string;
+    pruneDialogTitle: string; archiveDialogTitle: string; olderThanLabel: string;
+    sourceLabel: string; includeArchived: string; preview: string; apply: string;
+    previewCount: string; previewEmpty: string; appliedPruned: string; appliedArchived: string;
+    confirmPrune: string; confirmArchive: string; failed: string;
   };
   modelsView: {
     count: string; current: string; catalog: string; providersLower: string; stale: string;
@@ -396,6 +401,14 @@ const en: Translations = {
     transcriptFailed: "Failed to load transcript: {error}",
     emptyTranscript: "This session has no messages.",
     exportTitle: "Export selected session as Markdown", exportHtmlTitle: "Export selected session as standalone HTML", msgCount: "{count} messages", project: "project", source: "source", stats: "{sessions} sessions \u00b7 {messages} messages \u00b7 {size} on disk",
+    prune: "Prune…", archive: "Archive…", pruneTitle: "Delete ended sessions matching filters", archiveTitle: "Archive ended sessions matching filters",
+    pruneDialogTitle: "Prune ended sessions", archiveDialogTitle: "Archive ended sessions",
+    olderThanLabel: "Last activity older than (90d, 2026-01-01…)", sourceLabel: "Source filter (optional)",
+    includeArchived: "Include already-archived sessions", preview: "Preview", apply: "Apply",
+    previewCount: "{count} session(s) match — nothing changed yet.", previewEmpty: "No sessions match.",
+    appliedPruned: "Pruned {count} session(s).", appliedArchived: "Archived {count} session(s) — recoverable, nothing deleted.",
+    confirmPrune: "Really delete these {count} session(s)? This cannot be undone.", confirmArchive: "Archive these {count} session(s)?",
+    failed: "Failed: {error}",
     exportFailed: "Export failed.",
     roleUser: "User", roleAssistant: "Assistant", roleTool: "Tool", roleSystem: "System",
     recap: "Recap", recapTitle: "Show or hide the gateway-built session recap", recapFailed: "Recap failed: {error}",
@@ -741,6 +754,14 @@ const zh: Translations = {
     transcriptFailed: "加载转录失败:{error}",
     emptyTranscript: "该会话没有消息。",
     exportTitle: "将选中会话导出为 Markdown", exportHtmlTitle: "将选中会话导出为独立 HTML", msgCount: "{count} 条消息", project: "项目", source: "来源", stats: "{sessions} 个会话 \u00b7 {messages} 条消息 \u00b7 磁盘占用 {size}",
+    prune: "清理…", archive: "归档…", pruneTitle: "按过滤条件删除已结束的会话", archiveTitle: "按过滤条件归档已结束的会话",
+    pruneDialogTitle: "清理已结束的会话", archiveDialogTitle: "归档已结束的会话",
+    olderThanLabel: "最后活动早于（90d、2026-01-01…）", sourceLabel: "来源过滤（可选）",
+    includeArchived: "包含已归档会话", preview: "预览", apply: "应用",
+    previewCount: "匹配 {count} 个会话——尚未更改。", previewEmpty: "没有匹配的会话。",
+    appliedPruned: "已清理 {count} 个会话。", appliedArchived: "已归档 {count} 个会话——可恢复，未删除任何内容。",
+    confirmPrune: "确定删除这 {count} 个会话？此操作不可撤销。", confirmArchive: "归档这 {count} 个会话？",
+    failed: "失败：{error}",
     exportFailed: "导出失败。",
     roleUser: "用户", roleAssistant: "助手", roleTool: "工具", roleSystem: "系统",
     recap: "回顾", recapTitle: "显示/隐藏网关生成的会话回顾", recapFailed: "生成回顾失败:{error}",
@@ -1086,6 +1107,14 @@ const zhHant: Translations = {
     transcriptFailed: "載入轉錄失敗:{error}",
     emptyTranscript: "該會話沒有訊息。",
     exportTitle: "將選取會話匯出為 Markdown", exportHtmlTitle: "將選取會話匯出為獨立 HTML", msgCount: "{count} 則訊息", project: "專案", source: "來源", stats: "{sessions} 個會話 \u00b7 {messages} 則訊息 \u00b7 磁碟佔用 {size}",
+    prune: "清理…", archive: "封存…", pruneTitle: "按過濾條件刪除已結束的會話", archiveTitle: "按過濾條件封存已結束的會話",
+    pruneDialogTitle: "清理已結束的會話", archiveDialogTitle: "封存已結束的會話",
+    olderThanLabel: "最後活動早於（90d、2026-01-01…）", sourceLabel: "來源過濾（選填）",
+    includeArchived: "包含已封存會話", preview: "預覽", apply: "套用",
+    previewCount: "匹配 {count} 個會話——尚未變更。", previewEmpty: "沒有匹配的會話。",
+    appliedPruned: "已清理 {count} 個會話。", appliedArchived: "已封存 {count} 個會話——可復原，未刪除任何內容。",
+    confirmPrune: "確定刪除這 {count} 個會話？此操作無法復原。", confirmArchive: "封存這 {count} 個會話？",
+    failed: "失敗：{error}",
     exportFailed: "匯出失敗。",
     roleUser: "使用者", roleAssistant: "助理", roleTool: "工具", roleSystem: "系統",
     recap: "回顧", recapTitle: "顯示/隱藏閘道產生的會話回顧", recapFailed: "產生回顧失敗:{error}",
@@ -1431,6 +1460,14 @@ const ja: Translations = {
     transcriptFailed: "トランスクリプトの読み込みに失敗しました: {error}",
     emptyTranscript: "このセッションにはメッセージがありません。",
     exportTitle: "選択したセッションを Markdown でエクスポート", exportHtmlTitle: "選択したセッションを単体 HTML でエクスポート", msgCount: "{count} メッセージ", project: "プロジェクト", source: "ソース", stats: "{sessions} セッション \u00b7 {messages} メッセージ \u00b7 ディスク {size}",
+    prune: "枝切り…", archive: "アーカイブ…", pruneTitle: "フィルタに一致する終了セッションを削除", archiveTitle: "フィルタに一致する終了セッションをアーカイブ",
+    pruneDialogTitle: "終了セッションを枝切り", archiveDialogTitle: "終了セッションをアーカイブ",
+    olderThanLabel: "最終アクティビティがこれより古い（90d、2026-01-01…）", sourceLabel: "ソースフィルタ（任意）",
+    includeArchived: "アーカイブ済みセッションを含む", preview: "プレビュー", apply: "適用",
+    previewCount: "{count} 件のセッションが一致——まだ変更されていません。", previewEmpty: "一致するセッションはありません。",
+    appliedPruned: "{count} 件のセッションを削除しました。", appliedArchived: "{count} 件のセッションをアーカイブしました——復元可能、何も削除されていません。",
+    confirmPrune: "これら {count} 件のセッションを本当に削除しますか？元に戻せません。", confirmArchive: "これら {count} 件のセッションをアーカイブしますか？",
+    failed: "失敗しました: {error}",
     exportFailed: "エクスポートに失敗しました。",
     roleUser: "ユーザー", roleAssistant: "アシスタント", roleTool: "ツール", roleSystem: "システム",
     recap: "リキャップ", recapTitle: "ゲートウェイ生成のセッション要約を表示/非表示", recapFailed: "リキャップに失敗しました: {error}",
@@ -1776,6 +1813,14 @@ const ar: Translations = {
     transcriptFailed: "فشل تحميل النص: {error}",
     emptyTranscript: "لا توجد رسائل في هذه الجلسة.",
     exportTitle: "تصدير الجلسة المحددة بصيغة Markdown", exportHtmlTitle: "تصدير الجلسة المحددة بصيغة HTML مستقلة", msgCount: "{count} رسالة", project: "المشروع", source: "المصدر", stats: "{sessions} جلسة \u00b7 {messages} رسالة \u00b7 {size} على القرص",
+    prune: "تشذيب…", archive: "أرشفة…", pruneTitle: "حذف الجلسات المنتهية المطابقة للمرشحات", archiveTitle: "أرشفة الجلسات المنتهية المطابقة للمرشحات",
+    pruneDialogTitle: "تشذيب الجلسات المنتهية", archiveDialogTitle: "أرشفة الجلسات المنتهية",
+    olderThanLabel: "النشاط الأحدث أقدم من (90d، 2026-01-01…)", sourceLabel: "مرشح المصدر (اختياري)",
+    includeArchived: "تضمين الجلسات المؤرشفة", preview: "معاينة", apply: "تطبيق",
+    previewCount: "{count} جلسة مطابقة — لم يتغير شيء بعد.", previewEmpty: "لا جلسات مطابقة.",
+    appliedPruned: "تم تشذيب {count} جلسة.", appliedArchived: "تمت أرشفة {count} جلسة — قابلة للاستعادة، لم يُحذف شيء.",
+    confirmPrune: "هل تريد فعلاً حذف هذه {count} جلسة؟ لا يمكن التراجع.", confirmArchive: "أرشفة هذه {count} جلسة؟",
+    failed: "فشل: {error}",
     exportFailed: "فشل التصدير.",
     roleUser: "المستخدم", roleAssistant: "المساعد", roleTool: "أداة", roleSystem: "النظام",
     recap: "ملخص", recapTitle: "إظهار أو إخفاء ملخص الجلسة المُنشأ من البوابة", recapFailed: "فشل الملخص: {error}",

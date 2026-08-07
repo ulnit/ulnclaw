@@ -5,7 +5,7 @@
 // session. Complements the chat sidebar, which only renders resumable
 // sessions for continued conversation.
 
-import type { GatewayClient, MessageRow, SessionRow } from "./gateway";
+import type { GatewayClient, MessageRow, SessionPruneOptions, SessionRow } from "./gateway";
 import { t } from "./i18n";
 
 function escapeHtml(text: string): string {
@@ -24,6 +24,7 @@ function fmtWhen(ts: number | null | undefined): string {
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
   private selected: string | null = null;
+  private pruneMode: "prune" | "archive" = "prune";
 
   constructor(
     private root: HTMLElement,
@@ -42,6 +43,8 @@ export class SessionsViewWidget {
         <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
         <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳ MD</button>
         <button id="sessions-view-export-html" class="ghost" data-i18n-title="sessionsView.exportHtmlTitle" hidden>⭳ HTML</button>
+        <button id="sessions-view-prune" class="ghost" data-i18n="sessionsView.prune" data-i18n-title="sessionsView.pruneTitle"></button>
+        <button id="sessions-view-archive" class="ghost" data-i18n="sessionsView.archive" data-i18n-title="sessionsView.archiveTitle"></button>
         <button id="sessions-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="sessions-view-status" class="config-status" hidden></div>
@@ -55,6 +58,25 @@ export class SessionsViewWidget {
           <p class="empty" data-i18n="sessionsView.select"></p>
         </div>
       </div>
+      <dialog id="sessions-prune-dialog">
+        <h2 id="sessions-prune-title"></h2>
+        <label><span data-i18n="sessionsView.olderThanLabel">Last activity older than</span>
+          <input id="sessions-prune-older" type="text" placeholder="90d / 2026-01-01" />
+        </label>
+        <label><span data-i18n="sessionsView.sourceLabel">Source filter (optional)</span>
+          <input id="sessions-prune-source" type="text" placeholder="cli / cron / gateway" />
+        </label>
+        <label class="check" id="sessions-prune-archived-row">
+          <input id="sessions-prune-include-archived" type="checkbox" />
+          <span data-i18n="sessionsView.includeArchived">Include already-archived sessions</span>
+        </label>
+        <p id="sessions-prune-status" class="config-note"></p>
+        <menu>
+          <button id="sessions-prune-cancel" class="ghost" data-i18n="chrome.cancel">Cancel</button>
+          <button id="sessions-prune-preview" class="ghost" data-i18n="sessionsView.preview">Preview</button>
+          <button id="sessions-prune-apply" class="primary" data-i18n="sessionsView.apply">Apply</button>
+        </menu>
+      </dialog>
     `;
     this.root.querySelector("#sessions-view-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
@@ -86,6 +108,21 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-rename")!.addEventListener("click", () => {
       this.renameSelected().catch(() => undefined);
+    });
+    this.root.querySelector("#sessions-view-prune")!.addEventListener("click", () => {
+      this.openPruneDialog("prune");
+    });
+    this.root.querySelector("#sessions-view-archive")!.addEventListener("click", () => {
+      this.openPruneDialog("archive");
+    });
+    this.root.querySelector("#sessions-prune-cancel")!.addEventListener("click", () => {
+      (this.root.querySelector("#sessions-prune-dialog") as HTMLDialogElement).close();
+    });
+    this.root.querySelector("#sessions-prune-preview")!.addEventListener("click", () => {
+      this.prunePreview().catch(() => undefined);
+    });
+    this.root.querySelector("#sessions-prune-apply")!.addEventListener("click", () => {
+      this.pruneApply().catch(() => undefined);
     });
   }
 
@@ -125,6 +162,95 @@ export class SessionsViewWidget {
           error instanceof Error ? error.message : String(error),
         ),
         true,
+      );
+    }
+  }
+
+  /** Prune/archive dialog (P314) — mirrors `ulnclaw sessions prune`
+   * and `sessions archive` over POST /api/sessions/prune|archive. */
+  private openPruneDialog(mode: "prune" | "archive"): void {
+    this.pruneMode = mode;
+    const title = this.root.querySelector("#sessions-prune-title") as HTMLElement;
+    title.textContent =
+      mode === "prune" ? t.sessionsView.pruneDialogTitle : t.sessionsView.archiveDialogTitle;
+    (this.root.querySelector("#sessions-prune-archived-row") as HTMLElement).hidden =
+      mode === "archive";
+    (this.root.querySelector("#sessions-prune-status") as HTMLElement).textContent = "";
+    (this.root.querySelector("#sessions-prune-dialog") as HTMLDialogElement).showModal();
+  }
+
+  private pruneOptions(dryRun: boolean): SessionPruneOptions {
+    const older = (this.root.querySelector("#sessions-prune-older") as HTMLInputElement).value.trim();
+    const source = (this.root.querySelector("#sessions-prune-source") as HTMLInputElement).value.trim();
+    const includeArchived =
+      this.pruneMode === "prune" &&
+      (this.root.querySelector("#sessions-prune-include-archived") as HTMLInputElement).checked;
+    return {
+      older_than: older || undefined,
+      source: source || undefined,
+      include_archived: includeArchived || undefined,
+      dry_run: dryRun || undefined,
+    };
+  }
+
+  private async prunePreview(): Promise<void> {
+    const client = this.client();
+    const statusEl = this.root.querySelector("#sessions-prune-status") as HTMLElement;
+    if (!client) return;
+    try {
+      const result =
+        this.pruneMode === "prune"
+          ? await client.sessionsPrune(this.pruneOptions(true))
+          : await client.sessionsArchive(this.pruneOptions(true));
+      const count = result.count ?? 0;
+      statusEl.textContent =
+        count === 0
+          ? t.sessionsView.previewEmpty
+          : t.sessionsView.previewCount.replace("{count}", String(count));
+    } catch (error) {
+      statusEl.textContent = t.sessionsView.failed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async pruneApply(): Promise<void> {
+    const client = this.client();
+    const statusEl = this.root.querySelector("#sessions-prune-status") as HTMLElement;
+    if (!client) return;
+    try {
+      const preview =
+        this.pruneMode === "prune"
+          ? await client.sessionsPrune(this.pruneOptions(true))
+          : await client.sessionsArchive(this.pruneOptions(true));
+      const count = preview.count ?? 0;
+      if (count === 0) {
+        statusEl.textContent = t.sessionsView.previewEmpty;
+        return;
+      }
+      const confirmText = (
+        this.pruneMode === "prune"
+          ? t.sessionsView.confirmPrune
+          : t.sessionsView.confirmArchive
+      ).replace("{count}", String(count));
+      if (!window.confirm(confirmText)) return;
+      const result =
+        this.pruneMode === "prune"
+          ? await client.sessionsPrune(this.pruneOptions(false))
+          : await client.sessionsArchive(this.pruneOptions(false));
+      (this.root.querySelector("#sessions-prune-dialog") as HTMLDialogElement).close();
+      await this.refresh();
+      const affected = result.affected ?? 0;
+      this.status(
+        this.pruneMode === "prune"
+          ? t.sessionsView.appliedPruned.replace("{count}", String(affected))
+          : t.sessionsView.appliedArchived.replace("{count}", String(affected)),
+      );
+    } catch (error) {
+      statusEl.textContent = t.sessionsView.failed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
       );
     }
   }
