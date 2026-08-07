@@ -587,7 +587,8 @@ The agent core is at parity with hermes-agent v2026.8.3: every core tool,
 the full `sessions` surface (`list/show/search/export/recap/recover/prune/
 archive/stats/delete/rename/optimize/repair/browse`), startup resume
 (`--resume`/`--continue` with one-session-per-conversation continuity), the
-CDP browser client + attach layer + Camofox backend, the HTTP gateway
+CDP browser client + attach layer + Camofox backend + cloud browser
+providers (Browserbase / Browser Use / Firecrawl, P264), the HTTP gateway
 (including the `/v1/browser/*` live-endpoint control and profile
 multiplexing), skills/bundles/memory/goals/checkpoints/cron/insights/doctor/pets,
 external secret sources (command helper / Bitwarden / 1Password),
@@ -598,6 +599,7 @@ the `send_message` cross-channel tool + channel directory (P259),
 the MCP channel bridge `ulnclaw mcp serve` (P260),
 the ACP editor adapter `ulnclaw acp` (P261),
 the parallel batch runner `ulnclaw batch` (P262),
+the scripted-messaging CLI `ulnclaw send` (P263),
 the Tauri desktop GUI (`desktop/`, replacing hermes' Electron app)
 and the rest of the CLI are ported — this completes the v2026.8.3
 parity surface. The `sessions` surface intentionally

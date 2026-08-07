@@ -501,11 +501,11 @@
 agent 核心已与 hermes-agent v2026.8.3 对齐：全部核心工具、完整 `sessions`
 面（`list/show/search/export/recap/recover/prune/archive/stats/delete/
 rename/optimize/repair/browse`）、启动恢复（`--resume`/`--continue`，
-一会话一记录的连续性）、CDP 浏览器客户端 + 接入层 + Camofox 后端、HTTP
+一会话一记录的连续性）、CDP 浏览器客户端 + 接入层 + Camofox 后端 + 云浏览器 provider（Browserbase / Browser Use / Firecrawl，P264）、HTTP
 网关（含 `/v1/browser/*` 实时端点控制与 profile 多路复用）、技能/捆绑/
 记忆/目标/检查点/定时任务/用量分析/doctor、外部秘密源（command 助手 /
 Bitwarden / 1Password）、computer-use（cua-driver）、子进程插件系统、
-消息平台网关（Telegram/Discord/Slack/Signal/微信/QQ/元宝/邮件/Mattermost/Matrix/钉钉/企微/飞书/HomeAssistant/SMS/WhatsApp/IRC/ntfy/SimpleX/Teams/LINE/Google Chat/Buzz/Photon/Raft/A2A）、OAuth 设备流登录 + 技能同步、`send_message` 跨频道工具 + 频道目录（P259）、MCP 频道桥 `ulnclaw mcp serve`（P260）、ACP 编辑器适配器 `ulnclaw acp`（P261）、并行批量运行器 `ulnclaw batch`（P262）、Tauri 桌面 GUI（`desktop/`，取代 hermes 的 Electron 应用）及其余 CLI 均已移植——至此 v2026.8.3 对标面全部完成。`sessions`
+消息平台网关（Telegram/Discord/Slack/Signal/微信/QQ/元宝/邮件/Mattermost/Matrix/钉钉/企微/飞书/HomeAssistant/SMS/WhatsApp/IRC/ntfy/SimpleX/Teams/LINE/Google Chat/Buzz/Photon/Raft/A2A）、OAuth 设备流登录 + 技能同步、`send_message` 跨频道工具 + 频道目录（P259）、MCP 频道桥 `ulnclaw mcp serve`（P260）、ACP 编辑器适配器 `ulnclaw acp`（P261）、并行批量运行器 `ulnclaw batch`（P262）、脚本化消息 CLI `ulnclaw send`（P263）、Tauri 桌面 GUI（`desktop/`，取代 hermes 的 Electron 应用）及其余 CLI 均已移植——至此 v2026.8.3 对标面全部完成。`sessions`
 面仅有意省略：`optimize-storage`（ulnclaw 自始即采用紧凑的外联内容 FTS
 布局，无旧布局可迁移）。`-c <会话名>` 标题查找已于 P232 移植。
 
