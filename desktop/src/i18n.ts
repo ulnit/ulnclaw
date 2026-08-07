@@ -117,6 +117,8 @@ export interface Translations {
     gatewayDefault: string; lockNote: string; noProviders: string; noModels: string;
     notAuthenticatedTitle: string; notAuthenticatedBit: string; currentBit: string;
     lockFailed: string;
+    visibilityTitle: string; visibilitySearch: string; visibilityEmpty: string;
+    addProvider: string; editVisibleModels: string; resetVisibility: string;
   };
   find: { placeholder: string; closeTitle: string; nextTitle: string; prevTitle: string };
   palette: {
@@ -271,6 +273,10 @@ const en: Translations = {
     notAuthenticatedTitle: "Provider not authenticated",
     notAuthenticatedBit: "⚠ not authenticated", currentBit: "current",
     lockFailed: "Lock failed: {error}",
+    visibilityTitle: "Visible models", visibilitySearch: "Filter models…",
+    visibilityEmpty: "No authenticated providers reported models.",
+    addProvider: "Add provider…", editVisibleModels: "Edit visible models…",
+    resetVisibility: "Reset to defaults",
   },
   find: {
     placeholder: "Find in chat…", closeTitle: "Close (Esc)",
@@ -446,6 +452,10 @@ const zh: Translations = {
     notAuthenticatedTitle: "provider 未认证",
     notAuthenticatedBit: "⚠ 未认证", currentBit: "当前",
     lockFailed: "锁定失败：{error}",
+    visibilityTitle: "可见模型", visibilitySearch: "过滤模型…",
+    visibilityEmpty: "没有已认证 provider 报告模型。",
+    addProvider: "添加 provider…", editVisibleModels: "编辑可见模型…",
+    resetVisibility: "恢复默认",
   },
   find: {
     placeholder: "聊天中查找…", closeTitle: "关闭（Esc）",
@@ -621,6 +631,10 @@ const zhHant: Translations = {
     notAuthenticatedTitle: "provider 未認證",
     notAuthenticatedBit: "⚠ 未認證", currentBit: "目前",
     lockFailed: "鎖定失敗：{error}",
+    visibilityTitle: "可見模型", visibilitySearch: "過濾模型…",
+    visibilityEmpty: "沒有已認證 provider 報告模型。",
+    addProvider: "新增 provider…", editVisibleModels: "編輯可見模型…",
+    resetVisibility: "恢復預設",
   },
   find: {
     placeholder: "在聊天中尋找…", closeTitle: "關閉（Esc）",
@@ -796,6 +810,10 @@ const ja: Translations = {
     notAuthenticatedTitle: "provider が未認証",
     notAuthenticatedBit: "⚠ 未認証", currentBit: "現在",
     lockFailed: "ロックに失敗：{error}",
+    visibilityTitle: "表示するモデル", visibilitySearch: "モデルを絞り込み…",
+    visibilityEmpty: "認証済み provider からモデルが報告されていません。",
+    addProvider: "provider を追加…", editVisibleModels: "表示モデルを編集…",
+    resetVisibility: "既定に戻す",
   },
   find: {
     placeholder: "チャット内を検索…", closeTitle: "閉じる（Esc）",
@@ -971,6 +989,10 @@ const ar: Translations = {
     notAuthenticatedTitle: "provider غير مصادَق",
     notAuthenticatedBit: "⚠ غير مصادَق", currentBit: "الحالي",
     lockFailed: "فشل القفل: {error}",
+    visibilityTitle: "النماذج المرئية", visibilitySearch: "تصفية النماذج…",
+    visibilityEmpty: "لم تُبلّغ أي موارد مصادَق عنها نماذج.",
+    addProvider: "إضافة provider…", editVisibleModels: "تحرير النماذج المرئية…",
+    resetVisibility: "إعادة تعيين للافتراضي",
   },
   find: {
     placeholder: "ابحث في الدردشة…", closeTitle: "إغلاق (Esc)",

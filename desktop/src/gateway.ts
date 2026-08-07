@@ -74,6 +74,7 @@ export interface ModelOptionRow {
   mode?: string;
   probed?: boolean;
   key_env?: string;
+  featured_models?: string[];
 }
 
 export interface ModelOptionsPayload {

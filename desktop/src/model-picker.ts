@@ -5,6 +5,8 @@
 
 import type { GatewayClient, ModelOptionsPayload, ModelOptionRow } from "./gateway";
 import { fmt, t } from "./i18n";
+import { ModelVisibilityDialog } from "./model-visibility-dialog";
+import { effectiveVisibleKeys, getVisibleModels, modelVisibilityKey } from "./model-visibility";
 
 export interface ModelSelection {
   model: string;
@@ -14,6 +16,8 @@ export interface ModelSelection {
 export class ModelPickerOverlay {
   private dialog: HTMLDialogElement;
   private body: HTMLDivElement;
+  private visibility: ModelVisibilityDialog | null = null;
+  private lastPayload: ModelOptionsPayload | null = null;
 
   constructor(
     private client: () => GatewayClient | null,
@@ -21,6 +25,8 @@ export class ModelPickerOverlay {
     /** Current session lock (null = gateway default). */
     private currentModel: () => string | null,
     private onLocked: (selection: ModelSelection) => void = () => {},
+    /** Provider-setup guidance surface for the visibility dialog. */
+    private onAddProvider: () => void = () => {},
   ) {
     this.dialog = document.createElement("dialog");
     this.dialog.className = "model-picker-dialog";
@@ -29,6 +35,22 @@ export class ModelPickerOverlay {
     const title = document.createElement("h2");
     title.textContent = t.picker.title;
     header.appendChild(title);
+    const editVisible = document.createElement("button");
+    editVisible.className = "ghost model-picker-edit-visible";
+    editVisible.type = "button";
+    editVisible.textContent = t.picker.editVisibleModels;
+    editVisible.onclick = () => {
+      if (!this.visibility) {
+        this.visibility = new ModelVisibilityDialog(this.client, {
+          onChanged: () => {
+            if (this.dialog.open && this.lastPayload) this.render(this.lastPayload);
+          },
+          onAddProvider: () => this.onAddProvider(),
+        });
+      }
+      void this.visibility.open();
+    };
+    header.appendChild(editVisible);
     this.body = document.createElement("div");
     this.body.className = "model-picker-body";
     this.dialog.append(header, this.body);
@@ -57,6 +79,7 @@ export class ModelPickerOverlay {
   }
 
   private render(payload: ModelOptionsPayload): void {
+    this.lastPayload = payload;
     this.body.innerHTML = "";
     const sessionLocked = this.currentModel();
 
@@ -112,7 +135,13 @@ export class ModelPickerOverlay {
     head.textContent = bits.join("  ·  ");
     wrap.appendChild(head);
 
-    const models = provider.models && provider.models.length ? provider.models : [];
+    const allModels = provider.models && provider.models.length ? provider.models : [];
+    // Visibility filter (P252, hermes model-catalog-menu parity): honor
+    // the user's curated set — defaults expand featured/top-N per provider.
+    const visibleKeys = effectiveVisibleKeys(getVisibleModels(), payload.providers || []);
+    const models = allModels.filter((model) =>
+      visibleKeys.has(modelVisibilityKey(provider.slug, model)),
+    );
     if (!models.length) {
       const hint = document.createElement("div");
       hint.className = "model-picker-option-meta";

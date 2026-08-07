@@ -808,6 +808,7 @@ async function start(): Promise<void> {
         refreshModelBadge();
       }
     },
+    () => void state.onboarding?.maybeOpen(true),
   );
   el.modelBadge.addEventListener("click", () => {
     if (!state.current || !state.picker) return;
