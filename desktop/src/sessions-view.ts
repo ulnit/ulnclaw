@@ -35,6 +35,7 @@ export class SessionsViewWidget {
       <header id="sessions-view-header">
         <span id="sessions-view-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <button id="sessions-view-rename" class="ghost" data-i18n-title="sessionsView.renameTitle" hidden>✎</button>
         <button id="sessions-view-delete" class="ghost" data-i18n-title="sessionsView.deleteTitle" hidden>🗑</button>
         <button id="sessions-view-fork" class="ghost" data-i18n-title="sessionsView.forkTitle" hidden>⑂</button>
         <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
@@ -77,6 +78,9 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-delete")!.addEventListener("click", () => {
       this.deleteSelected().catch(() => undefined);
+    });
+    this.root.querySelector("#sessions-view-rename")!.addEventListener("click", () => {
+      this.renameSelected().catch(() => undefined);
     });
   }
 
@@ -214,6 +218,7 @@ export class SessionsViewWidget {
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = false;
+      (this.root.querySelector("#sessions-view-rename") as HTMLButtonElement).hidden = false;
     } catch (error) {
       if (this.selected !== sessionId) return;
       pane.innerHTML = `<p class="empty">${escapeHtml(
@@ -226,6 +231,7 @@ export class SessionsViewWidget {
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = true;
+      (this.root.querySelector("#sessions-view-rename") as HTMLButtonElement).hidden = true;
     }
   }
 
@@ -277,6 +283,28 @@ export class SessionsViewWidget {
       .join("");
   }
 
+  private async renameSelected(): Promise<void> {
+    const client = this.client();
+    if (!client || !this.selected) return;
+    const sessionId = this.selected;
+    const current = this.all.find((session) => session.id === sessionId);
+    const title = window.prompt(t.sessionsView.renamePrompt, current?.title || "");
+    if (title === null) return;
+    try {
+      await client.renameSession(sessionId, title.trim());
+      this.status(t.sessionsView.renamed, false);
+      await this.refresh();
+    } catch (error) {
+      this.status(
+        t.sessionsView.renameFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
+  }
+
   private async deleteSelected(): Promise<void> {
     const client = this.client();
     if (!client || !this.selected) return;
@@ -289,7 +317,7 @@ export class SessionsViewWidget {
       this.selected = null;
       const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
       pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.select)}</p>`;
-      for (const id of ["#sessions-view-export", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-delete"]) {
+      for (const id of ["#sessions-view-export", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-delete", "#sessions-view-rename"]) {
         (this.root.querySelector(id) as HTMLButtonElement).hidden = true;
       }
       await this.refresh();
