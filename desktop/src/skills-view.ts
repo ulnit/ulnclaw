@@ -32,6 +32,9 @@ export class SkillsWidget {
       <div id="skills-list" class="skills-list"></div>
       <h3 class="config-section" data-i18n="skillsView.toolsetsTitle">Toolsets</h3>
       <div id="toolsets-list" class="skills-list"></div>
+      <h3 class="config-section" data-i18n="skillsView.curationTitle">Curation</h3>
+      <div id="curation-summary" class="config-note"></div>
+      <div id="curation-list" class="skills-list"></div>
     `;
     this.root.querySelector("#skills-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
@@ -72,9 +75,106 @@ export class SkillsWidget {
           .replace("{skills}", String(skills.length))
           .replace("{toolsets}", `${enabledCount}/${toolsets.length}`);
       this.status("");
+      this.loadCuration().catch(() => undefined);
     } catch (error) {
       this.status(
         t.skillsView.loadFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
+        true,
+      );
+    }
+  }
+
+  /** Curation section (P316): curator status, usage rows with
+   * pin/archive actions, archived skills with restore — hermes
+   * `ulnclaw curator` parity over /api/curator. */
+  private async loadCuration(): Promise<void> {
+    const client = this.client();
+    const summary = this.root.querySelector("#curation-summary") as HTMLElement;
+    const list = this.root.querySelector("#curation-list") as HTMLElement;
+    if (!client) return;
+    try {
+      const data = await client.curatorStatus();
+      summary.textContent = data.status
+        .map((row) => `${row.label}: ${row.count}`)
+        .join(" \u00b7 ");
+      list.innerHTML = "";
+      if (data.archived.length) {
+        const header = document.createElement("div");
+        header.className = "config-note";
+        header.textContent = t.skillsView.archivedTitle;
+        list.appendChild(header);
+        for (const name of data.archived) {
+          const card = document.createElement("div");
+          card.className = "skill-card";
+          const head = document.createElement("div");
+          head.className = "skill-head";
+          const nameEl = document.createElement("span");
+          nameEl.className = "skill-name";
+          nameEl.textContent = name;
+          const restore = document.createElement("button");
+          restore.className = "ghost";
+          restore.textContent = t.skillsView.restoreSkill;
+          restore.onclick = () => this.curatorAction("restore", name);
+          head.append(nameEl, restore);
+          card.appendChild(head);
+          list.appendChild(card);
+        }
+      }
+      for (const row of data.usage.slice(0, 60)) {
+        const card = document.createElement("div");
+        card.className = "skill-card";
+        const head = document.createElement("div");
+        head.className = "skill-head";
+        const nameEl = document.createElement("span");
+        nameEl.className = "skill-name";
+        nameEl.textContent = row.name;
+        const state = document.createElement("span");
+        state.className = "skill-category";
+        state.textContent = `${row.state}${row.pinned ? " \u00b7 \ud83d\udccc" : ""}`;
+        const meta = document.createElement("span");
+        meta.className = "jobs-counts";
+        meta.textContent = `${row.activity_count} act \u00b7 ${row.use_count} use${
+          row.last_activity_at ? ` \u00b7 ${row.last_activity_at.slice(0, 10)}` : ""
+        }`;
+        const pin = document.createElement("button");
+        pin.className = "ghost";
+        pin.textContent = row.pinned ? t.skillsView.unpinSkill : t.skillsView.pinSkill;
+        pin.onclick = () => this.curatorAction(row.pinned ? "unpin" : "pin", row.name);
+        head.append(nameEl, state, meta, pin);
+        if (!row.pinned) {
+          const archive = document.createElement("button");
+          archive.className = "ghost danger";
+          archive.textContent = t.skillsView.archiveSkill;
+          archive.onclick = () => this.curatorAction("archive", row.name);
+          head.appendChild(archive);
+        }
+        card.appendChild(head);
+        list.appendChild(card);
+      }
+    } catch {
+      summary.textContent = "";
+      list.innerHTML = "";
+    }
+  }
+
+  private async curatorAction(
+    action: "pin" | "unpin" | "archive" | "restore",
+    skill: string,
+  ): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (action === "archive" && !window.confirm(t.skillsView.archiveConfirm.replace("{name}", skill))) {
+      return;
+    }
+    try {
+      await client.curatorAction(action, skill);
+      await this.loadCuration();
+    } catch (error) {
+      this.status(
+        t.skillsView.curationFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
         true,
       );
     }

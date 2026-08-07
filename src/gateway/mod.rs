@@ -1609,6 +1609,11 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/backups", get(list_backups).post(create_backup))
         .route("/api/backups/prune", post(prune_backups))
         .route("/api/backups/:id/restore", post(restore_backup))
+        .route("/api/curator", get(curator_status))
+        .route("/api/curator/pin", post(curator_pin))
+        .route("/api/curator/unpin", post(curator_unpin))
+        .route("/api/curator/archive", post(curator_archive))
+        .route("/api/curator/restore", post(curator_restore))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
         .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
         .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
@@ -4416,6 +4421,145 @@ async fn restore_backup(State(state): State<Arc<GatewayState>>, Path(id): Path<S
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("restore task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+// ── Curator (hermes curator CLI parity) ────────────────────────────────────
+
+/// `GET /api/curator` — curation overview: status summary, archived
+/// skill names, and the usage telemetry table sorted by activity
+/// (`ulnclaw curator status` + `list-archived` + `usage --json`).
+async fn curator_status(State(state): State<Arc<GatewayState>>) -> Response {
+    let home = state.agent.context().home.clone();
+    let payload = tokio::task::spawn_blocking(move || -> Value {
+        let status = crate::curator::status_summary(&home)
+            .into_iter()
+            .map(|(label, count)| json!({"label": label, "count": count}))
+            .collect::<Vec<_>>();
+        let archived = crate::skill_usage::list_archived_skill_names(&home);
+        let mut rows = crate::skill_usage::usage_report(&home);
+        rows.sort_by(|a, b| b.activity_count.cmp(&a.activity_count).then(a.name.cmp(&b.name)));
+        let usage = rows
+            .iter()
+            .map(|r| {
+                json!({
+                    "name": r.name,
+                    "provenance": r.provenance,
+                    "use_count": r.use_count,
+                    "view_count": r.view_count,
+                    "patch_count": r.patch_count,
+                    "activity_count": r.activity_count,
+                    "last_activity_at": r.last_activity_at,
+                    "state": r.state,
+                    "pinned": r.pinned,
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "object": "ulnclaw.curator",
+            "status": status,
+            "archived": archived,
+            "usage": usage,
+        })
+    })
+    .await
+    .unwrap_or_else(|e| json!({"error": format!("curator task failed: {e}")}));
+    axum::Json(payload).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct CuratorSkillBody {
+    skill: String,
+}
+
+/// `POST /api/curator/pin` — pin a skill so auto-transitions skip it
+/// (`ulnclaw curator pin <skill>`).
+async fn curator_pin(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CuratorSkillBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let skill = body.skill.clone();
+    tokio::task::spawn_blocking(move || crate::skill_usage::set_pinned(&home, &skill, true))
+        .await
+        .ok();
+    Json(json!({"ok": true, "skill": body.skill, "pinned": true})).into_response()
+}
+
+/// `POST /api/curator/unpin` — unpin a skill (`ulnclaw curator unpin`).
+async fn curator_unpin(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CuratorSkillBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let skill = body.skill.clone();
+    tokio::task::spawn_blocking(move || crate::skill_usage::set_pinned(&home, &skill, false))
+        .await
+        .ok();
+    Json(json!({"ok": true, "skill": body.skill, "pinned": false})).into_response()
+}
+
+/// `POST /api/curator/archive` — archive a skill now, recoverable via
+/// restore (`ulnclaw curator archive`). Pinned skills are refused.
+async fn curator_archive(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CuratorSkillBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let skill = body.skill.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        if crate::skill_usage::get_record(&home, &skill)
+            .get("pinned")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return (false, format!("'{skill}' is pinned — unpin it first"));
+        }
+        crate::skill_usage::archive_skill(&home, &skill)
+    })
+    .await;
+    match result {
+        Ok((true, message)) => {
+            Json(json!({"ok": true, "skill": body.skill, "message": message})).into_response()
+        }
+        Ok((false, message)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": message})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("archive task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/curator/restore` — restore an archived skill
+/// (`ulnclaw curator restore`).
+async fn curator_restore(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CuratorSkillBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let skill = body.skill.clone();
+    let result =
+        tokio::task::spawn_blocking(move || crate::skill_usage::restore_skill(&home, &skill))
+            .await;
+    match result {
+        Ok((true, message)) => {
+            Json(json!({"ok": true, "skill": body.skill, "message": message})).into_response()
+        }
+        Ok((false, message)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": message})),
         )
             .into_response(),
         Err(e) => (
@@ -9538,6 +9682,71 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (status, body) = get_json(app, "/api/backups", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["snapshots"].as_array().unwrap().len(), 1);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_curator_endpoints_pin_archive_restore() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A minimal installed skill for the usage report to see.
+        let skill_dir = dir.path().join("skills").join("demo");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: demo\n---\n\nbody\n").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Auth + inventory.
+        let (status, _) = get_json(app.clone(), "/api/curator", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, body) = get_json(app.clone(), "/api/curator", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let usage = body["usage"].as_array().unwrap();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0]["name"], "demo");
+
+        // Pin → archive refused while pinned.
+        let (status, _) =
+            post_json(app.clone(), "/api/curator/pin", r#"{"skill": "demo"}"#, "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) =
+            post_json(app.clone(), "/api/curator/archive", r#"{"skill": "demo"}"#, "sekret").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("pinned"));
+
+        // Unpin → archive succeeds → listed as archived.
+        let (status, _) =
+            post_json(app.clone(), "/api/curator/unpin", r#"{"skill": "demo"}"#, "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) =
+            post_json(app.clone(), "/api/curator/archive", r#"{"skill": "demo"}"#, "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let (status, body) = get_json(app.clone(), "/api/curator", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let archived: Vec<&str> = body["archived"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(archived.contains(&"demo"));
+
+        // Restore brings it back.
+        let (status, body) =
+            post_json(app.clone(), "/api/curator/restore", r#"{"skill": "demo"}"#, "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let (status, body) = get_json(app, "/api/curator", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["archived"].as_array().unwrap().is_empty());
+        assert!(skill_dir.join("SKILL.md").exists());
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

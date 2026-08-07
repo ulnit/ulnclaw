@@ -434,6 +434,25 @@ export interface BackupSnapshot {
   bytes: number;
 }
 
+/** GET /api/curator payload (P316) — hermes curator parity. */
+export interface CuratorUsageRow {
+  name: string;
+  provenance: string;
+  use_count: number;
+  view_count: number;
+  patch_count: number;
+  activity_count: number;
+  last_activity_at: string | null;
+  state: string;
+  pinned: boolean;
+}
+
+export interface CuratorStatus {
+  status: { label: string; count: number }[];
+  archived: string[];
+  usage: CuratorUsageRow[];
+}
+
 export interface McpServerRow {
   name: string;
   kind: "stdio" | "http" | "sse";
@@ -1228,6 +1247,28 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`search HTTP ${response.status}`);
     const value = await response.json();
     return (value.results || []) as SessionSearchHit[];
+  }
+
+  /** GET /api/curator — curation overview (status/archived/usage; P316). */
+  async curatorStatus(): Promise<CuratorStatus> {
+    const response = await fetch(this.endpoint("/api/curator"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `curator HTTP ${response.status}`);
+    return value as CuratorStatus;
+  }
+
+  /** POST /api/curator/{pin|unpin|archive|restore} — skill curation. */
+  async curatorAction(
+    action: "pin" | "unpin" | "archive" | "restore",
+    skill: string,
+  ): Promise<void> {
+    const response = await fetch(this.endpoint(`/api/curator/${action}`), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ skill }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `curator ${action} HTTP ${response.status}`);
   }
 
   /** GET /api/backups — quick-snapshot inventory (`backup list`; P315). */

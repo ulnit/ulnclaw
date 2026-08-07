@@ -197,6 +197,8 @@ export interface Translations {
   skillsView: {
     count: string; skillsTitle: string; toolsetsTitle: string; noSkills: string;
     noToolsets: string; loadFailed: string; enabled: string; disabled: string; tools: string;
+    curationTitle: string; archivedTitle: string; pinSkill: string; unpinSkill: string;
+    archiveSkill: string; restoreSkill: string; archiveConfirm: string; curationFailed: string;
   };
   browserPanel: {
     title: string; configured: string; backend: string; mode: string; source: string;
@@ -499,6 +501,10 @@ const en: Translations = {
     skillsTitle: "Installed skills", toolsetsTitle: "Toolsets",
     noSkills: "No skills installed in ~/.ulnclaw/skills yet.",
     noToolsets: "No toolsets reported.", loadFailed: "Failed to load: {error}",
+    curationTitle: "Curation", archivedTitle: "Archived skills (recoverable):",
+    pinSkill: "Pin", unpinSkill: "Unpin", archiveSkill: "Archive", restoreSkill: "Restore",
+    archiveConfirm: "Archive skill {name}? It can be restored later.",
+    curationFailed: "Curation action failed: {error}",
     enabled: "enabled", disabled: "disabled", tools: "Tools",
   },
   browserPanel: {
@@ -862,6 +868,10 @@ const zh: Translations = {
     skillsTitle: "已安装技能", toolsetsTitle: "工具集",
     noSkills: "~/.ulnclaw/skills 中还没有安装技能。",
     noToolsets: "没有报告的工具集。", loadFailed: "加载失败：{error}",
+    curationTitle: "策展", archivedTitle: "已归档技能（可恢复）：",
+    pinSkill: "固定", unpinSkill: "取消固定", archiveSkill: "归档", restoreSkill: "恢复",
+    archiveConfirm: "归档技能 {name}？之后可以恢复。",
+    curationFailed: "策展操作失败：{error}",
     enabled: "已启用", disabled: "未启用", tools: "工具",
   },
   browserPanel: {
@@ -1225,6 +1235,10 @@ const zhHant: Translations = {
     skillsTitle: "已安裝技能", toolsetsTitle: "工具集",
     noSkills: "~/.ulnclaw/skills 中還沒有安裝技能。",
     noToolsets: "沒有報告的工具集。", loadFailed: "載入失敗：{error}",
+    curationTitle: "策展", archivedTitle: "已封存技能（可復原）：",
+    pinSkill: "釘選", unpinSkill: "取消釘選", archiveSkill: "封存", restoreSkill: "還原",
+    archiveConfirm: "封存技能 {name}？之後可以還原。",
+    curationFailed: "策展操作失敗：{error}",
     enabled: "已啟用", disabled: "未啟用", tools: "工具",
   },
   browserPanel: {
@@ -1588,6 +1602,10 @@ const ja: Translations = {
     skillsTitle: "インストール済みスキル", toolsetsTitle: "ツールセット",
     noSkills: "~/.ulnclaw/skills にスキルはまだありません。",
     noToolsets: "ツールセットは報告されていません。", loadFailed: "読み込みに失敗：{error}",
+    curationTitle: "キュレーション", archivedTitle: "アーカイブ済みスキル（復元可能）:",
+    pinSkill: "ピン留め", unpinSkill: "ピン解除", archiveSkill: "アーカイブ", restoreSkill: "復元",
+    archiveConfirm: "スキル {name} をアーカイブしますか？後で復元できます。",
+    curationFailed: "キュレーション操作に失敗しました: {error}",
     enabled: "有効", disabled: "無効", tools: "ツール",
   },
   browserPanel: {
@@ -1951,6 +1969,10 @@ const ar: Translations = {
     skillsTitle: "المهارات المثبتة", toolsetsTitle: "مجموعات الأدوات",
     noSkills: "لا توجد مهارات مثبتة في ~/.ulnclaw/skills بعد.",
     noToolsets: "لا توجد مجموعات أدوات مبلغ عنها.", loadFailed: "فشل التحميل: {error}",
+    curationTitle: "التنسيق", archivedTitle: "مهارات مؤرشفة (قابلة للاستعادة):",
+    pinSkill: "تثبيت", unpinSkill: "إلغاء التثبيت", archiveSkill: "أرشفة", restoreSkill: "استعادة",
+    archiveConfirm: "أرشفة المهارة {name}؟ يمكن استعادتها لاحقاً.",
+    curationFailed: "فشلت عملية التنسيق: {error}",
     enabled: "مفعلة", disabled: "معطلة", tools: "الأدوات",
   },
   browserPanel: {
