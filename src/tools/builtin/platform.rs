@@ -1375,6 +1375,11 @@ fn register_gated_stubs(registry: &mut ToolRegistry) {
     // Yuanbao group/sticker/DM tools (hermes tools/yuanbao_tools.py):
     // gated on the live adapter session.
     crate::yuanbao_tool::register(registry);
+
+    // send_message — cross-channel messaging via the live platform
+    // adapters + channel directory (hermes tools/send_message_tool.py
+    // + gateway/channel_directory.py).
+    crate::send_message_tool::register(registry);
 }
 
 #[cfg(test)]

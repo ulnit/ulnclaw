@@ -364,6 +364,26 @@ pub trait PlatformSender: Send + Sync {
     ) -> bool {
         false
     }
+    /// Attach (or with `remove` retract) an emoji reaction — hermes
+    /// `send_message(action='react'/'unreact')` adapter hooks
+    /// (`add_reaction` / `remove_reaction`). `None` = platform has no
+    /// reaction support; `Some(ok)` = API outcome.
+    async fn send_reaction(
+        &self,
+        _chat_id: &str,
+        _emoji: &str,
+        _message_id: &str,
+        _remove: bool,
+    ) -> Option<bool> {
+        None
+    }
+    /// Deliver media files natively with an optional accompanying text
+    /// (hermes per-platform media delivery in the send_message path).
+    /// Returns false when the platform has no native media path — the
+    /// caller falls back to a text description.
+    async fn send_media(&self, _chat_id: &str, _text: &str, _paths: &[std::path::PathBuf]) -> bool {
+        false
+    }
 }
 
 fn platform_senders() -> &'static std::sync::Mutex<HashMap<String, Arc<dyn PlatformSender>>> {
@@ -381,6 +401,19 @@ pub fn register_platform_sender(platform: &str, sender: Arc<dyn PlatformSender>)
 
 pub fn platform_sender(platform: &str) -> Option<Arc<dyn PlatformSender>> {
     platform_senders().lock().unwrap().get(platform).cloned()
+}
+
+/// Whether any platform adapter has registered a live sender (hermes
+/// `is_gateway_running` gate for the send_message tool).
+pub fn has_platform_senders() -> bool {
+    !platform_senders().lock().unwrap().is_empty()
+}
+
+/// Names of the platforms with live senders (send_message diagnostics).
+pub fn platform_sender_names() -> Vec<String> {
+    let mut names: Vec<String> = platform_senders().lock().unwrap().keys().cloned().collect();
+    names.sort();
+    names
 }
 
 /// Parse a reply to a pending slash-confirm prompt (hermes gateway/run.py
@@ -707,6 +740,15 @@ impl Dispatcher {
     /// plus transcript echoes (hermes `_echo_pending_stt_transcripts_once`).
     pub async fn handle_event(self: &Arc<Self>, event: MessageEvent) -> Result<DispatchOutcome> {
         let key = Self::session_key(&event);
+        // Channel directory observation (hermes gateway directory build):
+        // every inbound event keeps the send_message target list fresh.
+        crate::channel_directory::record_channel(
+            &event.platform,
+            &event.chat_id,
+            &event.sender_name,
+            "",
+            &event.message_id,
+        );
         // Exec-approval intercept (hermes `/approve` + `/deny` slash
         // commands): resolves a pending blocking approval while the
         // blocked turn holds the busy flag, so it must run before the
@@ -1620,6 +1662,58 @@ pub mod telegram {
             )
             .await
         }
+
+        /// Emoji reactions via the Bot API (hermes send_message
+        /// action='react'/'unreact'; remove = empty reaction array).
+        async fn send_reaction(
+            &self,
+            chat_id: &str,
+            emoji: &str,
+            message_id: &str,
+            remove: bool,
+        ) -> Option<bool> {
+            let Ok(msg_id) = message_id.trim().parse::<i64>() else {
+                return Some(false);
+            };
+            let reaction: Vec<Value> = if remove {
+                Vec::new()
+            } else {
+                vec![json!({"type": "emoji", "emoji": emoji})]
+            };
+            let params = json!({
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "reaction": reaction,
+            });
+            match api(&self.client, &self.token, "setMessageReaction", params).await {
+                Ok(_) => Some(true),
+                Err(e) => {
+                    eprintln!("[telegram] setMessageReaction failed: {e}");
+                    Some(false)
+                }
+            }
+        }
+
+        /// Native media delivery with hermes caption semantics
+        /// (`_media_caption_split`, 1024-char Telegram cap).
+        async fn send_media(&self, chat_id: &str, text: &str, paths: &[std::path::PathBuf]) -> bool {
+            if paths.is_empty() {
+                return false;
+            }
+            let (caption, body) = media_caption_split(text, paths, 1024);
+            if !body.trim().is_empty() {
+                send_message(&self.client, &self.token, chat_id, &body).await;
+            }
+            for (idx, path) in paths.iter().enumerate() {
+                let cap = if idx == 0 { caption.as_deref() } else { None };
+                if crate::media_cache::mime_for_ext(path).starts_with("image/") {
+                    send_photo(&self.client, &self.token, chat_id, path, cap).await;
+                } else {
+                    send_document(&self.client, &self.token, chat_id, path, cap).await;
+                }
+            }
+            true
+        }
     }
 
     pub async fn run(cfg: TelegramConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
@@ -1758,9 +1852,9 @@ pub mod telegram {
                     }
                     for path in &media_paths {
                         if crate::media_cache::mime_for_ext(path).starts_with("image/") {
-                            send_photo(&client, &token, &event.chat_id, path).await;
+                            send_photo(&client, &token, &event.chat_id, path, None).await;
                         } else {
-                            send_document(&client, &token, &event.chat_id, path).await;
+                            send_document(&client, &token, &event.chat_id, path, None).await;
                         }
                     }
                 });
@@ -2267,8 +2361,15 @@ pub mod telegram {
         }
     }
 
-    /// Send a photo (MEDIA: delivery, hermes extract_media path).
-    pub async fn send_photo(client: &reqwest::Client, token: &str, chat_id: &str, path: &std::path::Path) {
+    /// Send a photo (MEDIA: delivery, hermes extract_media path) with an
+    /// optional native caption (send_message media path).
+    pub async fn send_photo(
+        client: &reqwest::Client,
+        token: &str,
+        chat_id: &str,
+        path: &std::path::Path,
+        caption: Option<&str>,
+    ) {
         let Ok(data) = tokio::fs::read(path).await else {
             eprintln!("[telegram] cannot read media {}", path.display());
             return;
@@ -2277,17 +2378,27 @@ pub mod telegram {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "media".to_string());
-        let form = reqwest::multipart::Form::new()
+        let mut form = reqwest::multipart::Form::new()
             .text("chat_id", chat_id.to_string())
             .part("photo", reqwest::multipart::Part::bytes(data).file_name(file_name));
+        if let Some(caption) = caption {
+            form = form.text("caption", caption.to_string());
+        }
         let url = format!("{API}/bot{token}/sendPhoto");
         if let Err(e) = client.post(&url).multipart(form).send().await {
             eprintln!("[telegram] sendPhoto failed: {e}");
         }
     }
 
-    /// Send a non-image file (MEDIA: delivery).
-    pub async fn send_document(client: &reqwest::Client, token: &str, chat_id: &str, path: &std::path::Path) {
+    /// Send a non-image file (MEDIA: delivery) with an optional native
+    /// caption (send_message media path).
+    pub async fn send_document(
+        client: &reqwest::Client,
+        token: &str,
+        chat_id: &str,
+        path: &std::path::Path,
+        caption: Option<&str>,
+    ) {
         let Ok(data) = tokio::fs::read(path).await else {
             eprintln!("[telegram] cannot read media {}", path.display());
             return;
@@ -2296,13 +2407,51 @@ pub mod telegram {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "media".to_string());
-        let form = reqwest::multipart::Form::new()
+        let mut form = reqwest::multipart::Form::new()
             .text("chat_id", chat_id.to_string())
             .part("document", reqwest::multipart::Part::bytes(data).file_name(file_name));
+        if let Some(caption) = caption {
+            form = form.text("caption", caption.to_string());
+        }
         let url = format!("{API}/bot{token}/sendDocument");
         if let Err(e) = client.post(&url).multipart(form).send().await {
             eprintln!("[telegram] sendDocument failed: {e}");
         }
+    }
+
+    /// hermes `_CAPTIONABLE_EXTS` — media kinds whose bubble carries a
+    /// native caption (voice/audio notes excluded).
+    fn captionable_ext(path: &std::path::Path) -> bool {
+        matches!(
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .as_deref(),
+            Some(
+                "jpg" | "jpeg" | "png" | "webp" | "gif" | "mp4" | "mov" | "avi" | "mkv"
+                | "webm" | "3gp" | "pdf" | "doc" | "docx" | "txt" | "md" | "csv" | "xlsx"
+                | "zip"
+            )
+        )
+    }
+
+    /// hermes `_media_caption_split`: a single captionable file with short
+    /// accompanying text rides on the media bubble as its caption;
+    /// everything else (multi-file, voice notes, long text) keeps the text
+    /// as a separate body message. Returns `(caption, body)`.
+    pub fn media_caption_split(
+        text: &str,
+        paths: &[std::path::PathBuf],
+        limit: usize,
+    ) -> (Option<String>, String) {
+        let stripped = text.trim();
+        if stripped.is_empty() || paths.len() != 1 || !captionable_ext(&paths[0]) {
+            return (None, text.to_string());
+        }
+        if stripped.chars().count() > limit {
+            return (None, text.to_string());
+        }
+        (Some(stripped.to_string()), String::new())
     }
 
     pub async fn send_message(client: &reqwest::Client, token: &str, chat_id: &str, text: &str) {
@@ -2829,6 +2978,46 @@ pub mod discord {
             )
             .await
         }
+
+        /// Emoji reactions (hermes send_message action='react'/'unreact'):
+        /// PUT/DELETE `/channels/{c}/messages/{m}/reactions/{emoji}/@me`.
+        async fn send_reaction(
+            &self,
+            chat_id: &str,
+            emoji: &str,
+            message_id: &str,
+            remove: bool,
+        ) -> Option<bool> {
+            let encoded: String =
+                url::form_urlencoded::byte_serialize(emoji.trim().as_bytes()).collect();
+            let url = format!(
+                "{}/channels/{chat_id}/messages/{message_id}/reactions/{encoded}/@me",
+                discord_api_base()
+            );
+            let client = reqwest::Client::new();
+            let request = if remove {
+                client.delete(&url)
+            } else {
+                client.put(&url)
+            };
+            match request
+                .header("Authorization", format!("Bot {}", self.token))
+                .send()
+                .await
+            {
+                Ok(response) => Some(response.status().is_success()),
+                Err(e) => {
+                    eprintln!("[discord] reaction failed: {e}");
+                    Some(false)
+                }
+            }
+        }
+
+        /// Native attachment delivery (hermes send_message MEDIA: path):
+        /// one multipart message with payload_json content + files.
+        async fn send_media(&self, chat_id: &str, text: &str, paths: &[std::path::PathBuf]) -> bool {
+            send_media_message(&self.token, chat_id, text, paths).await
+        }
     }
 
     pub async fn run(cfg: DiscordConfig, dispatcher: Arc<Dispatcher>, pairing: Option<Arc<crate::pairing::PairingStore>>) {
@@ -3045,6 +3234,57 @@ pub mod discord {
             .await;
         if let Err(e) = response.and_then(|r| r.error_for_status()) {
             eprintln!("[discord] attachment upload failed: {e}");
+        }
+    }
+
+    /// One multipart message carrying content + native attachments
+    /// (hermes send_message MEDIA: delivery for Discord). Long content is
+    /// sent first as regular chunked messages so the attachment keeps the
+    /// 2000-char payload_json limit.
+    pub async fn send_media_message(
+        token: &str,
+        channel_id: &str,
+        text: &str,
+        paths: &[std::path::PathBuf],
+    ) -> bool {
+        let mut form = reqwest::multipart::Form::new();
+        let trimmed = text.trim();
+        if !trimmed.is_empty() && trimmed.chars().count() <= 2000 {
+            form = form.part(
+                "payload_json",
+                reqwest::multipart::Part::text(json!({"content": trimmed}).to_string()),
+            );
+        } else if !trimmed.is_empty() {
+            send_channel_message(token, channel_id, trimmed).await;
+        }
+        for (idx, path) in paths.iter().enumerate() {
+            let Ok(data) = tokio::fs::read(path).await else {
+                eprintln!("[discord] cannot read media {}", path.display());
+                continue;
+            };
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "media".to_string());
+            form = form.part(
+                format!("files[{idx}]"),
+                reqwest::multipart::Part::bytes(data).file_name(file_name),
+            );
+        }
+        let url = format!("{}/channels/{channel_id}/messages", discord_api_base());
+        match reqwest::Client::new()
+            .post(&url)
+            .header("Authorization", format!("Bot {token}"))
+            .multipart(form)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("[discord] media send failed: {e}");
+                false
+            }
         }
     }
 
@@ -3979,6 +4219,59 @@ pub mod slack {
             choices: &[String],
         ) -> bool {
             send_clarify_message(&self.bot_token, chat_id, clarify_id, question, choices).await
+        }
+
+        /// Emoji reactions (hermes send_message action='react'/'unreact'):
+        /// `reactions.add` / `reactions.remove`. The message id is the
+        /// Slack timestamp recorded on the inbound event.
+        async fn send_reaction(
+            &self,
+            chat_id: &str,
+            emoji: &str,
+            message_id: &str,
+            remove: bool,
+        ) -> Option<bool> {
+            let name = emoji.trim().trim_matches(':').to_string();
+            if name.is_empty() || message_id.trim().is_empty() {
+                return Some(false);
+            }
+            let method = if remove { "reactions.remove" } else { "reactions.add" };
+            let params = json!({"channel": chat_id, "name": name, "timestamp": message_id.trim()});
+            let client = reqwest::Client::new();
+            match client
+                .post(format!("{}/{}", slack_api_base(), method))
+                .header("Authorization", format!("Bearer {}", self.bot_token))
+                .json(&params)
+                .send()
+                .await
+            {
+                Ok(response) => match response.json::<Value>().await {
+                    Ok(value) => Some(value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)),
+                    Err(e) => {
+                        eprintln!("[slack] {method} parse failed: {e}");
+                        Some(false)
+                    }
+                },
+                Err(e) => {
+                    eprintln!("[slack] {method} failed: {e}");
+                    Some(false)
+                }
+            }
+        }
+
+        /// Native file uploads (hermes send_message MEDIA: path): body
+        /// text first, then one `files` upload per attachment.
+        async fn send_media(&self, chat_id: &str, text: &str, paths: &[std::path::PathBuf]) -> bool {
+            if paths.is_empty() {
+                return false;
+            }
+            if !text.trim().is_empty() {
+                post_message(&self.bot_token, chat_id, text.trim()).await;
+            }
+            for path in paths {
+                upload_file(&self.bot_token, chat_id, path).await;
+            }
+            true
         }
     }
 
