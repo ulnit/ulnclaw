@@ -1425,6 +1425,8 @@ export class GatewayClient {
     folders?: string[];
     board_slug?: string;
     use?: boolean;
+    description?: string;
+    icon?: string;
   }): Promise<Project | null> {
     const value = await this.kanbanJson("/api/projects", {
       method: "POST",
@@ -1435,7 +1437,7 @@ export class GatewayClient {
 
   async projectUpdate(
     id: string,
-    patch: { name?: string; description?: string; board_slug?: string },
+    patch: { name?: string; description?: string; board_slug?: string; icon?: string },
   ): Promise<Project | null> {
     const value = await this.kanbanJson(`/api/projects/${encodeURIComponent(id)}`, {
       method: "PATCH",

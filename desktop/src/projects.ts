@@ -47,6 +47,12 @@ export class ProjectsWidget {
           <label><span data-i18n="projects.boardLabel">Bind kanban board (optional slug)</span>
             <input id="project-create-board" type="text" placeholder="default" />
           </label>
+          <label><span data-i18n="projects.descriptionLabel">Description (optional)</span>
+            <input id="project-create-description" type="text" />
+          </label>
+          <label><span data-i18n="projects.iconLabel">Icon emoji (optional)</span>
+            <input id="project-create-icon" type="text" maxlength="8" />
+          </label>
           <label class="check">
             <input id="project-create-use" type="checkbox" /> <span data-i18n="projects.setActive">Set as active project</span>
           </label>
@@ -129,6 +135,8 @@ export class ProjectsWidget {
     const name = (this.root.querySelector("#project-create-name") as HTMLInputElement).value.trim();
     const foldersRaw = (this.root.querySelector("#project-create-folders") as HTMLInputElement).value;
     const board = (this.root.querySelector("#project-create-board") as HTMLInputElement).value.trim();
+    const description = (this.root.querySelector("#project-create-description") as HTMLInputElement).value.trim();
+    const icon = (this.root.querySelector("#project-create-icon") as HTMLInputElement).value.trim();
     const use = (this.root.querySelector("#project-create-use") as HTMLInputElement).checked;
     if (!name) return;
     const folders = foldersRaw
@@ -140,6 +148,8 @@ export class ProjectsWidget {
       folders: folders.length ? folders : undefined,
       board_slug: board || undefined,
       use,
+      description: description || undefined,
+      icon: icon || undefined,
     });
     if (!created) {
       window.alert(t.projects.createFailed);
@@ -148,6 +158,8 @@ export class ProjectsWidget {
     (this.root.querySelector("#project-create-name") as HTMLInputElement).value = "";
     (this.root.querySelector("#project-create-folders") as HTMLInputElement).value = "";
     (this.root.querySelector("#project-create-board") as HTMLInputElement).value = "";
+    (this.root.querySelector("#project-create-description") as HTMLInputElement).value = "";
+    (this.root.querySelector("#project-create-icon") as HTMLInputElement).value = "";
     await this.refresh();
   }
 
@@ -274,6 +286,20 @@ export class ProjectsWidget {
       const path = window.prompt(t.projects.folderPathPrompt);
       if (!path || !path.trim()) return;
       void client.projectAddFolder(project.id, path.trim()).then(() => void this.refresh());
+    });
+    mk(t.projects.rename, () => {
+      if (!client) return;
+      const next = window.prompt(t.projects.renamePrompt, project.name);
+      if (next === null || !next.trim() || next.trim() === project.name) return;
+      void client.projectUpdate(project.id, { name: next.trim() }).then(() => void this.refresh());
+    });
+    mk(t.projects.editAbout, () => {
+      if (!client) return;
+      const next = window.prompt(t.projects.aboutPrompt, project.description || "");
+      if (next === null || next === (project.description || "")) return;
+      void client
+        .projectUpdate(project.id, { description: next.trim() })
+        .then(() => void this.refresh());
     });
     mk(project.board_slug ? t.projects.rebindBoard : t.projects.bindBoard, () => {
       if (!client) return;

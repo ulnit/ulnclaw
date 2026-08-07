@@ -95,6 +95,8 @@ export interface Translations {
     boardLabel: string; setActive: string; create: string; use: string; empty: string;
     reposEmpty: string; deleteConfirm: string; boardBadge: string; scanRecorded: string;
     createFailed: string; activePrefix: string;
+    rename: string; renamePrompt: string; editAbout: string; aboutPrompt: string;
+    descriptionLabel: string; iconLabel: string;
   };
   jobs: {
     active: string; paused: string; pause: string; resume: string; runNow: string;
@@ -343,6 +345,8 @@ const en: Translations = {
     scanRecorded: "Recorded {count} repo(s) into the discovery cache.",
     createFailed: "Project creation failed (gateway unreachable or invalid input).",
     activePrefix: "Active: {name}",
+    rename: "Rename", renamePrompt: "New name:", editAbout: "Edit about", aboutPrompt: "Description (empty clears):",
+    descriptionLabel: "Description (optional)", iconLabel: "Icon emoji (optional)",
   },
   jobs: {
     active: "Active", paused: "Paused", pause: "Pause", resume: "Resume",
@@ -686,6 +690,8 @@ const zh: Translations = {
     scanRecorded: "已记录 {count} 个仓库到发现缓存。",
     createFailed: "项目创建失败（网关不可达或输入无效）。",
     activePrefix: "启用：{name}",
+    rename: "重命名", renamePrompt: "新名称：", editAbout: "编辑简介", aboutPrompt: "描述（留空清除）：",
+    descriptionLabel: "描述（可选）", iconLabel: "图标 emoji（可选）",
   },
   jobs: {
     active: "活跃", paused: "已暂停", pause: "暂停", resume: "恢复",
@@ -1029,6 +1035,8 @@ const zhHant: Translations = {
     scanRecorded: "已記錄 {count} 個儲存庫至發現快取。",
     createFailed: "專案建立失敗（閘道不可達或輸入無效）。",
     activePrefix: "啟用：{name}",
+    rename: "重新命名", renamePrompt: "新名稱：", editAbout: "編輯簡介", aboutPrompt: "描述（留空清除）：",
+    descriptionLabel: "描述（選填）", iconLabel: "圖示 emoji（選填）",
   },
   jobs: {
     active: "活躍", paused: "已暫停", pause: "暫停", resume: "恢復",
@@ -1372,6 +1380,8 @@ const ja: Translations = {
     scanRecorded: "{count} 件のリポジトリを発見キャッシュに記録しました。",
     createFailed: "プロジェクトの作成に失敗（ゲートウェイ到達不能または入力が無効）。",
     activePrefix: "有効：{name}",
+    rename: "名前を変更", renamePrompt: "新しい名前:", editAbout: "概要を編集", aboutPrompt: "説明（空でクリア）:",
+    descriptionLabel: "説明（任意）", iconLabel: "アイコン絵文字（任意）",
   },
   jobs: {
     active: "有効", paused: "一時停止中", pause: "一時停止", resume: "再開",
@@ -1715,6 +1725,8 @@ const ar: Translations = {
     scanRecorded: "سُجّلت {count} مستودعات في ذاكرة الاكتشاف.",
     createFailed: "فشل إنشاء المشروع (البوابة غير متاحة أو الإدخال غير صالح).",
     activePrefix: "النشط: {name}",
+    rename: "إعادة تسمية", renamePrompt: "الاسم الجديد:", editAbout: "تحرير الوصف", aboutPrompt: "الوصف (فارغ للمسح):",
+    descriptionLabel: "الوصف (اختياري)", iconLabel: "رمز تعبيري (اختياري)",
   },
   jobs: {
     active: "نشط", paused: "متوقف مؤقتًا", pause: "إيقاف مؤقت", resume: "استئناف",
