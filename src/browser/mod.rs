@@ -4,6 +4,8 @@
 //!   - endpoint resolution (`ULNCLAW_BROWSER_CDP` ws:// URL or
 //!     http://host:port discovery via `/json` + `/json/version`)
 //!   - optional managed launch of a local Chrome/Chromium
+//!   - cloud browser providers (Browserbase / Browser Use / Firecrawl) via
+//!     the `cloud` submodule, selected by `[browser] cloud_provider`
 //!   - page session with navigate/snapshot/click/type/scroll/press/
 //!     screenshot/evaluate/dialog handling
 //!
@@ -12,6 +14,7 @@
 //! `DOM.resolveNode` + `Runtime.callFunctionOn`.
 
 pub mod camofox;
+pub mod cloud;
 pub mod connect;
 pub mod guard;
 
@@ -987,12 +990,23 @@ pub fn clear_cdp_override() {
     *override_slot().write().unwrap() = None;
 }
 
-/// Current live override + its source, if any: ("override" | "env", raw).
+/// Current live override + its source, if any:
+/// ("override" | "env" | "config", raw). Precedence mirrors hermes
+/// `_get_cdp_override`: live `/browser connect` override >
+/// `ULNCLAW_BROWSER_CDP` env > `[browser] cdp_url` config.
 pub fn endpoint_with_source() -> Option<(&'static str, String)> {
     if let Some(raw) = override_slot().read().unwrap().clone() {
         return Some(("override", raw));
     }
-    crate::config::get_env_value("ULNCLAW_BROWSER_CDP").map(|raw| ("env", raw))
+    if let Some(raw) = crate::config::get_env_value("ULNCLAW_BROWSER_CDP") {
+        return Some(("env", raw));
+    }
+    crate::config::UlncLawConfig::load(None)
+        .ok()
+        .and_then(|c| c.browser.cdp_url.clone())
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| ("config", raw))
 }
 
 /// Whether a managed (auto-launched) browser is currently running.
@@ -1000,8 +1014,9 @@ pub async fn managed_running() -> bool {
     managed_slot().read().await.is_some()
 }
 
-/// Read the configured CDP endpoint (live override > env), if any.
-/// Absent or `auto`/`launch`/`managed` means "launch a local browser".
+/// Read the configured CDP endpoint (live override > env > config), if
+/// any. Absent or `auto`/`launch`/`managed` means "cloud provider, else
+/// launch a local browser".
 pub fn configured_endpoint_raw() -> Option<String> {
     endpoint_with_source().map(|(_, raw)| raw)
 }
@@ -1014,11 +1029,20 @@ where
 {
     let raw = configured_endpoint_raw().unwrap_or_else(|| "auto".to_string());
     let endpoint = if is_auto_mode(&raw) {
-        // Supervisor: launch (or reuse) a managed local browser.
-        let http_base = launch_managed_browser().await?;
-        BrowserEndpoint {
-            browser_ws: None,
-            http_base: Some(http_base),
+        // Hermes cloud-mode precedence: when a cloud browser provider
+        // resolves (explicit `[browser] cloud_provider` or the legacy
+        // availability walk) its session CDP URL wins over a local launch.
+        match cloud::cloud_endpoint().await {
+            Ok(Some(cdp_url)) => resolve_endpoint(&cdp_url)?,
+            Ok(None) => {
+                // Supervisor: launch (or reuse) a managed local browser.
+                let http_base = launch_managed_browser().await?;
+                BrowserEndpoint {
+                    browser_ws: None,
+                    http_base: Some(http_base),
+                }
+            }
+            Err(e) => return Err(AgentError::tool(e)),
         }
     } else {
         resolve_endpoint(&raw)?

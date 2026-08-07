@@ -1986,6 +1986,9 @@ async fn main() {
     }
 
     let result = dispatch(cli, config).await;
+    // Hermes atexit parity: release any cloud browser session so paid
+    // backends do not leak orphaned sessions after a clean exit.
+    ulnclaw::browser::cloud::shutdown_cloud_sessions().await;
     if let Err(e) = result {
         eprintln!("error: {}", e);
         std::process::exit(1);

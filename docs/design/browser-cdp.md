@@ -1,9 +1,9 @@
 # Browser CDP Client & Gateway Browser Control Plane
 
 > **Audience:** contributors working on the `browser_*` tools, gateway operators pointing agents at browsers
-> **Source files:** `src/browser/mod.rs` (endpoint resolution, `CdpClient`, `BrowserSession`, managed launch), `src/browser/connect.rs` (local attach), `src/browser/guard.rs` (SSRF guards), `src/browser/camofox.rs` (REST backend), `src/gateway/mod.rs` (`/v1/browser/*`)
+> **Source files:** `src/browser/mod.rs` (endpoint resolution, `CdpClient`, `BrowserSession`, managed launch), `src/browser/connect.rs` (local attach), `src/browser/guard.rs` (SSRF guards), `src/browser/camofox.rs` (REST backend), `src/browser/cloud.rs` (cloud browser providers), `src/gateway/mod.rs` (`/v1/browser/*`)
 > **Related:** `docs/en/hermes-parity.md` (browser rows), `docs/design/multiplexing-gateway.md`
-> **Hermes parity:** `tools/browser_tool.py`, `tools/browser_cdp_tool.py`, `tools/browser_camofox.py`, `hermes_cli/browser_connect.py` (v2026.8.3)
+> **Hermes parity:** `tools/browser_tool.py`, `tools/browser_cdp_tool.py`, `tools/browser_camofox.py`, `hermes_cli/browser_connect.py`, `agent/browser_provider.py` + `agent/browser_registry.py` + `plugins/browser/*` (v2026.8.3)
 
 ## Overview
 
@@ -22,10 +22,15 @@ one tool surface:
 3. **Camofox REST** — anti-detection browser via the Camofox-browser
    Node.js server (`CAMOFOX_URL`), which maps its REST API 1:1 onto the
    tool interface.
+4. **Cloud browser providers** — Browserbase, Browser Use, and Firecrawl
+   sessions created on demand (`src/browser/cloud.rs`), each handing back a
+   CDP websocket URL that rides the same client as any remote endpoint.
 
-Backend priority (hermes `is_camofox_mode` semantics): a **live override**
-set at runtime wins, then a **configured/env CDP endpoint**, then Camofox
-when `CAMOFOX_URL` is set.
+Backend priority (hermes semantics): a **live override** set at runtime
+wins, then a **configured CDP endpoint** (`ULNCLAW_BROWSER_CDP` env >
+`[browser] cdp_url` config), then Camofox when `CAMOFOX_URL` is set, then
+the **cloud provider** (explicit `[browser] cloud_provider` or the legacy
+availability walk), else the managed local launch.
 
 ## Endpoint resolution
 
@@ -37,13 +42,20 @@ when `CAMOFOX_URL` is set.
 | `http://host:port` | discovery via `/json/version` (browser WS URL) with `/json` fallback |
 | `auto` | the supervisor finds a Chromium-family binary and launches it headless with a debug port, then attaches |
 
+Resolution chain (hermes `_get_cdp_override` + cloud-mode precedence):
+
+1. live override (REPL `/browser connect`, gateway `POST /v1/browser/connect`);
+2. `ULNCLAW_BROWSER_CDP` env var;
+3. `[browser] cdp_url` from config.toml;
+4. `auto` (absent/blank/`auto`/`launch`/`managed`): cloud provider session
+   if one resolves, otherwise the managed local launch.
+
 Runtime state lives in a process-global override slot:
 
-- `set_cdp_override(url)` — verify-then-commit a live endpoint (used by
-  REPL `/browser connect` and gateway `POST /v1/browser/connect`);
-- `clear_cdp_override()` — revert to config/env resolution;
+- `set_cdp_override(url)` — verify-then-commit a live endpoint;
+- `clear_cdp_override()` — revert to env/config resolution;
 - `endpoint_with_source()` — `(source, raw)` for status reporting, where
-  source ∈ `live` / `config` / `camofox`.
+  source ∈ `override` / `env` / `config`.
 
 ## CdpClient — one socket, multiplexed
 
@@ -173,7 +185,40 @@ profiles, matching hermes' single-process semantics.
 - **One session slot per process.** Tool calls serialize through
   `with_session`; concurrent turns sharing one browser interleave on the
   same page (hermes parity — hermes is single-session too).
-- **Cloud providers beyond Camofox** (Browserbase, browser_use plugin
-  backends in hermes) are deliberately not ported yet.
 - **Computer-use** (`src/computer_use.rs`) is a separate surface — desktop
   control via the cua-driver daemon, not CDP.
+
+## Cloud browser providers (`cloud.rs`)
+
+Port of hermes `agent/browser_provider.py` + `agent/browser_registry.py`
+and the built-in provider plugins (`plugins/browser/{browserbase,
+browser_use,firecrawl}`). Each backend implements the `CloudBrowserProvider`
+trait — `is_available` (cheap credential check, no network), `create_session`
+(returns `CloudSessionInfo`: session name, provider session id, CDP URL,
+optional provider-authoritative `expires_at`, feature flags), `close_session`,
+and best-effort `emergency_cleanup`.
+
+| Provider | Credentials | Create | Close |
+|---|---|---|---|
+| `browserbase` | `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` | `POST /v1/sessions` (keepAlive/proxies/advancedStealth/timeout knobs; 402 → retry without keepAlive, then without proxies) | `POST /v1/sessions/{id}` `REQUEST_RELEASE` |
+| `browser-use` | `BROWSER_USE_API_KEY` *or* managed Nous gateway (`[browser] use_gateway`) | `POST /browsers` (`X-Browser-Use-API-Key`; managed mode adds `X-Idempotency-Key` + short `{timeout, proxyCountryCode}` payload; reads `cdpUrl`/`connectUrl` + `timeoutAt` expiry) | `PATCH /browsers/{id}` `{"action": "stop"}` |
+| `firecrawl` | `FIRECRAWL_API_KEY` (`FIRECRAWL_API_URL`, `FIRECRAWL_BROWSER_TTL` knobs) | `POST /v2/browser` (`{ttl}`) | `DELETE /v2/browser/{id}` |
+
+Selection mirrors hermes `browser_registry._resolve`:
+
+1. `[browser] cloud_provider = "local"` disables cloud mode entirely;
+2. an explicit provider name wins regardless of availability — the
+   dispatcher surfaces a precise "missing credentials" error instead of
+   silently switching backends;
+3. otherwise the legacy preference walk (`browser-use` → `browserbase`)
+   filtered by availability. Firecrawl is deliberately **not** in the walk:
+   it shares its API key with web extract, so a fresh install with
+   `FIRECRAWL_API_KEY` must not be silently routed to a paid cloud browser.
+
+Session lifecycle: `with_session` lazily creates the active provider's
+session on first tool use and caches it process-wide; a provider-authoritative
+expiry (`expires_at`, Browser Use `timeoutAt`) retires the cached session
+(best-effort background close) and creates a fresh one instead of
+reconnecting to a dead endpoint indefinitely. `main` calls
+`shutdown_cloud_sessions()` on exit — the hermes atexit cleanup — so paid
+backends never leak orphaned sessions after a clean shutdown.

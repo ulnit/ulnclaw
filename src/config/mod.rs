@@ -99,6 +99,25 @@ pub struct WebConfig {
     pub extract_backend: Option<String>,
 }
 
+/// `[browser]` — browser tool endpoint + cloud provider selection
+/// (hermes `browser:` config block).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct BrowserConfig {
+    /// Persistent CDP endpoint: `ws://`, `http://host:port`, or `auto`
+    /// (hermes `browser.cdp_url`). Live override: `ULNCLAW_BROWSER_CDP`.
+    pub cdp_url: Option<String>,
+    /// Cloud browser backend (`browserbase` / `browser-use` / `firecrawl`),
+    /// or `"local"` to disable cloud mode entirely (hermes
+    /// `browser.cloud_provider`). Unset: hermes legacy availability walk
+    /// (browser-use → browserbase; firecrawl is explicit-only).
+    pub cloud_provider: Option<String>,
+    /// Prefer the managed Nous tool gateway for browser backends even when
+    /// a direct API key is set (hermes `tool_gateway.browser: gateway` /
+    /// `browser.use_gateway`).
+    pub use_gateway: Option<Truthiness>,
+}
+
 /// Model/provider settings (port of the model section of hermes config).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
@@ -774,6 +793,9 @@ pub struct UlncLawConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub web: WebConfig,
+    /// Browser tool endpoint + cloud browser providers (hermes `browser:`).
+    #[serde(default)]
+    pub browser: BrowserConfig,
     /// Enabled toolsets (empty = default "coding" set).
     #[serde(default)]
     pub enabled_toolsets: Vec<String>,
