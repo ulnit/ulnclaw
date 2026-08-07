@@ -20,6 +20,7 @@ import { resolveBootFailure, showBootFailure } from "./boot-failure";
 import { applyStatic, fmt, onLocaleChange, t } from "./i18n";
 import { LanguageSwitcher } from "./language-switcher";
 import { OnboardingOverlay } from "./onboarding";
+import { SessionPickerDialog } from "./session-picker";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -65,6 +66,7 @@ const state = {
   artifacts: null as ArtifactsOverlay | null,
   learning: null as LearningOverlay | null,
   onboarding: null as OnboardingOverlay | null,
+  sessionPicker: null as SessionPickerDialog | null,
   view: "chat" as "chat" | "kanban" | "projects" | "jobs",
 };
 
@@ -212,6 +214,14 @@ async function refreshSessions(): Promise<void> {
 
 async function sendTurn(): Promise<void> {
   const text = el.input.value.trim();
+  // /resume + /sessions + /switch render the desktop session picker
+  // (P254, hermes composer parity) instead of hitting the headless
+  // gateway slash worker, which can't show the overlay.
+  if (/^\/(resume|sessions|switch)\b/i.test(text)) {
+    el.input.value = "";
+    state.sessionPicker?.open();
+    return;
+  }
   if ((!text && state.pendingUploads.length === 0) || state.busy || !state.client) return;
   if (!state.current) {
     try {
@@ -370,6 +380,7 @@ async function pollHealth(): Promise<void> {
 
 function gatewaySlashCommands(): [string, string][] {
   return [
+    ["/resume", t.slash.resume],
     ["/help", t.slash.help],
     ["/skills", t.slash.skills],
     ["/tools", t.slash.tools],
@@ -842,6 +853,17 @@ async function start(): Promise<void> {
 
   // Command palette (hermes command-palette parity): Ctrl/Cmd+K fuzzy
   // launcher for views, session switching, and session actions.
+  // Session picker (P254): opened by /resume|/sessions|/switch and the
+  // command palette; resumes the picked session.
+  state.sessionPicker = new SessionPickerDialog({
+    sessions: () => state.sessions,
+    currentSessionId: () => state.current?.id ?? null,
+    openSession: async (id) => {
+      const session = state.sessions.find((row) => row.id === id);
+      if (session) await openSession(session);
+    },
+  });
+
   state.palette = new CommandPalette({
     sessions: () => state.sessions,
     currentSessionId: () => state.current?.id ?? null,
@@ -857,6 +879,7 @@ async function start(): Promise<void> {
       if (state.current) await deleteSession(state.current);
     },
     modelPicker: () => state.picker?.open() ?? Promise.resolve(),
+    resumeSession: () => state.sessionPicker?.open() ?? Promise.resolve(),
     artifacts: () => state.artifacts?.open() ?? Promise.resolve(),
     learning: () => state.learning?.open() ?? Promise.resolve(),
     findInChat: () => {

@@ -69,7 +69,7 @@ export interface Translations {
     reachable: string; unreachable: string; removeAttachment: string; uploadFailed: string; projectBadge: string;
   };
   tools: { running: string; done: string; arguments: string; result: string; fallbackName: string };
-  slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; skillFallback: string };
+  slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; skillFallback: string; resume: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
     failureTitle: string; retry: string; openSettings: string; dismiss: string };
   bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string };
@@ -126,7 +126,7 @@ export interface Translations {
     placeholder: string; noMatches: string; navigate: string; sessionGroup: string;
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
     goToProjects: string; goToJobs: string; newSession: string; switchSession: string;
-    findInChat: string; modelForSession: string; renameSession: string;
+    findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
     hintFreshChat: string; hintArtifacts: string; hintLearning: string; switchTo: string;
@@ -150,6 +150,7 @@ export interface Translations {
     needsEnv: string; notConfigured: string; needsEnvTitle: string;
   };
   language: { switchTo: string; searchPlaceholder: string; noResults: string; description: string };
+  sessionPicker: { title: string; searchPlaceholder: string; noResults: string; messages: string };
 }
 
 const en: Translations = {
@@ -185,6 +186,7 @@ const en: Translations = {
     help: "gateway slash commands", skills: "list skills", tools: "list enabled tools",
     recap: "recap this session", title: "show or set the session title",
     usage: "this session's token usage", skillFallback: "skill",
+    resume: "resume a recent session (desktop)",
   },
   boot: {
     spawnFailed: "Gateway spawn failed: {error}",
@@ -292,6 +294,7 @@ const en: Translations = {
     goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)",
     newSession: "New session", switchSession: "Switch session",
     findInChat: "Find in chat", modelForSession: "Model for this session…",
+    resumeSession: "Resume session… (/resume)",
     renameSession: "Rename session…", deleteSession: "Delete session…",
     browseArtifacts: "Browse artifacts…", learningGraph: "Learning graph…",
     openSettings: "Open gateway settings…", refreshSessions: "Refresh session list",
@@ -331,6 +334,10 @@ const en: Translations = {
     switchTo: "Switch language", searchPlaceholder: "Search languages…",
     noResults: "No matching languages", description: "Choose the display language for the desktop shell.",
   },
+  sessionPicker: {
+    title: "Sessions", searchPlaceholder: "Search sessions…",
+    noResults: "No matching sessions", messages: "{count} messages",
+  },
 };
 
 const zh: Translations = {
@@ -366,6 +373,7 @@ const zh: Translations = {
     help: "网关斜杠命令", skills: "列出技能", tools: "列出已启用工具",
     recap: "回顾本会话", title: "查看或设置会话标题",
     usage: "本会话的 token 用量", skillFallback: "技能",
+    resume: "恢复近期会话（桌面）",
   },
   boot: {
     spawnFailed: "网关拉起失败：{error}",
@@ -473,6 +481,7 @@ const zh: Translations = {
     goToProjects: "前往项目", goToJobs: "前往任务（cron）",
     newSession: "新建会话", switchSession: "切换会话",
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
+    resumeSession: "恢复会话…（/resume）",
     renameSession: "重命名会话…", deleteSession: "删除会话…",
     browseArtifacts: "浏览工件…", learningGraph: "学习图谱…",
     openSettings: "打开网关设置…", refreshSessions: "刷新会话列表",
@@ -512,6 +521,10 @@ const zh: Translations = {
     switchTo: "切换语言", searchPlaceholder: "搜索语言…",
     noResults: "未找到匹配语言", description: "选择桌面外壳的显示语言。",
   },
+  sessionPicker: {
+    title: "会话", searchPlaceholder: "搜索会话…",
+    noResults: "没有匹配的会话", messages: "{count} 条消息",
+  },
 };
 
 const zhHant: Translations = {
@@ -547,6 +560,7 @@ const zhHant: Translations = {
     help: "閘道斜線命令", skills: "列出技能", tools: "列出已啟用工具",
     recap: "回顧本工作階段", title: "檢視或設定工作階段標題",
     usage: "本工作階段的 token 用量", skillFallback: "技能",
+    resume: "恢復近期工作階段（桌面）",
   },
   boot: {
     spawnFailed: "閘道啟動失敗：{error}",
@@ -654,6 +668,7 @@ const zhHant: Translations = {
     goToProjects: "前往專案", goToJobs: "前往工作（cron）",
     newSession: "新增工作階段", switchSession: "切換工作階段",
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
+    resumeSession: "恢復工作階段…（/resume）",
     renameSession: "重新命名工作階段…", deleteSession: "刪除工作階段…",
     browseArtifacts: "瀏覽工件…", learningGraph: "學習圖譜…",
     openSettings: "開啟閘道設定…", refreshSessions: "重新整理工作階段清單",
@@ -693,6 +708,10 @@ const zhHant: Translations = {
     switchTo: "切換語言", searchPlaceholder: "搜尋語言…",
     noResults: "未找到符合的語言", description: "選擇桌面外殼的顯示語言。",
   },
+  sessionPicker: {
+    title: "工作階段", searchPlaceholder: "搜尋工作階段…",
+    noResults: "沒有符合的工作階段", messages: "{count} 則訊息",
+  },
 };
 
 const ja: Translations = {
@@ -728,6 +747,7 @@ const ja: Translations = {
     help: "ゲートウェイのスラッシュコマンド", skills: "スキル一覧", tools: "有効なツール一覧",
     recap: "このセッションの要約", title: "セッションタイトルを表示/設定",
     usage: "このセッションのトークン使用量", skillFallback: "スキル",
+    resume: "最近のセッションを再開（デスクトップ）",
   },
   boot: {
     spawnFailed: "ゲートウェイの起動に失敗：{error}",
@@ -835,6 +855,7 @@ const ja: Translations = {
     goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ",
     newSession: "新規セッション", switchSession: "セッションを切り替え",
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
+    resumeSession: "セッションを再開…（/resume）",
     renameSession: "セッション名を変更…", deleteSession: "セッションを削除…",
     browseArtifacts: "成果物を閲覧…", learningGraph: "学習グラフ…",
     openSettings: "ゲートウェイ設定を開く…", refreshSessions: "セッション一覧を更新",
@@ -874,6 +895,10 @@ const ja: Translations = {
     switchTo: "言語を切り替え", searchPlaceholder: "言語を検索…",
     noResults: "一致する言語がありません", description: "デスクトップシェルの表示言語を選択します。",
   },
+  sessionPicker: {
+    title: "セッション", searchPlaceholder: "セッションを検索…",
+    noResults: "一致するセッションがありません", messages: "{count} メッセージ",
+  },
 };
 
 const ar: Translations = {
@@ -909,6 +934,7 @@ const ar: Translations = {
     help: "أوامر البوابة المائلة", skills: "قائمة المهارات", tools: "قائمة الأدوات المفعّلة",
     recap: "تلخيص هذه الجلسة", title: "عرض عنوان الجلسة أو تعيينه",
     usage: "استخدام الرموز لهذه الجلسة", skillFallback: "مهارة",
+    resume: "استئناف جلسة حديثة (سطح المكتب)",
   },
   boot: {
     spawnFailed: "فشل تشغيل البوابة: {error}",
@@ -1016,6 +1042,7 @@ const ar: Translations = {
     goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)",
     newSession: "جلسة جديدة", switchSession: "تبديل الجلسة",
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
+    resumeSession: "استئناف جلسة… (/resume)",
     renameSession: "إعادة تسمية الجلسة…", deleteSession: "حذف الجلسة…",
     browseArtifacts: "تصفح المخرجات…", learningGraph: "رسم التعلم…",
     openSettings: "فتح إعدادات البوابة…", refreshSessions: "تحديث قائمة الجلسات",
@@ -1054,6 +1081,10 @@ const ar: Translations = {
   language: {
     switchTo: "تبديل اللغة", searchPlaceholder: "ابحث عن لغة…",
     noResults: "لا لغات مطابقة", description: "اختر لغة العرض لواجهة سطح المكتب.",
+  },
+  sessionPicker: {
+    title: "الجلسات", searchPlaceholder: "البحث في الجلسات…",
+    noResults: "لا جلسات مطابقة", messages: "{count} رسائل",
   },
 };
 

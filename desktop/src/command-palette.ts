@@ -23,6 +23,7 @@ export interface CommandPaletteHooks {
   renameSession(): void | Promise<void>;
   deleteSession(): void | Promise<void>;
   modelPicker(): void | Promise<void>;
+  resumeSession(): void | Promise<void>;
   artifacts(): void | Promise<void>;
   learning(): void | Promise<void>;
   findInChat(): void;
@@ -122,6 +123,7 @@ export class CommandPalette {
       { id: "artifacts", label: t.palette.browseArtifacts, group: t.palette.sessionGroup, hint: t.palette.hintArtifacts, run: () => hooks.artifacts() },
       { id: "learning", label: t.palette.learningGraph, group: t.palette.sessionGroup, hint: t.palette.hintLearning, run: () => hooks.learning() },
       { id: "model", label: t.palette.modelForSession, group: t.palette.sessionGroup, run: () => hooks.modelPicker() },
+      { id: "resume", label: t.palette.resumeSession, group: t.palette.sessionGroup, hint: "/resume", run: () => hooks.resumeSession() },
       { id: "rename", label: t.palette.renameSession, group: t.palette.sessionGroup, run: () => hooks.renameSession() },
       { id: "delete", label: t.palette.deleteSession, group: t.palette.sessionGroup, run: () => hooks.deleteSession() },
       { id: "refresh", label: t.palette.refreshSessions, group: t.palette.gatewayGroup, run: () => hooks.refreshSessions() },
