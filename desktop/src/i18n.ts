@@ -151,6 +151,7 @@ export interface Translations {
     title: string; configured: string; backend: string; mode: string; source: string;
     endpoint: string; available: string; vnc: string; managedRunning: string;
   };
+  logsPanel: { title: string; allLevels: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -380,6 +381,7 @@ const en: Translations = {
     mode: "Mode", source: "Source", endpoint: "Endpoint",
     available: "Available", vnc: "VNC URL", managedRunning: "Managed browser running",
   },
+  logsPanel: { title: "Gateway log", allLevels: "All levels" },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -659,6 +661,7 @@ const zh: Translations = {
     mode: "模式", source: "来源", endpoint: "端点",
     available: "可用", vnc: "VNC 地址", managedRunning: "托管浏览器运行中",
   },
+  logsPanel: { title: "网关日志", allLevels: "全部级别" },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -938,6 +941,7 @@ const zhHant: Translations = {
     mode: "模式", source: "來源", endpoint: "端點",
     available: "可用", vnc: "VNC 位址", managedRunning: "託管瀏覽器執行中",
   },
+  logsPanel: { title: "閘道日誌", allLevels: "全部層級" },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -1217,6 +1221,7 @@ const ja: Translations = {
     mode: "モード", source: "ソース", endpoint: "エンドポイント",
     available: "利用可能", vnc: "VNC URL", managedRunning: "管理ブラウザ実行中",
   },
+  logsPanel: { title: "ゲートウェイログ", allLevels: "全レベル" },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1496,6 +1501,7 @@ const ar: Translations = {
     mode: "الوضع", source: "المصدر", endpoint: "نقطة النهاية",
     available: "متاح", vnc: "عنوان VNC", managedRunning: "المتصفح المُدار يعمل",
   },
+  logsPanel: { title: "سجل البوابة", allLevels: "كل المستويات" },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",

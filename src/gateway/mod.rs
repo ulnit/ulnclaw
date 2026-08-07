@@ -794,6 +794,44 @@ async fn monitoring_status(State(state): State<Arc<GatewayState>>) -> Json<Value
     }))
 }
 
+/// Query parameters for `GET /api/logs/tail`.
+#[derive(Debug, Deserialize)]
+struct LogsTailQuery {
+    /// Number of trailing lines to return (default 200, max 1000).
+    lines: Option<usize>,
+    /// Minimum level filter (`debug`/`info`/`warn`/`error`).
+    level: Option<String>,
+}
+
+/// `GET /api/logs/tail` — tail of `gateway.log` (same source as
+/// `ulnclaw logs tail gateway`), optional min-level filter; desktop
+/// Doctor view logs panel (ulnclaw extension).
+async fn logs_tail(Query(query): Query<LogsTailQuery>) -> Response {
+    let path = crate::logs::logs_dir().join("gateway.log");
+    let num_lines = query.lines.unwrap_or(200).min(1000);
+    let filters = crate::logs::LogFilters {
+        min_level: query
+            .level
+            .filter(|level| !level.trim().is_empty())
+            .map(|level| level.trim().to_uppercase()),
+        session: None,
+        since: None,
+        component_prefixes: None,
+    };
+    match crate::logs::read_tail(&path, num_lines, &filters) {
+        Ok(tail) => Json(json!({
+            "path": path.display().to_string(),
+            "lines": tail,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("gateway.log unavailable: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
     let router = Router::new()
@@ -808,6 +846,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/config", get(config_get).put(config_put))
         .route("/api/doctor", get(doctor_report))
         .route("/api/monitoring", get(monitoring_status))
+        .route("/api/logs/tail", get(logs_tail))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
         .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
         .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
@@ -8167,6 +8206,43 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["otlp"]["transport"], "otlp/http-json");
         assert!(body["metrics_interval_seconds"].as_u64().unwrap() >= 5);
         assert!(body["scope"].as_str().unwrap().contains("redacted"));
+    }
+
+    #[tokio::test]
+    async fn test_logs_tail_endpoint_filters_levels() {
+        // gateway.log lives under ULNCLAW_HOME/logs — isolate it.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("logs")).unwrap();
+        std::fs::write(
+            dir.path().join("logs/gateway.log"),
+            "2026-08-07 10:00:00 INFO ulnclaw_gateway: started\n\
+             2026-08-07 10:00:01 WARN ulnclaw_gateway: slow request\n\
+             2026-08-07 10:00:02 ERROR ulnclaw_gateway: boom\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // All lines by default.
+        let (status, body) = get_json(app.clone(), "/api/logs/tail?lines=10", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["lines"].as_array().unwrap().len(), 3);
+
+        // Level filter keeps WARN+.
+        let (status, body) = get_json(app, "/api/logs/tail?lines=10&level=warn", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let lines = body["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].as_str().unwrap().contains("WARN"));
+        assert!(lines[1].as_str().unwrap().contains("ERROR"));
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     // ------------------------------------------------------------------

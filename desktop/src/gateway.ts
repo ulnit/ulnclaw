@@ -279,6 +279,11 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface LogsTailPayload {
+  path: string;
+  lines: string[];
+}
+
 export interface BrowserStatus {
   configured: boolean;
   backend?: string;
@@ -739,6 +744,17 @@ export class GatewayClient {
     } catch {
       return [];
     }
+  }
+
+  /** GET /api/logs/tail — tail of gateway.log with optional min level. */
+  async logsTail(lines = 200, level?: string): Promise<LogsTailPayload> {
+    const params = new URLSearchParams({ lines: String(lines) });
+    if (level) params.set("level", level);
+    const response = await fetch(this.endpoint(`/api/logs/tail?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`logs HTTP ${response.status}`);
+    return (await response.json()) as LogsTailPayload;
   }
 
   /** GET /v1/browser/status — CDP browser configuration state. */

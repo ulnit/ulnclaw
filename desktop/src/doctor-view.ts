@@ -13,8 +13,12 @@ const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
   info: "ℹ",
 };
 
+const LOGS_REFRESH_MS = 10_000;
+const LOGS_LINES = 150;
+
 export class DoctorWidget {
   private busy = false;
+  private logsTimer: number | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -41,6 +45,21 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
         <div id="browser-rows"></div>
       </section>
+      <section id="doctor-logs" class="doctor-monitoring doctor-logs" hidden>
+        <h3 class="config-section" data-i18n="logsPanel.title">Gateway log</h3>
+        <div class="logs-controls">
+          <select id="logs-level">
+            <option value="" data-i18n="logsPanel.allLevels">All levels</option>
+            <option value="INFO">INFO+</option>
+            <option value="WARN">WARN+</option>
+            <option value="ERROR">ERROR+</option>
+          </select>
+          <span id="logs-path" class="config-note"></span>
+          <span class="spacer"></span>
+          <button id="logs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        </div>
+        <pre id="logs-body" class="logs-body"></pre>
+      </section>
     `;
     this.root.querySelector("#doctor-run")!.addEventListener("click", () => {
       this.run().catch(() => undefined);
@@ -53,10 +72,19 @@ export class DoctorWidget {
     }
     this.loadMonitoring().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
+    this.loadLogs().catch(() => undefined);
+    if (this.logsTimer === null) {
+      this.logsTimer = window.setInterval(() => {
+        this.loadLogs().catch(() => undefined);
+      }, LOGS_REFRESH_MS);
+    }
   }
 
   stop(): void {
-    /* nothing polls */
+    if (this.logsTimer !== null) {
+      window.clearInterval(this.logsTimer);
+      this.logsTimer = null;
+    }
   }
 
   private status(message: string): void {
@@ -143,6 +171,34 @@ export class DoctorWidget {
       note.textContent = status.scope;
       rows.appendChild(note);
       section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadLogs(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-logs") as HTMLElement;
+    const body = this.root.querySelector("#logs-body") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const level = (this.root.querySelector("#logs-level") as HTMLSelectElement).value || undefined;
+      const payload = await client.logsTail(LOGS_LINES, level);
+      body.textContent = payload.lines.join("\n");
+      (this.root.querySelector("#logs-path") as HTMLElement).textContent = payload.path;
+      section.hidden = false;
+      const refresh = this.root.querySelector("#logs-refresh") as HTMLButtonElement;
+      if (!refresh.dataset.wired) {
+        refresh.dataset.wired = "1";
+        refresh.addEventListener("click", () => this.loadLogs().catch(() => undefined));
+        (this.root.querySelector("#logs-level") as HTMLSelectElement).addEventListener(
+          "change",
+          () => this.loadLogs().catch(() => undefined),
+        );
+      }
     } catch {
       section.hidden = true;
     }
