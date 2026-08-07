@@ -56,7 +56,7 @@ export function fmt(template: string, vars: Record<string, unknown>): string {
 
 export interface Translations {
   chrome: {
-    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string;
+    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string; pluginsTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
@@ -133,6 +133,11 @@ export interface Translations {
     colModel: string; colFamily: string; colContext: string; colMaxOut: string;
     colCaps: string; colPrice: string;
   };
+  pluginsView: {
+    count: string; none: string; loadFailed: string; hooksWord: string; toolsWord: string;
+    disabledBadge: string; enable: string; disable: string; noConfigHooks: string;
+    toggleFailed: string; configHooksTitle: string;
+  };
   config: {
     loading: string; notConnected: string; loadFailed: string; save: string;
     reload: string; saving: string; saved: string; saveFailed: string;
@@ -202,7 +207,7 @@ export interface Translations {
   palette: {
     placeholder: string; noMatches: string; navigate: string; sessionGroup: string;
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
-    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; goToWebhooks: string; goToRuns: string; goToSkills: string; goToSessions: string; goToModels: string; newSession: string; switchSession: string;
+    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; goToWebhooks: string; goToRuns: string; goToSkills: string; goToSessions: string; goToModels: string; goToPlugins: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
@@ -235,7 +240,7 @@ export interface Translations {
 
 const en: Translations = {
   chrome: {
-    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks", runsTab: "Runs", skillsTab: "Skills", sessionsTab: "Sessions", modelsTab: "Models",
+    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks", runsTab: "Runs", skillsTab: "Skills", sessionsTab: "Sessions", modelsTab: "Models", pluginsTab: "Plugins",
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
@@ -374,6 +379,13 @@ const en: Translations = {
     docs: "Docs", noModels: "No models listed.",
     colModel: "Model", colFamily: "Family", colContext: "Context", colMaxOut: "Max out", colCaps: "Caps", colPrice: "$/Mtok",
   },
+  pluginsView: {
+    count: "{count} plugins", none: "No plugins found — install a plugin directory with a plugin.toml manifest into ~/.ulnclaw/plugins.",
+    loadFailed: "Failed to load plugins: {error}", hooksWord: "hooks", toolsWord: "tools",
+    disabledBadge: "disabled", enable: "Enable", disable: "Disable",
+    noConfigHooks: "No [hooks] shell hooks configured.", toggleFailed: "Toggle failed: {error}",
+    configHooksTitle: "Config shell hooks",
+  },
   config: {
     loading: "Loading config…", notConnected: "Gateway not connected.",
     loadFailed: "Failed to load config: {error}",
@@ -487,7 +499,7 @@ const en: Translations = {
     placeholder: "Type a command… (Esc to close)", noMatches: "No matching commands",
     navigate: "Navigate", sessionGroup: "Session", sessionsGroup: "Sessions",
     gatewayGroup: "Gateway", goToChat: "Go to Chat", goToKanban: "Go to Kanban",
-    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor", goToWebhooks: "Go to Webhooks", goToRuns: "Go to Runs", goToSkills: "Go to Skills", goToSessions: "Go to Sessions", goToModels: "Go to Models",
+    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor", goToWebhooks: "Go to Webhooks", goToRuns: "Go to Runs", goToSkills: "Go to Skills", goToSessions: "Go to Sessions", goToModels: "Go to Models", goToPlugins: "Go to Plugins",
     newSession: "New session", switchSession: "Switch session",
     findInChat: "Find in chat", modelForSession: "Model for this session…",
     resumeSession: "Resume session… (/resume)",
@@ -551,7 +563,7 @@ const en: Translations = {
 
 const zh: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks", runsTab: "运行", skillsTab: "技能", sessionsTab: "会话记录", modelsTab: "模型",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks", runsTab: "运行", skillsTab: "技能", sessionsTab: "会话记录", modelsTab: "模型", pluginsTab: "插件",
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
@@ -690,6 +702,13 @@ const zh: Translations = {
     docs: "文档", noModels: "未列出模型。",
     colModel: "模型", colFamily: "家族", colContext: "上下文", colMaxOut: "最大输出", colCaps: "能力", colPrice: "$/Mtok",
   },
+  pluginsView: {
+    count: "{count} 个插件", none: "未发现插件——请将带 plugin.toml 清单的插件目录安装到 ~/.ulnclaw/plugins。",
+    loadFailed: "加载插件失败:{error}", hooksWord: "钩子", toolsWord: "工具",
+    disabledBadge: "已禁用", enable: "启用", disable: "禁用",
+    noConfigHooks: "未配置 [hooks] 外壳钩子。", toggleFailed: "切换失败:{error}",
+    configHooksTitle: "配置外壳钩子",
+  },
   config: {
     loading: "加载配置…", notConnected: "未连接网关。",
     loadFailed: "加载配置失败：{error}",
@@ -803,7 +822,7 @@ const zh: Translations = {
     placeholder: "输入命令…（Esc 关闭）", noMatches: "没有匹配的命令",
     navigate: "导航", sessionGroup: "会话", sessionsGroup: "会话列表",
     gatewayGroup: "网关", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断", goToWebhooks: "前往 Webhooks", goToRuns: "前往运行", goToSkills: "前往技能", goToSessions: "前往会话记录", goToModels: "前往模型",
+    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断", goToWebhooks: "前往 Webhooks", goToRuns: "前往运行", goToSkills: "前往技能", goToSessions: "前往会话记录", goToModels: "前往模型", goToPlugins: "前往插件",
     newSession: "新建会话", switchSession: "切换会话",
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
     resumeSession: "恢复会话…（/resume）",
@@ -867,7 +886,7 @@ const zh: Translations = {
 
 const zhHant: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks", runsTab: "執行", skillsTab: "技能", sessionsTab: "會話記錄", modelsTab: "模型",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks", runsTab: "執行", skillsTab: "技能", sessionsTab: "會話記錄", modelsTab: "模型", pluginsTab: "外掛",
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
@@ -1006,6 +1025,13 @@ const zhHant: Translations = {
     docs: "文件", noModels: "未列出模型。",
     colModel: "模型", colFamily: "家族", colContext: "上下文", colMaxOut: "最大輸出", colCaps: "能力", colPrice: "$/Mtok",
   },
+  pluginsView: {
+    count: "{count} 個外掛", none: "未發現外掛——請將帶 plugin.toml 清單的外掛目錄安裝到 ~/.ulnclaw/plugins。",
+    loadFailed: "載入外掛失敗:{error}", hooksWord: "掛鉤", toolsWord: "工具",
+    disabledBadge: "已停用", enable: "啟用", disable: "停用",
+    noConfigHooks: "未設定 [hooks] 殼層掛鉤。", toggleFailed: "切換失敗:{error}",
+    configHooksTitle: "設定殼層掛鉤",
+  },
   config: {
     loading: "載入設定…", notConnected: "未連線閘道。",
     loadFailed: "載入設定失敗：{error}",
@@ -1119,7 +1145,7 @@ const zhHant: Translations = {
     placeholder: "輸入命令…（Esc 關閉）", noMatches: "沒有符合的命令",
     navigate: "導覽", sessionGroup: "工作階段", sessionsGroup: "工作階段清單",
     gatewayGroup: "閘道", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷", goToWebhooks: "前往 Webhooks", goToRuns: "前往執行", goToSkills: "前往技能", goToSessions: "前往會話記錄", goToModels: "前往模型",
+    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷", goToWebhooks: "前往 Webhooks", goToRuns: "前往執行", goToSkills: "前往技能", goToSessions: "前往會話記錄", goToModels: "前往模型", goToPlugins: "前往外掛",
     newSession: "新增工作階段", switchSession: "切換工作階段",
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
     resumeSession: "恢復工作階段…（/resume）",
@@ -1183,7 +1209,7 @@ const zhHant: Translations = {
 
 const ja: Translations = {
   chrome: {
-    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook", runsTab: "実行", skillsTab: "スキル", sessionsTab: "履歴", modelsTab: "モデル",
+    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook", runsTab: "実行", skillsTab: "スキル", sessionsTab: "履歴", modelsTab: "モデル", pluginsTab: "プラグイン",
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
@@ -1322,6 +1348,13 @@ const ja: Translations = {
     docs: "ドキュメント", noModels: "モデルがリストされていません。",
     colModel: "モデル", colFamily: "ファミリー", colContext: "コンテキスト", colMaxOut: "最大出力", colCaps: "機能", colPrice: "$/Mtok",
   },
+  pluginsView: {
+    count: "{count} プラグイン", none: "プラグインが見つかりません — plugin.toml マニフェスト付きのプラグインディレクトリを ~/.ulnclaw/plugins にインストールしてください。",
+    loadFailed: "プラグインの読み込みに失敗しました: {error}", hooksWord: "フック", toolsWord: "ツール",
+    disabledBadge: "無効", enable: "有効化", disable: "無効化",
+    noConfigHooks: "[hooks] シェルフックは未設定です。", toggleFailed: "切り替えに失敗しました: {error}",
+    configHooksTitle: "設定シェルフック",
+  },
   config: {
     loading: "設定を読み込み中…", notConnected: "ゲートウェイに未接続です。",
     loadFailed: "設定の読み込みに失敗：{error}",
@@ -1435,7 +1468,7 @@ const ja: Translations = {
     placeholder: "コマンドを入力…（Esc で閉じる）", noMatches: "一致するコマンドがありません",
     navigate: "移動", sessionGroup: "セッション", sessionsGroup: "セッション一覧",
     gatewayGroup: "ゲートウェイ", goToChat: "チャットへ", goToKanban: "カンバンへ",
-    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ", goToWebhooks: "Webhook へ", goToRuns: "実行へ", goToSkills: "スキルへ", goToSessions: "履歴へ", goToModels: "モデルへ",
+    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ", goToWebhooks: "Webhook へ", goToRuns: "実行へ", goToSkills: "スキルへ", goToSessions: "履歴へ", goToModels: "モデルへ", goToPlugins: "プラグインへ",
     newSession: "新規セッション", switchSession: "セッションを切り替え",
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
     resumeSession: "セッションを再開…（/resume）",
@@ -1499,7 +1532,7 @@ const ja: Translations = {
 
 const ar: Translations = {
   chrome: {
-    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس", runsTab: "التشغيلات", skillsTab: "المهارات", sessionsTab: "السجلات", modelsTab: "النماذج",
+    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس", runsTab: "التشغيلات", skillsTab: "المهارات", sessionsTab: "السجلات", modelsTab: "النماذج", pluginsTab: "الإضافات",
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
@@ -1638,6 +1671,13 @@ const ar: Translations = {
     docs: "الوثائق", noModels: "لا توجد نماذج مدرجة.",
     colModel: "النموذج", colFamily: "العائلة", colContext: "السياق", colMaxOut: "أقصى إخراج", colCaps: "القدرات", colPrice: "$/Mtok",
   },
+  pluginsView: {
+    count: "{count} إضافة", none: "لا توجد إضافات — ثبّت دليل إضافة ببيان plugin.toml في ~/.ulnclaw/plugins.",
+    loadFailed: "فشل تحميل الإضافات: {error}", hooksWord: "خطافات", toolsWord: "أدوات",
+    disabledBadge: "معطلة", enable: "تفعيل", disable: "تعطيل",
+    noConfigHooks: "لا توجد خطافات [hooks] مهيأة.", toggleFailed: "فشل التبديل: {error}",
+    configHooksTitle: "خطافات الصدفة المهيأة",
+  },
   config: {
     loading: "جارٍ تحميل الإعدادات…", notConnected: "البوابة غير متصلة.",
     loadFailed: "فشل تحميل الإعدادات: {error}",
@@ -1751,7 +1791,7 @@ const ar: Translations = {
     placeholder: "اكتب أمرًا… (Esc للإغلاق)", noMatches: "لا أوامر مطابقة",
     navigate: "تنقّل", sessionGroup: "الجلسة", sessionsGroup: "الجلسات",
     gatewayGroup: "البوابة", goToChat: "إلى الدردشة", goToKanban: "إلى كانبان",
-    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص", goToWebhooks: "إلى ويب هوكس", goToRuns: "إلى التشغيلات", goToSkills: "إلى المهارات", goToSessions: "إلى السجلات", goToModels: "إلى النماذج",
+    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص", goToWebhooks: "إلى ويب هوكس", goToRuns: "إلى التشغيلات", goToSkills: "إلى المهارات", goToSessions: "إلى السجلات", goToModels: "إلى النماذج", goToPlugins: "إلى الإضافات",
     newSession: "جلسة جديدة", switchSession: "تبديل الجلسة",
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
     resumeSession: "استئناف جلسة… (/resume)",

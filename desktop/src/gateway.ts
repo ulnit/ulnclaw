@@ -322,6 +322,22 @@ export interface InsightsReport {
   activity: { peak_hour: number | null; peak_weekday: number | null };
 }
 
+export interface PluginRow {
+  name: string;
+  version: string;
+  description: string;
+  hooks: string[];
+  tools: { name: string; description: string }[];
+  disabled: boolean;
+  dir: string;
+}
+
+export interface PluginsPayload {
+  plugins: PluginRow[];
+  config_hooks: Record<string, string[]>;
+  disabled: string[];
+}
+
 export interface StorageStats {
   db_path: string;
   size_bytes: number;
@@ -837,6 +853,35 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`mcp servers HTTP ${response.status}`);
     const value = await response.json();
     return (value.servers || []) as McpServerRow[];
+  }
+
+  /** GET /api/plugins — plugin inventory (manifests, hooks, deny-list). */
+  async pluginsInventory(): Promise<PluginsPayload> {
+    const response = await fetch(this.endpoint("/api/plugins"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`plugins HTTP ${response.status}`);
+    return (await response.json()) as PluginsPayload;
+  }
+
+  /** POST /api/plugins/:name/enable — remove from the config deny-list. */
+  async pluginEnable(name: string): Promise<string> {
+    const response = await fetch(
+      this.endpoint(`/api/plugins/${encodeURIComponent(name)}/enable`),
+      { method: "POST", headers: this.headers() },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `enable HTTP ${response.status}`);
+    return value.message || "";
+  }
+
+  /** POST /api/plugins/:name/disable — add to the config deny-list. */
+  async pluginDisable(name: string): Promise<string> {
+    const response = await fetch(
+      this.endpoint(`/api/plugins/${encodeURIComponent(name)}/disable`),
+      { method: "POST", headers: this.headers() },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `disable HTTP ${response.status}`);
+    return value.message || "";
   }
 
   /** GET /api/storage — session-store footprint for the Doctor panel. */

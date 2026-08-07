@@ -919,6 +919,99 @@ async fn insights(
     }
 }
 
+/// `GET /api/plugins` — plugin inventory: loaded plugins (manifest,
+/// disabled flag, dir), config shell hooks (`[hooks]`) and the disabled
+/// list (desktop Plugins view; hermes `plugins list` parity).
+async fn plugins_inventory(State(_state): State<Arc<GatewayState>>) -> Response {
+    let result = tokio::task::spawn_blocking(|| {
+        let home = crate::config::ulnclaw_home();
+        let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let plugins: Vec<Value> = crate::plugins::loaded_plugins()
+            .iter()
+            .map(|plugin| {
+                json!({
+                    "name": plugin.manifest.name,
+                    "version": plugin.manifest.version,
+                    "description": plugin.manifest.description,
+                    "hooks": plugin.manifest.hooks,
+                    "tools": plugin
+                        .manifest
+                        .tools
+                        .iter()
+                        .map(|tool| {
+                            json!({
+                                "name": tool.name,
+                                "description": tool.description,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                    "disabled": plugin.disabled,
+                    "dir": plugin.dir.to_string_lossy(),
+                })
+            })
+            .collect();
+        let mut config_hooks = serde_json::Map::new();
+        for (event, commands) in &config.hooks.events {
+            config_hooks.insert(event.clone(), json!(commands));
+        }
+        json!({
+            "plugins": plugins,
+            "config_hooks": Value::Object(config_hooks),
+            "disabled": crate::plugins::current_disabled(&home),
+        })
+    })
+    .await;
+    match result {
+        Ok(payload) => Json(payload).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("plugins task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/plugins/:name/enable` — remove the plugin from the config
+/// deny-list (hermes `plugins enable`).
+async fn plugin_enable(State(_state): State<Arc<GatewayState>>, Path(name): Path<String>) -> Response {
+    let result = tokio::task::spawn_blocking(move || {
+        let home = crate::config::ulnclaw_home();
+        crate::plugins::enable_plugin(&home, &name)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("enable task failed: {e}")));
+    match result {
+        Ok(message) => Json(json!({"ok": true, "message": message})).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/plugins/:name/disable` — add the plugin to the config
+/// deny-list (hermes `plugins disable`).
+async fn plugin_disable(
+    State(_state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> Response {
+    let result = tokio::task::spawn_blocking(move || {
+        let home = crate::config::ulnclaw_home();
+        crate::plugins::disable_plugin(&home, &name)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("disable task failed: {e}")));
+    match result {
+        Ok(message) => Json(json!({"ok": true, "message": message})).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/storage` — session-store footprint: logical database size,
 /// WAL size, session/message counts and the on-disk path (desktop Doctor
 /// storage panel; ulnclaw extension).
@@ -993,6 +1086,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/insights", get(insights))
+        .route("/api/plugins", get(plugins_inventory))
+        .route("/api/plugins/:name/enable", post(plugin_enable))
+        .route("/api/plugins/:name/disable", post(plugin_disable))
         .route("/api/storage", get(storage_status))
         .route("/api/storage/optimize", post(storage_optimize))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
@@ -8555,6 +8651,50 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(body["merged_indexes"].as_i64().is_some());
         assert!(body["before_bytes"].as_u64().is_some());
         assert!(body["after_bytes"].as_u64().is_some());
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_plugins_endpoints_inventory_and_toggle() {
+        // Isolate ULNCLAW_HOME: disable/enable write config.toml.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        let (status, _) = get_json(app.clone(), "/api/plugins", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app.clone(), "/api/plugins", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["plugins"].as_array().is_some());
+        assert!(body["config_hooks"].as_object().is_some());
+        assert!(body["disabled"].as_array().is_some());
+
+        // Disable writes the deny-list entry; the inventory reflects it.
+        let (status, body) =
+            post_json(app.clone(), "/api/plugins/demo/disable", "{}", "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["message"].as_str().unwrap().contains("demo"));
+        let (_, body) = get_json(app.clone(), "/api/plugins", Some("sekret")).await;
+        let disabled: Vec<String> = body["disabled"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        assert!(disabled.contains(&"demo".to_string()));
+
+        // Enable removes it again.
+        let (status, _) =
+            post_json(app, "/api/plugins/demo/enable", "{}", "sekret").await;
+        assert_eq!(status, StatusCode::OK);
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
