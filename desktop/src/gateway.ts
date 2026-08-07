@@ -279,6 +279,30 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface InsightsReport {
+  days: number;
+  source_filter?: string | null;
+  empty: boolean;
+  generated_at: number;
+  overview: {
+    total_sessions: number;
+    total_messages: number;
+    total_tool_calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    estimated_cost_usd: number;
+    cost_known: boolean;
+    avg_session_seconds: number;
+    active_days: number;
+  };
+  models: { model: string; sessions: number; input_tokens: number; output_tokens: number; total_tokens: number }[];
+  sources: { source: string; sessions: number }[];
+  tools: { tool: string; calls: number }[];
+  top_sessions: { id: string; title: string | null; model: string; started_at: number; messages: number; tool_calls: number; total_tokens: number }[];
+  activity: { peak_hour: number | null; peak_weekday: number | null };
+}
+
 export interface McpServerRow {
   name: string;
   kind: "stdio" | "http" | "sse";
@@ -752,6 +776,15 @@ export class GatewayClient {
     } catch {
       return [];
     }
+  }
+
+  /** GET /api/insights — usage analytics over the session store. */
+  async insights(days = 30): Promise<InsightsReport> {
+    const response = await fetch(this.endpoint(`/api/insights?days=${days}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`insights HTTP ${response.status}`);
+    return (await response.json()) as InsightsReport;
   }
 
   /** GET /api/mcp/servers — configured MCP servers + auth posture. */

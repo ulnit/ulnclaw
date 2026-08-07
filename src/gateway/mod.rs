@@ -884,6 +884,41 @@ async fn mcp_servers_list(State(state): State<Arc<GatewayState>>) -> Json<Value>
     Json(json!({ "servers": servers }))
 }
 
+/// Query parameters for `GET /api/insights`.
+#[derive(Debug, Deserialize)]
+struct InsightsQuery {
+    /// Analysis window in days (default 30, max 365).
+    days: Option<u32>,
+    /// Filter to one session source (cli, telegram, …).
+    source: Option<String>,
+}
+
+/// `GET /api/insights` — usage analytics over the session store (same
+/// engine as `ulnclaw insights`); desktop Usage view insights section
+/// (ulnclaw extension).
+async fn insights(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<InsightsQuery>,
+) -> Response {
+    let days = query.days.unwrap_or(30).min(365).max(1);
+    let source = query.source.filter(|src| !src.trim().is_empty());
+    let provider_hint = state.agent.context().config.model.provider.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = crate::insights::InsightsEngine::open_default()?;
+        engine.generate(days, source.as_deref(), Some(&provider_hint))
+    })
+    .await
+    .unwrap_or_else(|e| Err(crate::error::AgentError::Tool(format!("insights task failed: {e}"))));
+    match result {
+        Ok(report) => Json(serde_json::to_value(&report).unwrap_or(Value::Null)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
     let router = Router::new()
@@ -900,6 +935,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/monitoring", get(monitoring_status))
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/mcp/servers", get(mcp_servers_list))
+        .route("/api/insights", get(insights))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
         .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
         .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
@@ -8356,6 +8392,48 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(servers[1]["kind"], "http");
         assert_eq!(servers[1]["auth"], "oauth");
         assert_eq!(servers[1]["oauth_tokens"], false);
+    }
+
+    #[tokio::test]
+    async fn test_insights_endpoint_reports_over_store() {
+        // The engine reads $ULNCLAW_HOME/state.db directly — seed one.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let store = SqliteSessionStore::open(dir.path().join("state.db")).expect("store");
+            let id = store.create_session("cli", Some("test-model"), None).unwrap();
+            store
+                .append_message(
+                    &id,
+                    &crate::provider::Message {
+                        role: crate::provider::Role::User,
+                        content: Some("hello".into()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                )
+                .unwrap();
+        }
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        let (status, _) = get_json(app.clone(), "/api/insights", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app, "/api/insights?days=7", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["days"], 7);
+        assert_eq!(body["empty"], false);
+        assert_eq!(body["overview"]["total_sessions"], 1);
+        assert!(body["overview"]["total_tokens"].as_i64().unwrap() >= 0);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     // ------------------------------------------------------------------

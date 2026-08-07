@@ -110,6 +110,14 @@ export interface Translations {
     colSession: string; colModel: string; colMessages: string;
     colInput: string; colOutput: string; colTotal: string; colStarted: string;
   };
+  insights: {
+    title: string; days7: string; days30: string; days90: string;
+    sessions: string; messages: string; toolCalls: string; tokens: string;
+    estCost: string; avgSession: string; activeDays: string;
+    topModels: string; topTools: string; topSessions: string;
+    colModel: string; colTool: string; colSession: string; calls: string;
+    empty: string; loadFailed: string;
+  };
   config: {
     loading: string; notConnected: string; loadFailed: string; save: string;
     reload: string; saving: string; saved: string; saveFailed: string;
@@ -315,6 +323,16 @@ const en: Translations = {
     requests: "API requests", runs: "Async runs", completed: "completed", failed: "failed",
     colSession: "Session", colModel: "Model", colMessages: "Msgs",
     colInput: "Input", colOutput: "Output", colTotal: "Total", colStarted: "Started",
+  },
+  insights: {
+    title: "Insights",
+    days7: "Last 7 days", days30: "Last 30 days", days90: "Last 90 days",
+    sessions: "Sessions", messages: "Messages", toolCalls: "Tool calls", tokens: "Tokens",
+    estCost: "Est. cost", avgSession: "Avg session", activeDays: "active days:",
+    topModels: "Top models", topTools: "Top tools", topSessions: "Top sessions",
+    colModel: "Model", colTool: "Tool", colSession: "Session", calls: "Calls",
+    empty: "No activity recorded for this window.",
+    loadFailed: "Failed to load insights: {error}",
   },
   config: {
     loading: "Loading config…", notConnected: "Gateway not connected.",
@@ -597,6 +615,16 @@ const zh: Translations = {
     colSession: "会话", colModel: "模型", colMessages: "消息",
     colInput: "输入", colOutput: "输出", colTotal: "总计", colStarted: "开始时间",
   },
+  insights: {
+    title: "洞察",
+    days7: "最近 7 天", days30: "最近 30 天", days90: "最近 90 天",
+    sessions: "会话数", messages: "消息数", toolCalls: "工具调用", tokens: "令牌数",
+    estCost: "估算费用", avgSession: "平均会话时长", activeDays: "活跃天数:",
+    topModels: "热门模型", topTools: "热门工具", topSessions: "热门会话",
+    colModel: "模型", colTool: "工具", colSession: "会话", calls: "调用次数",
+    empty: "该时间段内暂无活动记录。",
+    loadFailed: "加载洞察失败:{error}",
+  },
   config: {
     loading: "加载配置…", notConnected: "未连接网关。",
     loadFailed: "加载配置失败：{error}",
@@ -877,6 +905,16 @@ const zhHant: Translations = {
     requests: "API 請求", runs: "非同步執行", completed: "完成", failed: "失敗",
     colSession: "工作階段", colModel: "模型", colMessages: "訊息",
     colInput: "輸入", colOutput: "輸出", colTotal: "總計", colStarted: "開始時間",
+  },
+  insights: {
+    title: "洞察",
+    days7: "最近 7 天", days30: "最近 30 天", days90: "最近 90 天",
+    sessions: "會話數", messages: "訊息數", toolCalls: "工具呼叫", tokens: "權杖數",
+    estCost: "估算費用", avgSession: "平均會話時長", activeDays: "活躍天數:",
+    topModels: "熱門模型", topTools: "熱門工具", topSessions: "熱門會話",
+    colModel: "模型", colTool: "工具", colSession: "會話", calls: "呼叫次數",
+    empty: "該時間段內暫無活動記錄。",
+    loadFailed: "載入洞察失敗:{error}",
   },
   config: {
     loading: "載入設定…", notConnected: "未連線閘道。",
@@ -1159,6 +1197,16 @@ const ja: Translations = {
     colSession: "セッション", colModel: "モデル", colMessages: "件数",
     colInput: "入力", colOutput: "出力", colTotal: "合計", colStarted: "開始",
   },
+  insights: {
+    title: "インサイト",
+    days7: "過去 7 日間", days30: "過去 30 日間", days90: "過去 90 日間",
+    sessions: "セッション", messages: "メッセージ", toolCalls: "ツール呼び出し", tokens: "トークン",
+    estCost: "推定コスト", avgSession: "平均セッション時間", activeDays: "アクティブ日数:",
+    topModels: "上位モデル", topTools: "上位ツール", topSessions: "上位セッション",
+    colModel: "モデル", colTool: "ツール", colSession: "セッション", calls: "呼び出し回数",
+    empty: "この期間のアクティビティはありません。",
+    loadFailed: "インサイトの読み込みに失敗しました: {error}",
+  },
   config: {
     loading: "設定を読み込み中…", notConnected: "ゲートウェイに未接続です。",
     loadFailed: "設定の読み込みに失敗：{error}",
@@ -1439,6 +1487,16 @@ const ar: Translations = {
     requests: "طلبات API", runs: "تشغيلات غير متزامنة", completed: "اكتملت", failed: "فشلت",
     colSession: "الجلسة", colModel: "النموذج", colMessages: "رسائل",
     colInput: "دخل", colOutput: "خرج", colTotal: "الإجمالي", colStarted: "البدء",
+  },
+  insights: {
+    title: "الرؤى",
+    days7: "آخر 7 أيام", days30: "آخر 30 يومًا", days90: "آخر 90 يومًا",
+    sessions: "الجلسات", messages: "الرسائل", toolCalls: "استدعاءات الأدوات", tokens: "الرموز",
+    estCost: "التكلفة التقديرية", avgSession: "متوسط مدة الجلسة", activeDays: "أيام النشاط:",
+    topModels: "أكثر النماذج استخدامًا", topTools: "أكثر الأدوات استخدامًا", topSessions: "أكثر الجلسات نشاطًا",
+    colModel: "النموذج", colTool: "الأداة", colSession: "الجلسة", calls: "الاستدعاءات",
+    empty: "لا يوجد نشاط مسجل في هذه الفترة.",
+    loadFailed: "فشل تحميل الرؤى: {error}",
   },
   config: {
     loading: "جارٍ تحميل الإعدادات…", notConnected: "البوابة غير متصلة.",
