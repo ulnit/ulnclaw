@@ -370,6 +370,33 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Run the agent across a JSONL dataset of prompts in parallel with checkpointing (hermes batch_runner.py)
+    Batch {
+        /// Dataset file — JSONL, each line {"prompt": "...", ...}
+        #[arg(long)]
+        dataset_file: String,
+        /// Prompts per batch file (default 10)
+        #[arg(long, default_value_t = 10)]
+        batch_size: usize,
+        /// Run name — outputs to batch_runs/<run_name>/
+        #[arg(long)]
+        run_name: String,
+        /// Parallel batch workers (default: CPU count)
+        #[arg(long)]
+        num_workers: Option<usize>,
+        /// Resume an interrupted run (skip completed prompts)
+        #[arg(long)]
+        resume: bool,
+        /// Verbose per-prompt logging
+        #[arg(long)]
+        verbose: bool,
+        /// Max agent iterations per prompt
+        #[arg(long)]
+        max_iterations: Option<usize>,
+        /// Model override for this run
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// Run as an ACP (Agent Client Protocol) stdio server for editors like Zed (hermes acp)
     Acp {
         /// Verbose request/response logging on stderr
@@ -2467,6 +2494,32 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 println!("{out}");
             }
             Ok(())
+        }
+        Commands::Batch {
+            dataset_file,
+            batch_size,
+            run_name,
+            num_workers,
+            resume,
+            verbose,
+            max_iterations,
+            model,
+        } => {
+            ulnclaw::batch_runner::run(ulnclaw::batch_runner::BatchOptions {
+                dataset_file: dataset_file.into(),
+                batch_size,
+                run_name,
+                num_workers: num_workers.unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(4)
+                }),
+                resume,
+                verbose,
+                max_iterations,
+                model,
+            })
+            .await
         }
         Commands::Acp { verbose } => ulnclaw::acp_adapter::run_stdio(verbose)
             .await
