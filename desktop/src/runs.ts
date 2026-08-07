@@ -3,7 +3,7 @@
 // once/session/always/deny buttons (gateway approval gateway parity with
 // the terminal approve prompt), plus stop and result inspection.
 
-import type { GatewayClient, RunRow } from "./gateway";
+import type { GatewayClient, RunRow, DelegationRow } from "./gateway";
 import { t } from "./i18n";
 
 const REFRESH_MS = 5_000;
@@ -48,6 +48,8 @@ export class RunsWidget {
       </header>
       <div id="runs-status" class="config-status" hidden></div>
       <div id="runs-list" class="runs-list"></div>
+      <h3 class="config-section runs-delegations-title" data-i18n="runs.delegationsTitle">Delegations</h3>
+      <div id="delegations-list" class="runs-list"></div>
     `;
     this.root.querySelector("#runs-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
@@ -82,8 +84,12 @@ export class RunsWidget {
       return;
     }
     try {
-      const runs = await client.listRuns();
+      const [runs, delegations] = await Promise.all([
+        client.listRuns(),
+        client.listDelegations().catch(() => [] as DelegationRow[]),
+      ]);
       this.render(runs);
+      this.renderDelegations(delegations);
       const active = runs.filter((run) =>
         ["running", "queued", "waiting_for_approval"].includes(run.status),
       ).length;
@@ -162,6 +168,77 @@ export class RunsWidget {
         });
       }
       list.appendChild(card);
+    }
+  }
+
+  private renderDelegations(delegations: DelegationRow[]): void {
+    const list = this.root.querySelector("#delegations-list") as HTMLElement;
+    list.innerHTML = "";
+    if (delegations.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "config-note";
+      empty.textContent = t.runs.noDelegations;
+      list.appendChild(empty);
+      return;
+    }
+    for (const delegation of delegations) {
+      const card = document.createElement("div");
+      card.className = `run-card ${STATUS_CLASS[delegation.status] || ""}`;
+      const when = new Date(delegation.created_ms).toLocaleString();
+      card.innerHTML = `
+        <div class="run-head">
+          <span class="run-status">${escapeHtml(delegation.status)}</span>
+          <span class="run-id">${escapeHtml(delegation.id.slice(0, 8))}</span>
+          ${delegation.tasks != null ? `<span class="run-iter">${delegation.tasks} tasks</span>` : ""}
+          <span class="spacer"></span>
+          <span class="run-when">${escapeHtml(when)}</span>
+        </div>
+        <div class="run-session">parent: <code>${escapeHtml(delegation.parent_session_key)}</code></div>
+        ${
+          delegation.status === "completed"
+            ? `<details class="run-result delegation-result"><summary>${escapeHtml(t.runs.result)}</summary><div class="delegation-body">${escapeHtml(t.runs.loading)}</div></details>`
+            : ""
+        }
+      `;
+      const details = card.querySelector<HTMLDetailsElement>(".delegation-result");
+      if (details) {
+        let loaded = false;
+        details.addEventListener("toggle", () => {
+          if (details.open && !loaded) {
+            loaded = true;
+            this.loadDelegationResult(delegation.id, details).catch(() => undefined);
+          }
+        });
+      }
+      list.appendChild(card);
+    }
+  }
+
+  private async loadDelegationResult(id: string, details: HTMLDetailsElement): Promise<void> {
+    const client = this.client();
+    const body = details.querySelector(".delegation-body") as HTMLElement;
+    if (!client) return;
+    try {
+      const detail = await client.delegationDetail(id);
+      const result = detail.result;
+      let text: string;
+      if (result === null || result === undefined) {
+        text = t.runs.noResult;
+      } else if (typeof result === "object" && result !== null && "report" in result) {
+        text = String((result as { report: unknown }).report ?? JSON.stringify(result, null, 2));
+      } else if (typeof result === "string") {
+        text = result;
+      } else {
+        text = JSON.stringify(result, null, 2);
+      }
+      const pre = document.createElement("pre");
+      pre.textContent = text;
+      body.replaceChildren(pre);
+    } catch (error) {
+      body.textContent = t.runs.loadFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 

@@ -279,6 +279,18 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface DelegationRow {
+  id: string;
+  status: string;
+  tasks?: number;
+  parent_session_key: string;
+  created_ms: number;
+  finished_ms: number | null;
+  log_dir: string;
+  delivery_attempts?: number;
+  persisted?: boolean;
+}
+
 export interface RunApproval {
   command: string;
   reason: string;
@@ -716,6 +728,23 @@ export class GatewayClient {
     } catch {
       return [];
     }
+  }
+
+  /** GET /v1/delegations — async delegations (live + persisted history). */
+  async listDelegations(): Promise<DelegationRow[]> {
+    const response = await fetch(this.endpoint("/v1/delegations"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`delegations HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.delegations || []) as DelegationRow[];
+  }
+
+  /** GET /v1/delegations/:id — delegation record + consolidated result. */
+  async delegationDetail(id: string): Promise<{ result?: unknown } & DelegationRow> {
+    const response = await fetch(this.endpoint(`/v1/delegations/${encodeURIComponent(id)}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`delegation HTTP ${response.status}`);
+    return (await response.json()) as { result?: unknown } & DelegationRow;
   }
 
   /** GET /v1/runs — tracked async runs (with pending approvals). */

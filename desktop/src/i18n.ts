@@ -140,6 +140,7 @@ export interface Translations {
     count: string; empty: string; loadFailed: string; stop: string; stopping: string;
     result: string; approvalTitle: string; approveOnce: string; approveSession: string;
     approveAlways: string; deny: string; approveFailed: string; stopFailed: string;
+    delegationsTitle: string; noDelegations: string; loading: string; noResult: string;
   };
   skillsView: {
     count: string; skillsTitle: string; toolsetsTitle: string; noSkills: string;
@@ -358,6 +359,8 @@ const en: Translations = {
     result: "Result", approvalTitle: "Approval requested",
     approveOnce: "Once", approveSession: "Session", approveAlways: "Always", deny: "Deny",
     approveFailed: "Approval failed: {error}", stopFailed: "Stop failed: {error}",
+    delegationsTitle: "Delegations", noDelegations: "No async delegations dispatched yet.",
+    loading: "Loading…", noResult: "No result recorded.",
   },
   skillsView: {
     count: "{skills} skills · toolsets enabled {toolsets}",
@@ -629,6 +632,8 @@ const zh: Translations = {
     result: "结果", approvalTitle: "请求批准",
     approveOnce: "一次", approveSession: "本会话", approveAlways: "始终", deny: "拒绝",
     approveFailed: "批准失败：{error}", stopFailed: "停止失败：{error}",
+    delegationsTitle: "委派", noDelegations: "还没有派发的异步委派。",
+    loading: "加载中…", noResult: "没有记录结果。",
   },
   skillsView: {
     count: "{skills} 个技能 · 已启用工具集 {toolsets}",
@@ -900,6 +905,8 @@ const zhHant: Translations = {
     result: "結果", approvalTitle: "請求核准",
     approveOnce: "一次", approveSession: "本工作階段", approveAlways: "始終", deny: "拒絕",
     approveFailed: "核准失敗：{error}", stopFailed: "停止失敗：{error}",
+    delegationsTitle: "委派", noDelegations: "還沒有派發的非同步委派。",
+    loading: "載入中…", noResult: "沒有記錄結果。",
   },
   skillsView: {
     count: "{skills} 個技能 · 已啟用工具集 {toolsets}",
@@ -1171,6 +1178,8 @@ const ja: Translations = {
     result: "結果", approvalTitle: "承認要求",
     approveOnce: "今回", approveSession: "セッション", approveAlways: "常に", deny: "拒否",
     approveFailed: "承認に失敗：{error}", stopFailed: "停止に失敗：{error}",
+    delegationsTitle: "委任", noDelegations: "ディスパッチされた非同期委任はありません。",
+    loading: "読み込み中…", noResult: "結果は記録されていません。",
   },
   skillsView: {
     count: "{skills} 件のスキル · 有効なツールセット {toolsets}",
@@ -1442,6 +1451,8 @@ const ar: Translations = {
     result: "النتيجة", approvalTitle: "طلب موافقة",
     approveOnce: "مرة", approveSession: "الجلسة", approveAlways: "دائمًا", deny: "رفض",
     approveFailed: "فشل الاعتماد: {error}", stopFailed: "فشل الإيقاف: {error}",
+    delegationsTitle: "التفويضات", noDelegations: "لا توجد تفويضات غير متزامنة مرسلة بعد.",
+    loading: "جارٍ التحميل…", noResult: "لم تسجل نتيجة.",
   },
   skillsView: {
     count: "{skills} مهارة · مجموعات الأدوات المفعلة {toolsets}",
