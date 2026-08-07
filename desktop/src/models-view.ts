@@ -40,9 +40,29 @@ export class ModelsViewWidget {
       <div id="models-view-body" class="models-view-body"></div>
       <h3 class="config-section" data-i18n="modelsView.usageTitle">Model usage (30 days)</h3>
       <div id="models-view-usage"></div>
+      <h3 class="config-section" data-i18n="modelsView.endpointsTitle">Custom endpoints</h3>
+      <div id="models-view-endpoints"></div>
+      <div class="config-add">
+        <input id="models-view-ep-id" type="text" placeholder="id (mylab)" />
+        <input id="models-view-ep-url" type="text" placeholder="https://api.example.com/v1" />
+        <input id="models-view-ep-model" type="text" placeholder="default model" />
+        <select id="models-view-ep-mode"><option value="openai">openai</option><option value="anthropic">anthropic</option></select>
+        <input id="models-view-ep-key" type="password" placeholder="API key (stored in .env)" />
+      </div>
+      <div class="config-add">
+        <button id="models-view-ep-test" class="ghost" data-i18n="modelsView.endpointsTest">Test</button>
+        <button id="models-view-ep-add" class="ghost" data-i18n="config.add">Add</button>
+        <span id="models-view-ep-status" class="config-note"></span>
+      </div>
     `;
     this.root.querySelector("#models-view-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
+    });
+    this.root.querySelector("#models-view-ep-test")!.addEventListener("click", () => {
+      this.validateEndpoint().catch(() => undefined);
+    });
+    this.root.querySelector("#models-view-ep-add")!.addEventListener("click", () => {
+      this.addEndpoint().catch(() => undefined);
     });
   }
 
@@ -72,6 +92,7 @@ export class ModelsViewWidget {
       this.render(payload);
       this.renderGatewayModel().catch(() => undefined);
       this.renderUsage().catch(() => undefined);
+      this.renderEndpoints().catch(() => undefined);
       this.status("");
     } catch (error) {
       this.status(
@@ -113,6 +134,143 @@ export class ModelsViewWidget {
 
     (this.root.querySelector("#models-view-count") as HTMLElement).textContent =
       v.count.replace("{providers}", String(payload.providers.length));
+  }
+
+  /** Custom endpoint rows over /api/providers/custom-endpoints (P333). */
+  private async renderEndpoints(): Promise<void> {
+    const client = this.client();
+    const box = this.root.querySelector("#models-view-endpoints") as HTMLElement;
+    if (!client) {
+      box.innerHTML = "";
+      return;
+    }
+    const v = t.modelsView;
+    try {
+      const payload = await client.customEndpoints();
+      if (payload.endpoints.length === 0) {
+        box.innerHTML = `<p class="config-note">${escapeHtml(v.endpointsEmpty)}</p>`;
+        return;
+      }
+      box.innerHTML = payload.endpoints
+        .map((endpoint) => `
+          <div class="monitoring-row">
+            <span class="monitoring-label"><code>${escapeHtml(endpoint.id)}</code> <span class="models-view-badge">${escapeHtml(endpoint.mode)}</span> <span class="models-view-badge ${endpoint.key_state === "missing" ? "warn" : "ok"}">${escapeHtml(endpoint.key_state)}</span></span>
+            <span class="monitoring-value">${escapeHtml(endpoint.base_url)}${endpoint.model ? ` · ${escapeHtml(endpoint.model)}` : ""}</span>
+            <span class="jobs-counts">
+              <button class="ghost models-view-ep-activate" data-id="${escapeHtml(endpoint.id)}">${escapeHtml(v.endpointsActivate)}</button>
+              <button class="ghost danger models-view-ep-delete" data-id="${escapeHtml(endpoint.id)}">✕</button>
+            </span>
+          </div>`)
+        .join("");
+      box.querySelectorAll<HTMLButtonElement>(".models-view-ep-activate").forEach((btn) => {
+        btn.onclick = () => {
+          this.activateEndpoint(btn.dataset.id || "").catch(() => undefined);
+        };
+      });
+      box.querySelectorAll<HTMLButtonElement>(".models-view-ep-delete").forEach((btn) => {
+        btn.onclick = () => {
+          this.deleteEndpoint(btn.dataset.id || "").catch(() => undefined);
+        };
+      });
+    } catch {
+      box.innerHTML = "";
+    }
+  }
+
+  private endpointStatus(message: string): void {
+    const el = this.root.querySelector("#models-view-ep-status") as HTMLElement;
+    el.textContent = message;
+  }
+
+  /** Probe the drafted endpoint's /models URL (P333). */
+  private async validateEndpoint(): Promise<void> {
+    const client = this.client();
+    const url = (this.root.querySelector("#models-view-ep-url") as HTMLInputElement).value.trim();
+    const key = (this.root.querySelector("#models-view-ep-key") as HTMLInputElement).value;
+    if (!client) return;
+    try {
+      const result = await client.customEndpointsValidate({ base_url: url, api_key: key || undefined });
+      this.endpointStatus(
+        result.ok
+          ? `${result.models.length} models`
+          : result.message,
+      );
+    } catch (error) {
+      this.endpointStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** Upsert the drafted endpoint (P333). */
+  private async addEndpoint(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const id = (this.root.querySelector("#models-view-ep-id") as HTMLInputElement).value.trim();
+    const baseUrl = (this.root.querySelector("#models-view-ep-url") as HTMLInputElement).value.trim();
+    const model = (this.root.querySelector("#models-view-ep-model") as HTMLInputElement).value.trim();
+    const mode = (this.root.querySelector("#models-view-ep-mode") as HTMLSelectElement).value;
+    const key = (this.root.querySelector("#models-view-ep-key") as HTMLInputElement).value;
+    if (!id || !baseUrl) {
+      this.endpointStatus("id + base_url are required");
+      return;
+    }
+    try {
+      await client.customEndpointsUpsert({
+        id,
+        base_url: baseUrl,
+        model: model || undefined,
+        mode,
+        api_key: key || undefined,
+      });
+      (this.root.querySelector("#models-view-ep-id") as HTMLInputElement).value = "";
+      (this.root.querySelector("#models-view-ep-url") as HTMLInputElement).value = "";
+      (this.root.querySelector("#models-view-ep-model") as HTMLInputElement).value = "";
+      (this.root.querySelector("#models-view-ep-key") as HTMLInputElement).value = "";
+      this.endpointStatus(t.modelsView.endpointsSaved);
+      await this.renderEndpoints();
+    } catch (error) {
+      this.endpointStatus(
+        t.modelsView.endpointsFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  }
+
+  private async activateEndpoint(id: string): Promise<void> {
+    const client = this.client();
+    if (!client || !id) return;
+    try {
+      await client.customEndpointsActivate(id);
+      this.status(t.modelsView.endpointsActivated);
+      await this.renderGatewayModel();
+    } catch (error) {
+      this.status(
+        t.modelsView.endpointsFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
+  }
+
+  private async deleteEndpoint(id: string): Promise<void> {
+    const client = this.client();
+    if (!client || !id) return;
+    if (!window.confirm(t.modelsView.endpointsDeleteConfirm.replace("{id}", id))) return;
+    try {
+      await client.customEndpointsDelete(id);
+      await this.renderEndpoints();
+    } catch (error) {
+      this.status(
+        t.modelsView.endpointsFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
   }
 
   /** Gateway model card over /api/model/info (P332). */

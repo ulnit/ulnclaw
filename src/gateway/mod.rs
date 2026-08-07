@@ -864,6 +864,313 @@ async fn config_put(Json(body): Json<ConfigPutBody>) -> Response {
     .into_response()
 }
 
+/// Env var holding a custom endpoint's key (lean hermes
+/// `custom_endpoint_key_env`): keys never live in config.toml.
+fn custom_endpoint_key_env(id: &str) -> String {
+    let slug: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("ULNCLAW_PROVIDER_{slug}_API_KEY")
+}
+
+/// Validate + normalize a custom-provider slug.
+fn validate_provider_slug(raw: &str) -> std::result::Result<String, Response> {
+    let slug = raw.trim().to_lowercase();
+    if slug.is_empty() {
+        return Err(bad_request("id is required", None));
+    }
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    {
+        return Err(bad_request(
+            "id must be lowercase letters, digits, '-' or '_'",
+            None,
+        ));
+    }
+    Ok(slug)
+}
+
+/// `GET /api/providers/custom-endpoints` — configured `[providers.*]`
+/// custom endpoints (hermes parity): id/base_url/model/mode plus key
+/// posture (`literal` | `env` | `missing`).
+async fn custom_endpoints_list() -> Response {
+    let path = crate::config_cmd::config_path();
+    let doc = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    let mut endpoints = Vec::new();
+    if let Some(table) = doc.get("providers").and_then(|v| v.as_table()) {
+        for (id, entry) in table {
+            let base_url = entry.get("base_url").and_then(|v| v.as_str()).unwrap_or_default();
+            let model = entry.get("model").and_then(|v| v.as_str()).unwrap_or_default();
+            let mode = entry.get("mode").and_then(|v| v.as_str()).unwrap_or("openai");
+            let literal_key = entry
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+            let key_state = if literal_key {
+                "literal"
+            } else if let Some(var) = entry.get("key_env").and_then(|v| v.as_str()) {
+                let set = crate::config::get_env_value(var)
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false);
+                if set {
+                    "env"
+                } else {
+                    "missing"
+                }
+            } else {
+                "missing"
+            };
+            endpoints.push(json!({
+                "id": id,
+                "base_url": base_url,
+                "model": model,
+                "mode": mode,
+                "key_state": key_state,
+            }));
+        }
+    }
+    Json(json!({ "ok": true, "endpoints": endpoints })).into_response()
+}
+
+/// `POST /api/providers/custom-endpoints` — create/update a
+/// `[providers.<id>]` entry (hermes parity). Submitted API keys go to
+/// `.env` under a derived var and are referenced via `key_env` (#69449
+/// semantics); an empty `api_key` clears the stored key.
+async fn custom_endpoints_upsert(Json(body): Json<Value>) -> Response {
+    let id = match validate_provider_slug(body["id"].as_str().unwrap_or_default()) {
+        Ok(v) => v,
+        Err(response) => return response,
+    };
+    let base_url = body["base_url"].as_str().unwrap_or_default().trim().to_string();
+    if base_url.is_empty() {
+        return bad_request("base_url is required", None);
+    }
+    let model = body["model"].as_str().unwrap_or_default().trim().to_string();
+    let mode = match body["mode"]
+        .as_str()
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase()
+        .as_str()
+    {
+        "anthropic" => "anthropic",
+        _ => "openai",
+    };
+    let path = crate::config_cmd::config_path();
+    let mut doc = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    let prefix = format!("providers.{id}");
+    if let Err(e) = crate::config_cmd::set_nested(
+        &mut doc,
+        &format!("{prefix}.base_url"),
+        toml::Value::String(base_url.clone()),
+    ) {
+        return bad_request(&e, None);
+    }
+    if model.is_empty() {
+        crate::config_cmd::unset_nested(&mut doc, &format!("{prefix}.model"));
+    } else if let Err(e) = crate::config_cmd::set_nested(
+        &mut doc,
+        &format!("{prefix}.model"),
+        toml::Value::String(model.clone()),
+    ) {
+        return bad_request(&e, None);
+    }
+    if let Err(e) = crate::config_cmd::set_nested(
+        &mut doc,
+        &format!("{prefix}.mode"),
+        toml::Value::String(mode.to_string()),
+    ) {
+        return bad_request(&e, None);
+    }
+    let env_var = custom_endpoint_key_env(&id);
+    match body["api_key"].as_str() {
+        Some(raw) if !raw.trim().is_empty() => {
+            if let Err(e) = crate::config_cmd::set_env_value(&env_var, raw.trim()) {
+                return server_error(&e);
+            }
+            let _ = crate::config_cmd::set_nested(
+                &mut doc,
+                &format!("{prefix}.key_env"),
+                toml::Value::String(env_var.clone()),
+            );
+            crate::config_cmd::unset_nested(&mut doc, &format!("{prefix}.api_key"));
+        }
+        Some(_) => {
+            let _ = crate::config_cmd::remove_env_value(&env_var);
+            crate::config_cmd::unset_nested(&mut doc, &format!("{prefix}.key_env"));
+            crate::config_cmd::unset_nested(&mut doc, &format!("{prefix}.api_key"));
+        }
+        None => { /* keep the stored key as-is */ }
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+        return server_error(&e);
+    }
+    Json(json!({ "ok": true, "id": id, "base_url": base_url, "model": model, "mode": mode }))
+        .into_response()
+}
+
+/// `POST /api/providers/custom-endpoints/validate` — probe the
+/// endpoint's OpenAI-compatible `/models` URL (hermes parity).
+async fn custom_endpoints_validate(Json(body): Json<Value>) -> Response {
+    let base_url = body["base_url"]
+        .as_str()
+        .unwrap_or_default()
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    if base_url.is_empty() {
+        return Json(json!({
+            "ok": false, "reachable": true,
+            "message": "Enter an endpoint URL first.", "models": [],
+        }))
+        .into_response();
+    }
+    let url = format!("{base_url}/models");
+    let mut request = reqwest::Client::new()
+        .get(&url)
+        .header("accept", "application/json");
+    if let Some(key) = body["api_key"]
+        .as_str()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+    {
+        request = request.bearer_auth(key);
+    }
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        request.send(),
+    )
+    .await
+    {
+        Ok(Ok(response)) => response,
+        _ => {
+            return Json(json!({
+                "ok": false, "reachable": false,
+                "message": format!("Could not reach {url}."), "models": [],
+            }))
+            .into_response()
+        }
+    };
+    let status = response.status().as_u16();
+    if status == 401 || status == 403 {
+        return Json(json!({
+            "ok": false, "reachable": true,
+            "message": "The endpoint rejected the API key.", "models": [],
+        }))
+        .into_response();
+    }
+    if !(200..300).contains(&status) {
+        return Json(json!({
+            "ok": false, "reachable": true,
+            "message": format!("Endpoint returned HTTP {status}."), "models": [],
+        }))
+        .into_response();
+    }
+    let value: Value = response.json().await.unwrap_or_else(|_| json!({}));
+    let models: Vec<String> = value["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Json(json!({ "ok": true, "reachable": true, "message": "", "models": models }))
+        .into_response()
+}
+
+/// `POST /api/providers/custom-endpoints/:id/activate` — make the
+/// endpoint the gateway's main provider (hermes parity).
+async fn custom_endpoint_activate(Path(id): Path<String>) -> Response {
+    let id = match validate_provider_slug(&id) {
+        Ok(v) => v,
+        Err(response) => return response,
+    };
+    let path = crate::config_cmd::config_path();
+    let mut doc = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    let entry = match doc.get("providers").and_then(|t| t.get(&id)) {
+        Some(entry) => entry.clone(),
+        None => return not_found("custom endpoint not found"),
+    };
+    let model = entry.get("model").and_then(|v| v.as_str()).unwrap_or_default().trim().to_string();
+    let base_url = entry.get("base_url").and_then(|v| v.as_str()).unwrap_or_default().trim().to_string();
+    if model.is_empty() || base_url.is_empty() {
+        return bad_request("custom endpoint is incomplete", None);
+    }
+    if let Err(e) = crate::model_cmd::apply_model_choice(&mut doc, &id, &model) {
+        return bad_request(&e, None);
+    }
+    if let Err(e) = crate::config_cmd::set_nested(
+        &mut doc,
+        "model.base_url",
+        toml::Value::String(base_url),
+    ) {
+        return bad_request(&e, None);
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+        return server_error(&e);
+    }
+    Json(json!({ "ok": true, "provider": id, "model": model })).into_response()
+}
+
+/// `DELETE /api/providers/custom-endpoints/:id` — remove the endpoint
+/// and its `.env` key. Divergence from hermes: an ACTIVE provider is
+/// refused (400) instead of silently detaching the main model.
+async fn custom_endpoint_delete(Path(id): Path<String>) -> Response {
+    let id = match validate_provider_slug(&id) {
+        Ok(v) => v,
+        Err(response) => return response,
+    };
+    let path = crate::config_cmd::config_path();
+    let mut doc = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    let exists = doc
+        .get("providers")
+        .and_then(|t| t.get(&id))
+        .is_some();
+    if !exists {
+        return not_found("custom endpoint not found");
+    }
+    let active = doc
+        .get("model")
+        .and_then(|m| m.get("provider"))
+        .and_then(|v| v.as_str())
+        .map(|p| p.trim().to_lowercase() == id)
+        .unwrap_or(false);
+    if active {
+        return bad_request(
+            "provider is active — switch the gateway model first",
+            None,
+        );
+    }
+    crate::config_cmd::unset_nested(&mut doc, &format!("providers.{id}"));
+    let _ = crate::config_cmd::remove_env_value(&custom_endpoint_key_env(&id));
+    if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+        return server_error(&e);
+    }
+    Json(json!({ "ok": true, "id": id })).into_response()
+}
+
 /// `GET /api/model/info` — resolved metadata for the configured model
 /// (hermes `/api/model/info` parity, lean): provider/model/endpoint plus
 /// models.dev auto-detected context window and capability flags.
@@ -3019,6 +3326,10 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model/info", get(model_info_api))
         .route("/api/model/set", post(model_set_api))
         .route("/api/model/recommended-default", get(model_recommended_default))
+        .route("/api/providers/custom-endpoints", get(custom_endpoints_list).post(custom_endpoints_upsert))
+        .route("/api/providers/custom-endpoints/validate", post(custom_endpoints_validate))
+        .route("/api/providers/custom-endpoints/:id/activate", post(custom_endpoint_activate))
+        .route("/api/providers/custom-endpoints/:id", delete(custom_endpoint_delete))
         .route("/api/credentials/pool", get(credentials_pool_list).post(credentials_pool_add))
         .route("/api/credentials/pool/:provider/:index", delete(credentials_pool_remove))
         .route("/api/memory", get(memory_status_api))
@@ -12162,6 +12473,95 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         ).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["model"], "");
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_custom_endpoints_crud_activate_validate() {
+        // Custom endpoints persist through ULNCLAW_HOME config.toml + .env.
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Empty list.
+        let (status, body) = get_json(app.clone(), "/api/providers/custom-endpoints", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 0);
+
+        // Upsert: key lands in .env, never literal in config.toml.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/providers/custom-endpoints", Some(token),
+            json!({"id": "MyLab", "base_url": "http://127.0.0.1:9/v1", "model": "test-model", "api_key": "sk-custom-long-key"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["id"], "mylab");
+        let raw = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(raw.contains("[providers.mylab]"), "config.toml: {}", raw);
+        assert!(raw.contains("ULNCLAW_PROVIDER_MYLAB_API_KEY"), "config.toml: {}", raw);
+        assert!(!raw.contains("sk-custom-long-key"), "literal key leaked into config.toml");
+        let env_raw = std::fs::read_to_string(tmp.path().join(".env")).unwrap();
+        assert!(env_raw.contains("ULNCLAW_PROVIDER_MYLAB_API_KEY=sk-custom-long-key"), ".env: {}", env_raw);
+
+        // List shows env key posture.
+        let (_, body) = get_json(app.clone(), "/api/providers/custom-endpoints", Some(token)).await;
+        let endpoints = body["endpoints"].as_array().unwrap();
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0]["id"], "mylab");
+        assert_eq!(endpoints[0]["key_state"], "env");
+
+        // Validate: unreachable endpoint reports reachable=false.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/providers/custom-endpoints/validate", Some(token),
+            json!({"base_url": "http://127.0.0.1:9"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["reachable"], false);
+
+        // Activate: becomes the main provider.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/providers/custom-endpoints/mylab/activate", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["provider"], "mylab");
+        let raw = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(raw.contains("provider = \"mylab\""), "config.toml: {}", raw);
+
+        // Active provider refuses deletion.
+        let (status, _) = send_json(
+            app.clone(), "DELETE", "/api/providers/custom-endpoints/mylab", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Switch away, then delete succeeds and cleans the .env key.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/model/set", Some(token),
+            json!({"provider": "openai", "model": "gpt-5.2"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = send_json(
+            app.clone(), "DELETE", "/api/providers/custom-endpoints/mylab", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let raw = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(!raw.contains("[providers.mylab]"), "config.toml: {}", raw);
+        let env_raw = std::fs::read_to_string(tmp.path().join(".env")).unwrap_or_default();
+        assert!(!env_raw.contains("ULNCLAW_PROVIDER_MYLAB_API_KEY"), ".env: {}", env_raw);
+
+        // Deleting again 404s.
+        let (status, _) = send_json(
+            app.clone(), "DELETE", "/api/providers/custom-endpoints/mylab", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

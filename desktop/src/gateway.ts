@@ -573,6 +573,23 @@ export interface FsEntry {
   isDirectory: boolean;
 }
 
+/** Custom provider endpoint row from GET /api/providers/custom-endpoints (P333). */
+export interface CustomEndpoint {
+  id: string;
+  base_url: string;
+  model: string;
+  mode: string;
+  key_state: "literal" | "env" | "missing";
+}
+
+/** Validate probe result (P333). */
+export interface CustomEndpointValidation {
+  ok: boolean;
+  reachable: boolean;
+  message: string;
+  models: string[];
+}
+
 /** Resolved gateway model metadata from GET /api/model/info (P332). */
 export interface ModelInfoPayload {
   provider: string;
@@ -1573,6 +1590,64 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
     return typeof value.dataUrl === "string" ? value.dataUrl : "";
+  }
+
+  /** GET /api/providers/custom-endpoints — custom provider rows (P333). */
+  async customEndpoints(): Promise<{ endpoints: CustomEndpoint[] }> {
+    const response = await fetch(this.endpoint("/api/providers/custom-endpoints"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `endpoints HTTP ${response.status}`);
+    return value as { endpoints: CustomEndpoint[] };
+  }
+
+  /** POST /api/providers/custom-endpoints — upsert an endpoint (P333). */
+  async customEndpointsUpsert(payload: {
+    id: string;
+    base_url: string;
+    model?: string;
+    mode?: string;
+    api_key?: string;
+  }): Promise<void> {
+    const response = await fetch(this.endpoint("/api/providers/custom-endpoints"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(payload),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `endpoints HTTP ${response.status}`);
+  }
+
+  /** POST /api/providers/custom-endpoints/validate — probe /models (P333). */
+  async customEndpointsValidate(payload: {
+    base_url: string;
+    api_key?: string;
+  }): Promise<CustomEndpointValidation> {
+    const response = await fetch(this.endpoint("/api/providers/custom-endpoints/validate"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(payload),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `endpoints HTTP ${response.status}`);
+    return value as CustomEndpointValidation;
+  }
+
+  /** POST /api/providers/custom-endpoints/:id/activate (P333). */
+  async customEndpointsActivate(id: string): Promise<void> {
+    const uri = `/api/providers/custom-endpoints/${encodeURIComponent(id)}/activate`;
+    const response = await fetch(this.endpoint(uri), { method: "POST", headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `endpoints HTTP ${response.status}`);
+  }
+
+  /** DELETE /api/providers/custom-endpoints/:id (P333). */
+  async customEndpointsDelete(id: string): Promise<void> {
+    const uri = `/api/providers/custom-endpoints/${encodeURIComponent(id)}`;
+    const response = await fetch(this.endpoint(uri), { method: "DELETE", headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `endpoints HTTP ${response.status}`);
   }
 
   /** GET /api/model/info — resolved gateway model metadata (P332). */

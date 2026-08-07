@@ -339,7 +339,7 @@ pub fn set_env_value(name: &str, value: &str) -> Result<(), String> {
         .map_err(|e| format!("✗ Cannot write {}: {e}", path.display()))
 }
 
-fn remove_env_value(name: &str) -> Result<bool, String> {
+pub(crate) fn remove_env_value(name: &str) -> Result<bool, String> {
     let path = env_path();
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let mut removed = false;
