@@ -216,7 +216,9 @@ export class SessionsViewWidget {
     try {
       const messages = await client.messages(sessionId);
       if (this.selected !== sessionId) return; // user moved on
-      pane.innerHTML = this.renderMessages(messages);
+      const session = this.all.find((candidate) => candidate.id === sessionId);
+      const meta = session ? this.renderTranscriptMeta(session, messages.length) : "";
+      pane.innerHTML = meta + this.renderMessages(messages);
       pane.scrollTop = 0;
       exportBtn.hidden = false;
       (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = false;
@@ -239,6 +241,18 @@ export class SessionsViewWidget {
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-rename") as HTMLButtonElement).hidden = true;
     }
+  }
+
+  private renderTranscriptMeta(session: SessionRow, rendered: number): string {
+    const v = t.sessionsView;
+    const parts = [
+      session.model ? escapeHtml(session.model) : "",
+      v.msgCount.replace("{count}", String(rendered)),
+      session.project ? `${v.project}: ${escapeHtml(session.project)}` : "",
+      session.source ? `${v.source}: ${escapeHtml(session.source)}` : "",
+      fmtWhen(session.started_at),
+    ].filter(Boolean);
+    return `<div class="sessions-view-meta">${parts.join(" · ")}</div>`;
   }
 
   private roleLabel(role: string): string {

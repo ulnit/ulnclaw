@@ -1133,6 +1133,13 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   padding: 14px 16px;
   background: var(--panel-2);
 }
+.sessions-view-meta {
+  font-size: 0.78em;
+  opacity: 0.6;
+  border-bottom: 1px solid var(--border, #2a3442);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
 .sessions-view-msg { margin-bottom: 14px; }
 .sessions-view-role {
   font-size: 0.75em;
