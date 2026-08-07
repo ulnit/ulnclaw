@@ -526,6 +526,82 @@ export class ConfigWidget {
         row.appendChild(test);
       }
       rows.appendChild(row);
+      // P342: env-credential inputs for platforms whose adapters honor
+      // env keys (telegram/discord/slack) — save/clear ride the P337
+      // PUT /api/messaging/platforms/:id surface.
+      if (platform.env_vars.length) {
+        const envRow = document.createElement("div");
+        envRow.className = "config-env-row";
+        const spacer = document.createElement("span");
+        spacer.className = "jobs-counts";
+        spacer.textContent = "\u00a0";
+        envRow.appendChild(spacer);
+        for (const envVar of platform.env_vars) {
+          const input = document.createElement("input");
+          input.type = "password";
+          input.placeholder = envVar.is_set
+            ? envVar.redacted_value || envVar.key
+            : envVar.key;
+          input.title = envVar.key;
+          envRow.appendChild(input);
+          const save = document.createElement("button");
+          save.className = "ghost";
+          save.textContent = "\u{1F4BE}";
+          save.title = `${t.config.messagingSaveEnv} ${envVar.key}`;
+          save.onclick = async () => {
+            const value = input.value.trim();
+            if (!value) return;
+            save.disabled = true;
+            try {
+              await client.messagingPlatformUpdate(platform.id, {
+                env: { [envVar.key]: value },
+              });
+              input.value = "";
+              this.status(t.config.restartNote);
+              await this.renderMessaging();
+            } catch (error) {
+              this.status(
+                t.config.messagingFailed.replace(
+                  "{error}",
+                  error instanceof Error ? error.message : String(error),
+                ),
+                true,
+              );
+            } finally {
+              save.disabled = false;
+            }
+          };
+          envRow.appendChild(save);
+          if (envVar.is_set) {
+            const clear = document.createElement("button");
+            clear.className = "ghost danger";
+            clear.textContent = "\u{1F5D1}";
+            clear.title = `${t.config.messagingClearEnv} ${envVar.key}`;
+            clear.onclick = async () => {
+              clear.disabled = true;
+              try {
+                await client.messagingPlatformUpdate(platform.id, {
+                  clear_env: [envVar.key],
+                });
+                this.status(t.config.restartNote);
+                await this.renderMessaging();
+              } catch (error) {
+                this.status(
+                  t.config.messagingFailed.replace(
+                    "{error}",
+                    error instanceof Error ? error.message : String(error),
+                  ),
+                  true,
+                );
+              } finally {
+                clear.disabled = false;
+              }
+            };
+            envRow.appendChild(clear);
+          }
+        }
+        rows.appendChild(envRow);
+      }
     }
   }
 
