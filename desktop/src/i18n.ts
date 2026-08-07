@@ -181,6 +181,8 @@ export interface Translations {
     memoryMissing: string; memoryEntries: string; memoryLimit: string;
     memoryResetConfirm: string; memoryResetDone: string; memoryResetNone: string;
     memoryResetFailed: string;
+    poolTitle: string; poolAddLabel: string; poolEmpty: string;
+    poolRemoveConfirm: string; poolSaved: string; poolFailed: string; poolNote: string;
   };
   doctor: {
     run: string; running: string; online: string; issues: string;
@@ -503,6 +505,7 @@ const en: Translations = {
     memoryResetConfirm: "Delete the selected memory files? This cannot be undone.",
     memoryResetDone: "Deleted: {files}", memoryResetNone: "Nothing to delete.",
     memoryResetFailed: "Reset failed: {error}",
+    poolTitle: "Credential pool", poolAddLabel: "Add pool key", poolEmpty: "No pooled credentials", poolRemoveConfirm: "Remove this pooled key?", poolSaved: "Credential pool updated", poolFailed: "Credential pool failed: {error}", poolNote: "Pooled keys rotate round-robin per request and take precedence over environment variables for their provider; remove every entry to fall back to env keys.",
   },
   doctor: {
     run: "Run doctor", running: "Running checks…",
@@ -923,6 +926,7 @@ const zh: Translations = {
     memoryResetConfirm: "删除选定的记忆文件？此操作不可撤销。",
     memoryResetDone: "已删除：{files}", memoryResetNone: "无可删除内容。",
     memoryResetFailed: "重置失败：{error}",
+    poolTitle: "凭证池", poolAddLabel: "添加池密钥", poolEmpty: "暂无池凭证", poolRemoveConfirm: "移除该池密钥？", poolSaved: "凭证池已更新", poolFailed: "凭证池操作失败：{error}", poolNote: "池内密钥按请求轮转，且对其 provider 优先于环境变量；删光条目即回落到环境密钥。",
   },
   doctor: {
     run: "运行诊断", running: "检查中…",
@@ -1343,6 +1347,7 @@ const zhHant: Translations = {
     memoryResetConfirm: "刪除選定的記憶檔案？此操作無法復原。",
     memoryResetDone: "已刪除：{files}", memoryResetNone: "無可刪除內容。",
     memoryResetFailed: "重置失敗：{error}",
+    poolTitle: "憑證池", poolAddLabel: "新增池金鑰", poolEmpty: "無池憑證", poolRemoveConfirm: "移除此池金鑰？", poolSaved: "憑證池已更新", poolFailed: "憑證池操作失敗：{error}", poolNote: "池內金鑰按請求輪換，且對其 provider 優先於環境變數；刪光條目即回落到環境密鑰。",
   },
   doctor: {
     run: "執行診斷", running: "檢查中…",
@@ -1763,6 +1768,7 @@ const ja: Translations = {
     memoryResetConfirm: "選択したメモリファイルを削除しますか？元に戻せません。",
     memoryResetDone: "削除済み: {files}", memoryResetNone: "削除するものがありません。",
     memoryResetFailed: "リセットに失敗しました: {error}",
+    poolTitle: "認証情報プール", poolAddLabel: "プールキーを追加", poolEmpty: "プールされた認証情報はありません", poolRemoveConfirm: "このプールキーを削除しますか？", poolSaved: "認証情報プールを更新しました", poolFailed: "認証情報プールに失敗しました: {error}", poolNote: "プール内のキーはリクエストごとにラウンドロビンされ、そのプロバイダーでは環境変數より優先されます；全エントリを削除すると環境キーに戻ります。",
   },
   doctor: {
     run: "ドクターを実行", running: "チェック中…",
@@ -2183,6 +2189,7 @@ const ar: Translations = {
     memoryResetConfirm: "حذف ملفات الذاكرة المحددة؟ لا يمكن التراجع.",
     memoryResetDone: "تم الحذف: {files}", memoryResetNone: "لا شيء لحذفه.",
     memoryResetFailed: "فشلت إعادة التعيين: {error}",
+    poolTitle: "مجمع بيانات الاعتماد", poolAddLabel: "إضافة مفتاح إلى المجمع", poolEmpty: "لا توجد بيانات اعتماد في المجمع", poolRemoveConfirm: "إزالة هذا المفتاح من المجمع؟", poolSaved: "تم تحديث مجمع بيانات الاعتماد", poolFailed: "فشل مجمع بيانات الاعتماد: {error}", poolNote: "تتداول مفاتيح المجمع بالتناوب لكل طلب وتتقدم على متغيرات البيئة لموفرها؛ إزالة جميع الإدخالات تعيد الاستخدام إلى مفاتيح البيئة.",
   },
   doctor: {
     run: "تشغيل الفحص", running: "جارٍ الفحص…",

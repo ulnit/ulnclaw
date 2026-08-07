@@ -88,6 +88,18 @@ export class ConfigWidget {
         </div>
         <p class="config-note" data-i18n="config.memoryNote"></p>
       </div>
+      <div id="config-pool" class="config-env" hidden>
+        <h3 data-i18n="config.poolTitle">Credential pool</h3>
+        <div id="config-pool-rows" class="config-env-rows"></div>
+        <div class="config-add">
+          <span class="config-add-label" data-i18n="config.poolAddLabel">Add pool key</span>
+          <input id="config-pool-add-provider" type="text" placeholder="provider (openai, anthropic, …)" />
+          <input id="config-pool-add-key" type="password" placeholder="API key" />
+          <input id="config-pool-add-label" type="text" placeholder="label (optional)" />
+          <button id="config-pool-add-btn" class="ghost" data-i18n="config.add">Add</button>
+        </div>
+        <p class="config-note" data-i18n="config.poolNote"></p>
+      </div>
       <dialog id="config-raw-dialog" class="config-raw-dialog">
         <h2 data-i18n="config.rawTitle">Raw config.toml</h2>
         <textarea id="config-raw-text" spellcheck="false"></textarea>
@@ -103,6 +115,9 @@ export class ConfigWidget {
     });
     this.root.querySelector("#config-memory-reset-btn")!.addEventListener("click", () => {
       this.resetMemory().catch(() => undefined);
+    });
+    this.root.querySelector("#config-pool-add-btn")!.addEventListener("click", () => {
+      this.addPoolEntry().catch(() => undefined);
     });
     this.root.querySelector("#config-raw")!.addEventListener("click", () => {
       this.openRaw().catch(() => undefined);
@@ -221,6 +236,7 @@ export class ConfigWidget {
       this.renderRows();
       this.renderEnv().catch(() => undefined);
       this.renderMemory().catch(() => undefined);
+      this.renderPool().catch(() => undefined);
       this.status("");
       const fileEl = this.root.querySelector("#config-file") as HTMLElement;
       fileEl.textContent = this.configPath;
@@ -397,6 +413,101 @@ export class ConfigWidget {
       note.textContent = t.config.memoryResetFailed.replace(
         "{error}",
         error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async renderPool(): Promise<void> {
+    const client = this.client();
+    const block = this.root.querySelector("#config-pool") as HTMLElement;
+    const rows = this.root.querySelector("#config-pool-rows") as HTMLElement;
+    rows.innerHTML = "";
+    if (!client) {
+      block.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.credentialsPool();
+      block.hidden = false;
+      if (payload.providers.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "config-note";
+        empty.textContent = t.config.poolEmpty;
+        rows.appendChild(empty);
+        return;
+      }
+      for (const provider of payload.providers) {
+        for (const entry of provider.entries) {
+          const row = document.createElement("div");
+          row.className = "config-env-row";
+          const keyEl = document.createElement("span");
+          keyEl.className = "config-env-chip";
+          keyEl.textContent = provider.provider;
+          row.appendChild(keyEl);
+          const meta = document.createElement("span");
+          meta.className = "jobs-counts";
+          meta.textContent = `${entry.label} · ${entry.token_preview} · ${entry.source} · #${entry.request_count}`;
+          row.appendChild(meta);
+          const remove = document.createElement("button");
+          remove.className = "ghost danger";
+          remove.textContent = "✕";
+          remove.title = t.session.removeAttachment;
+          remove.onclick = () => {
+            this.removePoolEntry(provider.provider, entry.index).catch(() => undefined);
+          };
+          row.appendChild(remove);
+          rows.appendChild(row);
+        }
+      }
+    } catch {
+      block.hidden = true;
+    }
+  }
+
+  private async addPoolEntry(): Promise<void> {
+    const client = this.client();
+    const providerEl = this.root.querySelector("#config-pool-add-provider") as HTMLInputElement;
+    const keyEl = this.root.querySelector("#config-pool-add-key") as HTMLInputElement;
+    const labelEl = this.root.querySelector("#config-pool-add-label") as HTMLInputElement;
+    const provider = providerEl.value.trim();
+    const apiKey = keyEl.value.trim();
+    if (!client || !provider || !apiKey) {
+      (provider ? keyEl : providerEl).focus();
+      return;
+    }
+    try {
+      await client.credentialsPoolAdd(provider, apiKey, labelEl.value.trim());
+      providerEl.value = "";
+      keyEl.value = "";
+      labelEl.value = "";
+      await this.renderPool();
+      this.status(t.config.poolSaved);
+    } catch (error) {
+      this.status(
+        t.config.poolFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
+  }
+
+  private async removePoolEntry(provider: string, index: number): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (!window.confirm(t.config.poolRemoveConfirm)) return;
+    try {
+      await client.credentialsPoolRemove(provider, index);
+      await this.renderPool();
+      this.status(t.config.poolSaved);
+    } catch (error) {
+      this.status(
+        t.config.poolFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
       );
     }
   }

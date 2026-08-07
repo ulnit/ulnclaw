@@ -1505,6 +1505,108 @@ async fn fs_default_cwd(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     Json(json!({ "cwd": cwd, "branch": branch }))
 }
 
+/// `GET /api/credentials/pool` — pooled provider credentials with
+/// redacted token previews (hermes `/api/credentials/pool` parity, lean
+/// port — manual entries only, see `credential_pool.rs`).
+async fn credentials_pool_list(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let home = state.agent.context().home.clone();
+    let pool = crate::credential_pool::Pool::load(&home);
+    let mut providers = Vec::new();
+    for provider in pool.providers() {
+        let entries: Vec<Value> = pool
+            .entries(&provider)
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                json!({
+                    "index": index + 1,
+                    "id": entry.id,
+                    "label": entry.label,
+                    "auth_type": entry.auth_type,
+                    "priority": entry.priority,
+                    "source": entry.source,
+                    "request_count": entry.request_count,
+                    "token_preview": crate::status::redact_key(&entry.access_token),
+                })
+            })
+            .collect();
+        providers.push(json!({ "provider": provider, "entries": entries }));
+    }
+    Json(json!({ "providers": providers }))
+}
+
+/// `POST /api/credentials/pool` — add a manual pool entry (hermes
+/// parity; re-adding lifts nothing in the lean port — no suppression
+/// registry).
+async fn credentials_pool_add(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let provider = body["provider"]
+        .as_str()
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let api_key = body["api_key"].as_str().unwrap_or_default().trim().to_string();
+    if provider.is_empty() || api_key.is_empty() {
+        return bad_request("provider and api_key are required", None);
+    }
+    let home = state.agent.context().home.clone();
+    let mut pool = crate::credential_pool::Pool::load(&home);
+    let label = {
+        let raw = body["label"].as_str().unwrap_or_default().trim().to_string();
+        if raw.is_empty() {
+            format!("key #{}", pool.entries(&provider).len() + 1)
+        } else {
+            raw
+        }
+    };
+    pool.add(crate::credential_pool::PooledCredential {
+        provider: provider.clone(),
+        id: crate::credential_pool::new_entry_id(),
+        label,
+        auth_type: crate::credential_pool::AUTH_TYPE_API_KEY.to_string(),
+        priority: 0,
+        source: crate::credential_pool::SOURCE_MANUAL.to_string(),
+        access_token: api_key,
+        created_at: now_secs() as u64,
+        request_count: 0,
+    });
+    if let Err(err) = pool.save(&home) {
+        return bad_request(&format!("failed to save credential pool: {err}"), None);
+    }
+    Json(json!({
+        "ok": true,
+        "provider": provider,
+        "count": pool.entries(&provider).len(),
+    }))
+    .into_response()
+}
+
+/// `DELETE /api/credentials/pool/:provider/:index` — remove a pool entry
+/// by 1-based index (hermes parity; manual entries have no external state
+/// to clean up, so removal is just the row delete).
+async fn credentials_pool_remove(
+    State(state): State<Arc<GatewayState>>,
+    Path((provider, index)): Path<(String, usize)>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let mut pool = crate::credential_pool::Pool::load(&home);
+    if pool.remove_index(&provider, index).is_none() {
+        return not_found("No pool entry at that index");
+    }
+    if let Err(err) = pool.save(&home) {
+        return bad_request(&format!("failed to save credential pool: {err}"), None);
+    }
+    let provider = crate::credential_pool::normalize_provider(&provider);
+    Json(json!({
+        "ok": true,
+        "provider": provider,
+        "count": pool.entries(&provider).len(),
+    }))
+    .into_response()
+}
+
 /// `GET /api/memory` — persistent-memory status (hermes `/api/memory`
 /// parity): builtin provider posture plus the per-file census (sizes,
 /// bullet-entry counts) and configured char limits.
@@ -2707,6 +2809,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/read-data-url", get(fs_read_data_url))
         .route("/api/fs/git-root", get(fs_git_root))
         .route("/api/fs/default-cwd", get(fs_default_cwd))
+        .route("/api/credentials/pool", get(credentials_pool_list).post(credentials_pool_add))
+        .route("/api/credentials/pool/:provider/:index", delete(credentials_pool_remove))
         .route("/api/memory", get(memory_status_api))
         .route("/api/memory/reset", post(memory_reset_api))
         .route("/api/update/check", get(update_check_api))
@@ -11648,6 +11752,88 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         std::env::set_current_dir(saved_cwd).unwrap();
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_credentials_pool_endpoints_add_list_remove() {
+        // The pool store resolves through the agent home (ULNCLAW_HOME).
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Empty pool lists no providers.
+        let (status, body) = get_json(app.clone(), "/api/credentials/pool", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["providers"].as_array().unwrap().len(), 0);
+
+        // Validation: provider and api_key are required.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/credentials/pool", Some(token),
+            json!({"provider": "openai"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Add two entries (provider normalized lowercase; default label).
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/credentials/pool", Some(token),
+            json!({"provider": "OpenAI", "api_key": "sk-one-long-enough"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["provider"], "openai");
+        assert_eq!(body["count"], 1);
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/credentials/pool", Some(token),
+            json!({"provider": "openai", "api_key": "sk-two-long-enough", "label": "backup"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["count"], 2);
+
+        // List: 1-based indexes, redacted previews, no raw tokens.
+        let (status, body) = get_json(app.clone(), "/api/credentials/pool", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let providers = body["providers"].as_array().unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0]["provider"], "openai");
+        let entries = providers[0]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["index"], 1);
+        assert_eq!(entries[0]["label"], "key #1");
+        assert_eq!(entries[0]["source"], "manual");
+        assert_eq!(entries[1]["label"], "backup");
+        let raw = serde_json::to_string(&body).unwrap();
+        assert!(!raw.contains("sk-one-long-enough"), "raw token leaked");
+        assert!(!raw.contains("sk-two-long-enough"), "raw token leaked");
+
+        // Remove by 1-based index; count shrinks.
+        let (status, body) = send_json(
+            app.clone(), "DELETE", "/api/credentials/pool/openai/1", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["count"], 1);
+
+        // Missing index -> 404.
+        let (status, _) = send_json(
+            app.clone(), "DELETE", "/api/credentials/pool/openai/9", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Surviving entry is the former #2, renumbered to 1.
+        let (_, body) = get_json(app.clone(), "/api/credentials/pool", Some(token)).await;
+        let entries = body["providers"][0]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["label"], "backup");
+
+        // Pool file persisted under the temp home.
+        assert!(tmp.path().join("credentials-pool.json").exists());
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
     }

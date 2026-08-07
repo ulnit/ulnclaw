@@ -1366,12 +1366,22 @@ impl UlncLawConfig {
         self
     }
 
-    /// Resolve the API key: config > ULNCLAW_API_KEY > OPENAI_API_KEY > .env.
+    /// Resolve the API key: config > credential pool (rotating) >
+    /// ULNCLAW_API_KEY > OPENAI_API_KEY > ANTHROPIC_API_KEY (.env-aware).
+    /// Pool membership is the curation signal (hermes credential-pool
+    /// semantics, lean port — `credential_pool.rs`).
     pub fn resolve_api_key(&self) -> Option<String> {
         if let Some(ref key) = self.model.api_key {
             if !key.is_empty() {
                 return Some(key.clone());
             }
+        }
+        let pooled = crate::credential_pool::resolve_pooled_key(
+            &ulnclaw_home(),
+            &self.model.provider,
+        );
+        if let Some(key) = pooled {
+            return Some(key);
         }
         get_env_value("ULNCLAW_API_KEY")
             .or_else(|| get_env_value("OPENAI_API_KEY"))

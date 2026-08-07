@@ -573,6 +573,24 @@ export interface FsEntry {
   isDirectory: boolean;
 }
 
+/** Credential pool entry from GET /api/credentials/pool (P330). */
+export interface CredentialPoolEntry {
+  index: number;
+  id: string;
+  label: string;
+  auth_type: string;
+  priority: number;
+  source: string;
+  request_count: number;
+  token_preview: string;
+}
+
+/** One provider's pooled credentials (P330). */
+export interface CredentialPoolProvider {
+  provider: string;
+  entries: CredentialPoolEntry[];
+}
+
 /** Per-model usage row from GET /api/analytics/models (P328). */
 export interface ModelUsageRow {
   model: string;
@@ -1538,6 +1556,44 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
     return typeof value.dataUrl === "string" ? value.dataUrl : "";
+  }
+
+  /** GET /api/credentials/pool — pooled provider credentials (P330). */
+  async credentialsPool(): Promise<{ providers: CredentialPoolProvider[] }> {
+    const response = await fetch(this.endpoint("/api/credentials/pool"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `credentials HTTP ${response.status}`);
+    return value as { providers: CredentialPoolProvider[] };
+  }
+
+  /** POST /api/credentials/pool — add a pooled key (P330). */
+  async credentialsPoolAdd(
+    provider: string,
+    apiKey: string,
+    label?: string,
+  ): Promise<{ ok: boolean; provider: string; count: number }> {
+    const response = await fetch(this.endpoint("/api/credentials/pool"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ provider, api_key: apiKey, label: label || undefined }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `credentials HTTP ${response.status}`);
+    return value as { ok: boolean; provider: string; count: number };
+  }
+
+  /** DELETE /api/credentials/pool/:provider/:index — remove entry (P330). */
+  async credentialsPoolRemove(
+    provider: string,
+    index: number,
+  ): Promise<{ ok: boolean; provider: string; count: number }> {
+    const uri = `/api/credentials/pool/${encodeURIComponent(provider)}/${index}`;
+    const response = await fetch(this.endpoint(uri), { method: "DELETE", headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `credentials HTTP ${response.status}`);
+    return value as { ok: boolean; provider: string; count: number };
   }
 
   /** GET /api/analytics/models — per-model usage aggregation (P328). */
