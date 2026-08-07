@@ -36,6 +36,7 @@ export class ModelsViewWidget {
         <button id="models-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="models-view-status" class="config-status" hidden></div>
+      <div id="models-view-gateway" class="models-view-gateway"></div>
       <div id="models-view-body" class="models-view-body"></div>
       <h3 class="config-section" data-i18n="modelsView.usageTitle">Model usage (30 days)</h3>
       <div id="models-view-usage"></div>
@@ -69,6 +70,7 @@ export class ModelsViewWidget {
     try {
       const payload = await client.modelOptions();
       this.render(payload);
+      this.renderGatewayModel().catch(() => undefined);
       this.renderUsage().catch(() => undefined);
       this.status("");
     } catch (error) {
@@ -103,9 +105,69 @@ export class ModelsViewWidget {
       parts.push(this.renderProvider(provider, payload.model));
     }
     body.innerHTML = parts.join("");
+    body.querySelectorAll<HTMLButtonElement>(".models-view-set").forEach((btn) => {
+      btn.onclick = () => {
+        this.setModel(btn.dataset.provider || "", btn.dataset.model || "").catch(() => undefined);
+      };
+    });
 
     (this.root.querySelector("#models-view-count") as HTMLElement).textContent =
       v.count.replace("{providers}", String(payload.providers.length));
+  }
+
+  /** Gateway model card over /api/model/info (P332). */
+  private async renderGatewayModel(): Promise<void> {
+    const client = this.client();
+    const box = this.root.querySelector("#models-view-gateway") as HTMLElement;
+    if (!client) {
+      box.innerHTML = "";
+      return;
+    }
+    const v = t.modelsView;
+    try {
+      const info = await client.modelInfo();
+      const caps = info.capabilities;
+      const icons = caps
+        ? [caps.reasoning ? "\u{1F9E0}" : "", caps.tools ? "\u{1F527}" : "", caps.vision ? "\u{1F441}" : ""]
+            .filter(Boolean)
+            .join(" ")
+        : "";
+      box.innerHTML = `
+        <section class="models-view-provider">
+          <h3 class="config-section">${escapeHtml(v.gatewayTitle)}</h3>
+          <div class="monitoring-row">
+            <span class="monitoring-label"><code>${escapeHtml(info.provider)}/${escapeHtml(info.model)}</code></span>
+            <span class="monitoring-value">${escapeHtml(info.base_url)}</span>
+            <span class="jobs-counts">${info.context.effective ? `${escapeHtml(v.gatewayContext)}: ${fmtNum(info.context.effective)}` : ""} ${icons}</span>
+          </div>
+        </section>`;
+    } catch {
+      box.innerHTML = "";
+    }
+  }
+
+  /** Persist a new gateway model over POST /api/model/set (P332). */
+  private async setModel(provider: string, model: string): Promise<void> {
+    const client = this.client();
+    if (!client || !provider || !model) return;
+    const v = t.modelsView;
+    const message = v.gatewaySetConfirm
+      .replace("{provider}", provider)
+      .replace("{model}", model);
+    if (!window.confirm(message)) return;
+    try {
+      await client.modelSet(provider, model);
+      this.status(v.gatewaySetDone);
+      await this.renderGatewayModel();
+    } catch (error) {
+      this.status(
+        v.gatewaySetFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
   }
 
   /** Per-model usage table over /api/analytics/models (P328). */
@@ -180,6 +242,7 @@ export class ModelsViewWidget {
           <td class="num">${fmtNum(caps?.max_output_tokens)}</td>
           <td>${icons}</td>
           <td class="num">${price ? `${escapeHtml(price.input)} / ${escapeHtml(price.output)}` : "—"}</td>
+          <td>${isCurrent ? "" : `<button class="ghost models-view-set" data-provider="${escapeHtml(provider.slug)}" data-model="${escapeHtml(model)}" title="${escapeHtml(v.gatewaySet)}">⭢</button>`}</td>
         </tr>`;
       })
       .join("");
@@ -195,7 +258,7 @@ export class ModelsViewWidget {
         ${rows ? `<table class="usage-table"><thead><tr>
           <th>${escapeHtml(v.colModel)}</th><th>${escapeHtml(v.colFamily)}</th>
           <th class="num">${escapeHtml(v.colContext)}</th><th class="num">${escapeHtml(v.colMaxOut)}</th>
-          <th>${escapeHtml(v.colCaps)}</th><th class="num">${escapeHtml(v.colPrice)}</th>
+          <th>${escapeHtml(v.colCaps)}</th><th class="num">${escapeHtml(v.colPrice)}</th><th></th>
         </tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">${escapeHtml(v.noModels)}</p>`}
       </section>`;
   }

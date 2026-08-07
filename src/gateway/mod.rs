@@ -864,6 +864,92 @@ async fn config_put(Json(body): Json<ConfigPutBody>) -> Response {
     .into_response()
 }
 
+/// `GET /api/model/info` — resolved metadata for the configured model
+/// (hermes `/api/model/info` parity, lean): provider/model/endpoint plus
+/// models.dev auto-detected context window and capability flags.
+async fn model_info_api(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = state.agent.context().config.clone();
+    let provider = config.model.provider.clone();
+    let model = config.model.model.clone();
+    let base_url = config.resolve_base_url();
+    let info = crate::models_dev::get_model_info(&provider, &model);
+    let auto_ctx = info.as_ref().map(|i| i.context_window).unwrap_or(0);
+    let capabilities = match info.as_ref() {
+        Some(i) => json!({
+            "vision": i.attachment,
+            "reasoning": i.reasoning,
+            "tools": i.tool_call,
+        }),
+        None => Value::Null,
+    };
+    Json(json!({
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "known": info.is_some(),
+        "context": { "auto": auto_ctx, "config": 0, "effective": auto_ctx },
+        "capabilities": capabilities,
+    }))
+}
+
+/// `POST /api/model/set` — persist the main provider/model assignment
+/// (hermes `/api/model/set` parity, lean: main scope only, no auxiliary
+/// slots or cost guard). Applies to new sessions once the gateway
+/// restarts; per-session hot-swap stays `POST /api/sessions/:id/model`.
+async fn model_set_api(Json(body): Json<Value>) -> Response {
+    let provider = body["provider"].as_str().unwrap_or_default().trim().to_string();
+    let model = body["model"].as_str().unwrap_or_default().trim().to_string();
+    if provider.is_empty() || model.is_empty() {
+        return bad_request("provider and model are required", None);
+    }
+    let path = crate::config_cmd::config_path();
+    let mut doc = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    if let Err(e) = crate::model_cmd::apply_model_choice(&mut doc, &provider, &model) {
+        return bad_request(&e, None);
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+        return server_error(&e);
+    }
+    Json(json!({
+        "ok": true,
+        "provider": provider,
+        "model": model,
+        "note": "applies to new sessions; restart the gateway to change the running process",
+    }))
+    .into_response()
+}
+
+/// Query for `GET /api/model/recommended-default`.
+#[derive(Debug, Deserialize)]
+struct RecommendedDefaultQuery {
+    provider: Option<String>,
+}
+
+/// `GET /api/model/recommended-default` — sensible default model for a
+/// provider (hermes parity, lean: first curated models.dev catalog entry,
+/// then the built-in provider default; no Nous tier logic).
+async fn model_recommended_default(
+    Query(query): Query<RecommendedDefaultQuery>,
+) -> Json<Value> {
+    let provider = query
+        .provider
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let model = if provider.is_empty() {
+        String::new()
+    } else {
+        crate::model_cmd::catalog_models(&provider, false)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| crate::setup_cmd::default_model_for(&provider).to_string())
+    };
+    Json(json!({ "provider": provider, "model": model }))
+}
+
 /// Built-in dashboard themes (hermes `_BUILTIN_DASHBOARD_THEMES`). The
 /// frontend owns the full definitions; the backend ships name/label/
 /// description and stores the active selection.
@@ -2930,6 +3016,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/read-data-url", get(fs_read_data_url))
         .route("/api/fs/git-root", get(fs_git_root))
         .route("/api/fs/default-cwd", get(fs_default_cwd))
+        .route("/api/model/info", get(model_info_api))
+        .route("/api/model/set", post(model_set_api))
+        .route("/api/model/recommended-default", get(model_recommended_default))
         .route("/api/credentials/pool", get(credentials_pool_list).post(credentials_pool_add))
         .route("/api/credentials/pool/:provider/:index", delete(credentials_pool_remove))
         .route("/api/memory", get(memory_status_api))
@@ -12018,6 +12107,61 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         ).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["font"], "theme");
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_model_info_set_recommended_endpoints() {
+        // model/set persists config.toml through ULNCLAW_HOME.
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Info: shape check — default config is openai/gpt-5.2; catalog
+        // freshness varies by cache state, so only the contract is pinned.
+        let (status, body) = get_json(app.clone(), "/api/model/info", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["provider"], "openai");
+        assert_eq!(body["model"], "gpt-5.2");
+        assert!(body["base_url"].as_str().unwrap().starts_with("http"));
+        assert!(body["context"]["effective"].is_number());
+
+        // Set: validation + persistence.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/model/set", Some(token),
+            json!({"provider": "anthropic"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/model/set", Some(token),
+            json!({"provider": "anthropic", "model": "claude-sonnet-4-5"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let raw = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(raw.contains("anthropic"), "config.toml: {}", raw);
+        assert!(raw.contains("claude-sonnet-4-5"), "config.toml: {}", raw);
+
+        // Recommended default: non-empty for a known provider, empty
+        // provider yields an empty model.
+        let (status, body) = get_json(
+            app.clone(), "/api/model/recommended-default?provider=anthropic", Some(token),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body["model"].as_str().unwrap().is_empty());
+        let (status, body) = get_json(
+            app.clone(), "/api/model/recommended-default", Some(token),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["model"], "");
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

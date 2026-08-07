@@ -573,6 +573,16 @@ export interface FsEntry {
   isDirectory: boolean;
 }
 
+/** Resolved gateway model metadata from GET /api/model/info (P332). */
+export interface ModelInfoPayload {
+  provider: string;
+  model: string;
+  base_url: string;
+  known: boolean;
+  context: { auto: number; config: number; effective: number };
+  capabilities: { vision: boolean; reasoning: boolean; tools: boolean } | null;
+}
+
 /** Dashboard theme row from GET /api/dashboard/themes (P331). */
 export interface DashboardTheme {
   name: string;
@@ -1563,6 +1573,25 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
     return typeof value.dataUrl === "string" ? value.dataUrl : "";
+  }
+
+  /** GET /api/model/info — resolved gateway model metadata (P332). */
+  async modelInfo(): Promise<ModelInfoPayload> {
+    const response = await fetch(this.endpoint("/api/model/info"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
+    return value as ModelInfoPayload;
+  }
+
+  /** POST /api/model/set — persist the gateway provider/model (P332). */
+  async modelSet(provider: string, model: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/model/set"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ provider, model }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
   }
 
   /** GET /api/dashboard/themes — theme catalog + active theme (P331). */
