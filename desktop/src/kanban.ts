@@ -40,7 +40,9 @@ export class KanbanWidget {
       <header id="kanban-header">
         <select id="kanban-board" title="Switch board" data-i18n-title="kanban.switchBoard"></select>
         <span id="kanban-counts" class="kanban-counts"></span>
+        <span id="kanban-dispatch-status" class="config-note"></span>
         <span class="spacer"></span>
+        <button id="kanban-dispatch" class="ghost" data-i18n="kanban.dispatch">Dispatch</button>
         <button id="kanban-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="kanban-columns"></div>
@@ -76,6 +78,8 @@ export class KanbanWidget {
     };
     (this.root.querySelector("#kanban-refresh") as HTMLButtonElement).onclick = () =>
       void this.refresh();
+    (this.root.querySelector("#kanban-dispatch") as HTMLButtonElement).onclick = () =>
+      void this.dispatch();
 
     const dialog = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
     dialog.addEventListener("close", () => {
@@ -105,6 +109,27 @@ export class KanbanWidget {
         }
       }
     });
+  }
+
+  private async dispatch(): Promise<void> {
+    const client = this.client();
+    const statusEl = this.root.querySelector("#kanban-dispatch-status") as HTMLElement;
+    if (!client) return;
+    try {
+      const result = await client.kanbanDispatch(false);
+      if (result) {
+        statusEl.textContent = t.kanban.dispatchResult
+          .replace("{spawned}", String(result.spawned))
+          .replace("{promoted}", String(result.promoted))
+          .replace("{reclaimed}", String(result.reclaimed));
+      }
+      await this.refresh();
+    } catch (error) {
+      statusEl.textContent = t.kanban.dispatchFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   /** Start polling while the tab is visible. */

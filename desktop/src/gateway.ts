@@ -201,6 +201,18 @@ export interface KanbanBoard {
   total_tasks: number;
 }
 
+export interface KanbanDispatchResult {
+  dry_run: boolean;
+  skipped_locked: number;
+  reclaimed: number;
+  promoted: number;
+  spawned: number;
+  would_spawn: number;
+  respawn_guarded: number;
+  skipped_capped: number;
+  skipped_unassigned: number;
+}
+
 export interface KanbanComment {
   id: number;
   author: string;
@@ -1329,6 +1341,14 @@ export class GatewayClient {
       body: "{}",
     });
     return Boolean(value?.task);
+  }
+
+  async kanbanDispatch(dryRun = false): Promise<KanbanDispatchResult | null> {
+    const value = await this.kanbanJson("/api/kanban/dispatch", {
+      method: "POST",
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    return (value || null) as KanbanDispatchResult | null;
   }
 
   async kanbanClaim(id: string): Promise<KanbanTask | null> {
