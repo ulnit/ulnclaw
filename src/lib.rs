@@ -99,6 +99,7 @@ pub mod config_cmd;
 pub mod context;
 pub mod cron;
 pub mod desktop;
+pub mod desktop_bridge;
 pub mod dingtalk;
 pub mod debug_cmd;
 pub mod doctor;

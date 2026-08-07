@@ -659,6 +659,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/toolsets", get(toolsets_list))
         .route("/v1/delegations", get(list_delegations_http))
         .route("/v1/delegations/:id", get(get_delegation_http))
+        .route("/api/desktop/events", get(desktop_events))
+        .route("/api/desktop/read-response", post(desktop_read_response))
         .route("/v1/browser/status", get(browser_status))
         .route("/v1/browser/connect", post(browser_connect))
         .route("/v1/browser/disconnect", post(browser_disconnect))
@@ -1388,6 +1390,10 @@ pub async fn serve_multiplex(
     host: &str,
     port: u16,
 ) -> Result<()> {
+    // Desktop UI bridge (P231): when the gateway is a desktop shell's
+    // child (ULNCLAW_DESKTOP=1), expose desktop-tool events over SSE
+    // and answer read_terminal via an HTTP round-trip.
+    crate::desktop_bridge::install();
     // Fail-closed secret resolution while multiplexing (hermes
     // `set_multiplex_active` at gateway startup): with multiplexing on,
     // any credential read outside a profile scope errors loudly instead
@@ -1846,6 +1852,69 @@ async fn get_delegation_http(
         Json(json!({"error": {"message": format!("delegation '{id}' not found"), "type": "invalid_request_error"}})),
     )
         .into_response()
+}
+
+/// `GET /api/desktop/events` — SSE stream of desktop UI bridge events
+/// (P231). Every envelope is `{session_id, event, payload}`; the webview
+/// routes `terminal.close` / `pane.reveal` / `preview.open` /
+/// `message.reaction` to its panes and answers `terminal.read` requests
+/// via `POST /api/desktop/read-response`.
+async fn desktop_events() -> axum::response::Sse<impl futures::Stream<Item = std::result::Result<axum::response::sse::Event, std::convert::Infallible>>> {
+    let rx = crate::desktop_bridge::subscribe();
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(envelope) => {
+                    let data = json!({
+                        "session_id": envelope.session_id,
+                        "event": envelope.event,
+                        "payload": envelope.payload,
+                    });
+                    let event = axum::response::sse::Event::default()
+                        .json_data(data)
+                        .ok()?;
+                    return Some((Ok(event), rx));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+    axum::response::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::new())
+}
+
+/// `POST /api/desktop/read-response` — the webview's answer to a pending
+/// `terminal.read` request (P231). Body: `{id, ok, result}`.
+async fn desktop_read_response(Json(body): Json<Value>) -> Response {
+    let Some(id) = body.get("id").and_then(|v| v.as_str()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "id is required"})),
+        )
+            .into_response();
+    };
+    let ok = body.get("ok").and_then(|v| v.as_bool()).unwrap_or(true);
+    let result = body
+        .get("result")
+        .map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_default();
+    let resolved = crate::desktop_bridge::resolve_read(
+        id,
+        if ok { Ok(result) } else { Err(result) },
+    );
+    if resolved {
+        Json(json!({"resolved": true})).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("no pending terminal read with id '{id}'")})),
+        )
+            .into_response()
+    }
 }
 
 /// `GET /v1/browser/status` — current browser CDP endpoint configuration

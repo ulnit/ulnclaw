@@ -484,6 +484,123 @@ function attachmentNote(): string {
   return lines.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Desktop UI bridge events (P231): a gateway spawned with
+// ULNCLAW_DESKTOP=1 streams desktop-tool events over /api/desktop/events.
+// Route preview.open / pane.reveal / terminal.close / message.reaction to
+// the panes and answer terminal.read requests with the visible chat
+// transcript (the webview's only terminal-like surface).
+// ---------------------------------------------------------------------------
+
+let desktopEventsController: AbortController | null = null;
+let activeSwitchView: ((view: "chat" | "kanban" | "projects" | "jobs") => void) | null = null;
+
+interface DesktopEnvelope {
+  session_id: string;
+  event: string;
+  payload: Record<string, unknown>;
+}
+
+let desktopNoticeEl: HTMLDivElement | null = null;
+let desktopNoticeTimer: number | undefined;
+
+function bridgeNotice(text: string): void {
+  if (!desktopNoticeEl) {
+    desktopNoticeEl = document.createElement("div");
+    desktopNoticeEl.id = "desktop-notice";
+    document.body.appendChild(desktopNoticeEl);
+  }
+  desktopNoticeEl.textContent = text;
+  desktopNoticeEl.hidden = false;
+  window.clearTimeout(desktopNoticeTimer);
+  desktopNoticeTimer = window.setTimeout(() => {
+    if (desktopNoticeEl) desktopNoticeEl.hidden = true;
+  }, 4000);
+}
+
+function transcriptText(): string {
+  return Array.from(el.messages.querySelectorAll(".message .bubble"))
+    .map((node) => node.textContent ?? "")
+    .join("\n");
+}
+
+function handleDesktopEvent(envelope: DesktopEnvelope): void {
+  const payload = envelope.payload ?? {};
+  const switchView = (view: "chat" | "kanban" | "projects" | "jobs") =>
+    activeSwitchView?.(view);
+  switch (envelope.event) {
+    case "preview.open": {
+      const url = String(payload.url ?? "");
+      if (url) window.open(url, "_blank");
+      bridgeNotice(`Preview: ${String(payload.label || url)}`);
+      break;
+    }
+    case "pane.reveal": {
+      const pane = String(payload.pane ?? "chat");
+      if (pane === "kanban" || pane === "projects" || pane === "jobs") {
+        switchView(pane);
+      } else {
+        switchView("chat");
+      }
+      break;
+    }
+    case "terminal.close": {
+      const running = payload.running ? " (still running)" : "";
+      bridgeNotice(`Terminal closed: ${String(payload.process_id ?? "?")}${running}`);
+      break;
+    }
+    case "message.reaction": {
+      if (state.current && envelope.session_id === state.current.id) {
+        void openSession(state.current);
+      }
+      break;
+    }
+    case "terminal.read": {
+      const id = String(payload.id ?? "");
+      if (!id || !state.client) break;
+      const lines = transcriptText().split("\n");
+      const start = Number(payload.start_line ?? 0) || 0;
+      const rawCount = payload.count;
+      const count = rawCount != null ? Number(rawCount) : Number.NaN;
+      const slice = Number.isFinite(count)
+        ? lines.slice(start, start + count)
+        : lines.slice(start);
+      const text = slice.join("\n");
+      void state.client.answerTerminalRead(
+        id,
+        text.length > 0,
+        text.length > 0 ? text : "terminal pane is empty",
+      );
+      break;
+    }
+  }
+}
+
+function startDesktopEvents(): void {
+  desktopEventsController?.abort();
+  const controller = new AbortController();
+  desktopEventsController = controller;
+  const loop = async () => {
+    for (;;) {
+      if (controller.signal.aborted) return;
+      const client = state.client;
+      if (client) {
+        try {
+          await client.desktopEvents(
+            (envelope) => handleDesktopEvent(envelope),
+            controller.signal,
+          );
+        } catch {
+          // aborted or gateway offline — fall through to the retry wait
+        }
+      }
+      if (controller.signal.aborted) return;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  };
+  void loop();
+}
+
 async function start(): Promise<void> {
   state.bridge = await loadBridge();
   state.client = new GatewayClient(state.settings);
@@ -560,6 +677,7 @@ async function start(): Promise<void> {
     saveSettings(next);
     state.settings = next;
     state.client = new GatewayClient(next);
+    startDesktopEvents();
     void pollHealth();
     void refreshSessions();
   });
@@ -610,6 +728,10 @@ async function start(): Promise<void> {
   tabKanban.onclick = () => switchView("kanban");
   tabProjects.onclick = () => switchView("projects");
   tabJobs.onclick = () => switchView("jobs");
+
+  // Desktop bridge events (P231) — see startDesktopEvents.
+  activeSwitchView = switchView;
+  startDesktopEvents();
 
   // Petdex mascot overlay (display.pet.* driven, polls the gateway).
   state.pet = new PetOverlay(() => state.client);

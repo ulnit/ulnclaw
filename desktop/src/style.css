@@ -690,3 +690,23 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 }
 .learning-node-actions button.danger { background: var(--bad); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
 .learning-node-actions button.danger:disabled { opacity: 0.5; cursor: default; }
+
+/* Desktop bridge transient notice (P231) */
+#desktop-notice {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #20304a;
+  color: #dce6f5;
+  border: 1px solid #3a4d6e;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  z-index: 60;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  max-width: 70vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

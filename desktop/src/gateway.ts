@@ -379,6 +379,62 @@ export class GatewayClient {
     return (value.messages || value || []) as MessageRow[];
   }
 
+  /**
+   * Subscribe to the desktop UI bridge event stream (P231). Fetch-based
+   * SSE reader (EventSource can't carry the bearer header). Invokes
+   * onEvent per `{session_id, event, payload}` envelope until aborted.
+   */
+  async desktopEvents(
+    onEvent: (envelope: {
+      session_id: string;
+      event: string;
+      payload: Record<string, unknown>;
+    }) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const response = await fetch(this.endpoint("/api/desktop/events"), {
+      headers: this.headers(),
+      signal,
+    });
+    if (!response.ok || !response.body) return;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const envelope = JSON.parse(payload);
+          if (!envelope || typeof envelope.event !== "string") continue;
+          if (typeof envelope.session_id !== "string") envelope.session_id = "";
+          if (!envelope.payload || typeof envelope.payload !== "object") {
+            envelope.payload = {};
+          }
+          onEvent(envelope);
+        } catch {
+          // ignore malformed frames
+        }
+      }
+    }
+  }
+
+  /** Answer a pending `terminal.read` bridge request (P231). */
+  async answerTerminalRead(id: string, ok: boolean, result: string): Promise<void> {
+    await fetch(this.endpoint("/api/desktop/read-response"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ id, ok, result }),
+    });
+  }
+
   /** Stream a chat turn over SSE; invokes onDelta per content chunk. */
   async chatStream(
     sessionId: string,

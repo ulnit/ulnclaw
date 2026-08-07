@@ -61,8 +61,13 @@ fn spawn_gateway(state: State<'_, GatewayProcess>, binary: String, port: u16) ->
     if let Some(pid) = *guard {
         return Ok(pid); // already managed
     }
+    // ULNCLAW_DESKTOP=1 registers the desktop affordance tools and arms
+    // the desktop bridge in the child gateway (P231): events stream back
+    // over /api/desktop/events and read_terminal round-trips through
+    // /api/desktop/read-response.
     let child = std::process::Command::new(&binary)
         .args(["gateway", "--port", &port.to_string()])
+        .env("ULNCLAW_DESKTOP", "1")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
