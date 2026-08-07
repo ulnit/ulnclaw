@@ -1722,6 +1722,19 @@ export class GatewayClient {
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
   }
 
+  /** GET /api/media — gateway-host image as base64 data URL (hermes
+   * `/api/media` parity; P338). Image extensions only, confined to the
+   * gateway's media roots, 25 MiB cap. */
+  async mediaDataUrl(path: string): Promise<string> {
+    const params = new URLSearchParams({ path });
+    const response = await fetch(this.endpoint(`/api/media?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `media HTTP ${response.status}`);
+    return String(value.data_url ?? "");
+  }
+
   /** GET /api/fs/read-data-url — small file as base64 data URL (P329). */
   async fsReadDataUrl(path: string): Promise<string> {
     const params = new URLSearchParams({ path });

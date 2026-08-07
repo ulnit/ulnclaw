@@ -2125,6 +2125,100 @@ async fn fs_read_data_url(Query(query): Query<FsPathQuery>) -> Response {
     Json(json!({ "dataUrl": format!("data:{};base64,{}", fs_mime_type(&target), encoded) })).into_response()
 }
 
+/// Media-serving roots for `GET /api/media` (lean hermes
+/// `_media_serve_roots` parity): where the agent and attach pipeline
+/// actually write media on the gateway host. Canonicalized so symlink
+/// escapes resolve before the containment check.
+fn media_serve_roots() -> Vec<PathBuf> {
+    let home = crate::config::ulnclaw_home();
+    ["images", "screenshots", "cache", "media-cache"]
+        .iter()
+        .filter_map(|name| home.join(name).canonicalize().ok())
+        .collect()
+}
+
+/// 25 MiB cap for `GET /api/media` (hermes `_MEDIA_MAX_BYTES`).
+const MEDIA_MAX_BYTES: u64 = 25 * 1024 * 1024;
+
+/// `GET /api/media?path=...` — serve a gateway-local image file as a
+/// base64 data URL (hermes `/api/media` parity; P338): lets remote
+/// clients display images the agent wrote to this machine. Restricted
+/// to an image-extension allowlist, the 25 MiB cap, and the gateway's
+/// own media roots — not a general file reader.
+async fn media_serve(Query(query): Query<FsPathQuery>) -> Response {
+    use base64::Engine as _;
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let mime = match target
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("bmp") => "image/bmp",
+        Some("ico") => "image/x-icon",
+        _ => {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                Json(json!({ "error": "Unsupported media type" })),
+            )
+                .into_response()
+        }
+    };
+    let roots = media_serve_roots();
+    if !roots.iter().any(|root| target.starts_with(root)) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Path outside media roots" })),
+        )
+            .into_response();
+    }
+    let meta = match std::fs::metadata(&target) {
+        Ok(meta) if meta.is_file() => meta,
+        Ok(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Not a regular file" })),
+            )
+                .into_response()
+        }
+        Err(_) => return not_found("File not found"),
+    };
+    if meta.len() > MEDIA_MAX_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": "File too large" })),
+        )
+            .into_response();
+    }
+    let data = match std::fs::read(&target) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "File is not readable" })),
+            )
+                .into_response()
+        }
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response()
+        }
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    Json(json!({ "data_url": format!("data:{mime};base64,{encoded}") })).into_response()
+}
+
 /// `GET /api/fs/download` — stream a file as an attachment download
 /// (hermes `/api/files/download` parity; auth also rides `?token=` per
 /// the middleware carve-out so shell/browser-opened downloads work).
@@ -3796,6 +3890,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/read-text", get(fs_read_text))
         .route("/api/fs/write-text", post(fs_write_text))
         .route("/api/fs/read-data-url", get(fs_read_data_url))
+        .route("/api/media", get(media_serve))
         .route("/api/fs/download", get(fs_download))
         .route("/api/fs/mkdir", post(fs_mkdir))
         .route("/api/fs/git-root", get(fs_git_root))
@@ -13373,6 +13468,71 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(status, StatusCode::OK);
         let env_text = std::fs::read_to_string(dir.path().join(".env")).unwrap_or_default();
         assert!(!env_text.contains("222:env-token"), "{env_text}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_media_serve_roots_allowlist_and_caps() {
+        // Media roots resolve under ULNCLAW_HOME — isolate like the
+        // other home-overriding tests.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let media_dir = dir.path().join("media-cache");
+        std::fs::create_dir_all(&media_dir).unwrap();
+        let png_path = media_dir.join("tiny.png");
+        std::fs::write(&png_path, b"\x89PNG-test-bytes").unwrap();
+        std::fs::write(media_dir.join("notes.txt"), b"not an image").unwrap();
+        let outside = dir.path().join("outside.png");
+        std::fs::write(&outside, b"\x89PNG-outside").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        let uri = format!("/api/media?path={}", png_path.display());
+
+        // Requires auth.
+        let (status, _) = get_json(app.clone(), &uri, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Image inside a media root -> base64 data URL.
+        let (status, body) = get_json(app.clone(), &uri, Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data_url"], "data:image/png;base64,iVBORy10ZXN0LWJ5dGVz");
+
+        // Non-image extension -> 415.
+        let txt_uri = format!("/api/media?path={}", media_dir.join("notes.txt").display());
+        let (status, _) = get_json(app.clone(), &txt_uri, Some("sekret")).await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        // Image extension outside the media roots -> 403.
+        let outside_uri = format!("/api/media?path={}", outside.display());
+        let (status, _) = get_json(app.clone(), &outside_uri, Some("sekret")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // Missing file -> 404.
+        let missing_uri = format!("/api/media?path={}", media_dir.join("missing.png").display());
+        let (status, _) = get_json(app.clone(), &missing_uri, Some("sekret")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Over the 25 MiB cap -> 413.
+        let big_path = media_dir.join("big.png");
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::File::create(&big_path).unwrap();
+            let chunk = vec![0u8; 1024 * 1024];
+            for _ in 0..25 {
+                file.write_all(&chunk).unwrap();
+            }
+            file.write_all(&[1]).unwrap();
+        }
+        let big_uri = format!("/api/media?path={}", big_path.display());
+        let (status, _) = get_json(app.clone(), &big_uri, Some("sekret")).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

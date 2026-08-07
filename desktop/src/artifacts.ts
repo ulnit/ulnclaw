@@ -259,6 +259,23 @@ export class ArtifactsOverlay {
       window.open(record.value, "_blank", "noopener");
       return;
     }
+    // Images inside the gateway's media roots are served over
+    // GET /api/media (P338) — open them directly instead of copying.
+    if (record.kind === "image" && !record.value.startsWith("data:")) {
+      const client = this.client();
+      if (client) {
+        try {
+          const dataUrl = await client.mediaDataUrl(record.value);
+          const response = await fetch(dataUrl);
+          const blob = await response.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          window.open(objectUrl, "_blank");
+          return;
+        } catch {
+          // Outside the media roots / not servable — fall back to copy.
+        }
+      }
+    }
     // Files/images live on the gateway host — copy the path for the
     // operator (no arbitrary fs access from the webview).
     try {
