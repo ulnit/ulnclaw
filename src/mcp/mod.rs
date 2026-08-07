@@ -17,6 +17,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+pub mod oauth;
 pub mod remote;
 pub mod schema_cache;
 
@@ -47,6 +48,14 @@ pub struct McpServerConfig {
     /// `mcp_servers.<name>.headers`, e.g. bearer tokens).
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// `"oauth"` = browser-based OAuth 2.1 + PKCE instead of a static
+    /// bearer header (hermes `mcp_servers.<name>.auth`).
+    #[serde(default)]
+    pub auth: Option<String>,
+    /// OAuth settings when `auth = "oauth"` (all optional; hermes
+    /// `mcp_servers.<name>.oauth`).
+    #[serde(default)]
+    pub oauth: oauth::McpOAuthConfig,
     /// Lazy startup (hermes `mcp_servers.<name>.lazy`): when a matching
     /// schema-cache entry exists, register the tools WITHOUT spawning the
     /// server; the child is started on first tool call.
@@ -241,9 +250,47 @@ impl AnyMcpClient {
 /// Connect one server using the transport its config selects.
 async fn connect_any(config: &McpServerConfig) -> Result<AnyMcpClient> {
     if let Some(url) = &config.url {
-        let client =
-            remote::RemoteMcpClient::connect(url, config.transport.as_deref(), &config.headers)
-                .await?;
+        let mut bearer: Option<String> = None;
+        let mut reauth: Option<remote::ReauthFn> = None;
+        if config.auth.as_deref() == Some("oauth") {
+            // OAuth 2.1 + PKCE (hermes mcp_oauth.py): initial token now,
+            // recovery hook on 401. Full flows need a human; unattended
+            // contexts (cron) fail fast unless cached/refreshable tokens
+            // suffice.
+            let home = crate::config::ulnclaw_home();
+            let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin())
+                && !crate::agent::is_cron_context();
+            bearer = Some(
+                oauth::get_access_token(&home, &config.name, url, &config.oauth, interactive)
+                    .await?,
+            );
+            let hook_home = home.clone();
+            let hook_name = config.name.clone();
+            let hook_url = url.clone();
+            let hook_cfg = config.oauth.clone();
+            // Per-server mutex dedupes concurrent 401 recoveries (hermes
+            // MCPOAuthManager in-flight futures).
+            let inflight = Arc::new(tokio::sync::Mutex::new(()));
+            reauth = Some(Arc::new(move || {
+                let home = hook_home.clone();
+                let name = hook_name.clone();
+                let url = hook_url.clone();
+                let cfg = hook_cfg.clone();
+                let inflight = inflight.clone();
+                Box::pin(async move {
+                    let _guard = inflight.lock().await;
+                    oauth::recover_token(&home, &name, &url, &cfg, interactive).await
+                })
+            }));
+        }
+        let client = remote::RemoteMcpClient::connect(
+            url,
+            config.transport.as_deref(),
+            &config.headers,
+            bearer,
+            reauth,
+        )
+        .await?;
         return Ok(AnyMcpClient::Remote(client));
     }
     // OSV malware preflight for npx/uvx-launched servers (hermes
@@ -662,6 +709,8 @@ while True:
             url: None,
             transport: None,
             headers: HashMap::new(),
+            auth: None,
+            oauth: oauth::McpOAuthConfig::default(),
             lazy,
         }
     }
@@ -719,6 +768,8 @@ while True:
             url: None,
             transport: None,
             headers: HashMap::new(),
+            auth: None,
+            oauth: oauth::McpOAuthConfig::default(),
             lazy: true,
         };
         let prev = std::env::var("ULNCLAW_HOME").ok();

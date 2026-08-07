@@ -27,6 +27,14 @@ const REQUEST_TIMEOUT_SECS: u64 = 30;
 
 type PendingMap = HashMap<u64, oneshot::Sender<Result<Value>>>;
 
+/// 401 recovery hook: returns a fresh bearer token (hermes
+/// `MCPOAuthManager.handle_401` wiring point).
+pub type ReauthFn = std::sync::Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// A running remote MCP connection (Streamable HTTP or SSE).
 pub struct RemoteMcpClient {
     http: reqwest::Client,
@@ -40,6 +48,10 @@ pub struct RemoteMcpClient {
     /// SSE stream reader (SSE transport only).
     reader_handle: Option<JoinHandle<()>>,
     transport: Transport,
+    /// Current OAuth bearer token (when `auth = oauth`).
+    bearer: Arc<Mutex<Option<String>>>,
+    /// One-shot-per-request 401 recovery hook.
+    reauth: Arc<Mutex<Option<ReauthFn>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +119,8 @@ impl RemoteMcpClient {
         url: &str,
         transport: Option<&str>,
         headers: &HashMap<String, String>,
+        bearer: Option<String>,
+        reauth: Option<ReauthFn>,
     ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
@@ -122,6 +136,8 @@ impl RemoteMcpClient {
             pending: Arc::new(Mutex::new(HashMap::new())),
             reader_handle: None,
             transport: if is_sse { Transport::Sse } else { Transport::StreamableHttp },
+            bearer: Arc::new(Mutex::new(bearer)),
+            reauth: Arc::new(Mutex::new(reauth)),
         };
 
         let init = json!({
@@ -145,6 +161,9 @@ impl RemoteMcpClient {
             .http
             .get(url)
             .header("Accept", "text/event-stream");
+        if let Some(token) = self.bearer.lock().await.clone() {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
         for (key, value) in &self.headers {
             request = request.header(key, value);
         }
@@ -268,6 +287,9 @@ impl RemoteMcpClient {
     async fn post_message(&self, body: &Value) -> Result<()> {
         let endpoint = self.endpoint.lock().await.clone();
         let mut request = self.http.post(&endpoint).json(body);
+        if let Some(token) = self.bearer.lock().await.clone() {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
         for (key, value) in &self.headers {
             request = request.header(key, value);
         }
@@ -285,6 +307,58 @@ impl RemoteMcpClient {
         Ok(())
     }
 
+    /// POST with bearer auth + one 401 recovery retry (hermes
+    /// `handle_401`: refresh/re-auth once, then replay the request).
+    async fn post_with_auth(
+        &self,
+        endpoint: &str,
+        body: &Value,
+    ) -> Result<reqwest::Response> {
+        let send = |bearer: Option<String>| {
+            let mut request = self
+                .http
+                .post(endpoint)
+                .header("Accept", "application/json, text/event-stream")
+                .json(body);
+            if let Some(token) = bearer {
+                request = request.header("Authorization", format!("Bearer {}", token));
+            }
+            request
+        };
+        let mut request = send(self.bearer.lock().await.clone());
+        if let Some(session_id) = self.session_id.lock().await.clone() {
+            request = request.header("Mcp-Session-Id", session_id);
+        }
+        for (key, value) in &self.headers {
+            request = request.header(key, value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| AgentError::Tool(format!("MCP POST {}: {}", endpoint, e)))?;
+        if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
+        // 401 — ask the recovery hook for a fresh token, retry once.
+        let hook = self.reauth.lock().await.clone();
+        let Some(hook) = hook else {
+            return Ok(response);
+        };
+        let fresh = hook().await?;
+        *self.bearer.lock().await = Some(fresh.clone());
+        let mut request = send(Some(fresh));
+        if let Some(session_id) = self.session_id.lock().await.clone() {
+            request = request.header("Mcp-Session-Id", session_id);
+        }
+        for (key, value) in &self.headers {
+            request = request.header(key, value);
+        }
+        request
+            .send()
+            .await
+            .map_err(|e| AgentError::Tool(format!("MCP POST {}: {}", endpoint, e)))
+    }
+
     /// Streamable HTTP POST: parse a plain-JSON or SSE response body.
     /// `expect_id` = Some for requests (returns the matching reply), None
     /// for notifications (status check only).
@@ -297,21 +371,7 @@ impl RemoteMcpClient {
         T: serde::de::DeserializeOwned + Default,
     {
         let endpoint = self.endpoint.lock().await.clone();
-        let mut request = self
-            .http
-            .post(&endpoint)
-            .header("Accept", "application/json, text/event-stream")
-            .json(body);
-        if let Some(session_id) = self.session_id.lock().await.clone() {
-            request = request.header("Mcp-Session-Id", session_id);
-        }
-        for (key, value) in &self.headers {
-            request = request.header(key, value);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| AgentError::Tool(format!("MCP POST {}: {}", endpoint, e)))?;
+        let response = self.post_with_auth(&endpoint, body).await?;
 
         if let Some(session_header) = response.headers().get("mcp-session-id") {
             if let Ok(value) = session_header.to_str() {
@@ -477,7 +537,7 @@ mod tests {
         });
 
         let url = format!("http://127.0.0.1:{}/mcp", port);
-        let client = RemoteMcpClient::connect(&url, None, &HashMap::new())
+        let client = RemoteMcpClient::connect(&url, None, &HashMap::new(), None, None)
             .await
             .expect("streamable connect");
         assert_eq!(
@@ -569,7 +629,7 @@ mod tests {
         });
 
         let url = format!("http://127.0.0.1:{}/sse", port);
-        let client = RemoteMcpClient::connect(&url, Some("sse"), &HashMap::new())
+        let client = RemoteMcpClient::connect(&url, Some("sse"), &HashMap::new(), None, None)
             .await
             .expect("sse connect");
         let tools = client.list_tools().await.unwrap();
@@ -580,6 +640,67 @@ mod tests {
             result.pointer("/content/0/text").and_then(|v| v.as_str()),
             Some("sse-pong")
         );
+    }
+
+    /// A stale bearer gets one 401, the reauth hook supplies a fresh
+    /// token, and the retried request succeeds (hermes handle_401).
+    #[tokio::test]
+    async fn unauthorized_triggers_reauth_retry() {
+        use axum::extract::Json;
+        use axum::http::{HeaderMap, StatusCode};
+        use axum::routing::post;
+        use axum::Router;
+        use serde_json::json;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        static REAUTH_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        async fn rpc(headers: HeaderMap, Json(req): Json<Value>) -> (StatusCode, Json<Value>) {
+            let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
+            let Some(id) = req.get("id").cloned() else {
+                return (StatusCode::ACCEPTED, Json(Value::Null));
+            };
+            let auth = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if auth != "Bearer fresh-token" {
+                return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"})));
+            }
+            let result = match method {
+                "initialize" => json!({"serverInfo": {"name": "secure"}, "protocolVersion": "2025-03-26"}),
+                "tools/list" => json!({"tools": []}),
+                _ => json!({}),
+            };
+            (StatusCode::OK, Json(json!({"jsonrpc": "2.0", "id": id, "result": result})))
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/mcp", post(rpc))).await.ok();
+        });
+
+        let reauth: ReauthFn = Arc::new(|| {
+            Box::pin(async move {
+                REAUTH_CALLS.fetch_add(1, Ordering::SeqCst);
+                Ok("fresh-token".to_string())
+            })
+        });
+        let url = format!("http://127.0.0.1:{}/mcp", port);
+        // connect() itself runs initialize — which 401s and recovers.
+        let client = RemoteMcpClient::connect(
+            &url,
+            None,
+            &HashMap::new(),
+            Some("stale-token".into()),
+            Some(reauth),
+        )
+        .await
+        .expect("connect recovers from 401");
+        assert!(client.list_tools().await.unwrap().is_empty());
+        assert!(REAUTH_CALLS.load(Ordering::SeqCst) >= 1);
     }
 
     #[test]

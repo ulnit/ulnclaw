@@ -202,6 +202,8 @@ mod tests {
             url: None,
             transport: None,
             headers: HashMap::new(),
+            auth: None,
+            oauth: crate::mcp::oauth::McpOAuthConfig::default(),
             lazy: false,
         }
     }

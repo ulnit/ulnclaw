@@ -527,6 +527,8 @@ mod tests {
             url: None,
             transport: None,
             headers: Default::default(),
+            auth: None,
+            oauth: Default::default(),
             lazy: false,
         });
         config.mcp.servers.push(crate::mcp::McpServerConfig {
@@ -537,6 +539,8 @@ mod tests {
             url: None,
             transport: None,
             headers: Default::default(),
+            auth: None,
+            oauth: Default::default(),
             lazy: false,
         });
         let components = discover_mcp_components(&config);

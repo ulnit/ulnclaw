@@ -217,6 +217,8 @@ where
             url: None,
             transport: None,
             headers: HashMap::new(),
+            auth: None,
+            oauth: crate::mcp::oauth::McpOAuthConfig::default(),
             lazy: false,
         };
         let mut client = McpClient::connect(&server_cfg).await.map_err(|e| {
@@ -1265,6 +1267,8 @@ pub async fn health_report(cfg: &ComputerUseConfig) -> Result<Value> {
         url: None,
         transport: None,
         headers: HashMap::new(),
+        auth: None,
+        oauth: crate::mcp::oauth::McpOAuthConfig::default(),
         lazy: false,
     };
     let mut client = McpClient::connect(&server_cfg)
