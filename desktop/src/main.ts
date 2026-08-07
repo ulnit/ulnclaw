@@ -14,6 +14,8 @@ import { FindBar } from "./find-bar";
 import { CommandPalette } from "./command-palette";
 import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
+import { notifyError, notifySuccess } from "./notifications";
+import { hideConnecting, showConnecting } from "./connecting";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -138,8 +140,9 @@ async function renameSession(session: SessionRow): Promise<void> {
       el.chatTitle.textContent = session.title;
     }
     renderSessions();
+    notifySuccess("Session renamed.");
   } catch (error) {
-    window.alert(`Rename failed: ${error}`);
+    notifyError(`Rename failed: ${error}`);
   }
 }
 
@@ -157,7 +160,7 @@ async function deleteSession(session: SessionRow): Promise<void> {
     }
     renderSessions();
   } catch (error) {
-    window.alert(`Delete failed: ${error}`);
+    notifyError(`Delete failed: ${error}`);
   }
 }
 
@@ -616,9 +619,33 @@ async function start(): Promise<void> {
         await new Promise((resolve) => setTimeout(resolve, 1500));
       } catch (error) {
         console.warn("gateway spawn failed:", error);
+        notifyError(`Gateway spawn failed: ${error}`);
       }
     }
   }
+
+  // Cold-boot connecting overlay (hermes gateway-connecting-overlay
+  // parity): show while the gateway is unreachable, poll until healthy,
+  // then run the exit choreography. Never resurrects after first success.
+  void (async () => {
+    if (await state.client!.health()) {
+      hideConnecting();
+      return;
+    }
+    showConnecting();
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (await state.client!.health()) {
+        hideConnecting();
+        return;
+      }
+    }
+    hideConnecting();
+    notifyError(
+      "Gateway unreachable — check the gateway URL and API key in Settings.",
+      "The desktop shell polls /health once the gateway is up; managed mode spawns it automatically when the ulnclaw binary is on PATH."
+    );
+  })();
 
   el.newSession.onclick = async () => {
     state.current = null;
