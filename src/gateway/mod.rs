@@ -789,6 +789,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         )
         .route("/api/sessions/:id/fork", post(fork_session))
         .route("/api/sessions/:id/messages", get(session_messages))
+        .route("/api/sessions/:id/export", get(export_session))
         .route("/api/sessions/:id/chat", post(session_chat))
         .route("/api/sessions/:id/chat/stream", post(session_chat_stream))
         .route("/api/sessions/:id/model", post(lock_session_model))
@@ -3294,6 +3295,60 @@ async fn session_messages(
         Ok(messages) => Json(json!({"object": "list", "session_id": id, "data": messages})).into_response(),
         Err(e) => server_error(&e.to_string()),
     }
+}
+
+/// Query parameters for `GET /api/sessions/:id/export`.
+#[derive(Debug, Deserialize)]
+struct ExportQuery {
+    /// `md` (default) or `html`.
+    format: Option<String>,
+}
+
+/// `GET /api/sessions/:id/export?format=md|html` — download the session
+/// transcript as a Markdown or standalone HTML file (desktop session
+/// export actions; ulnclaw extension).
+async fn export_session(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Query(query): Query<ExportQuery>,
+) -> Response {
+    let row = match state.store.get_session_row(&id) {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(&format!("session {} not found", id)),
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let messages = match state.store.load_messages_with_timestamps(&id) {
+        Ok(messages) => messages,
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let stem = crate::session_export::export_stem(&row);
+    let html = matches!(query.format.as_deref(), Some("html"));
+    let (mime, extension, body) = if html {
+        (
+            "text/html; charset=utf-8",
+            "html",
+            crate::session_export::render_html(&row, &messages),
+        )
+    } else {
+        (
+            "text/markdown; charset=utf-8",
+            "md",
+            crate::session_export::render_markdown(&row, &messages),
+        )
+    };
+    let filename = format!("ulnclaw-session-{stem}.{extension}");
+    (
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, mime.to_string()),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// `POST /api/uploads` — store a binary upload (desktop composer pastes
@@ -7799,6 +7854,75 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_session_export_markdown_and_html() {
+        use crate::provider::{Message, Role};
+        let state = test_state();
+        let app = router(state.clone());
+        let id = state
+            .store
+            .create_session("gateway", Some("test-model"), None)
+            .unwrap();
+        state
+            .store
+            .append_message(
+                &id,
+                &Message {
+                    role: Role::User,
+                    content: Some("hello <world>".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+
+        // Markdown by default, with attachment headers.
+        let request = axum::http::Request::builder()
+            .uri(&format!("/api/sessions/{id}/export"))
+            .header("authorization", "Bearer sekret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(disposition.starts_with("attachment; filename=\"ulnclaw-session-"), "{disposition}");
+        assert!(disposition.ends_with(".md\""), "{disposition}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body.starts_with("# Session "));
+        assert!(body.contains("hello <world>"));
+
+        // HTML variant escapes content.
+        let (status, _) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{id}/export?format=html"),
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let request = axum::http::Request::builder()
+            .uri(&format!("/api/sessions/{id}/export?format=html"))
+            .header("authorization", "Bearer sekret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body.contains("hello &lt;world&gt;"));
+        assert!(body.contains("<!doctype html>"));
+
+        // Unknown session → 404.
+        let (status, _) = get_json(app, "/api/sessions/ghost/export", Some("sekret")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     // ------------------------------------------------------------------

@@ -28,6 +28,7 @@ export interface CommandPaletteHooks {
   learning(): void | Promise<void>;
   findInChat(): void;
   switchView(view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor"): void;
+  exportSession(format: "md" | "html"): Promise<void>;
   openSettings(): void;
   refreshSessions(): void | Promise<void>;
 }
@@ -129,6 +130,8 @@ export class CommandPalette {
       { id: "resume", label: t.palette.resumeSession, group: t.palette.sessionGroup, hint: "/resume", run: () => hooks.resumeSession() },
       { id: "rename", label: t.palette.renameSession, group: t.palette.sessionGroup, run: () => hooks.renameSession() },
       { id: "delete", label: t.palette.deleteSession, group: t.palette.sessionGroup, run: () => hooks.deleteSession() },
+      { id: "export-md", label: t.palette.exportMd, group: t.palette.sessionGroup, run: () => hooks.exportSession("md") },
+      { id: "export-html", label: t.palette.exportHtml, group: t.palette.sessionGroup, run: () => hooks.exportSession("html") },
       { id: "refresh", label: t.palette.refreshSessions, group: t.palette.gatewayGroup, run: () => hooks.refreshSessions() },
       { id: "settings", label: t.palette.openSettings, group: t.palette.gatewayGroup, hint: "Ctrl/Cmd+,", run: () => hooks.openSettings() },
     ];

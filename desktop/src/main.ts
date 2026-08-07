@@ -128,6 +128,14 @@ function renderSessions(): void {
       event.stopPropagation();
       void renameSession(session);
     };
+    const exportBtn = document.createElement("button");
+    exportBtn.className = "icon";
+    exportBtn.title = t.palette.exportMd;
+    exportBtn.textContent = "⭳";
+    exportBtn.onclick = (event) => {
+      event.stopPropagation();
+      void exportSession(session, "md");
+    };
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "icon danger";
     deleteBtn.title = t.palette.deleteSession;
@@ -136,7 +144,7 @@ function renderSessions(): void {
       event.stopPropagation();
       void deleteSession(session);
     };
-    actions.append(renameBtn, deleteBtn);
+    actions.append(renameBtn, exportBtn, deleteBtn);
     item.appendChild(actions);
     item.onclick = () => openSession(session);
     el.sessionList.appendChild(item);
@@ -159,6 +167,24 @@ async function renameSession(session: SessionRow): Promise<void> {
     notifySuccess(t.session.renamed);
   } catch (error) {
     notifyError(fmt(t.session.renameFailed, { error }));
+  }
+}
+
+async function exportSession(session: SessionRow, format: "md" | "html"): Promise<void> {
+  if (!state.client) return;
+  try {
+    const { blob, filename } = await state.client.exportSession(session.id, format);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    notifySuccess(fmt(t.session.exported, { filename }));
+  } catch (error) {
+    notifyError(fmt(t.session.exportFailed, { error }));
   }
 }
 
@@ -1034,6 +1060,9 @@ async function start(): Promise<void> {
     },
     deleteSession: async () => {
       if (state.current) await deleteSession(state.current);
+    },
+    exportSession: async (format) => {
+      if (state.current) await exportSession(state.current, format);
     },
     modelPicker: () => state.picker?.open() ?? Promise.resolve(),
     resumeSession: () => state.sessionPicker?.open() ?? Promise.resolve(),

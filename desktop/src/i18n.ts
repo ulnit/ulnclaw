@@ -64,7 +64,7 @@ export interface Translations {
   };
   session: {
     titlePrompt: string; renamed: string; renameFailed: string; deleteConfirm: string;
-    deleteFailed: string; newTitle: string; loadFailed: string; createFailed: string;
+    deleteFailed: string; exported: string; exportFailed: string; newTitle: string; loadFailed: string; createFailed: string;
     errorPrefix: string; modelLockTitle: string; gatewayModelTitle: string;
     reachable: string; unreachable: string; removeAttachment: string; uploadFailed: string; projectBadge: string;
   };
@@ -147,7 +147,7 @@ export interface Translations {
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
     goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
-    deleteSession: string; browseArtifacts: string; learningGraph: string;
+    deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
     hintFreshChat: string; hintArtifacts: string; hintLearning: string; switchTo: string;
   };
@@ -193,7 +193,9 @@ const en: Translations = {
     titlePrompt: "Session title:", renamed: "Session renamed.",
     renameFailed: "Rename failed: {error}",
     deleteConfirm: "Delete session \"{label}\" and its transcript?",
-    deleteFailed: "Delete failed: {error}", newTitle: "New session",
+    deleteFailed: "Delete failed: {error}",
+    exported: "Exported {filename}", exportFailed: "Export failed: {error}",
+    newTitle: "New session",
     loadFailed: "Could not load messages: {error}",
     createFailed: "Could not create a session: {error}",
     errorPrefix: "error: {error}",
@@ -351,6 +353,7 @@ const en: Translations = {
     findInChat: "Find in chat", modelForSession: "Model for this session…",
     resumeSession: "Resume session… (/resume)",
     renameSession: "Rename session…", deleteSession: "Delete session…",
+    exportMd: "Export session (Markdown)", exportHtml: "Export session (HTML)",
     browseArtifacts: "Browse artifacts…", learningGraph: "Learning graph…",
     openSettings: "Open gateway settings…", refreshSessions: "Refresh session list",
     hintFreshChat: "start a fresh chat", hintArtifacts: "links, files, images",
@@ -424,7 +427,9 @@ const zh: Translations = {
     titlePrompt: "会话标题：", renamed: "会话已重命名。",
     renameFailed: "重命名失败：{error}",
     deleteConfirm: "删除会话「{label}」及其对话记录？",
-    deleteFailed: "删除失败：{error}", newTitle: "新会话",
+    deleteFailed: "删除失败：{error}",
+    exported: "已导出 {filename}", exportFailed: "导出失败：{error}",
+    newTitle: "新会话",
     loadFailed: "无法加载消息：{error}",
     createFailed: "无法创建会话：{error}",
     errorPrefix: "错误：{error}",
@@ -582,6 +587,7 @@ const zh: Translations = {
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
     resumeSession: "恢复会话…（/resume）",
     renameSession: "重命名会话…", deleteSession: "删除会话…",
+    exportMd: "导出会话（Markdown）", exportHtml: "导出会话（HTML）",
     browseArtifacts: "浏览工件…", learningGraph: "学习图谱…",
     openSettings: "打开网关设置…", refreshSessions: "刷新会话列表",
     hintFreshChat: "开始全新聊天", hintArtifacts: "链接、文件、图片",
@@ -655,7 +661,9 @@ const zhHant: Translations = {
     titlePrompt: "工作階段標題：", renamed: "已重新命名工作階段。",
     renameFailed: "重新命名失敗：{error}",
     deleteConfirm: "刪除工作階段「{label}」及其對話紀錄？",
-    deleteFailed: "刪除失敗：{error}", newTitle: "新工作階段",
+    deleteFailed: "刪除失敗：{error}",
+    exported: "已匯出 {filename}", exportFailed: "匯出失敗：{error}",
+    newTitle: "新工作階段",
     loadFailed: "無法載入訊息：{error}",
     createFailed: "無法建立工作階段：{error}",
     errorPrefix: "錯誤：{error}",
@@ -813,6 +821,7 @@ const zhHant: Translations = {
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
     resumeSession: "恢復工作階段…（/resume）",
     renameSession: "重新命名工作階段…", deleteSession: "刪除工作階段…",
+    exportMd: "匯出工作階段（Markdown）", exportHtml: "匯出工作階段（HTML）",
     browseArtifacts: "瀏覽工件…", learningGraph: "學習圖譜…",
     openSettings: "開啟閘道設定…", refreshSessions: "重新整理工作階段清單",
     hintFreshChat: "開始全新聊天", hintArtifacts: "連結、檔案、圖片",
@@ -886,7 +895,9 @@ const ja: Translations = {
     titlePrompt: "セッションタイトル：", renamed: "セッション名を変更しました。",
     renameFailed: "名前の変更に失敗：{error}",
     deleteConfirm: "セッション「{label}」とその会話を削除しますか？",
-    deleteFailed: "削除に失敗：{error}", newTitle: "新規セッション",
+    deleteFailed: "削除に失敗：{error}",
+    exported: "{filename} をエクスポートしました", exportFailed: "エクスポートに失敗：{error}",
+    newTitle: "新規セッション",
     loadFailed: "メッセージを読み込めません：{error}",
     createFailed: "セッションを作成できません：{error}",
     errorPrefix: "エラー：{error}",
@@ -1044,6 +1055,7 @@ const ja: Translations = {
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
     resumeSession: "セッションを再開…（/resume）",
     renameSession: "セッション名を変更…", deleteSession: "セッションを削除…",
+    exportMd: "セッションをエクスポート（Markdown）", exportHtml: "セッションをエクスポート（HTML）",
     browseArtifacts: "成果物を閲覧…", learningGraph: "学習グラフ…",
     openSettings: "ゲートウェイ設定を開く…", refreshSessions: "セッション一覧を更新",
     hintFreshChat: "新しいチャットを開始", hintArtifacts: "リンク、ファイル、画像",
@@ -1117,7 +1129,9 @@ const ar: Translations = {
     titlePrompt: "عنوان الجلسة:", renamed: "أُعيدت تسمية الجلسة.",
     renameFailed: "فشلت إعادة التسمية: {error}",
     deleteConfirm: "حذف الجلسة «{label}» وسجل محادثتها؟",
-    deleteFailed: "فشل الحذف: {error}", newTitle: "جلسة جديدة",
+    deleteFailed: "فشل الحذف: {error}",
+    exported: "تم تصدير {filename}", exportFailed: "فشل التصدير: {error}",
+    newTitle: "جلسة جديدة",
     loadFailed: "تعذّر تحميل الرسائل: {error}",
     createFailed: "تعذّر إنشاء الجلسة: {error}",
     errorPrefix: "خطأ: {error}",
@@ -1275,6 +1289,7 @@ const ar: Translations = {
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
     resumeSession: "استئناف جلسة… (/resume)",
     renameSession: "إعادة تسمية الجلسة…", deleteSession: "حذف الجلسة…",
+    exportMd: "تصدير الجلسة (Markdown)", exportHtml: "تصدير الجلسة (HTML)",
     browseArtifacts: "تصفح المخرجات…", learningGraph: "رسم التعلم…",
     openSettings: "فتح إعدادات البوابة…", refreshSessions: "تحديث قائمة الجلسات",
     hintFreshChat: "بدء دردشة جديدة", hintArtifacts: "روابط وملفات وصور",

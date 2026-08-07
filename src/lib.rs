@@ -185,6 +185,7 @@ pub mod model_cmd;
 pub mod setup_cmd;
 pub mod security_audit;
 pub mod session;
+pub mod session_export;
 pub mod skin;
 pub mod skill_usage;
 pub mod skills;

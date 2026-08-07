@@ -632,6 +632,23 @@ export class GatewayClient {
     return (await response.json()) as UsagePayload;
   }
 
+  /** GET /api/sessions/:id/export — download the transcript as md/html. */
+  async exportSession(
+    sessionId: string,
+    format: "md" | "html",
+  ): Promise<{ blob: Blob; filename: string }> {
+    const qs = format === "html" ? "?format=html" : "";
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/export${qs}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`export HTTP ${response.status}`);
+    const disposition = response.headers.get("content-disposition") || "";
+    const match = /filename="?([^";]+)"?/.exec(disposition);
+    const filename =
+      match?.[1] || `ulnclaw-session-${sessionId.slice(0, 8)}.${format}`;
+    return { blob: await response.blob(), filename };
+  }
+
   /** GET /api/doctor — run the doctor report, optionally with online probes. */
   async doctor(online = false): Promise<DoctorPayload> {
     const qs = online ? "?online=true" : "";
