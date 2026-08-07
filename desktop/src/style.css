@@ -1331,6 +1331,15 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .run-approval-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .run-approval-resolved { margin-top: 6px; font-size: 12px; opacity: 0.6; }
 .run-timeline { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+#mic.recording {
+  border-color: var(--bad);
+  color: var(--bad);
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 .run-timeline-chip {
   font-size: 11px;
   padding: 1px 7px;

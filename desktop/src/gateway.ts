@@ -1493,6 +1493,21 @@ export class GatewayClient {
     if (!response.ok) throw new Error(value.error || `env delete HTTP ${response.status}`);
   }
 
+  /** POST /api/audio/transcribe — voice-note transcription (P327). */
+  async audioTranscribe(
+    dataUrl: string,
+    mimeType: string,
+  ): Promise<{ ok: boolean; transcript: string; provider: string }> {
+    const response = await fetch(this.endpoint("/api/audio/transcribe"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ data_url: dataUrl, mime_type: mimeType }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `transcribe HTTP ${response.status}`);
+    return value as { ok: boolean; transcript: string; provider: string };
+  }
+
   /** GET /api/update/check — non-applying update check (P324). */
   async updateCheck(): Promise<UpdateCheckResult> {
     const response = await fetch(this.endpoint("/api/update/check"), { headers: this.headers() });

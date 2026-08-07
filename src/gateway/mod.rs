@@ -900,6 +900,126 @@ async fn doctor_report(
     .into_response()
 }
 
+#[derive(Debug, Deserialize)]
+struct AudioTranscribeRequest {
+    data_url: String,
+    #[serde(default)]
+    mime_type: Option<String>,
+}
+
+/// Voice-upload cap (hermes `_MAX_TRANSCRIPTION_UPLOAD_BYTES`).
+const MAX_TRANSCRIPTION_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+
+fn audio_extension_for_mime(mime: &str) -> &'static str {
+    match mime {
+        "audio/webm" | "video/webm" => ".webm",
+        "audio/ogg" => ".ogg",
+        "audio/wav" | "audio/x-wav" | "audio/wave" => ".wav",
+        "audio/mpeg" | "audio/mp3" => ".mp3",
+        "audio/mp4" | "audio/m4a" | "audio/x-m4a" => ".m4a",
+        "audio/flac" => ".flac",
+        _ => ".webm",
+    }
+}
+
+/// `POST /api/audio/transcribe` — voice-note transcription over the
+/// configured STT provider (hermes `/api/audio/transcribe` parity):
+/// base64 `data:` URL in, transcript out.
+async fn audio_transcribe(
+    State(state): State<Arc<GatewayState>>,
+    Json(request): Json<AudioTranscribeRequest>,
+) -> Response {
+    use base64::Engine as _;
+    let data_url = request.data_url.trim();
+    if !data_url.starts_with("data:") {
+        return bad_request("Invalid audio payload", None);
+    }
+    let Some((header, encoded)) = data_url.split_once(',') else {
+        return bad_request("Invalid audio payload", None);
+    };
+    if !header.contains(";base64") {
+        return bad_request("Audio payload must be base64 encoded", None);
+    }
+    let mime = request
+        .mime_type
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            header
+                .trim_start_matches("data:")
+                .split(';')
+                .next()
+                .unwrap_or("audio/webm")
+                .to_string()
+        });
+    let mime = mime
+        .split(';')
+        .next()
+        .unwrap_or("audio/webm")
+        .trim()
+        .to_lowercase();
+    if !(mime.starts_with("audio/") || mime == "video/webm") {
+        return bad_request("Payload must be an audio recording", None);
+    }
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded.trim()) {
+        Ok(bytes) => bytes,
+        Err(_) => return bad_request("Audio payload is not valid base64", None),
+    };
+    if bytes.is_empty() {
+        return bad_request("Audio recording is empty", None);
+    }
+    if bytes.len() > MAX_TRANSCRIPTION_UPLOAD_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": "Audio recording is too large" })),
+        )
+            .into_response();
+    }
+    let stt = state.agent.context().config.stt.clone();
+    if let Err(err) = crate::stt::provider_readiness(&stt) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": err })),
+        )
+            .into_response();
+    }
+    let extension = audio_extension_for_mime(&mime);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let path = std::env::temp_dir().join(format!("ulnclaw-desktop-voice-{stamp}{extension}"));
+    if let Err(err) = tokio::fs::write(&path, &bytes).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to stage audio: {err}") })),
+        )
+            .into_response();
+    }
+    let outcome = crate::stt::transcribe_audio(&stt, &path).await;
+    std::fs::remove_file(&path).ok();
+    if outcome.success {
+        Json(json!({
+            "ok": true,
+            "transcript": outcome.transcript,
+            "provider": outcome.provider,
+        }))
+        .into_response()
+    } else {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "ok": false,
+                "provider": outcome.provider,
+                "error": outcome
+                    .error
+                    .unwrap_or_else(|| "transcription failed".to_string()),
+            })),
+        )
+            .into_response()
+    }
+}
+
 /// `GET /api/update/check` — non-applying update check (hermes
 /// `/api/hermes/update/check` parity): fetches upstream and reports how far
 /// behind the install is without changing anything.
@@ -2259,6 +2379,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/model", post(lock_session_model))
         .route("/api/sessions/:id/recap", get(session_recap))
         .route("/api/uploads", post(upload_media))
+        .route("/api/audio/transcribe", post(audio_transcribe))
         .route("/api/learning/graph", get(learning_graph))
         .route(
             "/api/learning/node",
@@ -10917,6 +11038,66 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_audio_transcribe_endpoint_validation() {
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = post_json(app.clone(), "/api/audio/transcribe", "{}", "").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Non-data-URL payload is rejected.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/audio/transcribe",
+            r#"{"data_url": "not-a-data-url"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Non-base64 data URL is rejected.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/audio/transcribe",
+            r#"{"data_url": "data:audio/webm,plain"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Non-audio mime is rejected.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/audio/transcribe",
+            r#"{"data_url": "data:text/plain;base64,aGVsbG8="}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Valid base64 audio but empty decoding is rejected.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/audio/transcribe",
+            r#"{"data_url": "data:audio/webm;base64,"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Well-formed audio reaches provider readiness; the test state has
+        // no STT provider configured, so the endpoint reports 503.
+        let (status, _) = post_json(
+            app,
+            "/api/audio/transcribe",
+            r#"{"data_url": "data:audio/webm;base64,aGVsbG8="}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

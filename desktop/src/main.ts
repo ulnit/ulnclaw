@@ -101,6 +101,7 @@ const el = {
   modelBadge: document.getElementById("model-badge")!,
   input: document.getElementById("input") as HTMLTextAreaElement,
   send: document.getElementById("send") as HTMLButtonElement,
+  mic: document.getElementById("mic") as HTMLButtonElement,
   toolProgress: document.getElementById("tool-progress")!,
   slashPop: document.getElementById("slash-pop")!,
   attachChips: document.getElementById("attach-chips")!,
@@ -262,6 +263,67 @@ async function refreshSessions(): Promise<void> {
     renderSessions();
   } catch {
     /* gateway offline — dot already reflects it */
+  }
+}
+
+// Voice input (P327, hermes desktop voice parity): MediaRecorder capture
+// -> POST /api/audio/transcribe -> transcript appended to the composer.
+let mediaRecorder: MediaRecorder | null = null;
+let mediaChunks: Blob[] = [];
+
+function setMicState(recording: boolean): void {
+  el.mic.classList.toggle("recording", recording);
+  el.mic.title = recording ? t.chrome.micRecording : t.chrome.micTitle;
+}
+
+async function toggleMic(): Promise<void> {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.stop();
+    return;
+  }
+  if (!state.client) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaChunks = [];
+    const recorder = new MediaRecorder(stream);
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size > 0) mediaChunks.push(event.data);
+    });
+    recorder.addEventListener("stop", () => {
+      stream.getTracks().forEach((track) => track.stop());
+      setMicState(false);
+      void transcribeRecording(recorder.mimeType);
+    });
+    recorder.start();
+    mediaRecorder = recorder;
+    setMicState(true);
+  } catch (error) {
+    setMicState(false);
+    notifyError(fmt(t.chrome.micFailed, { error: String(error) }));
+  }
+}
+
+async function transcribeRecording(mimeType: string): Promise<void> {
+  const client = state.client;
+  if (!client || mediaChunks.length === 0) return;
+  const type = mimeType || "audio/webm";
+  const blob = new Blob(mediaChunks, { type });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunkSize = 32_768;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  const dataUrl = `data:${type};base64,${btoa(binary)}`;
+  try {
+    const result = await client.audioTranscribe(dataUrl, type);
+    const transcript = result.transcript.trim();
+    if (transcript) {
+      el.input.value = el.input.value ? `${el.input.value} ${transcript}` : transcript;
+      el.input.focus();
+    }
+  } catch (error) {
+    notifyError(fmt(t.chrome.micFailed, { error: String(error) }));
   }
 }
 
@@ -911,6 +973,7 @@ async function start(): Promise<void> {
     el.input.focus();
   };
   el.send.onclick = () => void sendTurn();
+  el.mic.onclick = () => void toggleMic();
   el.input.addEventListener("keydown", (event) => {
     if (!el.slashPop.hidden) {
       const items = slashCandidates(el.input.value);

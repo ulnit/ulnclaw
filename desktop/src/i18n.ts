@@ -59,6 +59,7 @@ export interface Translations {
     chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string; pluginsTab: string; pairingTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string;
+    micTitle: string; micRecording: string; micFailed: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
     manageProcess: string; replayOnboarding: string; cancel: string; save: string;
   };
@@ -292,6 +293,9 @@ const en: Translations = {
     selectOrStart: "Select or start a session",
     inputPlaceholder: "Message ulnclaw… (Enter to send, Shift+Enter for newline)",
     send: "Send",
+    micTitle: "Voice input (record and transcribe)",
+    micRecording: "Recording\u2026 click to stop",
+    micFailed: "Voice input failed: {error}",
     settingsTitle: "Gateway settings", gatewayUrl: "Gateway URL",
     apiKey: "API key (optional, [gateway] key)", bearerToken: "bearer token",
     manageProcess: "Manage the gateway process (start/stop with the app)",
@@ -706,6 +710,9 @@ const zh: Translations = {
     selectOrStart: "选择或开始一个会话",
     inputPlaceholder: "给 ulnclaw 发消息…（Enter 发送，Shift+Enter 换行）",
     send: "发送",
+    micTitle: "语音输入（录音并转写）",
+    micRecording: "录音中…点击停止",
+    micFailed: "语音输入失败：{error}",
     settingsTitle: "网关设置", gatewayUrl: "网关 URL",
     apiKey: "API 密钥（可选，[gateway] key）", bearerToken: "bearer 令牌",
     manageProcess: "管理网关进程（随应用启动/停止）",
@@ -1120,6 +1127,9 @@ const zhHant: Translations = {
     selectOrStart: "選擇或開始工作階段",
     inputPlaceholder: "傳送訊息給 ulnclaw…（Enter 傳送，Shift+Enter 換行）",
     send: "傳送",
+    micTitle: "語音輸入（錄音並轉寫）",
+    micRecording: "錄音中…點選停止",
+    micFailed: "語音輸入失敗：{error}",
     settingsTitle: "閘道設定", gatewayUrl: "閘道 URL",
     apiKey: "API 金鑰（選填，[gateway] key）", bearerToken: "bearer 權杖",
     manageProcess: "管理閘道程序（隨應用程式啟動/停止）",
@@ -1534,6 +1544,9 @@ const ja: Translations = {
     selectOrStart: "セッションを選択または開始",
     inputPlaceholder: "ulnclaw にメッセージ…（Enter で送信、Shift+Enter で改行）",
     send: "送信",
+    micTitle: "音声入力（録音して文字起こし）",
+    micRecording: "録音中…クリックで停止",
+    micFailed: "音声入力に失敗しました: {error}",
     settingsTitle: "ゲートウェイ設定", gatewayUrl: "ゲートウェイ URL",
     apiKey: "API キー（任意、[gateway] key）", bearerToken: "bearer トークン",
     manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）",
@@ -1948,6 +1961,9 @@ const ar: Translations = {
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
     inputPlaceholder: "راسل ulnclaw… (Enter للإرسال، Shift+Enter لسطر جديد)",
     send: "إرسال",
+    micTitle: "إدخال صوتي (تسجيل وتحويل إلى نص)",
+    micRecording: "جارٍ التسجيل… انقر للإيقاف",
+    micFailed: "فشل الإدخال الصوتي: {error}",
     settingsTitle: "إعدادات البوابة", gatewayUrl: "عنوان البوابة",
     apiKey: "مفتاح API (اختياري، [gateway] key)", bearerToken: "رمز bearer",
     manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)",
