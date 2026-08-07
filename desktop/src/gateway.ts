@@ -862,6 +862,52 @@ export class GatewayClient {
     }
   }
 
+  /**
+   * Subscribe to a run's lifecycle SSE stream (/v1/runs/:id/events, P322).
+   * Fetch-based reader (EventSource can't carry the bearer header). Invokes
+   * onEvent with the SSE event name + fresh RunRow per status transition;
+   * resolves when the stream closes (run reached a terminal state).
+   */
+  async runEvents(
+    runId: string,
+    onEvent: (name: string, run: RunRow) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const response = await fetch(this.endpoint(`/v1/runs/${encodeURIComponent(runId)}/events`), {
+      headers: this.headers(),
+      signal,
+    });
+    if (!response.ok || !response.body) return;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let eventName = "run.progress";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("event:")) {
+          eventName = trimmed.slice(6).trim();
+          continue;
+        }
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload) continue;
+        try {
+          const run = JSON.parse(payload) as RunRow;
+          if (run && typeof run.run_id === "string") onEvent(eventName, run);
+        } catch {
+          // ignore malformed frames
+        }
+        eventName = "run.progress";
+      }
+    }
+  }
+
   /** Answer a pending `terminal.read` bridge request (P231). */
   async answerTerminalRead(id: string, ok: boolean, result: string): Promise<void> {
     await fetch(this.endpoint("/api/desktop/read-response"), {

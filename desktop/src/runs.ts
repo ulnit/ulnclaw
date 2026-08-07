@@ -33,6 +33,9 @@ const STATUS_CLASS: Record<string, string> = {
 export class RunsWidget {
   private timer: number | null = null;
   private busy = false;
+  /** Live status timeline per run, fed by /v1/runs/:id/events (P322). */
+  private timelines = new Map<string, { status: string; at: number }[]>();
+  private subs = new Map<string, AbortController>();
 
   constructor(
     private root: HTMLElement,
@@ -68,6 +71,8 @@ export class RunsWidget {
       window.clearInterval(this.timer);
       this.timer = null;
     }
+    for (const controller of this.subs.values()) controller.abort();
+    this.subs.clear();
   }
 
   private status(message: string, isError = false): void {
@@ -134,6 +139,14 @@ export class RunsWidget {
         ${run.result ? `<details class="run-result"><summary>${escapeHtml(t.runs.result)}</summary><pre>${escapeHtml(run.result)}</pre></details>` : ""}
         ${run.session_id ? `<div class="run-session">session: <code>${escapeHtml(run.session_id.slice(0, 12))}</code></div>` : ""}
       `;
+      card.dataset.runId = run.run_id;
+      const chips = this.timelineChips(run.run_id);
+      if (chips) {
+        card.insertAdjacentHTML(
+          "beforeend",
+          `<div class="run-timeline" title="${escapeHtml(t.runs.timelineTitle)}">${chips}</div>`,
+        );
+      }
       if (run.status === "waiting_for_approval" && run.approval && !run.approval.resolved) {
         const approval = document.createElement("div");
         approval.className = "run-approval";
@@ -169,6 +182,74 @@ export class RunsWidget {
       }
       list.appendChild(card);
     }
+    this.reconcileSubscriptions(runs);
+  }
+
+  /** Keep one SSE subscription per active run; drop stale ones (P322). */
+  private reconcileSubscriptions(runs: RunRow[]): void {
+    const seen = new Set(runs.map((run) => run.run_id));
+    for (const [runId, controller] of this.subs) {
+      if (!seen.has(runId)) {
+        controller.abort();
+        this.subs.delete(runId);
+        this.timelines.delete(runId);
+      }
+    }
+    for (const run of runs) {
+      if (["running", "queued", "waiting_for_approval"].includes(run.status)) {
+        this.recordTransition(run.run_id, run.status);
+        this.subscribe(run.run_id);
+      }
+    }
+  }
+
+  private subscribe(runId: string): void {
+    if (this.subs.has(runId)) return;
+    const client = this.client();
+    if (!client) return;
+    const controller = new AbortController();
+    this.subs.set(runId, controller);
+    client
+      .runEvents(runId, (_name, run) => {
+        this.recordTransition(run.run_id, run.status);
+      }, controller.signal)
+      .catch(() => undefined)
+      .finally(() => {
+        this.subs.delete(runId);
+      });
+  }
+
+  private recordTransition(runId: string, status: string): void {
+    const timeline = this.timelines.get(runId) ?? [];
+    const last = timeline[timeline.length - 1];
+    if (last && last.status === status) return;
+    timeline.push({ status, at: Date.now() / 1000 });
+    if (timeline.length > 24) timeline.shift();
+    this.timelines.set(runId, timeline);
+    this.renderTimeline(runId);
+  }
+
+  private timelineChips(runId: string): string {
+    const timeline = this.timelines.get(runId) ?? [];
+    return timeline
+      .map((entry) => {
+        const when = new Date(entry.at * 1000).toLocaleTimeString();
+        return `<span class="run-timeline-chip">${escapeHtml(entry.status)} \u00b7 ${escapeHtml(when)}</span>`;
+      })
+      .join("");
+  }
+
+  private renderTimeline(runId: string): void {
+    const card = this.root.querySelector(`.run-card[data-run-id="${CSS.escape(runId)}"]`);
+    if (!card) return;
+    let timeline = card.querySelector(".run-timeline");
+    if (!timeline) {
+      timeline = document.createElement("div");
+      timeline.className = "run-timeline";
+      timeline.setAttribute("title", t.runs.timelineTitle);
+      card.appendChild(timeline);
+    }
+    timeline.innerHTML = this.timelineChips(runId);
   }
 
   private renderDelegations(delegations: DelegationRow[]): void {
