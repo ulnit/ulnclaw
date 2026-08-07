@@ -342,6 +342,11 @@ enum Commands {
         #[arg(long)]
         deep: bool,
     },
+    /// Inspect gateway monitoring — health & diagnostics export posture (hermes monitoring)
+    Monitoring {
+        /// Action: status (default)
+        action: Option<String>,
+    },
     /// Generate shell completion scripts (hermes completion)
     Completion {
         /// Shell to generate completions for (bash, zsh, fish, elvish, powershell)
@@ -2061,6 +2066,43 @@ async fn build_gateway_stack(
     // Cron scheduler: dispatch due jobs as tracked cron runs (hermes
     // scheduler loop). 30s polling matches the job-timing granularity.
     ulnclaw::gateway::spawn_cron_scheduler(state.clone(), 30);
+    // Gateway monitoring: OTLP health/diagnostics export + heartbeat
+    // sampler (hermes agent/monitoring streamer). No-op unless
+    // [monitoring] is enabled with an OTLP endpoint.
+    {
+        let platform_count = [
+            config.messaging.telegram.enabled,
+            config.messaging.discord.enabled,
+            config.messaging.slack.enabled,
+            config.messaging.signal.enabled,
+            config.messaging.weixin.enabled,
+            config.messaging.qq.enabled,
+            config.messaging.yuanbao.enabled,
+            config.messaging.email.enabled,
+            config.messaging.mattermost.enabled,
+            config.messaging.matrix.enabled,
+            config.messaging.dingtalk.enabled,
+            config.messaging.wecom.enabled,
+            config.messaging.feishu.enabled,
+            config.messaging.homeassistant.enabled,
+            config.messaging.sms.enabled,
+            config.messaging.whatsapp.enabled,
+            config.messaging.irc.enabled,
+            config.messaging.ntfy.enabled,
+            config.messaging.simplex.enabled,
+            config.messaging.teams.enabled,
+            config.messaging.line.enabled,
+            config.messaging.google_chat.enabled,
+            config.messaging.buzz.enabled,
+            config.messaging.photon.enabled,
+            config.messaging.raft.enabled,
+            config.messaging.a2a.enabled,
+        ]
+        .iter()
+        .filter(|e| **e)
+        .count() as u64;
+        ulnclaw::gateway::spawn_monitoring(state.clone(), &config, platform_count);
+    }
     if config.kanban.dispatch_in_gateway {
         // Provider factory for the auto-decompose tick: builds from LIVE
         // config each call so [auxiliary] / model edits take effect
@@ -2517,6 +2559,22 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 print!("{}", report.render());
             }
             Ok(())
+        }
+        Commands::Monitoring { action } => {
+            match action
+                .as_deref()
+                .map(|a| a.trim())
+                .filter(|a| !a.is_empty())
+            {
+                None | Some("status") => {
+                    print!("{}", ulnclaw::monitoring::render_status(&config.monitoring));
+                    Ok(())
+                }
+                Some(other) => {
+                    eprintln!("Unknown monitoring action: {other}");
+                    std::process::exit(2);
+                }
+            }
         }
         Commands::Status { all: _, deep } => {
             let opts = ulnclaw::status::StatusOptions { deep };

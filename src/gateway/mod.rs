@@ -4252,6 +4252,7 @@ async fn spawn_job_run(
                     deliver_job_result(&job_snapshot, &summary, wrap_response).await;
             }
         }
+        let delivery_failed = delivery_error.is_some();
         if let Ok(Some(mut job)) = job_store.get(&job_id) {
             job.last_status = Some(match (success, &run_error) {
                 (true, _) => "ok".to_string(),
@@ -4262,6 +4263,29 @@ async fn spawn_job_run(
             job_store.update(&job).ok();
         }
         release_fire_claim(&job_id);
+
+        // Content-free cron execution lifecycle projection (hermes
+        // CronExecutionEvent) — monitoring egress only.
+        crate::monitoring::emit(
+            crate::monitoring::CronExecutionEvent {
+                status: if success { "ok".to_string() } else { "error".to_string() },
+                job_key: job_id.clone(),
+                source: job_snapshot
+                    .origin
+                    .as_ref()
+                    .map(|o| format!("platform:{}", o.platform))
+                    .unwrap_or_else(|| "cron".to_string()),
+                duration_ms: None,
+                delivery_outcome: Some(if delivery_failed {
+                    "failed".to_string()
+                } else {
+                    "ok".to_string()
+                }),
+                error_class: run_error.as_ref().map(|_| "agent_error".to_string()),
+                ts_ns: crate::monitoring::now_ns(),
+            }
+            .to_value(),
+        );
     });
 
     spawn_tracked_run(state, run_id.clone(), session_id, job.prompt.clone(), true);
@@ -4831,6 +4855,109 @@ fn format_notify_message(
 /// Start the cron scheduler loop (hermes scheduler): every `poll_secs`
 /// dispatch each due job as a tracked cron run. Called from the gateway
 /// command once the cron store is wired; does nothing when absent.
+/// Start the monitoring plane (hermes `agent/monitoring` gateway wiring):
+/// the OTLP streamer consuming the emitter queue, plus a periodic
+/// content-free health sampler. No-op unless
+/// `[monitoring] gateway_health_export.enabled` AND `export.otlp.enabled`
+/// with an endpoint. Never affects gateway operation (fail-isolated).
+pub fn spawn_monitoring(
+    state: Arc<GatewayState>,
+    config: &crate::config::UlncLawConfig,
+    platform_count: u64,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let monitoring = &config.monitoring;
+    if !monitoring.enabled() || !monitoring.otlp_enabled() {
+        return Vec::new();
+    }
+    let Some(endpoint) = monitoring
+        .export
+        .otlp
+        .endpoint
+        .clone()
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty())
+    else {
+        tracing::warn!("monitoring.gateway_health_export enabled but monitoring.export.otlp.endpoint is not set");
+        return Vec::new();
+    };
+
+    let install_id = crate::monitoring::ensure_install_id(monitoring.install_id.as_deref());
+    let version = env!("CARGO_PKG_VERSION");
+    let resource = crate::monitoring::resource_attributes(&install_id, version, None);
+
+    let mut handles = Vec::new();
+
+    // Lifecycle event (hermes gateway_started).
+    crate::monitoring::emit(
+        crate::monitoring::GatewayHealthEvent {
+            name: "gateway_started".to_string(),
+            gateway_state: Some("running".to_string()),
+            old_state: None,
+            new_state: Some("running".to_string()),
+            exit_reason: None,
+            active_agents: 0,
+            gateway_busy: false,
+            platform_count,
+            profile: None,
+            install_id: Some(install_id.clone()),
+            version: Some(version.to_string()),
+            pid: Some(std::process::id()),
+            ts_ns: crate::monitoring::now_ns(),
+        }
+        .to_value(),
+    );
+
+    // Continuous streamer (hermes OTLPStreamer).
+    if monitoring.diagnostic_events_enabled() || monitoring.metrics_enabled() {
+        let streamer_endpoint = endpoint.clone();
+        let headers_env = monitoring.export.otlp.headers_env.clone();
+        let streamer_resource = resource.clone();
+        let flush = std::time::Duration::from_secs(monitoring.logs_export_interval_seconds());
+        handles.push(tokio::spawn(async move {
+            crate::monitoring::run_streamer(streamer_endpoint, headers_env, streamer_resource, flush)
+                .await;
+        }));
+    }
+
+    // Periodic health snapshot (hermes gateway_health_export metrics loop).
+    if monitoring.metrics_enabled() {
+        let interval = std::time::Duration::from_secs(monitoring.export_interval_seconds());
+        let sampler_install_id = install_id.clone();
+        let sampler_version = version.to_string();
+        handles.push(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                let active = state.runs.lock().await.len() as u64;
+                crate::monitoring::emit(
+                    crate::monitoring::GatewayHealthEvent {
+                        name: "heartbeat".to_string(),
+                        gateway_state: Some("running".to_string()),
+                        old_state: None,
+                        new_state: None,
+                        exit_reason: None,
+                        active_agents: active,
+                        gateway_busy: active > 0,
+                        platform_count,
+                        profile: None,
+                        install_id: Some(sampler_install_id.clone()),
+                        version: Some(sampler_version.clone()),
+                        pid: Some(std::process::id()),
+                        ts_ns: crate::monitoring::now_ns(),
+                    }
+                    .to_value(),
+                );
+            }
+        }));
+    }
+
+    tracing::info!(
+        "monitoring enabled: OTLP export to {} (install_id {})",
+        crate::monitoring::traces_url(&endpoint),
+        install_id
+    );
+    handles
+}
+
 pub fn spawn_cron_scheduler(state: Arc<GatewayState>, poll_secs: u64) -> Option<tokio::task::JoinHandle<()>> {
     let store = state.cron.get().cloned()?;
     Some(tokio::spawn(crate::cron::run_scheduler(

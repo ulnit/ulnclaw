@@ -861,6 +861,9 @@ pub struct UlncLawConfig {
     /// Messaging platform gateways (hermes gateway/platforms).
     #[serde(default)]
     pub messaging: crate::messaging::MessagingConfig,
+    /// Gateway monitoring / OTLP health export (hermes `monitoring:`).
+    #[serde(default)]
+    pub monitoring: crate::monitoring::MonitoringConfig,
     /// Speech-to-text pipeline for voice messages (hermes `stt:`).
     #[serde(default)]
     pub stt: crate::stt::SttConfig,

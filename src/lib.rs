@@ -88,6 +88,7 @@ pub mod bundles;
 pub mod buzz;
 pub mod channel_directory;
 pub mod nostr_auth;
+pub mod monitoring;
 pub mod platform_slash;
 pub mod slack_cli;
 pub mod kanban;
