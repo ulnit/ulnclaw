@@ -63,6 +63,16 @@ export interface LearningNodeDetail {
 }
 
 /** One provider row from GET /api/model/options (gateway render_row). */
+export interface ModelCapabilities {
+  reasoning?: boolean;
+  tools?: boolean;
+  vision?: boolean;
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  family?: string;
+  cost?: { input_per_mtok: number; output_per_mtok: number };
+}
+
 export interface ModelOptionRow {
   slug: string;
   models: string[];
@@ -77,12 +87,19 @@ export interface ModelOptionRow {
   probed?: boolean;
   key_env?: string;
   featured_models?: string[];
+  api?: string;
+  doc?: string;
+  catalog?: string;
+  catalog_stale?: boolean;
+  capabilities?: Record<string, ModelCapabilities>;
+  pricing?: Record<string, { input: string; output: string }>;
 }
 
 export interface ModelOptionsPayload {
   providers: ModelOptionRow[];
   model: string;
   provider: string;
+  catalog_cache?: { providers: number; age_secs: number; fresh: boolean };
 }
 
 export interface SkillRow {
