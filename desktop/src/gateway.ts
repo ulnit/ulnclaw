@@ -401,6 +401,7 @@ export interface McpServerRow {
   target: string;
   auth: "none" | "headers" | "oauth";
   oauth_tokens: boolean;
+  cached_tools?: { name: string; description: string }[];
 }
 
 export interface McpOAuthFlow {

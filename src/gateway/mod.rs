@@ -872,12 +872,32 @@ async fn mcp_servers_list(State(state): State<Arc<GatewayState>>) -> Json<Value>
             };
             let oauth_tokens = server.auth.as_deref() == Some("oauth")
                 && crate::mcp::oauth::load_tokens(&home, &server.name).is_some();
+            // Discovered tools from the schema cache (fingerprint-gated).
+            let fingerprint = crate::mcp::schema_cache::config_fingerprint(server);
+            let cached_tools: Vec<Value> =
+                crate::mcp::schema_cache::get_cached_entry_in(&home, &server.name, &fingerprint)
+                    .map(|entry| {
+                        crate::mcp::schema_cache::tools_from_cache_entry(&entry)
+                            .into_iter()
+                            .map(|tool| {
+                                json!({
+                                    "name": tool.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "description": tool
+                                        .get("description")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(""),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
             json!({
                 "name": server.name,
                 "kind": kind,
                 "target": target,
                 "auth": auth,
                 "oauth_tokens": oauth_tokens,
+                "cached_tools": cached_tools,
             })
         })
         .collect();
@@ -8826,6 +8846,9 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(servers[1]["kind"], "http");
         assert_eq!(servers[1]["auth"], "oauth");
         assert_eq!(servers[1]["oauth_tokens"], false);
+        // No schema-cache entries in the test home → empty tool lists.
+        assert_eq!(servers[0]["cached_tools"].as_array().unwrap().len(), 0);
+        assert_eq!(servers[1]["cached_tools"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]

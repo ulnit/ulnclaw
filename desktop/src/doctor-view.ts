@@ -239,6 +239,32 @@ export class DoctorWidget {
         value.textContent = `${server.kind} · ${server.target} · ${auth}`;
         value.title = server.target;
         row.append(label, value);
+        const tools = server.cached_tools || [];
+        if (tools.length > 0) {
+          const details = document.createElement("details");
+          details.className = "mcp-tools-details";
+          details.innerHTML = `<summary>${
+            t.mcpPanel.toolsCached.replace("{count}", String(tools.length))
+          }</summary>`;
+          const list = document.createElement("div");
+          list.className = "mcp-tools-list";
+          for (const tool of tools) {
+            const item = document.createElement("div");
+            item.className = "mcp-tool";
+            const name = document.createElement("code");
+            name.textContent = tool.name;
+            item.appendChild(name);
+            if (tool.description) {
+              const desc = document.createElement("span");
+              desc.className = "mcp-tool-desc";
+              desc.textContent = tool.description;
+              item.appendChild(desc);
+            }
+            list.appendChild(item);
+          }
+          details.appendChild(list);
+          row.appendChild(details);
+        }
         if (server.auth === "oauth" && !server.oauth_tokens) {
           const connect = document.createElement("button");
           connect.className = "ghost mcp-connect";

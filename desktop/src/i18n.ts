@@ -195,7 +195,7 @@ export interface Translations {
     endpoint: string; available: string; vnc: string; managedRunning: string;
   };
   logsPanel: { title: string; allLevels: string; };
-  mcpPanel: { title: string; none: string; oauthTokens: string; oauthPending: string; connect: string; connecting: string; openAuth: string; approved: string; failed: string; };
+  mcpPanel: { title: string; none: string; oauthTokens: string; oauthPending: string; connect: string; connecting: string; openAuth: string; approved: string; failed: string; toolsCached: string; };
   kanbanPanel: { title: string; none: string; openOf: string; current: string; byStatus: string; blocked: string; };
   storagePanel: { title: string; size: string; contents: string; counts: string; path: string; optimize: string; optimizeTitle: string; optimizing: string; optimized: string; optimizeFailed: string; };
   systemPanel: { title: string; version: string; platform: string; uptime: string; contents: string; sessionsWord: string; messagesWord: string; runsWord: string; jobs: string; enabledWord: string; disabledWord: string; plugins: string; home: string; config: string; desktopManaged: string; };
@@ -485,7 +485,7 @@ const en: Translations = {
     available: "Available", vnc: "VNC URL", managedRunning: "Managed browser running",
   },
   logsPanel: { title: "Gateway log", allLevels: "All levels" },
-  mcpPanel: { title: "MCP servers", none: "No MCP servers configured ([mcp] section).", oauthTokens: "oauth (tokens stored)", oauthPending: "oauth (not authorized)", connect: "Connect", connecting: "Starting…", openAuth: "Open authorization page", approved: "Authorized ✓", failed: "OAuth flow failed." },
+  mcpPanel: { title: "MCP servers", none: "No MCP servers configured ([mcp] section).", oauthTokens: "oauth (tokens stored)", oauthPending: "oauth (not authorized)", connect: "Connect", connecting: "Starting…", openAuth: "Open authorization page", approved: "Authorized ✓", failed: "OAuth flow failed.", toolsCached: "{count} cached tools" },
   kanbanPanel: { title: "Kanban diagnostics", none: "No kanban boards configured.", openOf: "{open} open · {total} total", current: "current", byStatus: "Status counts", blocked: "Blocked tasks" },
   storagePanel: { title: "Session store", size: "Database size", contents: "Contents", counts: "{sessions} sessions · {messages} messages", path: "Path", optimize: "Optimize", optimizeTitle: "Merge FTS segments and VACUUM the session store (ulnclaw sessions optimize)", optimizing: "Optimizing…", optimized: "{indexes} index(es) merged · {before} → {after}", optimizeFailed: "Optimize failed: {error}" },
   systemPanel: { title: "System", version: "Version", platform: "Platform", uptime: "Uptime", contents: "Store", sessionsWord: "sessions", messagesWord: "messages", runsWord: "active runs", jobs: "Cron jobs", enabledWord: "enabled", disabledWord: "disabled", plugins: "Plugins", home: "Home", config: "Config", desktopManaged: "desktop-managed" },
@@ -825,7 +825,7 @@ const zh: Translations = {
     available: "可用", vnc: "VNC 地址", managedRunning: "托管浏览器运行中",
   },
   logsPanel: { title: "网关日志", allLevels: "全部级别" },
-  mcpPanel: { title: "MCP 服务器", none: "未配置 MCP 服务器（[mcp] 段）。", oauthTokens: "oauth（已存令牌）", oauthPending: "oauth（未授权）", connect: "连接", connecting: "启动中…", openAuth: "打开授权页面", approved: "已授权 ✓", failed: "OAuth 流程失败。" },
+  mcpPanel: { title: "MCP 服务器", none: "未配置 MCP 服务器（[mcp] 段）。", oauthTokens: "oauth（已存令牌）", oauthPending: "oauth（未授权）", connect: "连接", connecting: "启动中…", openAuth: "打开授权页面", approved: "已授权 ✓", failed: "OAuth 流程失败。", toolsCached: "{count} 个缓存工具" },
   kanbanPanel: { title: "看板诊断", none: "未配置看板。", openOf: "{open} 进行中 · 共 {total}", current: "当前", byStatus: "状态计数", blocked: "受阻任务" },
   storagePanel: { title: "会话存储", size: "数据库大小", contents: "内容", counts: "{sessions} 个会话 · {messages} 条消息", path: "路径", optimize: "优化", optimizeTitle: "合并 FTS 段并 VACUUM 会话存储（等同 ulnclaw sessions optimize）", optimizing: "优化中…", optimized: "已合并 {indexes} 个索引 · {before} → {after}", optimizeFailed: "优化失败:{error}" },
   systemPanel: { title: "系统", version: "版本", platform: "平台", uptime: "运行时长", contents: "存储", sessionsWord: "会话", messagesWord: "消息", runsWord: "活动运行", jobs: "定时任务", enabledWord: "启用", disabledWord: "禁用", plugins: "插件", home: "主目录", config: "配置", desktopManaged: "桌面托管" },
@@ -1165,7 +1165,7 @@ const zhHant: Translations = {
     available: "可用", vnc: "VNC 位址", managedRunning: "託管瀏覽器執行中",
   },
   logsPanel: { title: "閘道日誌", allLevels: "全部層級" },
-  mcpPanel: { title: "MCP 伺服器", none: "未設定 MCP 伺服器（[mcp] 段）。", oauthTokens: "oauth（已存權杖）", oauthPending: "oauth（未授權）", connect: "連線", connecting: "啟動中…", openAuth: "開啟授權頁面", approved: "已授權 ✓", failed: "OAuth 流程失敗。" },
+  mcpPanel: { title: "MCP 伺服器", none: "未設定 MCP 伺服器（[mcp] 段）。", oauthTokens: "oauth（已存權杖）", oauthPending: "oauth（未授權）", connect: "連線", connecting: "啟動中…", openAuth: "開啟授權頁面", approved: "已授權 ✓", failed: "OAuth 流程失敗。", toolsCached: "{count} 個快取工具" },
   kanbanPanel: { title: "看板診斷", none: "未設定看板。", openOf: "{open} 進行中 · 共 {total}", current: "目前", byStatus: "狀態計數", blocked: "受阻工作" },
   storagePanel: { title: "會話儲存", size: "資料庫大小", contents: "內容", counts: "{sessions} 個會話 · {messages} 則訊息", path: "路徑", optimize: "最佳化", optimizeTitle: "合併 FTS 段並 VACUUM 會話儲存（等同 ulnclaw sessions optimize）", optimizing: "最佳化中…", optimized: "已合併 {indexes} 個索引 · {before} → {after}", optimizeFailed: "最佳化失敗:{error}" },
   systemPanel: { title: "系統", version: "版本", platform: "平台", uptime: "執行時長", contents: "儲存", sessionsWord: "會話", messagesWord: "訊息", runsWord: "活動執行", jobs: "排程工作", enabledWord: "啟用", disabledWord: "停用", plugins: "外掛", home: "主目錄", config: "設定", desktopManaged: "桌面託管" },
@@ -1505,7 +1505,7 @@ const ja: Translations = {
     available: "利用可能", vnc: "VNC URL", managedRunning: "管理ブラウザ実行中",
   },
   logsPanel: { title: "ゲートウェイログ", allLevels: "全レベル" },
-  mcpPanel: { title: "MCP サーバー", none: "MCP サーバーは未設定です（[mcp] セクション）。", oauthTokens: "oauth（トークン保存済み）", oauthPending: "oauth（未承認）", connect: "接続", connecting: "開始中…", openAuth: "認証ページを開く", approved: "承認済み ✓", failed: "OAuth フローが失敗しました。" },
+  mcpPanel: { title: "MCP サーバー", none: "MCP サーバーは未設定です（[mcp] セクション）。", oauthTokens: "oauth（トークン保存済み）", oauthPending: "oauth（未承認）", connect: "接続", connecting: "開始中…", openAuth: "認証ページを開く", approved: "承認済み ✓", failed: "OAuth フローが失敗しました。", toolsCached: "キャッシュ済みツール {count} 件" },
   kanbanPanel: { title: "カンバン診断", none: "カンバンボードは未設定です。", openOf: "未完了 {open} · 全 {total}", current: "現在", byStatus: "ステータス別件数", blocked: "ブロック中タスク" },
   storagePanel: { title: "セッションストア", size: "データベースサイズ", contents: "内容", counts: "{sessions} セッション · {messages} メッセージ", path: "パス", optimize: "最適化", optimizeTitle: "FTS セグメントをマージしセッションストアを VACUUM（ulnclaw sessions optimize と同等）", optimizing: "最適化中…", optimized: "{indexes} 件のインデックスをマージ · {before} → {after}", optimizeFailed: "最適化に失敗しました: {error}" },
   systemPanel: { title: "システム", version: "バージョン", platform: "プラットフォーム", uptime: "稼働時間", contents: "ストア", sessionsWord: "セッション", messagesWord: "メッセージ", runsWord: "実行中", jobs: "cron ジョブ", enabledWord: "有効", disabledWord: "無効", plugins: "プラグイン", home: "ホーム", config: "設定", desktopManaged: "デスクトップ管理" },
@@ -1845,7 +1845,7 @@ const ar: Translations = {
     available: "متاح", vnc: "عنوان VNC", managedRunning: "المتصفح المُدار يعمل",
   },
   logsPanel: { title: "سجل البوابة", allLevels: "كل المستويات" },
-  mcpPanel: { title: "خوادم MCP", none: "لا توجد خوادم MCP مهيأة (قسم [mcp]).", oauthTokens: "oauth (الرموز محفوظة)", oauthPending: "oauth (غير مصرح)", connect: "اتصال", connecting: "جارٍ البدء…", openAuth: "فتح صفحة التفويض", approved: "تم التفويض ✓", failed: "فشل تدفق OAuth." },
+  mcpPanel: { title: "خوادم MCP", none: "لا توجد خوادم MCP مهيأة (قسم [mcp]).", oauthTokens: "oauth (الرموز محفوظة)", oauthPending: "oauth (غير مصرح)", connect: "اتصال", connecting: "جارٍ البدء…", openAuth: "فتح صفحة التفويض", approved: "تم التفويض ✓", failed: "فشل تدفق OAuth.", toolsCached: "{count} أداة مخزنة" },
   kanbanPanel: { title: "تشخيصات كانبان", none: "لا توجد لوحات كانبان مهيأة.", openOf: "{open} مفتوحة · {total} الإجمالي", current: "الحالية", byStatus: "أعداد الحالات", blocked: "المهام المحظورة" },
   storagePanel: { title: "مخزن الجلسات", size: "حجم قاعدة البيانات", contents: "المحتويات", counts: "{sessions} جلسة · {messages} رسالة", path: "المسار", optimize: "تحسين", optimizeTitle: "دمج مقاطع FTS وتفريغ مخزن الجلسات (يعادل ulnclaw sessions optimize)", optimizing: "جارٍ التحسين…", optimized: "تم دمج {indexes} فهرسًا · {before} ← {after}", optimizeFailed: "فشل التحسين: {error}" },
   systemPanel: { title: "النظام", version: "الإصدار", platform: "المنصة", uptime: "مدة التشغيل", contents: "المخزن", sessionsWord: "جلسة", messagesWord: "رسالة", runsWord: "تشغيل نشط", jobs: "مهام cron", enabledWord: "مفعلة", disabledWord: "معطلة", plugins: "الإضافات", home: "المجلد الرئيسي", config: "الإعدادات", desktopManaged: "بإدارة سطح المكتب" },
