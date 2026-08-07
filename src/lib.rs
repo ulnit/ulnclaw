@@ -102,6 +102,7 @@ pub mod spotify_tool;
 pub mod yuanbao_tool;
 pub mod send_message_tool;
 pub mod mcp_serve;
+pub mod acp_adapter;
 pub mod config;
 pub mod config_cmd;
 pub mod context;

@@ -370,6 +370,12 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Run as an ACP (Agent Client Protocol) stdio server for editors like Zed (hermes acp)
+    Acp {
+        /// Verbose request/response logging on stderr
+        #[arg(long)]
+        verbose: bool,
+    },
     /// MCP channel bridge — expose messaging conversations to MCP clients (hermes mcp)
     Mcp {
         /// Subcommand: serve (stdio MCP server)
@@ -2462,6 +2468,9 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             }
             Ok(())
         }
+        Commands::Acp { verbose } => ulnclaw::acp_adapter::run_stdio(verbose)
+            .await
+            .map_err(|e| e.to_string()),
         Commands::Mcp { args, verbose } => {
             match args.first().map(String::as_str) {
                 Some("serve") => ulnclaw::mcp_serve::run_stdio(verbose)
