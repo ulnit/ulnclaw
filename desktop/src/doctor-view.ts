@@ -62,6 +62,13 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="kanbanPanel.title">Kanban diagnostics</h3>
         <div id="kanban-rows"></div>
       </section>
+      <section id="doctor-metrics" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="metricsPanel.title">Prometheus metrics</h3>
+        <details id="metrics-details">
+          <summary data-i18n="metricsPanel.summary">Show raw /metrics exposition</summary>
+          <pre id="metrics-body" class="logs-body"></pre>
+        </details>
+      </section>
       <section id="doctor-logs" class="doctor-monitoring doctor-logs" hidden>
         <h3 class="config-section" data-i18n="logsPanel.title">Gateway log</h3>
         <div class="logs-controls">
@@ -93,6 +100,7 @@ export class DoctorWidget {
     this.loadSystem().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
     this.loadKanban().catch(() => undefined);
+    this.loadMetrics().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
       this.logsTimer = window.setInterval(() => {
@@ -546,6 +554,23 @@ export class DoctorWidget {
           rows.appendChild(row);
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** Raw Prometheus exposition from GET /metrics (collapsible). */
+  private async loadMetrics(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-metrics") as HTMLElement;
+    const body = this.root.querySelector("#metrics-body") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      body.textContent = await client.metricsRaw();
       section.hidden = false;
     } catch {
       section.hidden = true;

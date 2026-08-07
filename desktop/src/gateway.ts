@@ -880,6 +880,13 @@ export class GatewayClient {
     return (value.servers || []) as McpServerRow[];
   }
 
+  /** GET /metrics — raw Prometheus text exposition. */
+  async metricsRaw(): Promise<string> {
+    const response = await fetch(this.endpoint("/metrics"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`metrics HTTP ${response.status}`);
+    return response.text();
+  }
+
   /** GET /api/system — gateway/system facts for the Doctor panel. */
   async systemInfo(): Promise<SystemInfo> {
     const response = await fetch(this.endpoint("/api/system"), { headers: this.headers() });
