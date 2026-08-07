@@ -152,6 +152,7 @@ export interface Translations {
     endpoint: string; available: string; vnc: string; managedRunning: string;
   };
   logsPanel: { title: string; allLevels: string; };
+  mcpPanel: { title: string; none: string; oauthTokens: string; oauthPending: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -382,6 +383,7 @@ const en: Translations = {
     available: "Available", vnc: "VNC URL", managedRunning: "Managed browser running",
   },
   logsPanel: { title: "Gateway log", allLevels: "All levels" },
+  mcpPanel: { title: "MCP servers", none: "No MCP servers configured ([mcp] section).", oauthTokens: "oauth (tokens stored)", oauthPending: "oauth (not authorized)" },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -662,6 +664,7 @@ const zh: Translations = {
     available: "可用", vnc: "VNC 地址", managedRunning: "托管浏览器运行中",
   },
   logsPanel: { title: "网关日志", allLevels: "全部级别" },
+  mcpPanel: { title: "MCP 服务器", none: "未配置 MCP 服务器（[mcp] 段）。", oauthTokens: "oauth（已存令牌）", oauthPending: "oauth（未授权）" },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -942,6 +945,7 @@ const zhHant: Translations = {
     available: "可用", vnc: "VNC 位址", managedRunning: "託管瀏覽器執行中",
   },
   logsPanel: { title: "閘道日誌", allLevels: "全部層級" },
+  mcpPanel: { title: "MCP 伺服器", none: "未設定 MCP 伺服器（[mcp] 段）。", oauthTokens: "oauth（已存權杖）", oauthPending: "oauth（未授權）" },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -1222,6 +1226,7 @@ const ja: Translations = {
     available: "利用可能", vnc: "VNC URL", managedRunning: "管理ブラウザ実行中",
   },
   logsPanel: { title: "ゲートウェイログ", allLevels: "全レベル" },
+  mcpPanel: { title: "MCP サーバー", none: "MCP サーバーは未設定です（[mcp] セクション）。", oauthTokens: "oauth（トークン保存済み）", oauthPending: "oauth（未承認）" },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1502,6 +1507,7 @@ const ar: Translations = {
     available: "متاح", vnc: "عنوان VNC", managedRunning: "المتصفح المُدار يعمل",
   },
   logsPanel: { title: "سجل البوابة", allLevels: "كل المستويات" },
+  mcpPanel: { title: "خوادم MCP", none: "لا توجد خوادم MCP مهيأة (قسم [mcp]).", oauthTokens: "oauth (الرموز محفوظة)", oauthPending: "oauth (غير مصرح)" },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",

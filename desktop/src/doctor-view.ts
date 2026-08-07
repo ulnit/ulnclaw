@@ -45,6 +45,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
         <div id="browser-rows"></div>
       </section>
+      <section id="doctor-mcp" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="mcpPanel.title">MCP servers</h3>
+        <div id="mcp-rows"></div>
+      </section>
       <section id="doctor-logs" class="doctor-monitoring doctor-logs" hidden>
         <h3 class="config-section" data-i18n="logsPanel.title">Gateway log</h3>
         <div class="logs-controls">
@@ -72,6 +76,7 @@ export class DoctorWidget {
     }
     this.loadMonitoring().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
+    this.loadMcp().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
       this.logsTimer = window.setInterval(() => {
@@ -170,6 +175,46 @@ export class DoctorWidget {
       note.className = "config-note";
       note.textContent = status.scope;
       rows.appendChild(note);
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadMcp(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-mcp") as HTMLElement;
+    const rows = this.root.querySelector("#mcp-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const servers = await client.mcpServers();
+      rows.innerHTML = "";
+      if (servers.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "config-note";
+        empty.textContent = t.mcpPanel.none;
+        rows.appendChild(empty);
+      }
+      for (const server of servers) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const label = document.createElement("span");
+        label.className = "monitoring-label";
+        label.textContent = server.name;
+        const value = document.createElement("span");
+        value.className = "monitoring-value";
+        let auth: string = server.auth;
+        if (server.auth === "oauth") {
+          auth = server.oauth_tokens ? t.mcpPanel.oauthTokens : t.mcpPanel.oauthPending;
+        }
+        value.textContent = `${server.kind} · ${server.target} · ${auth}`;
+        value.title = server.target;
+        row.append(label, value);
+        rows.appendChild(row);
+      }
       section.hidden = false;
     } catch {
       section.hidden = true;

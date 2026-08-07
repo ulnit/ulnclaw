@@ -832,6 +832,58 @@ async fn logs_tail(Query(query): Query<LogsTailQuery>) -> Response {
     }
 }
 
+/// `GET /api/mcp/servers` — configured MCP servers with transport kind
+/// and auth posture (static headers vs OAuth with stored tokens); desktop
+/// Doctor view MCP panel (ulnclaw extension).
+async fn mcp_servers_list(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let context = state.agent.context();
+    let home = context.home.clone();
+    let servers: Vec<Value> = context
+        .config
+        .mcp
+        .servers
+        .iter()
+        .map(|server| {
+            let kind = if server.url.is_some() {
+                if server.transport.as_deref() == Some("sse") {
+                    "sse"
+                } else {
+                    "http"
+                }
+            } else {
+                "stdio"
+            };
+            let target = if let Some(url) = &server.url {
+                url.clone()
+            } else {
+                let mut command = server.command.clone();
+                for arg in &server.args {
+                    command.push(' ');
+                    command.push_str(arg);
+                }
+                command
+            };
+            let auth = if server.auth.as_deref() == Some("oauth") {
+                "oauth"
+            } else if !server.headers.is_empty() {
+                "headers"
+            } else {
+                "none"
+            };
+            let oauth_tokens = server.auth.as_deref() == Some("oauth")
+                && crate::mcp::oauth::load_tokens(&home, &server.name).is_some();
+            json!({
+                "name": server.name,
+                "kind": kind,
+                "target": target,
+                "auth": auth,
+                "oauth_tokens": oauth_tokens,
+            })
+        })
+        .collect();
+    Json(json!({ "servers": servers }))
+}
+
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
     let router = Router::new()
@@ -847,6 +899,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/doctor", get(doctor_report))
         .route("/api/monitoring", get(monitoring_status))
         .route("/api/logs/tail", get(logs_tail))
+        .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
         .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
         .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
@@ -8243,6 +8296,66 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_servers_list_reports_transport_and_auth() {
+        // State with two configured MCP servers: stdio + remote OAuth.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let provider = Arc::new(
+            OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let mut context = crate::tools::context::ToolContext::default();
+        context.config.mcp.servers = vec![
+            crate::mcp::McpServerConfig {
+                name: "local-tools".into(),
+                command: "mcp-server".into(),
+                args: vec!["--fast".into()],
+                ..Default::default()
+            },
+            crate::mcp::McpServerConfig {
+                name: "remote-api".into(),
+                url: Some("https://example.com/mcp".into()),
+                auth: Some("oauth".into()),
+                ..Default::default()
+            },
+        ];
+        let agent = Agent::new(provider, ToolRegistry::new())
+            .with_store(store)
+            .with_context(context);
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "test-model".into(),
+            "test".into(),
+            Some("sekret".into()),
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+        let app = router(state);
+
+        let (status, _) = get_json(app.clone(), "/api/mcp/servers", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app, "/api/mcp/servers", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let servers = body["servers"].as_array().expect("servers");
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0]["name"], "local-tools");
+        assert_eq!(servers[0]["kind"], "stdio");
+        assert_eq!(servers[0]["target"], "mcp-server --fast");
+        assert_eq!(servers[0]["auth"], "none");
+        assert_eq!(servers[1]["kind"], "http");
+        assert_eq!(servers[1]["auth"], "oauth");
+        assert_eq!(servers[1]["oauth_tokens"], false);
     }
 
     // ------------------------------------------------------------------

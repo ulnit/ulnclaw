@@ -29,7 +29,7 @@ pub mod schema_cache;
 /// (and optionally `transport = "sse"` for the pre-2025-03-26 protocol,
 /// plus static `headers` such as `Authorization`). Hermes parity —
 /// `mcp_tool.py` accepts both shapes.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct McpServerConfig {
     pub name: String,
     #[serde(default)]

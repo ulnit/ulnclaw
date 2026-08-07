@@ -279,6 +279,14 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface McpServerRow {
+  name: string;
+  kind: "stdio" | "http" | "sse";
+  target: string;
+  auth: "none" | "headers" | "oauth";
+  oauth_tokens: boolean;
+}
+
 export interface LogsTailPayload {
   path: string;
   lines: string[];
@@ -744,6 +752,16 @@ export class GatewayClient {
     } catch {
       return [];
     }
+  }
+
+  /** GET /api/mcp/servers — configured MCP servers + auth posture. */
+  async mcpServers(): Promise<McpServerRow[]> {
+    const response = await fetch(this.endpoint("/api/mcp/servers"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`mcp servers HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.servers || []) as McpServerRow[];
   }
 
   /** GET /api/logs/tail — tail of gateway.log with optional min level. */
