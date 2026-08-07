@@ -3,7 +3,7 @@
 // grouped by section, with an issues panel up top. Online provider
 // probes are opt-in since they are slow.
 
-import type { GatewayClient, DoctorCheck } from "./gateway";
+import type { GatewayClient, DoctorCheck, MonitoringPayload } from "./gateway";
 import { t } from "./i18n";
 
 const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
@@ -33,6 +33,10 @@ export class DoctorWidget {
         <span id="doctor-status" class="jobs-counts"></span>
       </header>
       <div id="doctor-body" class="doctor-body"></div>
+      <section id="doctor-monitoring" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="monitoring.title">Gateway monitoring</h3>
+        <div id="monitoring-rows"></div>
+      </section>
     `;
     this.root.querySelector("#doctor-run")!.addEventListener("click", () => {
       this.run().catch(() => undefined);
@@ -43,6 +47,7 @@ export class DoctorWidget {
     if (!this.root.querySelector(".doctor-section")) {
       this.run().catch(() => undefined);
     }
+    this.loadMonitoring().catch(() => undefined);
   }
 
   stop(): void {
@@ -74,6 +79,67 @@ export class DoctorWidget {
     } finally {
       this.busy = false;
       runBtn.disabled = false;
+    }
+  }
+
+  private async loadMonitoring(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-monitoring") as HTMLElement;
+    const rows = this.root.querySelector("#monitoring-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const status = await client.monitoring();
+      rows.innerHTML = "";
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      const entries: [string, string][] = [
+        [t.monitoring.healthExport, status.enabled ? on : off],
+        [
+          t.monitoring.metrics,
+          status.metrics
+            ? `${on} (${status.metrics_interval_seconds}s)`
+            : off,
+        ],
+        [t.monitoring.diagnosticEvents, status.diagnostic_events ? on : off],
+        [
+          t.monitoring.warningLogs,
+          status.warning_error_logs
+            ? `${on} (${status.logs_interval_seconds}s)`
+            : off,
+        ],
+        [
+          t.monitoring.otlpEndpoint,
+          status.otlp.endpoint
+            ? `${status.otlp.endpoint} (${status.otlp.transport})`
+            : t.monitoring.otlpNotConfigured,
+        ],
+        [t.monitoring.queueDepth, String(status.queue_depth)],
+      ];
+      if (status.install_id) {
+        entries.push([t.monitoring.installId, status.install_id]);
+      }
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
+      const note = document.createElement("p");
+      note.className = "config-note";
+      note.textContent = status.scope;
+      rows.appendChild(note);
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
     }
   }
 

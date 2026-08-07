@@ -763,6 +763,37 @@ async fn doctor_report(
     .into_response()
 }
 
+/// `GET /api/monitoring` — structured view of `ulnclaw monitoring status`:
+/// export posture + OTLP destination + emitter queue depth (content-free
+/// by design; desktop Doctor view monitoring panel).
+async fn monitoring_status(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = &state.agent.context().config.monitoring;
+    let endpoint = config
+        .export
+        .otlp
+        .endpoint
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .map(str::to_string);
+    Json(json!({
+        "enabled": config.enabled(),
+        "metrics": config.metrics_enabled(),
+        "metrics_interval_seconds": config.export_interval_seconds(),
+        "diagnostic_events": config.diagnostic_events_enabled(),
+        "warning_error_logs": config.warning_error_events_enabled(),
+        "logs_interval_seconds": config.logs_export_interval_seconds(),
+        "otlp": {
+            "enabled": config.otlp_enabled(),
+            "endpoint": endpoint,
+            "transport": "otlp/http-json",
+        },
+        "install_id": config.install_id,
+        "queue_depth": crate::monitoring::queue_len_estimate(),
+        "scope": "gateway service health + redacted diagnostics only;                   prompts, messages, tool args/results and usage are never exported",
+    }))
+}
+
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
     let router = Router::new()
@@ -776,6 +807,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/usage", get(usage))
         .route("/api/config", get(config_get).put(config_put))
         .route("/api/doctor", get(doctor_report))
+        .route("/api/monitoring", get(monitoring_status))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
         .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
         .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
@@ -8117,6 +8149,24 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_monitoring_endpoint_reports_posture() {
+        let app = router(test_state());
+
+        let (status, _) = get_json(app.clone(), "/api/monitoring", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app, "/api/monitoring", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        // Default config: health export disabled, OTLP unconfigured.
+        assert_eq!(body["enabled"], false);
+        assert_eq!(body["otlp"]["enabled"], false);
+        assert_eq!(body["otlp"]["endpoint"], Value::Null);
+        assert_eq!(body["otlp"]["transport"], "otlp/http-json");
+        assert!(body["metrics_interval_seconds"].as_u64().unwrap() >= 5);
+        assert!(body["scope"].as_str().unwrap().contains("redacted"));
     }
 
     // ------------------------------------------------------------------

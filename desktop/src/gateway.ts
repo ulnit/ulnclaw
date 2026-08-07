@@ -270,6 +270,19 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface MonitoringPayload {
+  enabled: boolean;
+  metrics: boolean;
+  metrics_interval_seconds: number;
+  diagnostic_events: boolean;
+  warning_error_logs: boolean;
+  logs_interval_seconds: number;
+  otlp: { enabled: boolean; endpoint: string | null; transport: string };
+  install_id: string | null;
+  queue_depth: number;
+  scope: string;
+}
+
 export interface WebhookSubscription {
   name: string;
   url: string;
@@ -661,6 +674,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`usage HTTP ${response.status}`);
     return (await response.json()) as UsagePayload;
+  }
+
+  /** GET /api/monitoring — health-export posture for the Doctor view. */
+  async monitoring(): Promise<MonitoringPayload> {
+    const response = await fetch(this.endpoint("/api/monitoring"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`monitoring HTTP ${response.status}`);
+    return (await response.json()) as MonitoringPayload;
   }
 
   /** GET /api/webhooks/subscriptions — dynamic webhook routes. */

@@ -131,6 +131,11 @@ export interface Translations {
     copied: string; copyFailed: string; removed: string; removeFailed: string;
     testing: string; testFailed: string; createFailed: string;
   };
+  monitoring: {
+    title: string; healthExport: string; metrics: string; diagnosticEvents: string;
+    warningLogs: string; otlpEndpoint: string; otlpNotConfigured: string;
+    queueDepth: string; installId: string; on: string; off: string;
+  };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -330,6 +335,13 @@ const en: Translations = {
     removed: "Removed subscription {name}.", removeFailed: "Remove failed: {error}",
     testing: "Firing signed test payload…", testFailed: "Test failed: {error}",
     createFailed: "Create failed: {error}",
+  },
+  monitoring: {
+    title: "Gateway monitoring", healthExport: "Health export",
+    metrics: "Metrics", diagnosticEvents: "Diagnostic events",
+    warningLogs: "Warning/error logs", otlpEndpoint: "OTLP endpoint",
+    otlpNotConfigured: "not configured", queueDepth: "Emitter queue depth",
+    installId: "Install id", on: "on", off: "off",
   },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
@@ -581,6 +593,13 @@ const zh: Translations = {
     testing: "发送签名测试载荷…", testFailed: "测试失败：{error}",
     createFailed: "创建失败：{error}",
   },
+  monitoring: {
+    title: "网关监控", healthExport: "健康导出",
+    metrics: "指标", diagnosticEvents: "诊断事件",
+    warningLogs: "警告/错误日志", otlpEndpoint: "OTLP 端点",
+    otlpNotConfigured: "未配置", queueDepth: "发射队列深度",
+    installId: "安装 ID", on: "开", off: "关",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -830,6 +849,13 @@ const zhHant: Translations = {
     removed: "已刪除訂閱 {name}。", removeFailed: "刪除失敗：{error}",
     testing: "發送簽名測試負載…", testFailed: "測試失敗：{error}",
     createFailed: "建立失敗：{error}",
+  },
+  monitoring: {
+    title: "閘道監控", healthExport: "健康匯出",
+    metrics: "指標", diagnosticEvents: "診斷事件",
+    warningLogs: "警告/錯誤日誌", otlpEndpoint: "OTLP 端點",
+    otlpNotConfigured: "未設定", queueDepth: "發射佇列深度",
+    installId: "安裝 ID", on: "開", off: "關",
   },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
@@ -1081,6 +1107,13 @@ const ja: Translations = {
     testing: "署名付きテストペイロードを送信中…", testFailed: "テストに失敗：{error}",
     createFailed: "作成に失敗：{error}",
   },
+  monitoring: {
+    title: "ゲートウェイ監視", healthExport: "ヘルスエクスポート",
+    metrics: "メトリクス", diagnosticEvents: "診断イベント",
+    warningLogs: "警告/エラーログ", otlpEndpoint: "OTLP エンドポイント",
+    otlpNotConfigured: "未設定", queueDepth: "エミッターキュー深度",
+    installId: "インストール ID", on: "オン", off: "オフ",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1330,6 +1363,13 @@ const ar: Translations = {
     removed: "تم حذف الاشتراك {name}.", removeFailed: "فشل الحذف: {error}",
     testing: "إرسال حمولة اختبار موقعة…", testFailed: "فشل الاختبار: {error}",
     createFailed: "فشل الإنشاء: {error}",
+  },
+  monitoring: {
+    title: "مراقبة البوابة", healthExport: "تصدير الصحة",
+    metrics: "المقاييس", diagnosticEvents: "الأحداث التشخيصية",
+    warningLogs: "سجلات التحذير/الخطأ", otlpEndpoint: "نقطة OTLP",
+    otlpNotConfigured: "غير مهيأة", queueDepth: "عمق قائمة الإرسال",
+    installId: "معرّف التثبيت", on: "مفعّل", off: "معطّل",
   },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",

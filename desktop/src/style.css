@@ -1083,3 +1083,9 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .webhooks-form label.check { flex-direction: row; align-items: center; }
 .webhooks-form textarea, .webhooks-form input { width: 100%; }
 .webhooks-form button[type=submit] { grid-column: 1 / -1; justify-self: start; }
+
+/* Monitoring panel in Doctor view (P277) */
+.doctor-monitoring { margin: 16px 0; border-top: 1px solid rgba(128,128,128,0.2); padding-top: 8px; }
+.monitoring-row { display: flex; gap: 12px; padding: 2px 0; font-size: 13px; }
+.monitoring-label { flex: 0 0 220px; opacity: 0.7; }
+.monitoring-value { font-family: var(--mono, monospace); font-size: 12.5px; }
