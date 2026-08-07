@@ -348,6 +348,22 @@ pub trait PlatformSender: Send + Sync {
     ) -> bool {
         false
     }
+    /// Render a slash-command confirmation natively (hermes
+    /// `send_slash_confirm`: Approve Once / Always Approve / Cancel
+    /// buttons). Button callbacks must route to
+    /// `crate::slash_confirm::resolve(session_key, confirm_id, choice)`.
+    /// Returns false when the platform has no native interactive support —
+    /// the caller falls back to `/approve` text.
+    async fn send_slash_confirm(
+        &self,
+        _chat_id: &str,
+        _title: &str,
+        _message: &str,
+        _session_key: &str,
+        _confirm_id: &str,
+    ) -> bool {
+        false
+    }
 }
 
 fn platform_senders() -> &'static std::sync::Mutex<HashMap<String, Arc<dyn PlatformSender>>> {
@@ -365,6 +381,75 @@ pub fn register_platform_sender(platform: &str, sender: Arc<dyn PlatformSender>)
 
 pub fn platform_sender(platform: &str) -> Option<Arc<dyn PlatformSender>> {
     platform_senders().lock().unwrap().get(platform).cloned()
+}
+
+/// Parse a reply to a pending slash-confirm prompt (hermes gateway/run.py
+/// intercept keyword table). Slash-command forms and plain text both work;
+/// `!`-prefixed replies (Slack-style) are accepted verbatim.
+pub fn parse_slash_confirm_reply(text: &str) -> Option<crate::slash_confirm::ConfirmChoice> {
+    use crate::slash_confirm::ConfirmChoice;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(command) = trimmed.strip_prefix('/') {
+        let first = command.split_whitespace().next().unwrap_or("").to_lowercase();
+        match first.as_str() {
+            "approve" | "yes" | "ok" | "confirm" => return Some(ConfirmChoice::Once),
+            "always" | "remember" => return Some(ConfirmChoice::Always),
+            "cancel" | "no" | "deny" | "nevermind" => return Some(ConfirmChoice::Cancel),
+            _ => {}
+        }
+    }
+    let norm = trimmed.trim_start_matches(['!', '/']).trim().to_lowercase();
+    match norm.as_str() {
+        "approve" | "approve once" | "once" => Some(ConfirmChoice::Once),
+        "always" | "always approve" => Some(ConfirmChoice::Always),
+        "cancel" | "nevermind" | "no" => Some(ConfirmChoice::Cancel),
+        _ => None,
+    }
+}
+
+/// Plain-text slash-confirm prompt (hermes `_request_slash_confirm`
+/// message shape): used on platforms without native buttons.
+pub fn format_slash_confirm_prompt(command: &str, detail: &str) -> String {
+    format!(
+        "⚠️ **Confirm /{command}**\n\n{detail}\n\nChoose:\n         • **Approve Once** — proceed this time only\n         • **Always Approve** — proceed and silence this prompt permanently\n         • **Cancel** — keep things as they are\n\n         _Text fallback: reply `/approve`, `/always`, or `/cancel`._"
+    )
+}
+
+fn next_slash_confirm_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::SeqCst).to_string()
+}
+
+/// Ask the user to confirm an expensive slash command (hermes
+/// `_request_slash_confirm`). Registers the pending confirm FIRST (a
+/// super-fast button click cannot race the send), then tries the
+/// platform's native buttons; returns `None` when buttons rendered (the
+/// buttons are the ack) or the text prompt to send as the direct reply.
+pub async fn request_slash_confirm(
+    platform: &str,
+    chat_id: &str,
+    session_key: &str,
+    command: &str,
+    title: &str,
+    message: &str,
+    handler: crate::slash_confirm::ConfirmHandler,
+) -> Option<String> {
+    let confirm_id = next_slash_confirm_id();
+    crate::slash_confirm::register(session_key, &confirm_id, command, handler);
+    if let Some(sender) = platform_sender(platform) {
+        match sender
+            .send_slash_confirm(chat_id, title, message, session_key, &confirm_id)
+            .await
+        {
+            true => return None,
+            false => {}
+        }
+    }
+    Some(message.to_string())
 }
 
 /// Truncate on a char boundary for approval previews (hermes
@@ -625,7 +710,45 @@ impl Dispatcher {
         // Exec-approval intercept (hermes `/approve` + `/deny` slash
         // commands): resolves a pending blocking approval while the
         // blocked turn holds the busy flag, so it must run before the
-        // busy check below.
+        // busy check below. Tool approvals take precedence over
+        // slash-confirms (hermes `has_blocking_approval` gate).
+        if crate::approval_gateway::has_blocking(&key) {
+            if let Some(cmd) = parse_approval_command(&event.text) {
+                return Ok(DispatchOutcome {
+                    reply: apply_approval_command(&key, cmd),
+                    transcript_echoes: Vec::new(),
+                });
+            }
+        }
+        // Slash-confirm text-fallback intercept (hermes gateway/run.py):
+        // a pending /reload-mcp confirm catches /approve-style replies;
+        // anything else falls through to normal dispatch (a stale pending
+        // confirm never blocks other commands).
+        if let Some(pending) = crate::slash_confirm::get_pending(&key) {
+            if let Some(choice) = parse_slash_confirm_reply(&event.text) {
+                let resolved = crate::slash_confirm::resolve(
+                    &key,
+                    &pending.confirm_id,
+                    choice,
+                    std::time::Duration::from_secs(crate::slash_confirm::DEFAULT_TIMEOUT_SECONDS),
+                )
+                .await;
+                return Ok(DispatchOutcome {
+                    reply: resolved.unwrap_or_default(),
+                    transcript_echoes: Vec::new(),
+                });
+            }
+            crate::slash_confirm::clear_if_stale(
+                &key,
+                std::time::Duration::from_secs(crate::slash_confirm::DEFAULT_TIMEOUT_SECONDS),
+            );
+        }
+        // Gateway slash commands (hermes gateway/slash_commands.py).
+        if event.text.trim() == "/reload-mcp" {
+            return self.handle_reload_mcp_command(&key, &event).await;
+        }
+        // Stray approval commands with nothing pending keep their
+        // historical reply instead of reaching the model.
         if let Some(cmd) = parse_approval_command(&event.text) {
             return Ok(DispatchOutcome {
                 reply: apply_approval_command(&key, cmd),
@@ -663,6 +786,106 @@ impl Dispatcher {
         let result = MESSAGING_CTX.scope(chat_ref, self.run_turn(&key, &event)).await;
         self.busy.lock().await.insert(key, false);
         result
+    }
+
+    /// `/reload-mcp` from a messaging platform (hermes
+    /// `_confirm_and_reload_mcp` gateway path): gate on
+    /// `approvals.mcp_reload_confirm`, deliver the prompt via native
+    /// buttons where the platform supports them or `/approve` text
+    /// otherwise, then rebuild the MCP tool surface on confirmation.
+    async fn handle_reload_mcp_command(
+        self: &Arc<Self>,
+        key: &str,
+        event: &MessageEvent,
+    ) -> Result<DispatchOutcome> {
+        let confirm_required = self.agent.tool_context().config.approvals.mcp_reload_confirm;
+        if !confirm_required {
+            return Ok(DispatchOutcome {
+                reply: self.run_reload_mcp(key).await,
+                transcript_echoes: Vec::new(),
+            });
+        }
+        let detail = "Reloading MCP servers rebuilds the tool surface and invalidates the                       provider prompt cache; the next message re-sends full input tokens                       (expensive on long-context / high-reasoning models).";
+        let message = format_slash_confirm_prompt("reload-mcp", detail);
+        let dispatcher = self.clone();
+        let session = key.to_string();
+        let handler: crate::slash_confirm::ConfirmHandler = Box::new(move |choice| {
+            let dispatcher = dispatcher.clone();
+            let session = session.clone();
+            Box::pin(async move {
+                if choice == crate::slash_confirm::ConfirmChoice::Cancel {
+                    return Some("🟡 /reload-mcp cancelled. MCP tools unchanged.".to_string());
+                }
+                if choice == crate::slash_confirm::ConfirmChoice::Always {
+                    if let Err(e) = crate::config_cmd::set_config_value(
+                        "approvals.mcp_reload_confirm",
+                        "false",
+                        false,
+                    ) {
+                        eprintln!("[messaging] couldn't persist reload-mcp opt-out: {e}");
+                    }
+                }
+                Some(dispatcher.run_reload_mcp(&session).await)
+            })
+        });
+        let ack = request_slash_confirm(
+            &event.platform,
+            &event.chat_id,
+            key,
+            "reload-mcp",
+            "Reload MCP servers?",
+            &message,
+            handler,
+        )
+        .await;
+        // Buttons rendered → no redundant text ack (hermes returns None).
+        Ok(DispatchOutcome {
+            reply: ack.unwrap_or_default(),
+            transcript_echoes: Vec::new(),
+        })
+    }
+
+    /// Run the actual MCP reload and inject the change note at the END of
+    /// the session history (hermes: the model sees the new tool surface
+    /// next turn while the prompt-cache prefix survives).
+    async fn run_reload_mcp(&self, key: &str) -> String {
+        let fresh_config = match crate::config::UlncLawConfig::load(None) {
+            Ok(config) => config,
+            Err(e) => return format!("❌ /reload-mcp failed to re-read config: {e}"),
+        };
+        let report = self.agent.reload_mcp(&fresh_config).await;
+        let formatted = crate::mcp::format_reload_report(&report);
+        let mut change_parts: Vec<String> = Vec::new();
+        if !report.added.is_empty() {
+            change_parts.push(format!("Added servers: {}", report.added.join(", ")));
+        }
+        if !report.removed.is_empty() {
+            change_parts.push(format!("Removed servers: {}", report.removed.join(", ")));
+        }
+        if !report.reconnected.is_empty() {
+            change_parts.push(format!("Reconnected servers: {}", report.reconnected.join(", ")));
+        }
+        if change_parts.is_empty() {
+            change_parts.push("server list unchanged".to_string());
+        }
+        let note = crate::provider::Message {
+            role: crate::provider::Role::User,
+            content: Some(format!(
+                "[system note] MCP tools were just reloaded ({}). {} tool(s) now available.",
+                change_parts.join("; "),
+                report.tool_count
+            )),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        self.histories
+            .lock()
+            .await
+            .entry(key.to_string())
+            .or_default()
+            .push(note);
+        formatted
     }
 
     async fn run_turn(&self, key: &str, event: &MessageEvent) -> Result<DispatchOutcome> {
@@ -5217,5 +5440,174 @@ mod tests {
         // hermes stop_typing: the final call clears the status.
         assert_eq!(statuses.last().map(String::as_str), Some(""));
         assert!(statuses[..statuses.len() - 1].iter().all(|s| s == "is thinking..."));
+    }
+
+    // ------------------------------------------------------------------
+    // Slash-confirm delivery (P244)
+    // ------------------------------------------------------------------
+
+    /// The pending-confirmation registry is process-global; serialize the
+    /// tests that register/clear entries (parallel clears race).
+    fn slash_confirm_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn slash_confirm_reply_parsing() {
+        use crate::slash_confirm::ConfirmChoice;
+        // Slash-command forms.
+        assert_eq!(parse_slash_confirm_reply("/approve"), Some(ConfirmChoice::Once));
+        assert_eq!(parse_slash_confirm_reply("/yes"), Some(ConfirmChoice::Once));
+        assert_eq!(parse_slash_confirm_reply("/always"), Some(ConfirmChoice::Always));
+        assert_eq!(parse_slash_confirm_reply("/remember"), Some(ConfirmChoice::Always));
+        assert_eq!(parse_slash_confirm_reply("/cancel"), Some(ConfirmChoice::Cancel));
+        assert_eq!(parse_slash_confirm_reply("/deny"), Some(ConfirmChoice::Cancel));
+        // Plain text + bang-prefixed (Slack-style).
+        assert_eq!(parse_slash_confirm_reply("approve once"), Some(ConfirmChoice::Once));
+        assert_eq!(parse_slash_confirm_reply("!always"), Some(ConfirmChoice::Always));
+        assert_eq!(parse_slash_confirm_reply("nevermind"), Some(ConfirmChoice::Cancel));
+        // Unrelated text falls through.
+        assert_eq!(parse_slash_confirm_reply("hello there"), None);
+        assert_eq!(parse_slash_confirm_reply(""), None);
+        assert_eq!(parse_slash_confirm_reply("/something-else"), None);
+    }
+
+    fn test_event(text: &str, message_id: &str) -> MessageEvent {
+        MessageEvent {
+            platform: "testplat".into(),
+            chat_id: "chat-1".into(),
+            sender_id: "u1".into(),
+            sender_name: "User".into(),
+            text: text.into(),
+            message_id: message_id.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    fn test_dispatcher() -> Arc<Dispatcher> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let provider = Arc::new(
+            crate::provider::openai::OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let agent =
+            crate::agent::Agent::new(provider, crate::tools::ToolRegistry::new()).with_store(store.clone());
+        Dispatcher::new(Arc::new(agent), store)
+    }
+
+    #[tokio::test]
+    async fn reload_mcp_prompts_then_approve_reloads_and_injects_note() {
+        let _guard = slash_confirm_test_lock();
+        crate::slash_confirm::clear_all_for_tests();
+        let dispatcher = test_dispatcher();
+        let key = "platform-testplat-chat-1".to_string();
+
+        // /reload-mcp is gated (approvals.mcp_reload_confirm defaults on):
+        // the text-fallback prompt goes out and a confirm registers.
+        let outcome = dispatcher.handle_event(test_event("/reload-mcp", "m1")).await.unwrap();
+        assert!(outcome.reply.contains("Confirm /reload-mcp"), "{}", outcome.reply);
+        assert!(outcome.reply.contains("/approve"), "{}", outcome.reply);
+        assert!(crate::slash_confirm::get_pending(&key).is_some());
+
+        // /approve resolves the pending confirm and runs the reload.
+        let outcome = dispatcher.handle_event(test_event("/approve", "m2")).await.unwrap();
+        assert!(
+            outcome.reply.contains("No MCP servers connected"),
+            "{}",
+            outcome.reply
+        );
+        assert!(crate::slash_confirm::get_pending(&key).is_none());
+
+        // The change note lands at the END of the session history.
+        let histories = dispatcher.histories.lock().await;
+        let history = histories.get(&key).expect("history created");
+        let last = history.last().expect("note appended");
+        assert!(last
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("[system note] MCP tools were just reloaded"));
+    }
+
+    #[tokio::test]
+    async fn reload_mcp_cancel_keeps_everything() {
+        let _guard = slash_confirm_test_lock();
+        crate::slash_confirm::clear_all_for_tests();
+        let dispatcher = test_dispatcher();
+        let key = "platform-testplat-chat-1".to_string();
+
+        dispatcher.handle_event(test_event("/reload-mcp", "m1")).await.unwrap();
+        let outcome = dispatcher.handle_event(test_event("cancel", "m2")).await.unwrap();
+        assert!(outcome.reply.contains("cancelled"), "{}", outcome.reply);
+        assert!(crate::slash_confirm::get_pending(&key).is_none());
+        let histories = dispatcher.histories.lock().await;
+        let history = histories.get(&key);
+        assert!(
+            history.map(|h| h.is_empty()).unwrap_or(true),
+            "no change note after cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_message_does_not_resolve_pending_confirm() {
+        let _guard = slash_confirm_test_lock();
+        crate::slash_confirm::clear_all_for_tests();
+        let dispatcher = test_dispatcher();
+        let key = "platform-testplat-chat-1".to_string();
+
+        dispatcher.handle_event(test_event("/reload-mcp", "m1")).await.unwrap();
+        // Busy flag short-circuits the agent turn; the point is the
+        // intercept: "hello" matches no confirm keyword, so the pending
+        // confirm survives (not stale yet).
+        dispatcher.busy.lock().await.insert(key.clone(), true);
+        let outcome = dispatcher.handle_event(test_event("hello", "m2")).await.unwrap();
+        assert!(outcome.reply.contains("still being processed"));
+        assert!(crate::slash_confirm::get_pending(&key).is_some());
+        dispatcher.busy.lock().await.insert(key.clone(), false);
+        crate::slash_confirm::clear_all_for_tests();
+    }
+
+    #[tokio::test]
+    async fn request_slash_confirm_registers_before_sending_and_supersedes() {
+        let _guard = slash_confirm_test_lock();
+        crate::slash_confirm::clear_all_for_tests();
+        let handler: crate::slash_confirm::ConfirmHandler = Box::new(|choice| {
+            Box::pin(async move { Some(format!("done:{}", choice.as_str())) })
+        });
+        // No platform sender registered → text fallback returns the prompt.
+        let ack = request_slash_confirm(
+            "nosuchplat",
+            "chat-9",
+            "platform-nosuchplat-chat-9",
+            "reload-mcp",
+            "title",
+            "prompt body",
+            handler,
+        )
+        .await;
+        assert_eq!(ack.as_deref(), Some("prompt body"));
+        let pending = crate::slash_confirm::get_pending("platform-nosuchplat-chat-9").unwrap();
+
+        // Resolve via the registry with the issued confirm_id.
+        let out = crate::slash_confirm::resolve(
+            "platform-nosuchplat-chat-9",
+            &pending.confirm_id,
+            crate::slash_confirm::ConfirmChoice::Always,
+            std::time::Duration::from_secs(300),
+        )
+        .await;
+        assert_eq!(out.as_deref(), Some("done:always"));
+        crate::slash_confirm::clear_all_for_tests();
     }
 }
