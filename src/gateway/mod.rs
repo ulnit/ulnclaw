@@ -727,6 +727,42 @@ async fn config_put(Json(body): Json<ConfigPutBody>) -> Response {
     .into_response()
 }
 
+/// Query parameters for `GET /api/doctor`.
+#[derive(Debug, Deserialize)]
+struct DoctorQuery {
+    /// Run provider connectivity probes (hermes `doctor --online`); off by
+    /// default so the endpoint stays fast.
+    online: Option<bool>,
+}
+
+/// `GET /api/doctor` — run the doctor report (same checks as
+/// `ulnclaw doctor`) and return it as JSON for the desktop Doctor view
+/// (ulnclaw extension; hermes has no HTTP doctor surface).
+async fn doctor_report(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<DoctorQuery>,
+) -> Response {
+    let config = state.agent.context().config.clone();
+    let online = query.online.unwrap_or(false);
+    let report = tokio::task::spawn_blocking(move || {
+        crate::doctor::run_doctor(
+            &config,
+            &crate::doctor::DoctorOptions {
+                fix: false,
+                online,
+                json: true,
+            },
+        )
+    })
+    .await
+    .unwrap_or_default();
+    Json(json!({
+        "report": serde_json::to_value(&report).unwrap_or(Value::Null),
+        "online": online,
+    }))
+    .into_response()
+}
+
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
     let router = Router::new()
@@ -739,6 +775,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/metrics", get(metrics))
         .route("/api/usage", get(usage))
         .route("/api/config", get(config_get).put(config_put))
+        .route("/api/doctor", get(doctor_report))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(create_response))
         .route(
@@ -7730,6 +7767,33 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(text.contains("theme = \"dark\""), "{text}");
         assert!(text.contains("api_key = \"sk-super-secret\""), "{text}");
         assert!(!text.contains("openrouter"), "{text}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_doctor_endpoint_returns_report() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Requires auth.
+        let (status, _) = get_json(app.clone(), "/api/doctor", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Authenticated: a structured report with sections + issues.
+        let (status, body) = get_json(app.clone(), "/api/doctor", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["online"], false);
+        let sections = body["report"]["sections"].as_array().expect("sections array");
+        assert!(!sections.is_empty(), "doctor report has sections");
+        assert!(body["report"]["issues"].is_array());
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

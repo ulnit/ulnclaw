@@ -270,6 +270,28 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface DoctorCheck {
+  level: "ok" | "warn" | "fail" | "info";
+  text: string;
+  detail?: string;
+}
+
+export interface DoctorSection {
+  title: string;
+  checks: DoctorCheck[];
+}
+
+export interface DoctorReport {
+  sections: DoctorSection[];
+  issues: string[];
+  fixed: number;
+}
+
+export interface DoctorPayload {
+  report: DoctorReport;
+  online: boolean;
+}
+
 export interface ConfigSaveReply {
   ok: boolean;
   applied: string[];
@@ -608,6 +630,16 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`usage HTTP ${response.status}`);
     return (await response.json()) as UsagePayload;
+  }
+
+  /** GET /api/doctor — run the doctor report, optionally with online probes. */
+  async doctor(online = false): Promise<DoctorPayload> {
+    const qs = online ? "?online=true" : "";
+    const response = await fetch(this.endpoint(`/api/doctor${qs}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`doctor HTTP ${response.status}`);
+    return (await response.json()) as DoctorPayload;
   }
 
   /** GET /api/config — config.toml as redacted nested JSON. */

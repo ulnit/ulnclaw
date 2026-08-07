@@ -56,7 +56,7 @@ export function fmt(template: string, vars: Record<string, unknown>): string {
 
 export interface Translations {
   chrome: {
-    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string;
+    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
@@ -117,6 +117,10 @@ export interface Translations {
     removeTitle: string; redactedNote: string; envKeys: string; envKeysNote: string;
     restartNote: string; noKeys: string; noChanges: string; pending: string;
   };
+  doctor: {
+    run: string; running: string; online: string; issues: string;
+    noIssues: string; failed: string; empty: string;
+  };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -141,7 +145,7 @@ export interface Translations {
   palette: {
     placeholder: string; noMatches: string; navigate: string; sessionGroup: string;
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
-    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; newSession: string; switchSession: string;
+    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
@@ -174,7 +178,7 @@ export interface Translations {
 
 const en: Translations = {
   chrome: {
-    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config",
+    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor",
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
@@ -293,6 +297,12 @@ const en: Translations = {
     noKeys: "config.toml is empty.", noChanges: "Nothing to save.",
     pending: "{count} unsaved change(s)",
   },
+  doctor: {
+    run: "Run doctor", running: "Running checks…",
+    online: "Include provider connectivity probes (slow)",
+    issues: "Issues found", noIssues: "✓ No issues found.",
+    failed: "Doctor run failed: {error}", empty: "No checks reported.",
+  },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -336,7 +346,7 @@ const en: Translations = {
     placeholder: "Type a command… (Esc to close)", noMatches: "No matching commands",
     navigate: "Navigate", sessionGroup: "Session", sessionsGroup: "Sessions",
     gatewayGroup: "Gateway", goToChat: "Go to Chat", goToKanban: "Go to Kanban",
-    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config",
+    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor",
     newSession: "New session", switchSession: "Switch session",
     findInChat: "Find in chat", modelForSession: "Model for this session…",
     resumeSession: "Resume session… (/resume)",
@@ -399,7 +409,7 @@ const en: Translations = {
 
 const zh: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断",
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
@@ -518,6 +528,12 @@ const zh: Translations = {
     noKeys: "config.toml 为空。", noChanges: "没有可保存的更改。",
     pending: "{count} 项未保存更改",
   },
+  doctor: {
+    run: "运行诊断", running: "检查中…",
+    online: "包含 provider 连通性探测（较慢）",
+    issues: "发现的问题", noIssues: "✓ 未发现问题。",
+    failed: "诊断失败：{error}", empty: "没有检查项。",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -561,7 +577,7 @@ const zh: Translations = {
     placeholder: "输入命令…（Esc 关闭）", noMatches: "没有匹配的命令",
     navigate: "导航", sessionGroup: "会话", sessionsGroup: "会话列表",
     gatewayGroup: "网关", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置",
+    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断",
     newSession: "新建会话", switchSession: "切换会话",
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
     resumeSession: "恢复会话…（/resume）",
@@ -624,7 +640,7 @@ const zh: Translations = {
 
 const zhHant: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷",
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
@@ -743,6 +759,12 @@ const zhHant: Translations = {
     noKeys: "config.toml 為空。", noChanges: "沒有可儲存的變更。",
     pending: "{count} 項未儲存變更",
   },
+  doctor: {
+    run: "執行診斷", running: "檢查中…",
+    online: "包含 provider 連通性探測（較慢）",
+    issues: "發現的問題", noIssues: "✓ 未發現問題。",
+    failed: "診斷失敗：{error}", empty: "沒有檢查項。",
+  },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -786,7 +808,7 @@ const zhHant: Translations = {
     placeholder: "輸入命令…（Esc 關閉）", noMatches: "沒有符合的命令",
     navigate: "導覽", sessionGroup: "工作階段", sessionsGroup: "工作階段清單",
     gatewayGroup: "閘道", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定",
+    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷",
     newSession: "新增工作階段", switchSession: "切換工作階段",
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
     resumeSession: "恢復工作階段…（/resume）",
@@ -849,7 +871,7 @@ const zhHant: Translations = {
 
 const ja: Translations = {
   chrome: {
-    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定",
+    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター",
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
@@ -968,6 +990,12 @@ const ja: Translations = {
     noKeys: "config.toml は空です。", noChanges: "保存する変更がありません。",
     pending: "未保存の変更 {count} 件",
   },
+  doctor: {
+    run: "ドクターを実行", running: "チェック中…",
+    online: "プロバイダー接続Probeを含む（低速）",
+    issues: "見つかった問題", noIssues: "✓ 問題は見つかりませんでした。",
+    failed: "ドクター実行に失敗：{error}", empty: "チェック項目がありません。",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1011,7 +1039,7 @@ const ja: Translations = {
     placeholder: "コマンドを入力…（Esc で閉じる）", noMatches: "一致するコマンドがありません",
     navigate: "移動", sessionGroup: "セッション", sessionsGroup: "セッション一覧",
     gatewayGroup: "ゲートウェイ", goToChat: "チャットへ", goToKanban: "カンバンへ",
-    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ",
+    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ",
     newSession: "新規セッション", switchSession: "セッションを切り替え",
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
     resumeSession: "セッションを再開…（/resume）",
@@ -1074,7 +1102,7 @@ const ja: Translations = {
 
 const ar: Translations = {
   chrome: {
-    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات",
+    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص",
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
@@ -1193,6 +1221,12 @@ const ar: Translations = {
     noKeys: "config.toml فارغ.", noChanges: "لا شيء للحفظ.",
     pending: "{count} تغيير(ات) غير محفوظة",
   },
+  doctor: {
+    run: "تشغيل الفحص", running: "جارٍ الفحص…",
+    online: "تضمين اختبارات اتصال المزودين (بطيء)",
+    issues: "المشاكل المكتشفة", noIssues: "✓ لم يتم العثور على مشاكل.",
+    failed: "فشل الفحص: {error}", empty: "لا توجد فحوصات.",
+  },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",
@@ -1236,7 +1270,7 @@ const ar: Translations = {
     placeholder: "اكتب أمرًا… (Esc للإغلاق)", noMatches: "لا أوامر مطابقة",
     navigate: "تنقّل", sessionGroup: "الجلسة", sessionsGroup: "الجلسات",
     gatewayGroup: "البوابة", goToChat: "إلى الدردشة", goToKanban: "إلى كانبان",
-    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات",
+    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص",
     newSession: "جلسة جديدة", switchSession: "تبديل الجلسة",
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
     resumeSession: "استئناف جلسة… (/resume)",

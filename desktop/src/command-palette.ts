@@ -27,7 +27,7 @@ export interface CommandPaletteHooks {
   artifacts(): void | Promise<void>;
   learning(): void | Promise<void>;
   findInChat(): void;
-  switchView(view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config"): void;
+  switchView(view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor"): void;
   openSettings(): void;
   refreshSessions(): void | Promise<void>;
 }
@@ -121,6 +121,7 @@ export class CommandPalette {
       { id: "view-jobs", label: t.palette.goToJobs, group: t.palette.navigate, run: () => hooks.switchView("jobs") },
       { id: "view-usage", label: t.palette.goToUsage, group: t.palette.navigate, run: () => hooks.switchView("usage") },
       { id: "view-config", label: t.palette.goToConfig, group: t.palette.navigate, run: () => hooks.switchView("config") },
+      { id: "view-doctor", label: t.palette.goToDoctor, group: t.palette.navigate, run: () => hooks.switchView("doctor") },
       { id: "find", label: t.palette.findInChat, group: t.palette.sessionGroup, hint: "Ctrl/Cmd+F", run: () => hooks.findInChat() },
       { id: "artifacts", label: t.palette.browseArtifacts, group: t.palette.sessionGroup, hint: t.palette.hintArtifacts, run: () => hooks.artifacts() },
       { id: "learning", label: t.palette.learningGraph, group: t.palette.sessionGroup, hint: t.palette.hintLearning, run: () => hooks.learning() },

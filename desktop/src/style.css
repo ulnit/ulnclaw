@@ -1049,3 +1049,19 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .config-env h3 { margin: 8px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.7; }
 .config-env-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .config-env-chip { font-family: var(--mono, monospace); font-size: 12px; padding: 2px 8px; border: 1px solid rgba(128,128,128,0.35); border-radius: 10px; opacity: 0.85; }
+
+/* Doctor view (P274) */
+.doctor-online { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; opacity: 0.85; }
+.doctor-body { padding: 8px 16px; overflow-y: auto; }
+.doctor-issues { border: 1px solid rgba(220,53,69,0.5); background: rgba(220,53,69,0.08); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
+.doctor-issues h3 { margin: 0 0 6px; color: #dc3545; font-size: 13px; }
+.doctor-issues ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.doctor-clean { border: 1px solid rgba(46,204,64,0.4); background: rgba(46,204,64,0.08); color: #2ecc40; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; }
+.doctor-row { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; font-size: 13px; }
+.doctor-icon { flex: 0 0 1.2em; text-align: center; }
+.doctor-ok .doctor-icon { color: #2ecc40; }
+.doctor-warn .doctor-icon { color: #ffc107; }
+.doctor-fail .doctor-icon { color: #dc3545; }
+.doctor-fail .doctor-text { color: #dc3545; }
+.doctor-info .doctor-icon { opacity: 0.6; }
+.doctor-detail { opacity: 0.6; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
