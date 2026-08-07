@@ -168,6 +168,7 @@ export interface Translations {
   };
   logsPanel: { title: string; allLevels: string; };
   mcpPanel: { title: string; none: string; oauthTokens: string; oauthPending: string; connect: string; connecting: string; openAuth: string; approved: string; failed: string; };
+  kanbanPanel: { title: string; none: string; openOf: string; current: string; byStatus: string; blocked: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -424,6 +425,7 @@ const en: Translations = {
   },
   logsPanel: { title: "Gateway log", allLevels: "All levels" },
   mcpPanel: { title: "MCP servers", none: "No MCP servers configured ([mcp] section).", oauthTokens: "oauth (tokens stored)", oauthPending: "oauth (not authorized)", connect: "Connect", connecting: "Starting…", openAuth: "Open authorization page", approved: "Authorized ✓", failed: "OAuth flow failed." },
+  kanbanPanel: { title: "Kanban diagnostics", none: "No kanban boards configured.", openOf: "{open} open · {total} total", current: "current", byStatus: "Status counts", blocked: "Blocked tasks" },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -730,6 +732,7 @@ const zh: Translations = {
   },
   logsPanel: { title: "网关日志", allLevels: "全部级别" },
   mcpPanel: { title: "MCP 服务器", none: "未配置 MCP 服务器（[mcp] 段）。", oauthTokens: "oauth（已存令牌）", oauthPending: "oauth（未授权）", connect: "连接", connecting: "启动中…", openAuth: "打开授权页面", approved: "已授权 ✓", failed: "OAuth 流程失败。" },
+  kanbanPanel: { title: "看板诊断", none: "未配置看板。", openOf: "{open} 进行中 · 共 {total}", current: "当前", byStatus: "状态计数", blocked: "受阻任务" },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -1036,6 +1039,7 @@ const zhHant: Translations = {
   },
   logsPanel: { title: "閘道日誌", allLevels: "全部層級" },
   mcpPanel: { title: "MCP 伺服器", none: "未設定 MCP 伺服器（[mcp] 段）。", oauthTokens: "oauth（已存權杖）", oauthPending: "oauth（未授權）", connect: "連線", connecting: "啟動中…", openAuth: "開啟授權頁面", approved: "已授權 ✓", failed: "OAuth 流程失敗。" },
+  kanbanPanel: { title: "看板診斷", none: "未設定看板。", openOf: "{open} 進行中 · 共 {total}", current: "目前", byStatus: "狀態計數", blocked: "受阻工作" },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -1342,6 +1346,7 @@ const ja: Translations = {
   },
   logsPanel: { title: "ゲートウェイログ", allLevels: "全レベル" },
   mcpPanel: { title: "MCP サーバー", none: "MCP サーバーは未設定です（[mcp] セクション）。", oauthTokens: "oauth（トークン保存済み）", oauthPending: "oauth（未承認）", connect: "接続", connecting: "開始中…", openAuth: "認証ページを開く", approved: "承認済み ✓", failed: "OAuth フローが失敗しました。" },
+  kanbanPanel: { title: "カンバン診断", none: "カンバンボードは未設定です。", openOf: "未完了 {open} · 全 {total}", current: "現在", byStatus: "ステータス別件数", blocked: "ブロック中タスク" },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1648,6 +1653,7 @@ const ar: Translations = {
   },
   logsPanel: { title: "سجل البوابة", allLevels: "كل المستويات" },
   mcpPanel: { title: "خوادم MCP", none: "لا توجد خوادم MCP مهيأة (قسم [mcp]).", oauthTokens: "oauth (الرموز محفوظة)", oauthPending: "oauth (غير مصرح)", connect: "اتصال", connecting: "جارٍ البدء…", openAuth: "فتح صفحة التفويض", approved: "تم التفويض ✓", failed: "فشل تدفق OAuth." },
+  kanbanPanel: { title: "تشخيصات كانبان", none: "لا توجد لوحات كانبان مهيأة.", openOf: "{open} مفتوحة · {total} الإجمالي", current: "الحالية", byStatus: "أعداد الحالات", blocked: "المهام المحظورة" },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",

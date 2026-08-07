@@ -50,6 +50,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="mcpPanel.title">MCP servers</h3>
         <div id="mcp-rows"></div>
       </section>
+      <section id="doctor-kanban" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="kanbanPanel.title">Kanban diagnostics</h3>
+        <div id="kanban-rows"></div>
+      </section>
       <section id="doctor-logs" class="doctor-monitoring doctor-logs" hidden>
         <h3 class="config-section" data-i18n="logsPanel.title">Gateway log</h3>
         <div class="logs-controls">
@@ -78,6 +82,7 @@ export class DoctorWidget {
     this.loadMonitoring().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
+    this.loadKanban().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
       this.logsTimer = window.setInterval(() => {
@@ -305,6 +310,87 @@ export class DoctorWidget {
     }
     note.textContent = message;
     note.classList.toggle("error", isError);
+  }
+
+  /** Kanban diagnostics: boards with open/total counts, current-board
+   * status histogram, and the blocked-task list. */
+  private async loadKanban(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-kanban") as HTMLElement;
+    const rows = this.root.querySelector("#kanban-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const boards = await client.kanbanBoards();
+      rows.innerHTML = "";
+      if (boards.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "config-note";
+        empty.textContent = t.kanbanPanel.none;
+        rows.appendChild(empty);
+        section.hidden = false;
+        return;
+      }
+      for (const board of boards) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const label = document.createElement("span");
+        label.className = "monitoring-label";
+        label.textContent = `${board.name} (${board.slug})`;
+        const value = document.createElement("span");
+        value.className = "monitoring-value";
+        value.textContent =
+          t.kanbanPanel.openOf
+            .replace("{open}", String(board.open_tasks))
+            .replace("{total}", String(board.total_tasks)) +
+          (board.current ? ` · ${t.kanbanPanel.current}` : "");
+        row.append(label, value);
+        rows.appendChild(row);
+      }
+      const current = boards.find((board) => board.current);
+      if (current) {
+        const tasks = await client.kanbanTasks(current.slug);
+        const counts = new Map<string, number>();
+        for (const task of tasks) {
+          counts.set(task.status, (counts.get(task.status) || 0) + 1);
+        }
+        if (counts.size > 0) {
+          const row = document.createElement("div");
+          row.className = "monitoring-row";
+          const label = document.createElement("span");
+          label.className = "monitoring-label";
+          label.textContent = t.kanbanPanel.byStatus;
+          const value = document.createElement("span");
+          value.className = "monitoring-value";
+          value.textContent = Array.from(counts.entries())
+            .map(([status, count]) => `${status}: ${count}`)
+            .join(" · ");
+          row.append(label, value);
+          rows.appendChild(row);
+        }
+        const blocked = tasks.filter((task) => task.status === "blocked");
+        if (blocked.length > 0) {
+          const row = document.createElement("div");
+          row.className = "monitoring-row";
+          const label = document.createElement("span");
+          label.className = "monitoring-label";
+          label.textContent = t.kanbanPanel.blocked;
+          const value = document.createElement("span");
+          value.className = "monitoring-value";
+          value.textContent = blocked
+            .slice(0, 8)
+            .map((task) => task.title || task.id.slice(0, 8))
+            .join("; ");
+          row.append(label, value);
+          rows.appendChild(row);
+        }
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
   }
 
   private async loadLogs(): Promise<void> {
