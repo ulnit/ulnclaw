@@ -56,7 +56,7 @@ export function fmt(template: string, vars: Record<string, unknown>): string {
 
 export interface Translations {
   chrome: {
-    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string;
+    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
@@ -110,6 +110,13 @@ export interface Translations {
     colSession: string; colModel: string; colMessages: string;
     colInput: string; colOutput: string; colTotal: string; colStarted: string;
   };
+  config: {
+    loading: string; notConnected: string; loadFailed: string; save: string;
+    reload: string; saving: string; saved: string; saveFailed: string;
+    addKey: string; keyPlaceholder: string; valuePlaceholder: string; add: string;
+    removeTitle: string; redactedNote: string; envKeys: string; envKeysNote: string;
+    restartNote: string; noKeys: string; noChanges: string; pending: string;
+  };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -134,7 +141,7 @@ export interface Translations {
   palette: {
     placeholder: string; noMatches: string; navigate: string; sessionGroup: string;
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
-    goToProjects: string; goToJobs: string; goToUsage: string; newSession: string; switchSession: string;
+    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
@@ -167,7 +174,7 @@ export interface Translations {
 
 const en: Translations = {
   chrome: {
-    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage",
+    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config",
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
@@ -271,6 +278,21 @@ const en: Translations = {
     colSession: "Session", colModel: "Model", colMessages: "Msgs",
     colInput: "Input", colOutput: "Output", colTotal: "Total", colStarted: "Started",
   },
+  config: {
+    loading: "Loading config…", notConnected: "Gateway not connected.",
+    loadFailed: "Failed to load config: {error}",
+    save: "Save", reload: "Reload", saving: "Saving…",
+    saved: "Saved {count} change(s). Restart the gateway to apply.",
+    saveFailed: "Save failed: {error}",
+    addKey: "Add key", keyPlaceholder: "dotted.key.path",
+    valuePlaceholder: "value (JSON or text)", add: "Add",
+    removeTitle: "Remove this key",
+    redactedNote: "Masked values are secrets; saving an unchanged masked value keeps the original.",
+    envKeys: "Environment keys (.env)", envKeysNote: "Names only — edit the .env file to change values.",
+    restartNote: "Edits apply to new processes; restart the gateway to apply them here.",
+    noKeys: "config.toml is empty.", noChanges: "Nothing to save.",
+    pending: "{count} unsaved change(s)",
+  },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -314,7 +336,7 @@ const en: Translations = {
     placeholder: "Type a command… (Esc to close)", noMatches: "No matching commands",
     navigate: "Navigate", sessionGroup: "Session", sessionsGroup: "Sessions",
     gatewayGroup: "Gateway", goToChat: "Go to Chat", goToKanban: "Go to Kanban",
-    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage",
+    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config",
     newSession: "New session", switchSession: "Switch session",
     findInChat: "Find in chat", modelForSession: "Model for this session…",
     resumeSession: "Resume session… (/resume)",
@@ -377,7 +399,7 @@ const en: Translations = {
 
 const zh: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置",
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
@@ -481,6 +503,21 @@ const zh: Translations = {
     colSession: "会话", colModel: "模型", colMessages: "消息",
     colInput: "输入", colOutput: "输出", colTotal: "总计", colStarted: "开始时间",
   },
+  config: {
+    loading: "加载配置…", notConnected: "未连接网关。",
+    loadFailed: "加载配置失败：{error}",
+    save: "保存", reload: "重新加载", saving: "保存中…",
+    saved: "已保存 {count} 项更改，重启网关后生效。",
+    saveFailed: "保存失败：{error}",
+    addKey: "添加键", keyPlaceholder: "点分键路径",
+    valuePlaceholder: "值（JSON 或文本）", add: "添加",
+    removeTitle: "删除此键",
+    redactedNote: "打码的值是密钥；保存未改动的打码值将保留原密钥。",
+    envKeys: "环境变量键（.env）", envKeysNote: "仅显示名称——修改 .env 文件才能改值。",
+    restartNote: "修改对新进程生效；重启网关后在此生效。",
+    noKeys: "config.toml 为空。", noChanges: "没有可保存的更改。",
+    pending: "{count} 项未保存更改",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -524,7 +561,7 @@ const zh: Translations = {
     placeholder: "输入命令…（Esc 关闭）", noMatches: "没有匹配的命令",
     navigate: "导航", sessionGroup: "会话", sessionsGroup: "会话列表",
     gatewayGroup: "网关", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量",
+    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置",
     newSession: "新建会话", switchSession: "切换会话",
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
     resumeSession: "恢复会话…（/resume）",
@@ -587,7 +624,7 @@ const zh: Translations = {
 
 const zhHant: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定",
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
@@ -691,6 +728,21 @@ const zhHant: Translations = {
     colSession: "工作階段", colModel: "模型", colMessages: "訊息",
     colInput: "輸入", colOutput: "輸出", colTotal: "總計", colStarted: "開始時間",
   },
+  config: {
+    loading: "載入設定…", notConnected: "未連線閘道。",
+    loadFailed: "載入設定失敗：{error}",
+    save: "儲存", reload: "重新載入", saving: "儲存中…",
+    saved: "已儲存 {count} 項變更，重啟閘道後生效。",
+    saveFailed: "儲存失敗：{error}",
+    addKey: "新增鍵", keyPlaceholder: "點分鍵路徑",
+    valuePlaceholder: "值（JSON 或文字）", add: "新增",
+    removeTitle: "刪除此鍵",
+    redactedNote: "遮罩的值是金鑰；儲存未改動的遮罩值將保留原金鑰。",
+    envKeys: "環境變數鍵（.env）", envKeysNote: "僅顯示名稱——修改 .env 檔案才能改值。",
+    restartNote: "修改對新程序生效；重啟閘道後在此生效。",
+    noKeys: "config.toml 為空。", noChanges: "沒有可儲存的變更。",
+    pending: "{count} 項未儲存變更",
+  },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -734,7 +786,7 @@ const zhHant: Translations = {
     placeholder: "輸入命令…（Esc 關閉）", noMatches: "沒有符合的命令",
     navigate: "導覽", sessionGroup: "工作階段", sessionsGroup: "工作階段清單",
     gatewayGroup: "閘道", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量",
+    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定",
     newSession: "新增工作階段", switchSession: "切換工作階段",
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
     resumeSession: "恢復工作階段…（/resume）",
@@ -797,7 +849,7 @@ const zhHant: Translations = {
 
 const ja: Translations = {
   chrome: {
-    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量",
+    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定",
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
@@ -901,6 +953,21 @@ const ja: Translations = {
     colSession: "セッション", colModel: "モデル", colMessages: "件数",
     colInput: "入力", colOutput: "出力", colTotal: "合計", colStarted: "開始",
   },
+  config: {
+    loading: "設定を読み込み中…", notConnected: "ゲートウェイに未接続です。",
+    loadFailed: "設定の読み込みに失敗：{error}",
+    save: "保存", reload: "再読み込み", saving: "保存中…",
+    saved: "{count} 件保存しました。反映にはゲートウェイの再起動が必要です。",
+    saveFailed: "保存に失敗：{error}",
+    addKey: "キーを追加", keyPlaceholder: "ドット区切りパス",
+    valuePlaceholder: "値（JSON またはテキスト）", add: "追加",
+    removeTitle: "このキーを削除",
+    redactedNote: "マスクされた値は秘密です。未変更のマスク値を保存しても元の値は保持されます。",
+    envKeys: "環境キー（.env）", envKeysNote: "名前のみの表示です。値は .env ファイルを編集してください。",
+    restartNote: "変更は新しいプロセスに適用されます。反映にはゲートウェイを再起動してください。",
+    noKeys: "config.toml は空です。", noChanges: "保存する変更がありません。",
+    pending: "未保存の変更 {count} 件",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -944,7 +1011,7 @@ const ja: Translations = {
     placeholder: "コマンドを入力…（Esc で閉じる）", noMatches: "一致するコマンドがありません",
     navigate: "移動", sessionGroup: "セッション", sessionsGroup: "セッション一覧",
     gatewayGroup: "ゲートウェイ", goToChat: "チャットへ", goToKanban: "カンバンへ",
-    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ",
+    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ",
     newSession: "新規セッション", switchSession: "セッションを切り替え",
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
     resumeSession: "セッションを再開…（/resume）",
@@ -1007,7 +1074,7 @@ const ja: Translations = {
 
 const ar: Translations = {
   chrome: {
-    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام",
+    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات",
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
@@ -1111,6 +1178,21 @@ const ar: Translations = {
     colSession: "الجلسة", colModel: "النموذج", colMessages: "رسائل",
     colInput: "دخل", colOutput: "خرج", colTotal: "الإجمالي", colStarted: "البدء",
   },
+  config: {
+    loading: "جارٍ تحميل الإعدادات…", notConnected: "البوابة غير متصلة.",
+    loadFailed: "فشل تحميل الإعدادات: {error}",
+    save: "حفظ", reload: "إعادة تحميل", saving: "جارٍ الحفظ…",
+    saved: "تم حفظ {count} تغيير(ات). أعد تشغيل البوابة للتطبيق.",
+    saveFailed: "فشل الحفظ: {error}",
+    addKey: "إضافة مفتاح", keyPlaceholder: "مسار منقط",
+    valuePlaceholder: "القيمة (JSON أو نص)", add: "إضافة",
+    removeTitle: "إزالة هذا المفتاح",
+    redactedNote: "القيم المموهة أسرار؛ حفظ قيمة مموهة دون تغيير يحافظ على الأصل.",
+    envKeys: "مفاتيح البيئة (.env)", envKeysNote: "الأسماء فقط — حرّر ملف .env لتغيير القيم.",
+    restartNote: "تسري التعديلات على العمليات الجديدة؛ أعد تشغيل البوابة لتطبيقها هنا.",
+    noKeys: "config.toml فارغ.", noChanges: "لا شيء للحفظ.",
+    pending: "{count} تغيير(ات) غير محفوظة",
+  },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",
@@ -1154,7 +1236,7 @@ const ar: Translations = {
     placeholder: "اكتب أمرًا… (Esc للإغلاق)", noMatches: "لا أوامر مطابقة",
     navigate: "تنقّل", sessionGroup: "الجلسة", sessionsGroup: "الجلسات",
     gatewayGroup: "البوابة", goToChat: "إلى الدردشة", goToKanban: "إلى كانبان",
-    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام",
+    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات",
     newSession: "جلسة جديدة", switchSession: "تبديل الجلسة",
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
     resumeSession: "استئناف جلسة… (/resume)",

@@ -262,6 +262,23 @@ export interface UsagePayload {
   sessions: UsageSessionRow[];
 }
 
+export interface ConfigPayload {
+  path: string;
+  config: Record<string, unknown>;
+  redacted: string[];
+  env_keys: string[];
+  note: string;
+}
+
+export interface ConfigSaveReply {
+  ok: boolean;
+  applied: string[];
+  skipped_redacted: string[];
+  path: string;
+  note: string;
+  error?: string;
+}
+
 export function loadSettings(): GatewaySettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -591,6 +608,30 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`usage HTTP ${response.status}`);
     return (await response.json()) as UsagePayload;
+  }
+
+  /** GET /api/config — config.toml as redacted nested JSON. */
+  async configGet(): Promise<ConfigPayload> {
+    const response = await fetch(this.endpoint("/api/config"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`config HTTP ${response.status}`);
+    return (await response.json()) as ConfigPayload;
+  }
+
+  /** PUT /api/config — apply dotted-path sets/unsets to config.toml. */
+  async configSave(
+    set: Record<string, unknown>,
+    unset: string[],
+  ): Promise<ConfigSaveReply> {
+    const response = await fetch(this.endpoint("/api/config"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ set, unset }),
+    });
+    const value = (await response.json().catch(() => ({}))) as ConfigSaveReply;
+    if (!response.ok) {
+      throw new Error(value.error || `config save HTTP ${response.status}`);
+    }
+    return value;
   }
 
   async listSkills(): Promise<SkillRow[]> {

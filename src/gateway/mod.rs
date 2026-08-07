@@ -567,6 +567,166 @@ async fn usage(
     }))
 }
 
+// ── Config editor API (desktop Config view) ───────────────────────────────
+
+/// Placeholder the GET response uses for secret-looking values; PUT ignores
+/// writes that still carry it (so a round-trip never clobbers secrets).
+const CONFIG_REDACTED: &str = "[redacted]";
+
+fn looks_like_secret_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    ["key", "token", "secret", "password", "passwd", "credential"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+/// Recursive serde_json → toml::Value conversion (toml 0.8 has no
+/// TryFrom<serde_json::Value>); objects must stay string-keyed tables.
+fn json_to_toml(value: Value) -> std::result::Result<toml::Value, String> {
+    Ok(match value {
+        Value::Null => toml::Value::String(String::new()),
+        Value::Bool(b) => toml::Value::Boolean(b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                toml::Value::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                toml::Value::Float(f)
+            } else {
+                return Err(format!("number {n} is not representable in TOML"));
+            }
+        }
+        Value::String(t) => toml::Value::String(t),
+        Value::Array(items) => toml::Value::Array(
+            items
+                .into_iter()
+                .map(json_to_toml)
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        ),
+        Value::Object(map) => {
+            let mut table = toml::map::Map::new();
+            for (k, v) in map {
+                table.insert(k, json_to_toml(v)?);
+            }
+            toml::Value::Table(table)
+        }
+    })
+}
+
+/// Redact secret-looking string leaves in place; returns the list of
+/// dotted paths that were masked.
+fn redact_config_value(value: &mut Value, prefix: &str, redacted: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                let path = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                redact_config_value(v, &path, redacted);
+            }
+        }
+        Value::Array(items) => {
+            for (i, v) in items.iter_mut().enumerate() {
+                redact_config_value(v, &format!("{prefix}[{i}]"), redacted);
+            }
+        }
+        Value::String(text) if looks_like_secret_key(prefix.rsplit(['.', '[']).next().unwrap_or(prefix)) => {
+            if !text.is_empty() {
+                *text = CONFIG_REDACTED.to_string();
+                redacted.push(prefix.to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `GET /api/config` — config.toml as nested JSON with secret-looking
+/// leaves redacted, plus the .env key names present on disk (names only,
+/// never values). Desktop Config view backing endpoint (ulnclaw extension).
+async fn config_get() -> Response {
+    let path = crate::config_cmd::config_path();
+    let toml_value = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    let mut json_value = serde_json::to_value(&toml_value).unwrap_or(Value::Null);
+    let mut redacted = Vec::new();
+    redact_config_value(&mut json_value, "", &mut redacted);
+    let env_keys: Vec<String> = crate::dump::dotenv_key_names(&crate::config::ulnclaw_home())
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Json(json!({
+        "path": path.display().to_string(),
+        "config": json_value,
+        "redacted": redacted,
+        "env_keys": env_keys,
+        "note": "edits apply to new CLI/gateway processes; restart the gateway to apply here",
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct ConfigPutBody {
+    #[serde(default)]
+    set: std::collections::BTreeMap<String, Value>,
+    #[serde(default)]
+    unset: Vec<String>,
+}
+
+/// `PUT /api/config` — apply dotted-path sets/unsets to config.toml.
+/// Values equal to the redaction placeholder are skipped so a GET→PUT
+/// round-trip never overwrites real secrets.
+async fn config_put(Json(body): Json<ConfigPutBody>) -> Response {
+    let path = crate::config_cmd::config_path();
+    let mut toml_value = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    let mut applied: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for (key, value) in body.set {
+        if key.trim().is_empty() {
+            continue;
+        }
+        if value == Value::String(CONFIG_REDACTED.to_string()) {
+            skipped.push(key);
+            continue;
+        }
+        let toml_scalar = match json_to_toml(Value::clone(&value)) {
+            Ok(v) => v,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!("value for '{key}' is not representable in TOML")})),
+                )
+                    .into_response()
+            }
+        };
+        if let Err(e) = crate::config_cmd::set_nested(&mut toml_value, &key, toml_scalar) {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+        }
+        applied.push(key);
+    }
+    for key in &body.unset {
+        crate::config_cmd::unset_nested(&mut toml_value, key);
+        applied.push(format!("-{key}"));
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &toml_value) {
+        return server_error(&e);
+    }
+    Json(json!({
+        "ok": true,
+        "applied": applied,
+        "skipped_redacted": skipped,
+        "path": path.display().to_string(),
+        "note": "restart the gateway to apply changes to the running process",
+    }))
+    .into_response()
+}
+
 /// Build the HTTP router (also used by tests).
 pub fn router(state: Arc<GatewayState>) -> Router {
     let router = Router::new()
@@ -578,6 +738,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/capabilities", get(capabilities))
         .route("/metrics", get(metrics))
         .route("/api/usage", get(usage))
+        .route("/api/config", get(config_get).put(config_put))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(create_response))
         .route(
@@ -7517,6 +7678,63 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(status, StatusCode::OK);
         assert!(body["sessions"].as_array().unwrap().is_empty());
         assert_eq!(body["store"]["sessions"], json!(1));
+    }
+
+    #[tokio::test]
+    async fn test_config_endpoint_redacts_and_round_trips() {
+        // The handler reads/writes config.toml under ULNCLAW_HOME — point
+        // it at a temp dir and serialize with other home-overriding tests.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[model]\nprovider = \"openrouter\"\napi_key = \"sk-super-secret\"\n\n[gateway]\nport = 8642\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Requires auth.
+        let (status, _) = get_json(app.clone(), "/api/config", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // GET redacts secret-looking leaves but keeps structure.
+        let (status, body) = get_json(app.clone(), "/api/config", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["config"]["model"]["provider"], "openrouter");
+        assert_eq!(body["config"]["model"]["api_key"], "[redacted]");
+        assert_eq!(body["config"]["gateway"]["port"], 8642);
+        assert!(body["redacted"].as_array().unwrap().iter().any(|v| v == "model.api_key"));
+
+        // PUT: set + unset apply; the redaction placeholder is skipped.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/config", Some("sekret"),
+            json!({
+                "set": {
+                    "gateway.port": 9999,
+                    "model.api_key": "[redacted]",
+                    "display.theme": "dark"
+                },
+                "unset": ["model.provider"],
+            }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["skipped_redacted"], json!(["model.api_key"]));
+
+        // The file on disk reflects the edit; the real secret survived.
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(text.contains("port = 9999"), "{text}");
+        assert!(text.contains("theme = \"dark\""), "{text}");
+        assert!(text.contains("api_key = \"sk-super-secret\""), "{text}");
+        assert!(!text.contains("openrouter"), "{text}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     // ------------------------------------------------------------------

@@ -8,6 +8,7 @@ import { KanbanWidget } from "./kanban";
 import { ProjectsWidget } from "./projects";
 import { JobsWidget } from "./jobs";
 import { UsageWidget } from "./usage";
+import { ConfigWidget } from "./config-view";
 import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
 import { ModelPickerOverlay } from "./model-picker";
@@ -62,6 +63,7 @@ const state = {
   projects: null as ProjectsWidget | null,
   jobs: null as JobsWidget | null,
   usage: null as UsageWidget | null,
+  config: null as ConfigWidget | null,
   pet: null as PetOverlay | null,
   hatch: null as HatchOverlay | null,
   picker: null as ModelPickerOverlay | null,
@@ -71,7 +73,7 @@ const state = {
   learning: null as LearningOverlay | null,
   onboarding: null as OnboardingOverlay | null,
   sessionPicker: null as SessionPickerDialog | null,
-  view: "chat" as "chat" | "kanban" | "projects" | "jobs" | "usage",
+  view: "chat" as "chat" | "kanban" | "projects" | "jobs" | "usage" | "config",
 };
 
 const el = {
@@ -542,7 +544,7 @@ function attachmentNote(): string {
 // ---------------------------------------------------------------------------
 
 let desktopEventsController: AbortController | null = null;
-let activeSwitchView: ((view: "chat" | "kanban" | "projects" | "jobs" | "usage") => void) | null = null;
+let activeSwitchView: ((view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config") => void) | null = null;
 
 interface DesktopEnvelope {
   session_id: string;
@@ -575,7 +577,7 @@ function transcriptText(): string {
 
 function handleDesktopEvent(envelope: DesktopEnvelope): void {
   const payload = envelope.payload ?? {};
-  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage") =>
+  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config") =>
     activeSwitchView?.(view);
   switch (envelope.event) {
     case "preview.open": {
@@ -586,7 +588,7 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
     }
     case "pane.reveal": {
       const pane = String(payload.pane ?? "chat");
-      if (pane === "kanban" || pane === "projects" || pane === "jobs" || pane === "usage") {
+      if (pane === "kanban" || pane === "projects" || pane === "jobs" || pane === "usage" || pane === "config") {
         switchView(pane);
       } else {
         switchView("chat");
@@ -863,11 +865,13 @@ async function start(): Promise<void> {
   const projectsMain = document.getElementById("projects")!;
   const jobsMain = document.getElementById("jobs")!;
   const usageMain = document.getElementById("usage")!;
+  const configMain = document.getElementById("config")!;
   const tabChat = document.getElementById("tab-chat") as HTMLButtonElement;
   const tabKanban = document.getElementById("tab-kanban") as HTMLButtonElement;
   const tabProjects = document.getElementById("tab-projects") as HTMLButtonElement;
   const tabJobs = document.getElementById("tab-jobs") as HTMLButtonElement;
   const tabUsage = document.getElementById("tab-usage") as HTMLButtonElement;
+  const tabConfig = document.getElementById("tab-config") as HTMLButtonElement;
   state.kanban = new KanbanWidget(kanbanMain, () => state.client);
   state.kanban.mount();
   state.projects = new ProjectsWidget(projectsMain, () => state.client);
@@ -876,7 +880,9 @@ async function start(): Promise<void> {
   state.jobs.mount();
   state.usage = new UsageWidget(usageMain, () => state.client);
   state.usage.mount();
-  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage") => {
+  state.config = new ConfigWidget(configMain, () => state.client);
+  state.config.mount();
+  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config") => {
     if (view !== "chat") state.findBar?.close();
     state.view = view;
     chatMain.hidden = view !== "chat";
@@ -884,11 +890,13 @@ async function start(): Promise<void> {
     projectsMain.hidden = view !== "projects";
     jobsMain.hidden = view !== "jobs";
     usageMain.hidden = view !== "usage";
+    configMain.hidden = view !== "config";
     tabChat.classList.toggle("active", view === "chat");
     tabKanban.classList.toggle("active", view === "kanban");
     tabProjects.classList.toggle("active", view === "projects");
     tabJobs.classList.toggle("active", view === "jobs");
     tabUsage.classList.toggle("active", view === "usage");
+    tabConfig.classList.toggle("active", view === "config");
     if (view === "kanban") {
       state.kanban!.start();
     } else {
@@ -909,12 +917,18 @@ async function start(): Promise<void> {
     } else {
       state.usage!.stop();
     }
+    if (view === "config") {
+      state.config!.start();
+    } else {
+      state.config!.stop();
+    }
   };
   tabChat.onclick = () => switchView("chat");
   tabKanban.onclick = () => switchView("kanban");
   tabProjects.onclick = () => switchView("projects");
   tabJobs.onclick = () => switchView("jobs");
   tabUsage.onclick = () => switchView("usage");
+  tabConfig.onclick = () => switchView("config");
 
   // Desktop bridge events (P231) — see startDesktopEvents.
   activeSwitchView = switchView;
