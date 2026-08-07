@@ -3149,6 +3149,247 @@ async fn channels_status(State(_state): State<Arc<GatewayState>>) -> Response {
     }
 }
 
+/// Build one messaging-platform payload row (lean hermes
+/// `_messaging_platform_payload` parity): enabled from
+/// `[messaging.<id>].enabled`, configured from the catalog's
+/// required-field groups (with telegram/discord/slack env fallbacks),
+/// state ladder `disabled` -> `not_configured` -> `connected` (the
+/// gateway is by construction running while serving this endpoint).
+fn messaging_platform_payload(
+    entry: &crate::messaging::PlatformCatalogEntry,
+    messaging_value: &Value,
+    env_on_disk: &HashMap<String, String>,
+) -> Value {
+    let section = messaging_value.get(entry.id).cloned().unwrap_or(Value::Null);
+    let enabled = section.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+    let configured = crate::messaging::platform_configured(&section, entry);
+    let state = if !enabled {
+        "disabled"
+    } else if !configured {
+        "not_configured"
+    } else {
+        "connected"
+    };
+    let env_vars: Vec<Value> = entry
+        .env_keys
+        .iter()
+        .map(|(key, required)| {
+            let value = env_on_disk
+                .get(*key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok())
+                .unwrap_or_default();
+            let is_set = !value.trim().is_empty();
+            json!({
+                "key": key,
+                "required": required,
+                "is_set": is_set,
+                "redacted_value": if is_set { Value::String(crate::status::redact_key(&value)) } else { Value::Null },
+            })
+        })
+        .collect();
+    json!({
+        "id": entry.id,
+        "name": entry.name,
+        "description": entry.description,
+        "docs_url": "",
+        "enabled": enabled,
+        "configured": configured,
+        "gateway_running": true,
+        "state": state,
+        "error_code": null,
+        "error_message": null,
+        "env_vars": env_vars,
+    })
+}
+
+/// `GET /api/messaging/platforms` — messaging-platform catalog with
+/// per-platform enabled/configured posture + env rows (lean hermes
+/// `/api/messaging/platforms` parity; P337). Config.toml-driven
+/// adapters carry no env rows.
+async fn messaging_platforms() -> Response {
+    let result = tokio::task::spawn_blocking(|| {
+        let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let messaging_value = serde_json::to_value(&config.messaging).unwrap_or_else(|_| json!({}));
+        let home = crate::config::ulnclaw_home();
+        let env_on_disk = crate::config::load_env_file(&home.join(".env"));
+        let platforms: Vec<Value> = crate::messaging::platform_catalog()
+            .iter()
+            .map(|entry| messaging_platform_payload(entry, &messaging_value, &env_on_disk))
+            .collect();
+        json!({
+            "env_path": home.join(".env").display().to_string(),
+            "gateway_start_command": "ulnclaw gateway",
+            "platforms": platforms,
+        })
+    })
+    .await;
+    match result {
+        Ok(payload) => Json(payload).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("messaging platforms task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// `PUT /api/messaging/platforms/:id` — toggle
+/// `[messaging.<id>].enabled` and/or set/clear the platform's env keys
+/// in `.env` (lean hermes `update_messaging_platform` parity; P337).
+/// Env keys outside the platform's catalog row are rejected 400.
+async fn messaging_platform_update(
+    Path(platform_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let Some(entry) = crate::messaging::platform_lookup(&platform_id) else {
+        return not_found(&format!("Unknown messaging platform: {platform_id}"));
+    };
+    let allowed: Vec<&str> = entry.env_keys.iter().map(|(key, _)| *key).collect();
+    // Clear first, then set (hermes order).
+    let clear_env: Vec<String> = body["clear_env"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    for key in &clear_env {
+        if !allowed.contains(&key.as_str()) {
+            return bad_request(
+                &format!("{key} is not configurable for {}", entry.name),
+                None,
+            );
+        }
+    }
+    let env_sets: Vec<(String, String)> = body["env"]
+        .as_object()
+        .map(|map| {
+            map.iter()
+                .filter_map(|(key, value)| value.as_str().map(|v| (key.clone(), v.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (key, _) in &env_sets {
+        if !allowed.contains(&key.as_str()) {
+            return bad_request(
+                &format!("{key} is not configurable for {}", entry.name),
+                None,
+            );
+        }
+    }
+    for key in &clear_env {
+        if let Err(e) = crate::config_cmd::unset_config_value(key) {
+            return server_error(&format!("clear {key}: {e}"));
+        }
+    }
+    for (key, value) in &env_sets {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Err(e) = crate::config_cmd::set_config_value(key, trimmed, true) {
+            return server_error(&format!("set {key}: {e}"));
+        }
+    }
+    if let Some(enabled) = body["enabled"].as_bool() {
+        let path = crate::config_cmd::config_path();
+        let mut toml_value = match crate::config_cmd::load_toml(&path) {
+            Ok(v) => v,
+            Err(e) => return server_error(&e),
+        };
+        let dotted = format!("messaging.{platform_id}.enabled");
+        if let Err(e) =
+            crate::config_cmd::set_nested(&mut toml_value, &dotted, toml::Value::Boolean(enabled))
+        {
+            return bad_request(&e, None);
+        }
+        if let Err(e) = crate::config_cmd::save_toml(&path, &toml_value) {
+            return server_error(&e);
+        }
+    }
+    Json(json!({
+        "ok": true,
+        "platform": platform_id,
+        "note": "restart the gateway to apply changes to the running process",
+    }))
+    .into_response()
+}
+
+/// `POST /api/messaging/platforms/:id/test` — posture check answering
+/// `{ok, state, message}` (lean hermes `test_messaging_platform`
+/// parity; P337).
+async fn messaging_platform_test(Path(platform_id): Path<String>) -> Response {
+    let Some(entry) = crate::messaging::platform_lookup(&platform_id) else {
+        return not_found(&format!("Unknown messaging platform: {platform_id}"));
+    };
+    let payload = tokio::task::spawn_blocking(move || {
+        let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let messaging_value = serde_json::to_value(&config.messaging).unwrap_or_else(|_| json!({}));
+        let home = crate::config::ulnclaw_home();
+        let env_on_disk = crate::config::load_env_file(&home.join(".env"));
+        let entry = crate::messaging::platform_lookup(&platform_id).expect("known id");
+        messaging_platform_payload(&entry, &messaging_value, &env_on_disk)
+    })
+    .await;
+    let payload = match payload {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("messaging test task failed: {e}")})),
+            )
+                .into_response()
+        }
+    };
+    let name = entry.name;
+    if payload["enabled"] != Value::Bool(true) {
+        return Json(json!({
+            "ok": false,
+            "state": payload["state"],
+            "message": format!("{name} is disabled. Enable it, then restart the gateway."),
+        }))
+        .into_response();
+    }
+    if payload["configured"] != Value::Bool(true) {
+        let section = serde_json::to_value(
+            crate::config::UlncLawConfig::load(None).unwrap_or_default().messaging,
+        )
+        .unwrap_or_else(|_| json!({}))
+        .get(entry.id)
+        .cloned()
+        .unwrap_or(Value::Null);
+        let missing: Vec<String> = entry
+            .required_any
+            .iter()
+            .filter(|group| {
+                !group.iter().any(|field| {
+                    section
+                        .get(field)
+                        .and_then(|v| v.as_str())
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false)
+                })
+            })
+            .map(|group| group.join("/"))
+            .collect();
+        let message = if missing.is_empty() {
+            "Platform setup is incomplete.".to_string()
+        } else {
+            format!("Missing required setup: {}", missing.join(", "))
+        };
+        return Json(json!({ "ok": false, "state": payload["state"], "message": message }))
+            .into_response();
+    }
+    Json(json!({
+        "ok": true,
+        "state": payload["state"],
+        "message": format!("{name} is connected."),
+    }))
+    .into_response()
+}
+
 /// `GET /api/egress/status` — egress-proxy status text (same
 /// `format_status_text` the `/egress` slash command and CLI print;
 /// tokens always redacted). Desktop Doctor egress panel.
@@ -3591,6 +3832,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/insights", get(insights))
         .route("/api/channels", get(channels_status))
+        .route("/api/messaging/platforms", get(messaging_platforms))
+        .route("/api/messaging/platforms/:id", put(messaging_platform_update))
+        .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
         .route("/api/egress/status", get(egress_status))
         .route("/api/system", get(system_info))
         .route("/api/pairing", get(pairing_status))
@@ -13010,6 +13254,125 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             .expect("gateway.port row");
         assert_eq!(port_row["type"], "number");
         assert!(port_row["default"].is_number());
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_messaging_platforms_catalog_update_and_test() {
+        // Platforms read config.toml + .env under ULNCLAW_HOME — isolate
+        // like the other home-overriding tests.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[messaging.telegram]\nenabled = true\nbot_token = \"111:cfg-token\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Requires auth.
+        let (status, _) = get_json(app.clone(), "/api/messaging/platforms", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Catalog: 26 platforms with posture; telegram enabled+configured,
+        // discord disabled.
+        let (status, body) = get_json(app.clone(), "/api/messaging/platforms", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["env_path"].as_str().unwrap().ends_with(".env"));
+        assert_eq!(body["gateway_start_command"], "ulnclaw gateway");
+        let platforms = body["platforms"].as_array().expect("platforms array");
+        assert_eq!(platforms.len(), 26);
+        let telegram = platforms.iter().find(|p| p["id"] == "telegram").expect("telegram row");
+        assert_eq!(telegram["enabled"], true);
+        assert_eq!(telegram["configured"], true);
+        assert_eq!(telegram["state"], "connected");
+        assert_eq!(telegram["gateway_running"], true);
+        let env_row = &telegram["env_vars"][0];
+        assert_eq!(env_row["key"], "TELEGRAM_BOT_TOKEN");
+        assert_eq!(env_row["required"], true);
+        let discord = platforms.iter().find(|p| p["id"] == "discord").expect("discord row");
+        assert_eq!(discord["enabled"], false);
+        assert_eq!(discord["state"], "disabled");
+
+        // Update: unknown platform -> 404; foreign env key -> 400.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/messaging/platforms/nope", Some("sekret"),
+            json!({ "enabled": true }),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/messaging/platforms/telegram", Some("sekret"),
+            json!({ "env": { "SOME_RANDOM_KEY": "x" } }),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Update: set telegram's env token + enable discord.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/messaging/platforms/telegram", Some("sekret"),
+            json!({ "env": { "TELEGRAM_BOT_TOKEN": "222:env-token" } }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let env_text = std::fs::read_to_string(dir.path().join(".env")).unwrap();
+        assert!(env_text.contains("TELEGRAM_BOT_TOKEN=222:env-token"), "{env_text}");
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/messaging/platforms/discord", Some("sekret"),
+            json!({ "enabled": true }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let toml_text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(toml_text.contains("[messaging.discord]"), "{toml_text}");
+        assert!(toml_text.contains("enabled = true"), "{toml_text}");
+
+        // The catalog now reflects the env row + discord enablement.
+        let (status, body) = get_json(app.clone(), "/api/messaging/platforms", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let platforms = body["platforms"].as_array().unwrap();
+        let telegram = platforms.iter().find(|p| p["id"] == "telegram").unwrap();
+        assert_eq!(telegram["env_vars"][0]["is_set"], true);
+        assert_eq!(telegram["env_vars"][0]["redacted_value"], "222\u{2026}oken");
+        let discord = platforms.iter().find(|p| p["id"] == "discord").unwrap();
+        assert_eq!(discord["enabled"], true);
+        assert_eq!(discord["state"], "not_configured");
+
+        // Test endpoint: telegram connected; discord missing its token;
+        // unknown platform -> 404.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/messaging/platforms/telegram/test", Some("sekret"),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["state"], "connected");
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/messaging/platforms/discord/test", Some("sekret"),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["state"], "not_configured");
+        assert!(body["message"].as_str().unwrap().contains("bot_token"));
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/messaging/platforms/nope/test", Some("sekret"),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Clear the env key again.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/messaging/platforms/telegram", Some("sekret"),
+            json!({ "clear_env": ["TELEGRAM_BOT_TOKEN"] }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let env_text = std::fs::read_to_string(dir.path().join(".env")).unwrap_or_default();
+        assert!(!env_text.contains("222:env-token"), "{env_text}");
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

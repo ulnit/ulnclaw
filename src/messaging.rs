@@ -468,6 +468,216 @@ pub fn platform_sender_names() -> Vec<String> {
     names
 }
 
+/// One messaging-platform catalog row (lean hermes
+/// `_messaging_platform_catalog` parity): static metadata for the
+/// dashboard Channels surface. `env_keys` lists the env vars the
+/// adapter actually honors (telegram/discord/slack fallbacks); the
+/// remaining platforms are config.toml-driven, so their cards carry no
+/// env rows. `required_any` encodes the configured rule: every group
+/// needs at least one non-empty field in `[messaging.<id>]`.
+#[derive(Debug, Clone, Copy)]
+pub struct PlatformCatalogEntry {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub env_keys: &'static [(&'static str, bool)],
+    pub required_any: &'static [&'static [&'static str]],
+}
+
+/// The messaging platform catalog (hermes ChannelsPage inventory).
+/// Ordering mirrors `connected_messaging_platforms` callers' display
+/// order (the `/api/channels` list).
+pub fn platform_catalog() -> Vec<PlatformCatalogEntry> {
+    vec![
+        PlatformCatalogEntry {
+            id: "telegram", name: "Telegram",
+            description: "Bot API long-polling adapter",
+            env_keys: &[("TELEGRAM_BOT_TOKEN", true)],
+            required_any: &[&["bot_token"]],
+        },
+        PlatformCatalogEntry {
+            id: "discord", name: "Discord",
+            description: "Gateway v10 websocket + REST adapter",
+            env_keys: &[("DISCORD_BOT_TOKEN", true)],
+            required_any: &[&["bot_token"]],
+        },
+        PlatformCatalogEntry {
+            id: "slack", name: "Slack",
+            description: "Socket Mode websocket + chat.postMessage adapter",
+            env_keys: &[("SLACK_BOT_TOKEN", true), ("SLACK_APP_TOKEN", true)],
+            required_any: &[&["bot_token"], &["app_token"]],
+        },
+        PlatformCatalogEntry {
+            id: "signal", name: "Signal",
+            description: "signal-cli HTTP daemon adapter",
+            env_keys: &[],
+            required_any: &[&["http_url"], &["account"]],
+        },
+        PlatformCatalogEntry {
+            id: "weixin", name: "Weixin",
+            description: "Weixin personal account via the iLink Bot API",
+            env_keys: &[],
+            required_any: &[&["token"], &["base_url"]],
+        },
+        PlatformCatalogEntry {
+            id: "qq", name: "QQ",
+            description: "Official QQ Bot API v2 adapter",
+            env_keys: &[],
+            required_any: &[&["app_id"], &["client_secret"]],
+        },
+        PlatformCatalogEntry {
+            id: "yuanbao", name: "Yuanbao",
+            description: "Yuanbao WS-gateway adapter",
+            env_keys: &[],
+            required_any: &[&["app_id"], &["app_secret"]],
+        },
+        PlatformCatalogEntry {
+            id: "email", name: "Email",
+            description: "Email via IMAP/SMTP",
+            env_keys: &[],
+            required_any: &[&["password"]],
+        },
+        PlatformCatalogEntry {
+            id: "mattermost", name: "Mattermost",
+            description: "Mattermost REST v4 + WebSocket adapter",
+            env_keys: &[],
+            required_any: &[&["url"], &["token"]],
+        },
+        PlatformCatalogEntry {
+            id: "matrix", name: "Matrix",
+            description: "Matrix Client-Server API adapter (sans E2EE)",
+            env_keys: &[],
+            required_any: &[&["homeserver"], &["access_token", "password"]],
+        },
+        PlatformCatalogEntry {
+            id: "dingtalk", name: "DingTalk",
+            description: "DingTalk Stream Mode adapter",
+            env_keys: &[],
+            required_any: &[&["client_id"], &["client_secret"]],
+        },
+        PlatformCatalogEntry {
+            id: "wecom", name: "WeCom",
+            description: "WeCom AI Bot WebSocket gateway adapter",
+            env_keys: &[],
+            required_any: &[&["bot_id"], &["secret"]],
+        },
+        PlatformCatalogEntry {
+            id: "feishu", name: "Feishu/Lark",
+            description: "Feishu/Lark gateway webhook adapter",
+            env_keys: &[],
+            required_any: &[&["app_id"], &["app_secret"]],
+        },
+        PlatformCatalogEntry {
+            id: "homeassistant", name: "Home Assistant",
+            description: "Home Assistant WS API state-change events",
+            env_keys: &[],
+            required_any: &[&["url"], &["token"]],
+        },
+        PlatformCatalogEntry {
+            id: "sms", name: "SMS (Twilio)",
+            description: "Twilio SMS via REST + gateway webhook",
+            env_keys: &[],
+            required_any: &[&["account_sid"], &["auth_token"]],
+        },
+        PlatformCatalogEntry {
+            id: "whatsapp", name: "WhatsApp",
+            description: "WhatsApp via an external Baileys HTTP bridge",
+            env_keys: &[],
+            required_any: &[&["bridge_url"]],
+        },
+        PlatformCatalogEntry {
+            id: "irc", name: "IRC",
+            description: "IRC via a zero-dependency TLS client",
+            env_keys: &[],
+            required_any: &[&["server"], &["nickname"]],
+        },
+        PlatformCatalogEntry {
+            id: "ntfy", name: "ntfy",
+            description: "ntfy topics via HTTP streaming",
+            env_keys: &[],
+            required_any: &[&["server"], &["topic"]],
+        },
+        PlatformCatalogEntry {
+            id: "simplex", name: "SimpleX",
+            description: "SimpleX via the simplex-chat daemon WS API",
+            env_keys: &[],
+            required_any: &[&["ws_url"]],
+        },
+        PlatformCatalogEntry {
+            id: "teams", name: "Microsoft Teams",
+            description: "Microsoft Teams via the raw Bot Framework protocol",
+            env_keys: &[],
+            required_any: &[&["client_id"], &["client_secret"]],
+        },
+        PlatformCatalogEntry {
+            id: "line", name: "LINE",
+            description: "LINE Messaging API adapter",
+            env_keys: &[],
+            required_any: &[&["channel_access_token"], &["channel_secret"]],
+        },
+        PlatformCatalogEntry {
+            id: "google_chat", name: "Google Chat",
+            description: "Google Chat service-account HTTP events adapter",
+            env_keys: &[],
+            required_any: &[&["service_account_file"]],
+        },
+        PlatformCatalogEntry {
+            id: "buzz", name: "Buzz",
+            description: "Buzz CLI bridge adapter",
+            env_keys: &[],
+            required_any: &[&["cli_path"], &["self_pubkey"]],
+        },
+        PlatformCatalogEntry {
+            id: "photon", name: "Photon",
+            description: "Photon sidecar bridge adapter",
+            env_keys: &[],
+            required_any: &[&["sidecar_url"]],
+        },
+        PlatformCatalogEntry {
+            id: "raft", name: "Raft",
+            description: "Raft bridge runtime adapter",
+            env_keys: &[],
+            required_any: &[&["bridge_token"]],
+        },
+        PlatformCatalogEntry {
+            id: "a2a", name: "A2A",
+            description: "Agent-to-agent protocol adapter",
+            env_keys: &[],
+            required_any: &[&["public_url"]],
+        },
+    ]
+}
+
+/// Look up one catalog entry by platform id.
+pub fn platform_lookup(id: &str) -> Option<PlatformCatalogEntry> {
+    platform_catalog().into_iter().find(|entry| entry.id == id)
+}
+
+/// Whether `[messaging.<id>]` carries the credentials the adapter
+/// needs: every `required_any` group must have at least one non-empty
+/// string field. Telegram/Discord/Slack also honor their env fallbacks.
+pub fn platform_configured(section: &serde_json::Value, entry: &PlatformCatalogEntry) -> bool {
+    let env_satisfies = |group: &[&str]| -> bool {
+        entry.env_keys.iter().any(|(key, _)| {
+            group.iter().any(|field| {
+                key.ends_with(&format!("_{}", field.to_uppercase()))
+                    && std::env::var(key)
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false)
+            })
+        })
+    };
+    entry.required_any.iter().all(|group| {
+        group.iter().any(|field| {
+            section
+                .get(field)
+                .and_then(|v| v.as_str())
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false)
+        }) || env_satisfies(group)
+    })
+}
+
 /// Parse a reply to a pending slash-confirm prompt (hermes gateway/run.py
 /// intercept keyword table). Slash-command forms and plain text both work;
 /// `!`-prefixed replies (Slack-style) are accepted verbatim.

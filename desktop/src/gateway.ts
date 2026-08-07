@@ -495,6 +495,28 @@ export interface ConfigSchemaField {
   default: unknown;
 }
 
+/** One GET /api/messaging/platforms row (P337). */
+export interface MessagingPlatformEnvVar {
+  key: string;
+  required: boolean;
+  is_set: boolean;
+  redacted_value: string | null;
+}
+
+export interface MessagingPlatform {
+  id: string;
+  name: string;
+  description: string;
+  docs_url: string;
+  enabled: boolean;
+  configured: boolean;
+  gateway_running: boolean;
+  state: string;
+  error_code: string | null;
+  error_message: string | null;
+  env_vars: MessagingPlatformEnvVar[];
+}
+
 /** Update-check result from GET /api/update/check (P324). */
 export interface UpdateCheckResult {
   install_method: string;
@@ -1592,6 +1614,55 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `env reveal HTTP ${response.status}`);
     return String(value.value ?? "");
+  }
+
+  /** GET /api/messaging/platforms — catalog with posture (P337). */
+  async messagingPlatforms(): Promise<MessagingPlatform[]> {
+    const response = await fetch(this.endpoint("/api/messaging/platforms"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `messaging platforms HTTP ${response.status}`);
+    return (value.platforms || []) as MessagingPlatform[];
+  }
+
+  /** PUT /api/messaging/platforms/:id — enable toggle + env set/clear
+   * (P337). */
+  async messagingPlatformUpdate(
+    id: string,
+    body: { enabled?: boolean; env?: Record<string, string>; clear_env?: string[] },
+  ): Promise<void> {
+    const response = await fetch(
+      this.endpoint(`/api/messaging/platforms/${encodeURIComponent(id)}`),
+      {
+        method: "PUT",
+        headers: { ...this.headers(), "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(value.error || `messaging platform update HTTP ${response.status}`);
+    }
+  }
+
+  /** POST /api/messaging/platforms/:id/test — posture probe (P337). */
+  async messagingPlatformTest(
+    id: string,
+  ): Promise<{ ok: boolean; state: string; message: string }> {
+    const response = await fetch(
+      this.endpoint(`/api/messaging/platforms/${encodeURIComponent(id)}/test`),
+      {
+        method: "POST",
+        headers: { ...this.headers(), "content-type": "application/json" },
+        body: "{}",
+      },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(value.error || `messaging platform test HTTP ${response.status}`);
+    }
+    return value as { ok: boolean; state: string; message: string };
   }
 
   /** GET /api/config/defaults — full default config as JSON (P336). */

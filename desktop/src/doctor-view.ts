@@ -3,7 +3,7 @@
 // grouped by section, with an issues panel up top. Online provider
 // probes are opt-in since they are slow.
 
-import type { GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload } from "./gateway";
+import type { GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
 import { t } from "./i18n";
 
 const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
@@ -883,36 +883,124 @@ export class DoctorWidget {
       return;
     }
     try {
-      const channels = await client.channels();
-      const enabled = channels.filter((channel) => channel.enabled);
-      const disabled = channels.filter((channel) => !channel.enabled);
+      let platforms: MessagingPlatform[] | null = null;
+      try {
+        platforms = await client.messagingPlatforms();
+      } catch {
+        platforms = null; // older gateway: fall back to /api/channels
+      }
       rows.innerHTML = "";
 
-      const enabledRow = document.createElement("div");
-      enabledRow.className = "monitoring-row";
-      const enabledLabel = document.createElement("span");
-      enabledLabel.className = "monitoring-label";
-      enabledLabel.textContent = t.channelsPanel.enabled;
-      const enabledValue = document.createElement("span");
-      enabledValue.className = "monitoring-value";
-      enabledValue.innerHTML = enabled.length
-        ? enabled
-            .map((channel) => `<span class="models-view-badge ok">${escapeHtmlDoctor(channel.name)}</span>`)
-            .join(" ")
-        : escapeHtmlDoctor(t.channelsPanel.noneEnabled);
-      enabledRow.append(enabledLabel, enabledValue);
-      rows.appendChild(enabledRow);
+      const stateBadge = (state: string): string => {
+        const cls = state === "connected" ? "ok" : state === "disabled" ? "" : "warn";
+        const label =
+          state === "connected"
+            ? t.channelsPanel.stateConnected
+            : state === "not_configured"
+              ? t.channelsPanel.stateNotConfigured
+              : state;
+        return `<span class="models-view-badge ${cls}">${escapeHtmlDoctor(label)}</span>`;
+      };
 
-      const disabledRow = document.createElement("div");
-      disabledRow.className = "monitoring-row";
-      const disabledLabel = document.createElement("span");
-      disabledLabel.className = "monitoring-label";
-      disabledLabel.textContent = t.channelsPanel.disabled;
-      const disabledValue = document.createElement("span");
-      disabledValue.className = "monitoring-value channels-disabled";
-      disabledValue.textContent = disabled.map((channel) => channel.name).join(", ");
-      disabledRow.append(disabledLabel, disabledValue);
-      rows.appendChild(disabledRow);
+      if (platforms && platforms.length) {
+        const enabled = platforms.filter((platform) => platform.enabled);
+        const disabled = platforms.filter((platform) => !platform.enabled);
+
+        const enabledRow = document.createElement("div");
+        enabledRow.className = "monitoring-row";
+        const enabledLabel = document.createElement("span");
+        enabledLabel.className = "monitoring-label";
+        enabledLabel.textContent = t.channelsPanel.enabled;
+        const enabledValue = document.createElement("span");
+        enabledValue.className = "monitoring-value";
+        enabledValue.innerHTML = enabled.length
+          ? enabled
+              .map((platform) => `${escapeHtmlDoctor(platform.name)} ${stateBadge(platform.state)}`)
+              .join(" ")
+          : escapeHtmlDoctor(t.channelsPanel.noneEnabled);
+        enabledRow.append(enabledLabel, enabledValue);
+        rows.appendChild(enabledRow);
+
+        const disabledRow = document.createElement("div");
+        disabledRow.className = "monitoring-row";
+        const disabledLabel = document.createElement("span");
+        disabledLabel.className = "monitoring-label";
+        disabledLabel.textContent = t.channelsPanel.disabled;
+        const disabledValue = document.createElement("span");
+        disabledValue.className = "monitoring-value channels-disabled";
+        disabledValue.textContent = disabled.map((platform) => platform.name).join(", ");
+        disabledRow.append(disabledLabel, disabledValue);
+        rows.appendChild(disabledRow);
+
+        // Per-enabled-platform probe rows (hermes ChannelsPage test button).
+        for (const platform of enabled) {
+          const row = document.createElement("div");
+          row.className = "monitoring-row";
+          const label = document.createElement("span");
+          label.className = "monitoring-label";
+          label.textContent = platform.name;
+          label.title = platform.description;
+          const value = document.createElement("span");
+          value.className = "monitoring-value";
+          const note = document.createElement("span");
+          note.className = "jobs-counts";
+          const missingEnv = platform.env_vars.filter((envVar) => envVar.required && !envVar.is_set);
+          note.textContent = platform.configured
+            ? platform.state
+            : `${platform.state} \u00b7 ${t.channelsPanel.stateNotConfigured}`;
+          value.appendChild(note);
+          const test = document.createElement("button");
+          test.className = "ghost";
+          test.textContent = t.channelsPanel.test;
+          test.onclick = async () => {
+            test.disabled = true;
+            try {
+              const result = await client.messagingPlatformTest(platform.id);
+              note.textContent = result.message;
+            } catch (error) {
+              note.textContent = error instanceof Error ? error.message : String(error);
+            } finally {
+              test.disabled = false;
+            }
+          };
+          if (missingEnv.length) {
+            note.textContent += ` \u00b7 ${missingEnv.map((envVar) => envVar.key).join(", ")}`;
+          }
+          value.appendChild(test);
+          row.append(label, value);
+          rows.appendChild(row);
+        }
+      } else {
+        const channels = await client.channels();
+        const enabled = channels.filter((channel) => channel.enabled);
+        const disabled = channels.filter((channel) => !channel.enabled);
+
+        const enabledRow = document.createElement("div");
+        enabledRow.className = "monitoring-row";
+        const enabledLabel = document.createElement("span");
+        enabledLabel.className = "monitoring-label";
+        enabledLabel.textContent = t.channelsPanel.enabled;
+        const enabledValue = document.createElement("span");
+        enabledValue.className = "monitoring-value";
+        enabledValue.innerHTML = enabled.length
+          ? enabled
+              .map((channel) => `<span class="models-view-badge ok">${escapeHtmlDoctor(channel.name)}</span>`)
+              .join(" ")
+          : escapeHtmlDoctor(t.channelsPanel.noneEnabled);
+        enabledRow.append(enabledLabel, enabledValue);
+        rows.appendChild(enabledRow);
+
+        const disabledRow = document.createElement("div");
+        disabledRow.className = "monitoring-row";
+        const disabledLabel = document.createElement("span");
+        disabledLabel.className = "monitoring-label";
+        disabledLabel.textContent = t.channelsPanel.disabled;
+        const disabledValue = document.createElement("span");
+        disabledValue.className = "monitoring-value channels-disabled";
+        disabledValue.textContent = disabled.map((channel) => channel.name).join(", ");
+        disabledRow.append(disabledLabel, disabledValue);
+        rows.appendChild(disabledRow);
+      }
 
       section.hidden = false;
     } catch {
