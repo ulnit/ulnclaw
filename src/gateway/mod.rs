@@ -1160,6 +1160,351 @@ async fn update_apply_api() -> Response {
     }
 }
 
+// ---------------------------------------------------------------------
+// /api/fs — filesystem browser endpoints (hermes `/api/fs/*` parity).
+// ---------------------------------------------------------------------
+
+const FS_READDIR_HIDDEN: &[&str] = &[
+    ".git", ".hg", ".svn", ".cache", ".next", ".turbo", ".venv",
+    "__pycache__", "build", "dist", "node_modules", "target", "venv",
+];
+const FS_TEXT_SOURCE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const FS_TEXT_PREVIEW_MAX_BYTES: u64 = 512 * 1024;
+const FS_TEXT_WRITE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const FS_DATA_URL_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+struct FsPathQuery {
+    path: Option<String>,
+}
+
+/// Expand `~`, absolutize against the process cwd and canonicalize when
+/// possible (hermes `_fs_path`; resolve(strict=False) fallback).
+fn fs_resolve_path(raw: &str) -> std::result::Result<PathBuf, (StatusCode, String)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Path is required".to_string()));
+    }
+    if raw.contains('\0') {
+        return Err((StatusCode::BAD_REQUEST, "Invalid path".to_string()));
+    }
+    let expanded = if let Some(stripped) = raw.strip_prefix('~') {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        home.join(stripped.trim_start_matches('/'))
+    } else {
+        PathBuf::from(raw)
+    };
+    let candidate = if expanded.is_absolute() {
+        expanded
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(expanded)
+    };
+    Ok(candidate.canonicalize().unwrap_or(candidate))
+}
+
+fn fs_query_path(query: &FsPathQuery) -> std::result::Result<PathBuf, Response> {
+    fs_resolve_path(query.path.as_deref().unwrap_or_default())
+        .map_err(|(status, message)| (status, Json(json!({ "error": message }))).into_response())
+}
+
+fn fs_mime_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
+        Some("md") | Some("markdown") => "text/markdown",
+        Some("txt") | Some("log") => "text/plain",
+        Some("rs") => "text/x-rust",
+        Some("py") => "text/x-python",
+        Some("ts") => "text/typescript",
+        Some("tsx") => "text/tsx",
+        Some("js") => "text/javascript",
+        Some("jsx") => "text/jsx",
+        Some("json") => "application/json",
+        Some("toml") => "text/x-toml",
+        Some("yaml") | Some("yml") => "text/yaml",
+        Some("html") => "text/html",
+        Some("css") => "text/css",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("pdf") => "application/pdf",
+        Some("zip") => "application/zip",
+        Some("wav") => "audio/wav",
+        Some("mp3") => "audio/mpeg",
+        Some("webm") => "audio/webm",
+        Some("mp4") => "video/mp4",
+        _ => "application/octet-stream",
+    }
+}
+
+fn fs_looks_binary(data: &[u8]) -> bool {
+    if data.is_empty() {
+        return false;
+    }
+    if data.contains(&0) {
+        return true;
+    }
+    let suspicious = data
+        .iter()
+        .filter(|&&byte| byte < 32 && byte != 9 && byte != 10 && byte != 13)
+        .count();
+    (suspicious as f64 / data.len() as f64) > 0.12
+}
+
+/// Stat guard for read endpoints (hermes `_fs_regular_file`).
+fn fs_regular_file(path: &std::path::Path) -> std::result::Result<std::fs::Metadata, Response> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "File not found" }))).into_response());
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err((StatusCode::FORBIDDEN, Json(json!({ "error": "File is not readable" }))).into_response());
+        }
+        Err(err) => {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": err.to_string() }))).into_response());
+        }
+    };
+    if meta.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "Path points to a directory" }))).into_response());
+    }
+    if !meta.is_file() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "Only regular files can be read" }))).into_response());
+    }
+    Ok(meta)
+}
+
+fn fs_find_git_root(start: &std::path::Path) -> Option<PathBuf> {
+    let mut directory = if start.is_dir() { start.to_path_buf() } else { start.parent()?.to_path_buf() };
+    for _ in 0..50 {
+        if directory.join(".git").exists() {
+            return Some(directory);
+        }
+        match directory.parent() {
+            Some(parent) if parent != directory => directory = parent.to_path_buf(),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// `GET /api/fs/list` — directory listing with hermes' hidden set and
+/// directories-first ordering (hermes `/api/fs/list` parity).
+async fn fs_list(Query(query): Query<FsPathQuery>) -> Response {
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let read_dir = match std::fs::read_dir(&target) {
+        Ok(read_dir) => read_dir,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Json(json!({ "entries": [], "error": "ENOENT" })).into_response();
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Json(json!({ "entries": [], "error": "EACCES" })).into_response();
+        }
+        Err(_) => {
+            return Json(json!({ "entries": [], "error": "ENOTDIR" })).into_response();
+        }
+    };
+    let mut entries = Vec::new();
+    for entry in read_dir.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if FS_READDIR_HIDDEN.contains(&name.as_str()) {
+            continue;
+        }
+        let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        entries.push(json!({
+            "name": name,
+            "path": entry.path(),
+            "isDirectory": is_directory,
+        }));
+    }
+    entries.sort_by(|a, b| {
+        let a_dir = a["isDirectory"].as_bool().unwrap_or(false);
+        let b_dir = b["isDirectory"].as_bool().unwrap_or(false);
+        let a_name = a["name"].as_str().unwrap_or_default().to_lowercase();
+        let b_name = b["name"].as_str().unwrap_or_default().to_lowercase();
+        b_dir.cmp(&a_dir).then_with(|| a_name.cmp(&b_name))
+    });
+    Json(json!({ "entries": entries })).into_response()
+}
+
+/// `GET /api/fs/read-text` — capped UTF-8 preview with binary sniffing
+/// and extension-based language hints (hermes `/api/fs/read-text` parity).
+async fn fs_read_text(Query(query): Query<FsPathQuery>) -> Response {
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let meta = match fs_regular_file(&target) {
+        Ok(meta) => meta,
+        Err(response) => return response,
+    };
+    if meta.len() > FS_TEXT_SOURCE_MAX_BYTES {
+        return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({ "error": "File too large" }))).into_response();
+    }
+    let data = match std::fs::read(&target) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "File is not readable" }))).into_response();
+        }
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": err.to_string() }))).into_response();
+        }
+    };
+    let truncated = data.len() as u64 > FS_TEXT_PREVIEW_MAX_BYTES;
+    let preview: Vec<u8> = data.into_iter().take(FS_TEXT_PREVIEW_MAX_BYTES as usize).collect();
+    let binary = fs_looks_binary(&preview[..preview.len().min(4096)]);
+    let language = match target.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
+        Some("rs") => "rust",
+        Some("py") => "python",
+        Some("ts") | Some("tsx") => "typescript",
+        Some("js") | Some("jsx") => "javascript",
+        Some("json") => "json",
+        Some("toml") => "toml",
+        Some("yaml") | Some("yml") => "yaml",
+        Some("md") | Some("markdown") => "markdown",
+        Some("html") => "html",
+        Some("css") => "css",
+        _ => "text",
+    };
+    Json(json!({
+        "binary": binary,
+        "byteSize": meta.len(),
+        "language": language,
+        "mimeType": fs_mime_type(&target),
+        "path": target,
+        "text": String::from_utf8_lossy(&preview),
+        "truncated": truncated,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct FsWriteTextRequest {
+    path: String,
+    #[serde(default)]
+    content: String,
+}
+
+/// `POST /api/fs/write-text` — atomic (tmp + rename) overwrite/create of
+/// a UTF-8 text file; parent must exist (hermes `/api/fs/write-text`
+/// parity).
+async fn fs_write_text(Json(request): Json<FsWriteTextRequest>) -> Response {
+    let target = match fs_resolve_path(&request.path) {
+        Ok(target) => target,
+        Err((status, message)) => {
+            return (status, Json(json!({ "error": message }))).into_response();
+        }
+    };
+    let bytes = request.content.as_bytes();
+    if bytes.len() > FS_TEXT_WRITE_MAX_BYTES {
+        return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({ "error": "Content too large" }))).into_response();
+    }
+    match std::fs::metadata(&target) {
+        Ok(meta) if meta.is_dir() => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Path points to a directory" }))).into_response();
+        }
+        Ok(meta) if !meta.is_file() => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Only regular files can be written" }))).into_response();
+        }
+        _ => {}
+    }
+    let Some(parent) = target.parent() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid path" }))).into_response();
+    };
+    if !parent.is_dir() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Parent directory does not exist" }))).into_response();
+    }
+    let file_name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let tmp = parent.join(format!(".{file_name}.ulnclaw-tmp-{}", std::process::id()));
+    if let Err(err) = std::fs::write(&tmp, bytes) {
+        std::fs::remove_file(&tmp).ok();
+        let status = if err.kind() == std::io::ErrorKind::PermissionDenied {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        return (status, Json(json!({ "error": format!("Could not write file: {err}") }))).into_response();
+    }
+    if let Err(err) = std::fs::rename(&tmp, &target) {
+        std::fs::remove_file(&tmp).ok();
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Could not write file: {err}") }))).into_response();
+    }
+    Json(json!({ "ok": true, "path": target, "byteSize": bytes.len() })).into_response()
+}
+
+/// `GET /api/fs/read-data-url` — base64 data URL for small files
+/// (hermes `/api/fs/read-data-url` parity).
+async fn fs_read_data_url(Query(query): Query<FsPathQuery>) -> Response {
+    use base64::Engine as _;
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let meta = match fs_regular_file(&target) {
+        Ok(meta) => meta,
+        Err(response) => return response,
+    };
+    if meta.len() > FS_DATA_URL_MAX_BYTES {
+        return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({ "error": "File too large" }))).into_response();
+    }
+    let data = match std::fs::read(&target) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "File is not readable" }))).into_response();
+        }
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": err.to_string() }))).into_response();
+        }
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    Json(json!({ "dataUrl": format!("data:{};base64,{}", fs_mime_type(&target), encoded) })).into_response()
+}
+
+/// `GET /api/fs/git-root` — nearest enclosing git checkout
+/// (hermes `/api/fs/git-root` parity).
+async fn fs_git_root(Query(query): Query<FsPathQuery>) -> Response {
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    Json(json!({ "root": fs_find_git_root(&target) })).into_response()
+}
+
+/// `GET /api/fs/default-cwd` — the gateway's working directory plus its
+/// git branch (hermes `/api/fs/default-cwd` parity; honors
+/// `[terminal] cwd`).
+async fn fs_default_cwd(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = state.agent.context().config.clone();
+    let cwd = config
+        .terminal
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty() && !matches!(*raw, "." | "auto" | "cwd"))
+        .and_then(|raw| fs_resolve_path(raw).ok())
+        .filter(|candidate| candidate.is_dir())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let branch = std::process::Command::new("git")
+        .args(["-C", &cwd.to_string_lossy(), "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|branch| !branch.is_empty())
+        .unwrap_or_default();
+    Json(json!({ "cwd": cwd, "branch": branch }))
+}
+
 /// `GET /api/memory` — persistent-memory status (hermes `/api/memory`
 /// parity): builtin provider posture plus the per-file census (sizes,
 /// bullet-entry counts) and configured char limits.
@@ -2356,6 +2701,12 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/config", get(config_get).put(config_put))
         .route("/api/config/raw", get(config_raw_get).put(config_raw_put))
         .route("/api/env", get(env_list).put(env_set).delete(env_delete))
+        .route("/api/fs/list", get(fs_list))
+        .route("/api/fs/read-text", get(fs_read_text))
+        .route("/api/fs/write-text", post(fs_write_text))
+        .route("/api/fs/read-data-url", get(fs_read_data_url))
+        .route("/api/fs/git-root", get(fs_git_root))
+        .route("/api/fs/default-cwd", get(fs_default_cwd))
         .route("/api/memory", get(memory_status_api))
         .route("/api/memory/reset", post(memory_reset_api))
         .route("/api/update/check", get(update_check_api))
@@ -11188,6 +11539,117 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["days"], 365);
+    }
+
+    #[tokio::test]
+    async fn test_fs_endpoints_list_read_write() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        let saved_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        // Seed a small tree.
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules")).unwrap();
+        std::fs::write(dir.path().join("hello.txt"), "hello fs\n").unwrap();
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/fs/list?path=.", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Listing: dirs first, hidden set filtered.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/fs/list?path=.",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = body["entries"].as_array().unwrap().clone();
+        let names: Vec<String> = entries
+            .iter()
+            .filter_map(|entry| entry["name"].as_str().map(String::from))
+            .collect();
+        assert!(names.contains(&"sub".to_string()));
+        assert!(names.contains(&"hello.txt".to_string()));
+        assert!(!names.contains(&"node_modules".to_string()));
+        assert_eq!(entries[0]["isDirectory"], true);
+
+        // Read-text returns the content with metadata.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/fs/read-text?path=hello.txt",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["text"], "hello fs\n");
+        assert_eq!(body["byteSize"], 9);
+        assert_eq!(body["binary"], false);
+
+        // Write-text creates a new file atomically.
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/fs/write-text",
+            Some(r#"{"path": "sub/created.txt", "content": "made by test"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("sub/created.txt")).unwrap(),
+            "made by test"
+        );
+
+        // Write-text refuses missing parents.
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/fs/write-text",
+            Some(r#"{"path": "nope/missing.txt", "content": "x"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Read-data-url round-trips.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/fs/read-data-url?path=hello.txt",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["dataUrl"].as_str().unwrap().starts_with("data:text/plain;base64,"));
+
+        // Git-root on a git-less temp dir is null; default-cwd reports cwd.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/fs/git-root?path=.",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["root"].is_null() || body["root"].is_string());
+        let (status, body) = get_json(app.clone(), "/api/fs/default-cwd", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["cwd"].as_str().is_some());
+
+        // Missing path errors are structured.
+        let (status, _) = get_json(app.clone(), "/api/fs/list", Some("sekret")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        std::env::set_current_dir(saved_cwd).unwrap();
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

@@ -46,6 +46,7 @@
           <div id="slash-pop" class="slash-pop" hidden></div>
           <div id="attach-chips" class="attach-chips" hidden></div>
           <textarea id="input" rows="3" placeholder="Message ulnclaw… (Enter to send, Shift+Enter for newline)" data-i18n-ph="chrome.inputPlaceholder"></textarea>
+          <button id="attach-file" class="ghost" title="Attach file" data-i18n-title="chrome.attachTitle">📎</button>
           <button id="mic" class="ghost" title="Voice input" data-i18n-title="chrome.micTitle">🎙️</button>
           <button id="send" class="primary" data-i18n="chrome.send">Send</button>
         </footer>
@@ -82,6 +83,19 @@
             <button id="settings-save" value="default" data-i18n="chrome.save">Save</button>
           </menu>
         </form>
+      </dialog>
+      <dialog id="fs-dialog" class="fs-dialog">
+        <h2 data-i18n="chrome.fsTitle">Attach a file</h2>
+        <div class="logs-controls">
+          <button id="fs-up" class="ghost" title="Up" data-i18n-title="chrome.fsUpTitle">⬆</button>
+          <input id="fs-path" type="text" />
+          <button id="fs-go" class="ghost">Go</button>
+        </div>
+        <div id="fs-entries" class="fs-entries"></div>
+        <p id="fs-status" class="config-note"></p>
+        <menu>
+          <button id="fs-close" value="cancel" data-i18n="chrome.cancel">Cancel</button>
+        </menu>
       </dialog>
     </div>
     <script type="module" src="/src/main.ts"></script>

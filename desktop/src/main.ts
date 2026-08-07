@@ -3,7 +3,7 @@
 // everything else is plain HTTP (gateway.ts).
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
-import type { GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
+import type { FsEntry, GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import { KanbanWidget } from "./kanban";
 import { ProjectsWidget } from "./projects";
 import { JobsWidget } from "./jobs";
@@ -111,6 +111,14 @@ const el = {
   settingKey: document.getElementById("setting-key") as HTMLInputElement,
   settingManage: document.getElementById("setting-manage") as HTMLInputElement,
   settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
+  attachFile: document.getElementById("attach-file") as HTMLButtonElement,
+  fsDialog: document.getElementById("fs-dialog") as HTMLDialogElement,
+  fsUp: document.getElementById("fs-up") as HTMLButtonElement,
+  fsPath: document.getElementById("fs-path") as HTMLInputElement,
+  fsGo: document.getElementById("fs-go") as HTMLButtonElement,
+  fsEntries: document.getElementById("fs-entries")!,
+  fsStatus: document.getElementById("fs-status")!,
+  fsClose: document.getElementById("fs-close") as HTMLButtonElement,
 };
 
 function renderSessions(): void {
@@ -690,6 +698,69 @@ async function handlePasteImages(event: ClipboardEvent): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Gateway filesystem picker -> /api/fs/* -> /api/uploads (P329, hermes parity)
+// ---------------------------------------------------------------------------
+
+async function openFsPicker(): Promise<void> {
+  if (!state.client) return;
+  el.fsStatus.textContent = "";
+  el.fsEntries.innerHTML = "";
+  el.fsDialog.showModal();
+  try {
+    const { cwd } = await state.client.fsDefaultCwd();
+    await renderFsEntries(cwd);
+  } catch (error) {
+    el.fsStatus.textContent = fmt(t.chrome.fsFailed, { error });
+  }
+}
+
+async function renderFsEntries(path: string): Promise<void> {
+  if (!state.client) return;
+  el.fsPath.value = path;
+  el.fsStatus.textContent = "";
+  el.fsEntries.innerHTML = "";
+  let entries: FsEntry[];
+  try {
+    ({ entries } = await state.client.fsList(path));
+  } catch (error) {
+    el.fsStatus.textContent = fmt(t.chrome.fsFailed, { error });
+    return;
+  }
+  if (entries.length === 0) {
+    el.fsStatus.textContent = t.chrome.fsEmpty;
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement("button");
+    row.className = "fs-entry" + (entry.isDirectory ? " dir" : "");
+    row.textContent = (entry.isDirectory ? "\u{1F4C1} " : "\u{1F4C4} ") + entry.name;
+    row.title = entry.path;
+    row.onclick = () => {
+      if (entry.isDirectory) void renderFsEntries(entry.path);
+      else void pickFsFile(entry);
+    };
+    el.fsEntries.appendChild(row);
+  }
+}
+
+async function pickFsFile(entry: FsEntry): Promise<void> {
+  if (!state.client) return;
+  try {
+    const dataUrl = await state.client.fsReadDataUrl(entry.path);
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const file = new File([blob], entry.name, { type: blob.type || "application/octet-stream" });
+    const upload = await state.client.uploadFile(file, entry.name);
+    state.pendingUploads.push(upload);
+    renderAttachChips();
+    el.fsDialog.close();
+  } catch (error) {
+    el.fsStatus.textContent = fmt(t.chrome.fsFailed, { error });
+    addMessage("system", fmt(t.session.uploadFailed, { error }));
+  }
+}
+
 /// hermes attachment_note text-fallback format.
 function attachmentNote(): string {
   if (state.pendingUploads.length === 0) return "";
@@ -974,6 +1045,18 @@ async function start(): Promise<void> {
   };
   el.send.onclick = () => void sendTurn();
   el.mic.onclick = () => void toggleMic();
+  el.attachFile.onclick = () => void openFsPicker();
+  el.fsUp.onclick = () => {
+    const current = el.fsPath.value.trim();
+    if (!current) return;
+    const parent = current.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/";
+    void renderFsEntries(parent);
+  };
+  el.fsGo.onclick = () => {
+    const target = el.fsPath.value.trim();
+    if (target) void renderFsEntries(target);
+  };
+  el.fsClose.onclick = () => el.fsDialog.close();
   el.input.addEventListener("keydown", (event) => {
     if (!el.slashPop.hidden) {
       const items = slashCandidates(el.input.value);

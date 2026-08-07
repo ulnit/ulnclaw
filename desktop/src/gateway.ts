@@ -566,6 +566,13 @@ export interface McpOAuthFlow {
   tools?: { name: string; description?: string | null }[];
 }
 
+/** Filesystem entry from GET /api/fs/list (P329). */
+export interface FsEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+}
+
 /** Per-model usage row from GET /api/analytics/models (P328). */
 export interface ModelUsageRow {
   model: string;
@@ -1502,6 +1509,35 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `env delete HTTP ${response.status}`);
+  }
+
+  /** GET /api/fs/list — directory listing (P329). */
+  async fsList(path: string): Promise<{ entries: FsEntry[]; error?: string }> {
+    const params = new URLSearchParams({ path });
+    const response = await fetch(this.endpoint(`/api/fs/list?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
+    return value as { entries: FsEntry[]; error?: string };
+  }
+
+  /** GET /api/fs/default-cwd — gateway cwd + branch (P329). */
+  async fsDefaultCwd(): Promise<{ cwd: string; branch: string }> {
+    const response = await fetch(this.endpoint("/api/fs/default-cwd"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`fs HTTP ${response.status}`);
+    return (await response.json()) as { cwd: string; branch: string };
+  }
+
+  /** GET /api/fs/read-data-url — small file as base64 data URL (P329). */
+  async fsReadDataUrl(path: string): Promise<string> {
+    const params = new URLSearchParams({ path });
+    const response = await fetch(this.endpoint(`/api/fs/read-data-url?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
+    return typeof value.dataUrl === "string" ? value.dataUrl : "";
   }
 
   /** GET /api/analytics/models — per-model usage aggregation (P328). */

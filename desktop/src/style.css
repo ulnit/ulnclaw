@@ -1375,5 +1375,11 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 
 .config-raw-dialog { width: min(760px, 92vw); border: none; border-radius: 10px; padding: 16px; }
 .config-raw-dialog textarea { width: 100%; height: 52vh; font-family: var(--mono, monospace); font-size: 12.5px; }
+.fs-dialog { width: min(640px, 92vw); border: none; border-radius: 10px; padding: 16px; }
+.fs-dialog #fs-path { flex: 1; background: inherit; color: inherit; border: 1px solid rgba(128,128,128,0.35); border-radius: 6px; padding: 2px 8px; font-family: var(--mono, monospace); font-size: 12.5px; }
+.fs-entries { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 8px 0; }
+.fs-entry { display: block; width: 100%; text-align: left; background: none; color: inherit; border: none; border-radius: 6px; padding: 4px 8px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fs-entry:hover { background: rgba(128,128,128,0.18); }
+.fs-entry.dir { font-weight: 600; }
 .job-delivery-error { color: var(--bad, #a04545); }
 .config-env-row { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
