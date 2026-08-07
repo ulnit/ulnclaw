@@ -1364,9 +1364,12 @@ fn register_gated_stubs(registry: &mut ToolRegistry) {
     // intent-gated dynamic schema, config allowlist, enriched 403s.
     crate::discord_tool::register(registry);
 
+    // Feishu/Lark documents + drive comments (hermes tools/feishu_doc_tool.py
+    // + tools/feishu_drive_tool.py): tenant-token Open API client.
+    crate::feishu_doc_tool::register(registry);
+
     // Messaging platforms — faithful tool surface, gated on credentials.
-    let platforms: [(&str, &str, &str, &str); 2] = [
-        ("feishu_doc_read", "feishu_doc", "Read a Feishu/Lark document as markdown.", "FEISHU_APP_ID"),
+    let platforms: [(&str, &str, &str, &str); 1] = [
         ("spotify_playback", "spotify", "Control Spotify playback (play/pause/skip/current track).", "SPOTIFY_CLIENT_ID"),
     ];
     for (name, toolset, description, env_var) in platforms {
