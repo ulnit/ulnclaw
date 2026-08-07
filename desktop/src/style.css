@@ -1203,6 +1203,12 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   background: var(--panel-2);
 }
 .pairing-view-row button { font-size: 12px; padding: 2px 12px; margin-left: auto; }
+
+/* Kanban detail enrichments */
+.kanban-detail-meta { font-size: 0.8em; opacity: 0.7; margin: 4px 0 8px; }
+.kanban-detail-attachments { margin-top: 8px; }
+.kanban-attachment { display: flex; align-items: center; gap: 8px; font-size: 0.85em; margin: 3px 0; }
+.kanban-attachment code { font-family: var(--mono, monospace); font-size: 0.95em; word-break: break-all; }
 #usage .empty { opacity: 0.6; padding: 12px 0; }
 
 /* Config view (P273) */

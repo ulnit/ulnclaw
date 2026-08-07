@@ -80,6 +80,9 @@ export interface Translations {
     blockAction: string; unblockAction: string; doneAction: string;
     whyBlocked: string; refresh: string; switchBoard: string;
     counts: string; noDescription: string; resultPrefix: string; noComments: string;
+    claim: string; metaAssignee: string; metaPriority: string; metaCreated: string;
+    metaStarted: string; metaCompleted: string; metaParents: string; metaChildren: string;
+    attachmentsTitle: string;
   };
   projects: {
     addFolder: string; archive: string; restore: string; bindBoard: string;
@@ -305,6 +308,9 @@ const en: Translations = {
     whyBlocked: "Why is it blocked?", refresh: "Refresh", switchBoard: "Switch board",
     counts: "{open} open · {total} total", noDescription: "(no description)",
     resultPrefix: "Result: {result}", noComments: "No comments yet.",
+    claim: "Claim", metaAssignee: "Assignee", metaPriority: "Priority", metaCreated: "Created",
+    metaStarted: "Started", metaCompleted: "Completed", metaParents: "Parents", metaChildren: "Children",
+    attachmentsTitle: "Attachments",
   },
   projects: {
     addFolder: "Add folder", archive: "Archive", restore: "Restore",
@@ -639,6 +645,9 @@ const zh: Translations = {
     whyBlocked: "为什么受阻？", refresh: "刷新", switchBoard: "切换看板",
     counts: "{open} 进行中 · 共 {total}", noDescription: "（无描述）",
     resultPrefix: "结果：{result}", noComments: "暂无评论。",
+    claim: "认领", metaAssignee: "负责人", metaPriority: "优先级", metaCreated: "创建于",
+    metaStarted: "开始于", metaCompleted: "完成于", metaParents: "父任务", metaChildren: "子任务",
+    attachmentsTitle: "附件",
   },
   projects: {
     addFolder: "添加文件夹", archive: "归档", restore: "恢复",
@@ -973,6 +982,9 @@ const zhHant: Translations = {
     whyBlocked: "為何受阻？", refresh: "重新整理", switchBoard: "切換看板",
     counts: "{open} 進行中 · 共 {total}", noDescription: "（無描述）",
     resultPrefix: "結果：{result}", noComments: "尚無留言。",
+    claim: "認領", metaAssignee: "負責人", metaPriority: "優先級", metaCreated: "建立於",
+    metaStarted: "開始於", metaCompleted: "完成於", metaParents: "父工作", metaChildren: "子工作",
+    attachmentsTitle: "附件",
   },
   projects: {
     addFolder: "新增資料夾", archive: "封存", restore: "還原",
@@ -1307,6 +1319,9 @@ const ja: Translations = {
     whyBlocked: "ブロックの理由は？", refresh: "更新", switchBoard: "ボードを切り替え",
     counts: "未完了 {open} · 合計 {total}", noDescription: "（説明なし）",
     resultPrefix: "結果：{result}", noComments: "まだコメントはありません。",
+    claim: "クレーム", metaAssignee: "担当者", metaPriority: "優先度", metaCreated: "作成",
+    metaStarted: "開始", metaCompleted: "完了", metaParents: "親タスク", metaChildren: "子タスク",
+    attachmentsTitle: "添付",
   },
   projects: {
     addFolder: "フォルダを追加", archive: "アーカイブ", restore: "復元",
@@ -1641,6 +1656,9 @@ const ar: Translations = {
     whyBlocked: "لماذا هي محجوبة؟", refresh: "تحديث", switchBoard: "تبديل اللوحة",
     counts: "{open} مفتوحة · {total} إجمالًا", noDescription: "(بدون وصف)",
     resultPrefix: "النتيجة: {result}", noComments: "لا تعليقات بعد.",
+    claim: "استلام", metaAssignee: "المسند إليه", metaPriority: "الأولوية", metaCreated: "أُنشئت",
+    metaStarted: "بدأت", metaCompleted: "اكتملت", metaParents: "المهام الأم", metaChildren: "المهام الفرعية",
+    attachmentsTitle: "المرفقات",
   },
   projects: {
     addFolder: "إضافة مجلد", archive: "أرشفة", restore: "استعادة",

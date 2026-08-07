@@ -1331,6 +1331,13 @@ export class GatewayClient {
     return Boolean(value?.task);
   }
 
+  async kanbanClaim(id: string): Promise<KanbanTask | null> {
+    const value = await this.kanbanJson(`/api/kanban/tasks/${encodeURIComponent(id)}/claim`, {
+      method: "POST",
+    });
+    return (value?.task || null) as KanbanTask | null;
+  }
+
   async kanbanComment(id: string, body: string): Promise<boolean> {
     const value = await this.kanbanJson(`/api/kanban/tasks/${encodeURIComponent(id)}/comment`, {
       method: "POST",

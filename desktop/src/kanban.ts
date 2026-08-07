@@ -5,6 +5,14 @@
 import type { GatewayClient, KanbanBoard, KanbanTask } from "./gateway";
 import { fmt, t } from "./i18n";
 
+function escapeHtmlKanban(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 // Engine statuses (hermes swarm): todo → ready → running → done, plus
 // scheduled / blocked / archived. The wall shows four columns; the "To do"
 // column gathers todo+ready+scheduled, "Doing" shows running tasks.
@@ -39,13 +47,16 @@ export class KanbanWidget {
       <dialog id="kanban-detail">
         <form method="dialog">
           <h2 id="kanban-detail-title"></h2>
+          <div id="kanban-detail-meta" class="kanban-detail-meta"></div>
           <pre id="kanban-detail-body" class="kanban-detail-body"></pre>
+          <div id="kanban-detail-attachments" class="kanban-detail-attachments"></div>
           <div id="kanban-detail-comments" class="kanban-comments"></div>
           <div class="kanban-detail-compose">
             <input id="kanban-comment-input" type="text" placeholder="Add a comment…" data-i18n-ph="kanban.addComment" />
             <button id="kanban-comment-send" value="comment" data-i18n="kanban.comment">Comment</button>
           </div>
           <menu>
+            <button id="kanban-detail-claim" value="claim" data-i18n="kanban.claim">Claim</button>
             <button id="kanban-detail-unblock" value="unblock" data-i18n="kanban.unblock">Unblock</button>
             <button id="kanban-detail-block" value="block" data-i18n="kanban.blockEllipsis">Block…</button>
             <button id="kanban-detail-complete" value="complete" data-i18n="kanban.complete">Complete</button>
@@ -81,6 +92,11 @@ export class KanbanWidget {
         }
       } else if (dialog.returnValue === "unblock") {
         void client.kanbanUnblock(id).then(() => void this.refresh());
+      } else if (dialog.returnValue === "claim") {
+        void client.kanbanClaim(id).then(() => {
+          void this.refresh();
+          void this.openDetail(id);
+        });
       } else if (dialog.returnValue === "comment") {
         const input = this.root.querySelector("#kanban-comment-input") as HTMLInputElement;
         const body = input.value.trim();
@@ -265,6 +281,35 @@ export class KanbanWidget {
     if (detail.task.result) parts.push(`\n${fmt(t.kanban.resultPrefix, { result: detail.task.result })}`);
     bodyEl.textContent = parts.join("\n");
 
+    const metaEl = this.root.querySelector("#kanban-detail-meta") as HTMLElement;
+    const task = detail.task;
+    const fmtWhen = (ts: number | null): string =>
+      ts ? new Date(ts * 1000).toLocaleString() : "—";
+    const metaParts = [
+      `${t.kanban.metaAssignee}: ${task.assignee || "—"}`,
+      `${t.kanban.metaPriority}: P${task.priority}`,
+      `${t.kanban.metaCreated}: ${fmtWhen(task.created_at)}`,
+    ];
+    if (task.started_at) metaParts.push(`${t.kanban.metaStarted}: ${fmtWhen(task.started_at)}`);
+    if (task.completed_at) metaParts.push(`${t.kanban.metaCompleted}: ${fmtWhen(task.completed_at)}`);
+    if (task.parents.length > 0) metaParts.push(`${t.kanban.metaParents}: ${task.parents.join(", ")}`);
+    if (task.children.length > 0) metaParts.push(`${t.kanban.metaChildren}: ${task.children.join(", ")}`);
+    metaEl.textContent = metaParts.join(" · ");
+
+    const attachEl = this.root.querySelector("#kanban-detail-attachments") as HTMLElement;
+    if (detail.attachments.length > 0) {
+      attachEl.innerHTML =
+        `<h3 class="config-section">${escapeHtmlKanban(t.kanban.attachmentsTitle)}</h3>` +
+        detail.attachments
+          .map(
+            (attachment) =>
+              `<div class="kanban-attachment"><span class="models-view-badge">${escapeHtmlKanban(attachment.kind)}</span> <code>${escapeHtmlKanban(attachment.value)}</code></div>`,
+          )
+          .join("");
+    } else {
+      attachEl.innerHTML = "";
+    }
+
     const comments = this.root.querySelector("#kanban-detail-comments")!;
     comments.innerHTML = "";
     for (const comment of detail.comments) {
@@ -292,6 +337,8 @@ export class KanbanWidget {
     blockBtn.style.display = detail.task.status === "blocked" ? "none" : "";
     const completeBtn = this.root.querySelector("#kanban-detail-complete") as HTMLButtonElement;
     completeBtn.style.display = detail.task.status === "done" ? "none" : "";
+    const claimBtn = this.root.querySelector("#kanban-detail-claim") as HTMLButtonElement;
+    claimBtn.style.display = detail.task.status === "done" ? "none" : "";
     dialog.showModal();
   }
 }
