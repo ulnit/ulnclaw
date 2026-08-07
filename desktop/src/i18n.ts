@@ -56,7 +56,7 @@ export function fmt(template: string, vars: Record<string, unknown>): string {
 
 export interface Translations {
   chrome: {
-    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string;
+    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
@@ -117,6 +117,12 @@ export interface Translations {
     topModels: string; topTools: string; topSessions: string;
     colModel: string; colTool: string; colSession: string; calls: string;
     empty: string; loadFailed: string;
+  };
+  sessionsView: {
+    filterPlaceholder: string; count: string; empty: string; noMatch: string;
+    select: string; loading: string; loadFailed: string; transcriptFailed: string;
+    emptyTranscript: string; exportTitle: string; exportFailed: string;
+    roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
   };
   config: {
     loading: string; notConnected: string; loadFailed: string; save: string;
@@ -185,7 +191,7 @@ export interface Translations {
   palette: {
     placeholder: string; noMatches: string; navigate: string; sessionGroup: string;
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
-    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; goToWebhooks: string; goToRuns: string; goToSkills: string; newSession: string; switchSession: string;
+    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; goToWebhooks: string; goToRuns: string; goToSkills: string; goToSessions: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
@@ -218,7 +224,7 @@ export interface Translations {
 
 const en: Translations = {
   chrome: {
-    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks", runsTab: "Runs", skillsTab: "Skills",
+    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks", runsTab: "Runs", skillsTab: "Skills", sessionsTab: "Sessions",
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
@@ -334,6 +340,20 @@ const en: Translations = {
     empty: "No activity recorded for this window.",
     loadFailed: "Failed to load insights: {error}",
   },
+  sessionsView: {
+    filterPlaceholder: "Filter sessions…",
+    count: "{count} sessions",
+    empty: "No sessions recorded yet.",
+    noMatch: "No sessions match the filter.",
+    select: "Select a session to browse its transcript.",
+    loading: "Loading transcript…",
+    loadFailed: "Failed to load sessions: {error}",
+    transcriptFailed: "Failed to load transcript: {error}",
+    emptyTranscript: "This session has no messages.",
+    exportTitle: "Export selected session as Markdown",
+    exportFailed: "Export failed.",
+    roleUser: "User", roleAssistant: "Assistant", roleTool: "Tool", roleSystem: "System",
+  },
   config: {
     loading: "Loading config…", notConnected: "Gateway not connected.",
     loadFailed: "Failed to load config: {error}",
@@ -445,7 +465,7 @@ const en: Translations = {
     placeholder: "Type a command… (Esc to close)", noMatches: "No matching commands",
     navigate: "Navigate", sessionGroup: "Session", sessionsGroup: "Sessions",
     gatewayGroup: "Gateway", goToChat: "Go to Chat", goToKanban: "Go to Kanban",
-    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor", goToWebhooks: "Go to Webhooks", goToRuns: "Go to Runs", goToSkills: "Go to Skills",
+    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor", goToWebhooks: "Go to Webhooks", goToRuns: "Go to Runs", goToSkills: "Go to Skills", goToSessions: "Go to Sessions",
     newSession: "New session", switchSession: "Switch session",
     findInChat: "Find in chat", modelForSession: "Model for this session…",
     resumeSession: "Resume session… (/resume)",
@@ -509,7 +529,7 @@ const en: Translations = {
 
 const zh: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks", runsTab: "运行", skillsTab: "技能",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks", runsTab: "运行", skillsTab: "技能", sessionsTab: "会话记录",
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
@@ -625,6 +645,20 @@ const zh: Translations = {
     empty: "该时间段内暂无活动记录。",
     loadFailed: "加载洞察失败:{error}",
   },
+  sessionsView: {
+    filterPlaceholder: "过滤会话…",
+    count: "{count} 个会话",
+    empty: "暂无会话记录。",
+    noMatch: "没有匹配过滤条件的会话。",
+    select: "选择一个会话以浏览其转录。",
+    loading: "正在加载转录…",
+    loadFailed: "加载会话列表失败:{error}",
+    transcriptFailed: "加载转录失败:{error}",
+    emptyTranscript: "该会话没有消息。",
+    exportTitle: "将选中会话导出为 Markdown",
+    exportFailed: "导出失败。",
+    roleUser: "用户", roleAssistant: "助手", roleTool: "工具", roleSystem: "系统",
+  },
   config: {
     loading: "加载配置…", notConnected: "未连接网关。",
     loadFailed: "加载配置失败：{error}",
@@ -736,7 +770,7 @@ const zh: Translations = {
     placeholder: "输入命令…（Esc 关闭）", noMatches: "没有匹配的命令",
     navigate: "导航", sessionGroup: "会话", sessionsGroup: "会话列表",
     gatewayGroup: "网关", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断", goToWebhooks: "前往 Webhooks", goToRuns: "前往运行", goToSkills: "前往技能",
+    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断", goToWebhooks: "前往 Webhooks", goToRuns: "前往运行", goToSkills: "前往技能", goToSessions: "前往会话记录",
     newSession: "新建会话", switchSession: "切换会话",
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
     resumeSession: "恢复会话…（/resume）",
@@ -800,7 +834,7 @@ const zh: Translations = {
 
 const zhHant: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks", runsTab: "執行", skillsTab: "技能",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks", runsTab: "執行", skillsTab: "技能", sessionsTab: "會話記錄",
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
@@ -916,6 +950,20 @@ const zhHant: Translations = {
     empty: "該時間段內暫無活動記錄。",
     loadFailed: "載入洞察失敗:{error}",
   },
+  sessionsView: {
+    filterPlaceholder: "過濾會話…",
+    count: "{count} 個會話",
+    empty: "暫無會話記錄。",
+    noMatch: "沒有符合過濾條件的會話。",
+    select: "選擇一個會話以瀏覽其轉錄。",
+    loading: "正在載入轉錄…",
+    loadFailed: "載入會話列表失敗:{error}",
+    transcriptFailed: "載入轉錄失敗:{error}",
+    emptyTranscript: "該會話沒有訊息。",
+    exportTitle: "將選取會話匯出為 Markdown",
+    exportFailed: "匯出失敗。",
+    roleUser: "使用者", roleAssistant: "助理", roleTool: "工具", roleSystem: "系統",
+  },
   config: {
     loading: "載入設定…", notConnected: "未連線閘道。",
     loadFailed: "載入設定失敗：{error}",
@@ -1027,7 +1075,7 @@ const zhHant: Translations = {
     placeholder: "輸入命令…（Esc 關閉）", noMatches: "沒有符合的命令",
     navigate: "導覽", sessionGroup: "工作階段", sessionsGroup: "工作階段清單",
     gatewayGroup: "閘道", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷", goToWebhooks: "前往 Webhooks", goToRuns: "前往執行", goToSkills: "前往技能",
+    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷", goToWebhooks: "前往 Webhooks", goToRuns: "前往執行", goToSkills: "前往技能", goToSessions: "前往會話記錄",
     newSession: "新增工作階段", switchSession: "切換工作階段",
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
     resumeSession: "恢復工作階段…（/resume）",
@@ -1091,7 +1139,7 @@ const zhHant: Translations = {
 
 const ja: Translations = {
   chrome: {
-    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook", runsTab: "実行", skillsTab: "スキル",
+    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook", runsTab: "実行", skillsTab: "スキル", sessionsTab: "履歴",
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
@@ -1207,6 +1255,20 @@ const ja: Translations = {
     empty: "この期間のアクティビティはありません。",
     loadFailed: "インサイトの読み込みに失敗しました: {error}",
   },
+  sessionsView: {
+    filterPlaceholder: "セッションを絞り込み…",
+    count: "{count} 件のセッション",
+    empty: "セッションはまだ記録されていません。",
+    noMatch: "フィルタに一致するセッションはありません。",
+    select: "セッションを選択するとトランスクリプトを閲覧できます。",
+    loading: "トランスクリプトを読み込み中…",
+    loadFailed: "セッションの読み込みに失敗しました: {error}",
+    transcriptFailed: "トランスクリプトの読み込みに失敗しました: {error}",
+    emptyTranscript: "このセッションにはメッセージがありません。",
+    exportTitle: "選択したセッションを Markdown でエクスポート",
+    exportFailed: "エクスポートに失敗しました。",
+    roleUser: "ユーザー", roleAssistant: "アシスタント", roleTool: "ツール", roleSystem: "システム",
+  },
   config: {
     loading: "設定を読み込み中…", notConnected: "ゲートウェイに未接続です。",
     loadFailed: "設定の読み込みに失敗：{error}",
@@ -1318,7 +1380,7 @@ const ja: Translations = {
     placeholder: "コマンドを入力…（Esc で閉じる）", noMatches: "一致するコマンドがありません",
     navigate: "移動", sessionGroup: "セッション", sessionsGroup: "セッション一覧",
     gatewayGroup: "ゲートウェイ", goToChat: "チャットへ", goToKanban: "カンバンへ",
-    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ", goToWebhooks: "Webhook へ", goToRuns: "実行へ", goToSkills: "スキルへ",
+    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ", goToWebhooks: "Webhook へ", goToRuns: "実行へ", goToSkills: "スキルへ", goToSessions: "履歴へ",
     newSession: "新規セッション", switchSession: "セッションを切り替え",
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
     resumeSession: "セッションを再開…（/resume）",
@@ -1382,7 +1444,7 @@ const ja: Translations = {
 
 const ar: Translations = {
   chrome: {
-    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس", runsTab: "التشغيلات", skillsTab: "المهارات",
+    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس", runsTab: "التشغيلات", skillsTab: "المهارات", sessionsTab: "السجلات",
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
@@ -1498,6 +1560,20 @@ const ar: Translations = {
     empty: "لا يوجد نشاط مسجل في هذه الفترة.",
     loadFailed: "فشل تحميل الرؤى: {error}",
   },
+  sessionsView: {
+    filterPlaceholder: "تصفية الجلسات…",
+    count: "{count} جلسة",
+    empty: "لا توجد جلسات مسجلة بعد.",
+    noMatch: "لا توجد جلسات مطابقة للتصفية.",
+    select: "اختر جلسة لتصفح نصها.",
+    loading: "جارٍ تحميل النص…",
+    loadFailed: "فشل تحميل الجلسات: {error}",
+    transcriptFailed: "فشل تحميل النص: {error}",
+    emptyTranscript: "لا توجد رسائل في هذه الجلسة.",
+    exportTitle: "تصدير الجلسة المحددة بصيغة Markdown",
+    exportFailed: "فشل التصدير.",
+    roleUser: "المستخدم", roleAssistant: "المساعد", roleTool: "أداة", roleSystem: "النظام",
+  },
   config: {
     loading: "جارٍ تحميل الإعدادات…", notConnected: "البوابة غير متصلة.",
     loadFailed: "فشل تحميل الإعدادات: {error}",
@@ -1609,7 +1685,7 @@ const ar: Translations = {
     placeholder: "اكتب أمرًا… (Esc للإغلاق)", noMatches: "لا أوامر مطابقة",
     navigate: "تنقّل", sessionGroup: "الجلسة", sessionsGroup: "الجلسات",
     gatewayGroup: "البوابة", goToChat: "إلى الدردشة", goToKanban: "إلى كانبان",
-    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص", goToWebhooks: "إلى ويب هوكس", goToRuns: "إلى التشغيلات", goToSkills: "إلى المهارات",
+    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص", goToWebhooks: "إلى ويب هوكس", goToRuns: "إلى التشغيلات", goToSkills: "إلى المهارات", goToSessions: "إلى السجلات",
     newSession: "جلسة جديدة", switchSession: "تبديل الجلسة",
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
     resumeSession: "استئناف جلسة… (/resume)",

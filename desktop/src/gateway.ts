@@ -24,6 +24,8 @@ export interface MessageRow {
   role: string;
   content: string | null;
   name?: string | null;
+  tool_call_id?: string | null;
+  tool_calls?: { id: string; function?: { name?: string; arguments?: string } }[];
 }
 
 export interface ChatReply {
@@ -583,7 +585,7 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`messages: HTTP ${response.status}`);
     const value = await response.json();
-    return (value.messages || value || []) as MessageRow[];
+    return (value.data || value.messages || value || []) as MessageRow[];
   }
 
   /**

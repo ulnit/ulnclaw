@@ -27,7 +27,7 @@ export interface CommandPaletteHooks {
   artifacts(): void | Promise<void>;
   learning(): void | Promise<void>;
   findInChat(): void;
-  switchView(view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills"): void;
+  switchView(view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions"): void;
   exportSession(format: "md" | "html"): Promise<void>;
   openSettings(): void;
   refreshSessions(): void | Promise<void>;
@@ -126,6 +126,7 @@ export class CommandPalette {
       { id: "view-webhooks", label: t.palette.goToWebhooks, group: t.palette.navigate, run: () => hooks.switchView("webhooks") },
       { id: "view-runs", label: t.palette.goToRuns, group: t.palette.navigate, run: () => hooks.switchView("runs") },
       { id: "view-skills", label: t.palette.goToSkills, group: t.palette.navigate, run: () => hooks.switchView("skills") },
+      { id: "view-sessions", label: t.palette.goToSessions, group: t.palette.navigate, run: () => hooks.switchView("sessions") },
       { id: "find", label: t.palette.findInChat, group: t.palette.sessionGroup, hint: "Ctrl/Cmd+F", run: () => hooks.findInChat() },
       { id: "artifacts", label: t.palette.browseArtifacts, group: t.palette.sessionGroup, hint: t.palette.hintArtifacts, run: () => hooks.artifacts() },
       { id: "learning", label: t.palette.learningGraph, group: t.palette.sessionGroup, hint: t.palette.hintLearning, run: () => hooks.learning() },
