@@ -125,6 +125,7 @@ export interface Translations {
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
     recap: string; recapTitle: string; recapFailed: string;
     forkTitle: string; forked: string; forkFailed: string;
+    deleteTitle: string; deleteConfirm: string; deleted: string; deleteFailed: string;
   };
   modelsView: {
     count: string; current: string; catalog: string; providersLower: string; stale: string;
@@ -378,6 +379,7 @@ const en: Translations = {
     roleUser: "User", roleAssistant: "Assistant", roleTool: "Tool", roleSystem: "System",
     recap: "Recap", recapTitle: "Show or hide the gateway-built session recap", recapFailed: "Recap failed: {error}",
     forkTitle: "Fork this session into a new branch", forked: "Forked as {id}", forkFailed: "Fork failed: {error}",
+    deleteTitle: "Delete this session", deleteConfirm: "Delete session {id}? This cannot be undone.", deleted: "Deleted {id}.", deleteFailed: "Delete failed: {error}",
   },
   modelsView: {
     count: "{providers} providers", current: "Current", catalog: "catalog", providersLower: "providers", stale: "stale",
@@ -710,6 +712,7 @@ const zh: Translations = {
     roleUser: "用户", roleAssistant: "助手", roleTool: "工具", roleSystem: "系统",
     recap: "回顾", recapTitle: "显示/隐藏网关生成的会话回顾", recapFailed: "生成回顾失败:{error}",
     forkTitle: "将此会话分叉为新分支", forked: "已分叉为 {id}", forkFailed: "分叉失败:{error}",
+    deleteTitle: "删除此会话", deleteConfirm: "删除会话 {id}？此操作无法撤销。", deleted: "已删除 {id}。", deleteFailed: "删除失败:{error}",
   },
   modelsView: {
     count: "{providers} 个 provider", current: "当前", catalog: "目录", providersLower: "个 provider", stale: "已过期",
@@ -1042,6 +1045,7 @@ const zhHant: Translations = {
     roleUser: "使用者", roleAssistant: "助理", roleTool: "工具", roleSystem: "系統",
     recap: "回顧", recapTitle: "顯示/隱藏閘道產生的會話回顧", recapFailed: "產生回顧失敗:{error}",
     forkTitle: "將此會話分叉為新分支", forked: "已分叉為 {id}", forkFailed: "分叉失敗:{error}",
+    deleteTitle: "刪除此會話", deleteConfirm: "刪除會話 {id}？此操作無法復原。", deleted: "已刪除 {id}。", deleteFailed: "刪除失敗:{error}",
   },
   modelsView: {
     count: "{providers} 個 provider", current: "目前", catalog: "目錄", providersLower: "個 provider", stale: "已過期",
@@ -1374,6 +1378,7 @@ const ja: Translations = {
     roleUser: "ユーザー", roleAssistant: "アシスタント", roleTool: "ツール", roleSystem: "システム",
     recap: "リキャップ", recapTitle: "ゲートウェイ生成のセッション要約を表示/非表示", recapFailed: "リキャップに失敗しました: {error}",
     forkTitle: "このセッションを新しいブランチにフォーク", forked: "{id} としてフォークしました", forkFailed: "フォークに失敗しました: {error}",
+    deleteTitle: "このセッションを削除", deleteConfirm: "セッション {id} を削除しますか？元に戻せません。", deleted: "{id} を削除しました。", deleteFailed: "削除に失敗しました: {error}",
   },
   modelsView: {
     count: "{providers} プロバイダ", current: "現在", catalog: "カタログ", providersLower: "プロバイダ", stale: "古い",
@@ -1706,6 +1711,7 @@ const ar: Translations = {
     roleUser: "المستخدم", roleAssistant: "المساعد", roleTool: "أداة", roleSystem: "النظام",
     recap: "ملخص", recapTitle: "إظهار أو إخفاء ملخص الجلسة المُنشأ من البوابة", recapFailed: "فشل الملخص: {error}",
     forkTitle: "تفريع هذه الجلسة إلى فرع جديد", forked: "تم التفريع باسم {id}", forkFailed: "فشل التفريع: {error}",
+    deleteTitle: "حذف هذه الجلسة", deleteConfirm: "حذف الجلسة {id}؟ لا يمكن التراجع عن هذا.", deleted: "تم حذف {id}.", deleteFailed: "فشل الحذف: {error}",
   },
   modelsView: {
     count: "{providers} مزود", current: "الحالي", catalog: "الفهرس", providersLower: "مزودًا", stale: "قديم",

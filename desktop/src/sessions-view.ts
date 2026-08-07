@@ -35,6 +35,7 @@ export class SessionsViewWidget {
       <header id="sessions-view-header">
         <span id="sessions-view-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <button id="sessions-view-delete" class="ghost" data-i18n-title="sessionsView.deleteTitle" hidden>🗑</button>
         <button id="sessions-view-fork" class="ghost" data-i18n-title="sessionsView.forkTitle" hidden>⑂</button>
         <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
         <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳</button>
@@ -65,6 +66,9 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-fork")!.addEventListener("click", () => {
       this.forkSelected().catch(() => undefined);
+    });
+    this.root.querySelector("#sessions-view-delete")!.addEventListener("click", () => {
+      this.deleteSelected().catch(() => undefined);
     });
   }
 
@@ -158,6 +162,7 @@ export class SessionsViewWidget {
       exportBtn.hidden = false;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = false;
+      (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = false;
     } catch (error) {
       if (this.selected !== sessionId) return;
       pane.innerHTML = `<p class="empty">${escapeHtml(
@@ -169,6 +174,7 @@ export class SessionsViewWidget {
       exportBtn.hidden = true;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = true;
+      (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = true;
     }
   }
 
@@ -218,6 +224,33 @@ export class SessionsViewWidget {
           </div>`;
       })
       .join("");
+  }
+
+  private async deleteSelected(): Promise<void> {
+    const client = this.client();
+    if (!client || !this.selected) return;
+    const sessionId = this.selected;
+    const confirmText = t.sessionsView.deleteConfirm.replace("{id}", sessionId.slice(0, 12));
+    if (!window.confirm(confirmText)) return;
+    try {
+      await client.deleteSession(sessionId);
+      this.status(t.sessionsView.deleted.replace("{id}", sessionId.slice(0, 12)), false);
+      this.selected = null;
+      const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+      pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.select)}</p>`;
+      for (const id of ["#sessions-view-export", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-delete"]) {
+        (this.root.querySelector(id) as HTMLButtonElement).hidden = true;
+      }
+      await this.refresh();
+    } catch (error) {
+      this.status(
+        t.sessionsView.deleteFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
   }
 
   private async forkSelected(): Promise<void> {
