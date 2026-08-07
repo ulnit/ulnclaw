@@ -35,6 +35,7 @@ export class SessionsViewWidget {
       <header id="sessions-view-header">
         <span id="sessions-view-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
         <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳</button>
         <button id="sessions-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
@@ -57,6 +58,9 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-export")!.addEventListener("click", () => {
       this.exportSelected();
+    });
+    this.root.querySelector("#sessions-view-recap")!.addEventListener("click", () => {
+      this.toggleRecap().catch(() => undefined);
     });
   }
 
@@ -148,6 +152,7 @@ export class SessionsViewWidget {
       pane.innerHTML = this.renderMessages(messages);
       pane.scrollTop = 0;
       exportBtn.hidden = false;
+      (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = false;
     } catch (error) {
       if (this.selected !== sessionId) return;
       pane.innerHTML = `<p class="empty">${escapeHtml(
@@ -157,6 +162,7 @@ export class SessionsViewWidget {
         ),
       )}</p>`;
       exportBtn.hidden = true;
+      (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = true;
     }
   }
 
@@ -206,6 +212,32 @@ export class SessionsViewWidget {
           </div>`;
       })
       .join("");
+  }
+
+  private async toggleRecap(): Promise<void> {
+    const client = this.client();
+    const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    if (!client || !this.selected) return;
+    const existing = pane.querySelector("#sessions-view-recap-panel") as HTMLElement | null;
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const panel = document.createElement("details");
+    panel.id = "sessions-view-recap-panel";
+    panel.open = true;
+    panel.innerHTML = `<summary>${escapeHtml(t.sessionsView.recap)}</summary>
+      <pre class="sessions-view-recap-body">${escapeHtml(t.sessionsView.loading)}</pre>`;
+    pane.insertBefore(panel, pane.firstChild);
+    try {
+      const recap = await client.sessionRecap(this.selected);
+      panel.querySelector("pre")!.textContent = recap || t.sessionsView.emptyTranscript;
+    } catch (error) {
+      panel.querySelector("pre")!.textContent = t.sessionsView.recapFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   private exportSelected(): void {

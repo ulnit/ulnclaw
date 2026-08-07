@@ -958,6 +958,16 @@ export class GatewayClient {
     return { ok: Boolean(value.ok), message: value.message || "" };
   }
 
+  /** GET /api/sessions/:id/recap — gateway-built session recap text. */
+  async sessionRecap(sessionId: string): Promise<string> {
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/recap`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`recap HTTP ${response.status}`);
+    const value = await response.json();
+    return typeof value.recap === "string" ? value.recap : "";
+  }
+
   /** GET /api/sessions/:id/export — download the transcript as md/html. */
   async exportSession(
     sessionId: string,

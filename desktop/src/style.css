@@ -1137,6 +1137,16 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   white-space: pre-wrap;
   word-break: break-all;
 }
+.sessions-view-recap-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+#sessions-view-recap-panel { margin-bottom: 12px; }
+#sessions-view-recap-panel summary { cursor: pointer; font-size: 0.85em; opacity: 0.85; }
 #usage .empty { opacity: 0.6; padding: 12px 0; }
 
 /* Config view (P273) */

@@ -123,6 +123,7 @@ export interface Translations {
     select: string; loading: string; loadFailed: string; transcriptFailed: string;
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
+    recap: string; recapTitle: string; recapFailed: string;
   };
   config: {
     loading: string; notConnected: string; loadFailed: string; save: string;
@@ -353,6 +354,7 @@ const en: Translations = {
     exportTitle: "Export selected session as Markdown",
     exportFailed: "Export failed.",
     roleUser: "User", roleAssistant: "Assistant", roleTool: "Tool", roleSystem: "System",
+    recap: "Recap", recapTitle: "Show or hide the gateway-built session recap", recapFailed: "Recap failed: {error}",
   },
   config: {
     loading: "Loading config…", notConnected: "Gateway not connected.",
@@ -658,6 +660,7 @@ const zh: Translations = {
     exportTitle: "将选中会话导出为 Markdown",
     exportFailed: "导出失败。",
     roleUser: "用户", roleAssistant: "助手", roleTool: "工具", roleSystem: "系统",
+    recap: "回顾", recapTitle: "显示/隐藏网关生成的会话回顾", recapFailed: "生成回顾失败:{error}",
   },
   config: {
     loading: "加载配置…", notConnected: "未连接网关。",
@@ -963,6 +966,7 @@ const zhHant: Translations = {
     exportTitle: "將選取會話匯出為 Markdown",
     exportFailed: "匯出失敗。",
     roleUser: "使用者", roleAssistant: "助理", roleTool: "工具", roleSystem: "系統",
+    recap: "回顧", recapTitle: "顯示/隱藏閘道產生的會話回顧", recapFailed: "產生回顧失敗:{error}",
   },
   config: {
     loading: "載入設定…", notConnected: "未連線閘道。",
@@ -1268,6 +1272,7 @@ const ja: Translations = {
     exportTitle: "選択したセッションを Markdown でエクスポート",
     exportFailed: "エクスポートに失敗しました。",
     roleUser: "ユーザー", roleAssistant: "アシスタント", roleTool: "ツール", roleSystem: "システム",
+    recap: "リキャップ", recapTitle: "ゲートウェイ生成のセッション要約を表示/非表示", recapFailed: "リキャップに失敗しました: {error}",
   },
   config: {
     loading: "設定を読み込み中…", notConnected: "ゲートウェイに未接続です。",
@@ -1573,6 +1578,7 @@ const ar: Translations = {
     exportTitle: "تصدير الجلسة المحددة بصيغة Markdown",
     exportFailed: "فشل التصدير.",
     roleUser: "المستخدم", roleAssistant: "المساعد", roleTool: "أداة", roleSystem: "النظام",
+    recap: "ملخص", recapTitle: "إظهار أو إخفاء ملخص الجلسة المُنشأ من البوابة", recapFailed: "فشل الملخص: {error}",
   },
   config: {
     loading: "جارٍ تحميل الإعدادات…", notConnected: "البوابة غير متصلة.",
