@@ -375,6 +375,12 @@ export interface PluginsPayload {
   disabled: string[];
 }
 
+export interface SessionSearchHit {
+  session_id: string;
+  title: string | null;
+  snippet: string;
+}
+
 export interface StorageStats {
   db_path: string;
   size_bytes: number;
@@ -1146,6 +1152,17 @@ export class GatewayClient {
     };
     if (!response.ok) throw new Error(value.error || `webhook test HTTP ${response.status}`);
     return { ok: Boolean(value.ok), message: value.message || "" };
+  }
+
+  /** GET /api/sessions/search?q=... — full-text transcript search. */
+  async searchSessions(query: string, limit = 30): Promise<SessionSearchHit[]> {
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    const response = await fetch(this.endpoint(`/api/sessions/search?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`search HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.results || []) as SessionSearchHit[];
   }
 
   /** POST /api/sessions/:id/fork — copy the session into a new branch. */

@@ -45,6 +45,7 @@ export class SessionsViewWidget {
       <div class="sessions-view-body">
         <div class="sessions-view-listcol">
           <input id="sessions-view-filter" type="search" data-i18n-ph="sessionsView.filterPlaceholder" />
+          <input id="sessions-view-search" type="search" data-i18n-ph="sessionsView.searchPlaceholder" />
           <div id="sessions-view-list" class="sessions-view-list"></div>
         </div>
         <div id="sessions-view-transcript" class="sessions-view-transcript">
@@ -57,6 +58,13 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-filter")!.addEventListener("input", () => {
       this.renderList();
+    });
+    let searchDebounce: number | null = null;
+    this.root.querySelector("#sessions-view-search")!.addEventListener("input", () => {
+      if (searchDebounce !== null) window.clearTimeout(searchDebounce);
+      searchDebounce = window.setTimeout(() => {
+        this.runSearch().catch(() => undefined);
+      }, 350);
     });
     this.root.querySelector("#sessions-view-export")!.addEventListener("click", () => {
       this.exportSelected();
@@ -108,6 +116,49 @@ export class SessionsViewWidget {
         ),
         true,
       );
+    }
+  }
+
+  private async runSearch(): Promise<void> {
+    const client = this.client();
+    const list = this.root.querySelector("#sessions-view-list") as HTMLElement;
+    const query = (this.root.querySelector("#sessions-view-search") as HTMLInputElement).value.trim();
+    if (!query) {
+      this.renderList();
+      return;
+    }
+    if (!client) return;
+    try {
+      const hits = await client.searchSessions(query);
+      if (hits.length === 0) {
+        list.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.noResults)}</p>`;
+        return;
+      }
+      list.innerHTML = hits
+        .map((hit) => {
+          const title = hit.title || hit.session_id.slice(0, 8);
+          return `
+            <div class="sessions-view-row" data-id="${escapeHtml(hit.session_id)}">
+              <div class="sessions-view-row-title">${escapeHtml(title)}</div>
+              <div class="sessions-view-snippet">${escapeHtml(hit.snippet)}</div>
+            </div>`;
+        })
+        .join("");
+      for (const row of Array.from(list.querySelectorAll<HTMLElement>(".sessions-view-row"))) {
+        row.addEventListener("click", () => {
+          this.selected = row.dataset.id || null;
+          (this.root.querySelector("#sessions-view-search") as HTMLInputElement).value = "";
+          this.renderList();
+          this.loadTranscript(row.dataset.id || "").catch(() => undefined);
+        });
+      }
+    } catch (error) {
+      list.innerHTML = `<p class="empty">${escapeHtml(
+        t.sessionsView.searchFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+      )}</p>`;
     }
   }
 

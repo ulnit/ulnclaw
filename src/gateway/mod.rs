@@ -884,6 +884,60 @@ async fn mcp_servers_list(State(state): State<Arc<GatewayState>>) -> Json<Value>
     Json(json!({ "servers": servers }))
 }
 
+/// Query parameters for `GET /api/sessions/search`.
+#[derive(Debug, Deserialize)]
+struct SessionSearchQuery {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `GET /api/sessions/search?q=...` — full-text search across all session
+/// transcripts (FTS5 with LIKE fallback), returning session ids with
+/// snippets and titles (desktop Sessions view search; hermes
+/// `hermes_state_search` parity).
+async fn search_sessions(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<SessionSearchQuery>,
+) -> Response {
+    let Some(q) = query.q.map(|q| q.trim().to_string()).filter(|q| !q.is_empty()) else {
+        return bad_request("q is required", Some("invalid_request"));
+    };
+    let limit = query.limit.unwrap_or(30).min(200).max(1);
+    let store = state.store.clone();
+    let result =
+        tokio::task::spawn_blocking(move || -> std::result::Result<Value, crate::error::AgentError> {
+            let hits = store.search_messages(&q, limit)?;
+            let results: Vec<Value> = hits
+                .into_iter()
+                .map(|(session_id, snippet)| {
+                    let title = store.get_session_title(&session_id).ok().flatten();
+                    json!({
+                        "session_id": session_id,
+                        "title": title,
+                        "snippet": snippet,
+                    })
+                })
+                .collect();
+            Ok(json!({"query": q, "count": results.len(), "results": results}))
+        })
+        .await;
+    match result {
+        Ok(Ok(payload)) => Json(payload).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("search task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
 /// Query parameters for `GET /api/insights`.
 #[derive(Debug, Deserialize)]
 struct InsightsQuery {
@@ -1325,6 +1379,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
             get(get_response).delete(delete_response),
         )
         .route("/api/sessions", get(list_sessions).post(create_session))
+        .route("/api/sessions/search", get(search_sessions))
         .route(
             "/api/sessions/:id",
             get(get_session).patch(patch_session).delete(delete_session),
@@ -8880,6 +8935,67 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_session_search_finds_seeded_message() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(dir.path().join("state.db")).expect("store"),
+        );
+        let id = store.create_session("cli", Some("test-model"), None).unwrap();
+        store.set_session_title(&id, "searchable session").unwrap();
+        store
+            .append_message(
+                &id,
+                &crate::provider::Message {
+                    role: crate::provider::Role::User,
+                    content: Some("the quick brown fox jumps over the lazy dog".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+
+        let provider = Arc::new(
+            OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let agent = Agent::new(provider, ToolRegistry::new()).with_store(store);
+        let state = GatewayState::new(
+            Arc::new(agent),
+            "test-model".into(),
+            "test".into(),
+            Some("sekret".into()),
+            ApprovalRouter::new(),
+        )
+        .expect("state builds");
+        let app = router(state);
+
+        let (status, _) = get_json(app.clone(), "/api/sessions/search?q=fox", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, _) = get_json(app.clone(), "/api/sessions/search", Some("sekret")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, body) =
+            get_json(app.clone(), "/api/sessions/search?q=fox", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["count"], 1);
+        let first = &body["results"][0];
+        assert_eq!(first["title"], "searchable session");
+        assert!(first["snippet"].as_str().unwrap().contains("fox"));
+
+        let (status, body) =
+            get_json(app, "/api/sessions/search?q=zebra", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["count"], 0);
     }
 
     #[tokio::test]
