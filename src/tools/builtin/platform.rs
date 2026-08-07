@@ -1360,10 +1360,12 @@ fn register_gated_stubs(registry: &mut ToolRegistry) {
             .expect("computer_use builds"),
     );
 
+    // Discord — full REST-API backed tools (hermes tools/discord_tool.py):
+    // intent-gated dynamic schema, config allowlist, enriched 403s.
+    crate::discord_tool::register(registry);
+
     // Messaging platforms — faithful tool surface, gated on credentials.
-    let platforms: [(&str, &str, &str, &str); 4] = [
-        ("discord", "discord", "Send and manage Discord messages in servers the bot has joined.", "DISCORD_BOT_TOKEN"),
-        ("discord_admin", "discord_admin", "Discord server administration (channels, roles, moderation).", "DISCORD_BOT_TOKEN"),
+    let platforms: [(&str, &str, &str, &str); 2] = [
         ("feishu_doc_read", "feishu_doc", "Read a Feishu/Lark document as markdown.", "FEISHU_APP_ID"),
         ("spotify_playback", "spotify", "Control Spotify playback (play/pause/skip/current track).", "SPOTIFY_CLIENT_ID"),
     ];

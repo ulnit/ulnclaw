@@ -786,6 +786,9 @@ pub struct UlncLawConfig {
     /// MCP server connections.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Discord tool settings (`[discord]`, hermes parity).
+    #[serde(default)]
+    pub discord: DiscordConfig,
     /// HTTP gateway (OpenAI-compatible API server).
     #[serde(default)]
     pub gateway: GatewayConfig,
@@ -1259,6 +1262,25 @@ impl Default for ApprovalsConfig {
 pub struct McpConfig {
     #[serde(default)]
     pub servers: Vec<crate::mcp::McpServerConfig>,
+}
+
+/// A config value accepted as either a scalar string or a list (hermes
+/// config.yaml accepts both for e.g. `discord.server_actions`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StringOrList {
+    Single(String),
+    List(Vec<String>),
+}
+
+/// Discord tool settings (hermes config.yaml `[discord]`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiscordConfig {
+    /// Action allowlist — comma-separated string or list of action names.
+    /// Unset/empty exposes every intent-available action (hermes
+    /// `discord.server_actions`).
+    #[serde(default)]
+    pub server_actions: Option<StringOrList>,
 }
 
 /// A named profile override section.
