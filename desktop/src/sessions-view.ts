@@ -39,7 +39,8 @@ export class SessionsViewWidget {
         <button id="sessions-view-delete" class="ghost" data-i18n-title="sessionsView.deleteTitle" hidden>🗑</button>
         <button id="sessions-view-fork" class="ghost" data-i18n-title="sessionsView.forkTitle" hidden>⑂</button>
         <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
-        <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳</button>
+        <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳ MD</button>
+        <button id="sessions-view-export-html" class="ghost" data-i18n-title="sessionsView.exportHtmlTitle" hidden>⭳ HTML</button>
         <button id="sessions-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="sessions-view-status" class="config-status" hidden></div>
@@ -68,7 +69,10 @@ export class SessionsViewWidget {
       }, 350);
     });
     this.root.querySelector("#sessions-view-export")!.addEventListener("click", () => {
-      this.exportSelected();
+      this.exportSelected("md");
+    });
+    this.root.querySelector("#sessions-view-export-html")!.addEventListener("click", () => {
+      this.exportSelected("html");
     });
     this.root.querySelector("#sessions-view-recap")!.addEventListener("click", () => {
       this.toggleRecap().catch(() => undefined);
@@ -215,6 +219,7 @@ export class SessionsViewWidget {
       pane.innerHTML = this.renderMessages(messages);
       pane.scrollTop = 0;
       exportBtn.hidden = false;
+      (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = false;
@@ -228,6 +233,7 @@ export class SessionsViewWidget {
         ),
       )}</p>`;
       exportBtn.hidden = true;
+      (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = true;
@@ -317,7 +323,7 @@ export class SessionsViewWidget {
       this.selected = null;
       const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
       pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.select)}</p>`;
-      for (const id of ["#sessions-view-export", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-delete", "#sessions-view-rename"]) {
+      for (const id of ["#sessions-view-export", "#sessions-view-export-html", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-delete", "#sessions-view-rename"]) {
         (this.root.querySelector(id) as HTMLButtonElement).hidden = true;
       }
       await this.refresh();
@@ -382,12 +388,12 @@ export class SessionsViewWidget {
     }
   }
 
-  private exportSelected(): void {
+  private exportSelected(format: "md" | "html"): void {
     const client = this.client();
     if (!client || !this.selected) return;
     const sessionId = this.selected;
     client
-      .exportSession(sessionId, "md")
+      .exportSession(sessionId, format)
       .then(({ blob, filename }) => {
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
