@@ -46,7 +46,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
@@ -862,6 +862,104 @@ async fn config_put(Json(body): Json<ConfigPutBody>) -> Response {
         "note": "restart the gateway to apply changes to the running process",
     }))
     .into_response()
+}
+
+/// Reveal rate limit state (hermes `_reveal_timestamps`): max 5
+/// reveals per 30 s window, process-wide.
+static REVEAL_WINDOW: std::sync::Mutex<VecDeque<std::time::Instant>> =
+    std::sync::Mutex::new(VecDeque::new());
+const REVEAL_MAX_PER_WINDOW: usize = 5;
+const REVEAL_WINDOW_SECONDS: u64 = 30;
+
+/// `POST /api/env/reveal` — unredacted value of one env key (hermes
+/// parity): `.env` file first, then the process env. Rate-limited 5/30 s.
+async fn env_reveal(Json(body): Json<Value>) -> Response {
+    let key = body["key"].as_str().unwrap_or_default().trim().to_string();
+    if key.is_empty() || !crate::secrets::is_valid_env_name(&key) {
+        return bad_request("a valid env key is required", None);
+    }
+    {
+        let mut window = REVEAL_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let cutoff = std::time::Instant::now()
+            - std::time::Duration::from_secs(REVEAL_WINDOW_SECONDS);
+        while let Some(front) = window.front() {
+            if *front < cutoff {
+                window.pop_front();
+            } else {
+                break;
+            }
+        }
+        if window.len() >= REVEAL_MAX_PER_WINDOW {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({ "error": "Too many reveal requests. Try again shortly." })),
+            )
+                .into_response();
+        }
+        window.push_back(std::time::Instant::now());
+    }
+    let home = crate::config::ulnclaw_home();
+    let file_keys = crate::config::load_env_file(&home.join(".env"));
+    let value = file_keys
+        .get(&key)
+        .cloned()
+        .or_else(|| std::env::var(&key).ok());
+    match value {
+        Some(value) => Json(json!({ "ok": true, "key": key, "value": value })).into_response(),
+        None => not_found("env key not found"),
+    }
+}
+
+/// `GET /api/config/defaults` — the default config as JSON (hermes
+/// parity, lean: no YAML).
+async fn config_defaults() -> Json<Value> {
+    let defaults = crate::config::UlncLawConfig::default();
+    let value = serde_json::to_value(&defaults).unwrap_or_else(|_| json!({}));
+    Json(json!({ "defaults": value }))
+}
+
+/// Flatten a JSON value into dotted-path leaf rows (schema helper).
+fn flatten_schema_rows(value: &Value, prefix: &str, out: &mut Vec<Value>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                flatten_schema_rows(child, &path, out);
+            }
+        }
+        other => {
+            let kind = match other {
+                Value::Bool(_) => "bool",
+                Value::Number(_) => "number",
+                Value::String(_) => "string",
+                Value::Array(_) => "array",
+                Value::Null => "null",
+                Value::Object(_) => unreachable!(),
+            };
+            out.push(json!({ "path": prefix, "type": kind, "default": other }));
+        }
+    }
+}
+
+/// `GET /api/config/schema` — flattened dotted-path schema derived
+/// from the default config (lean hermes parity: types + defaults, no
+/// per-field labels/options).
+async fn config_schema() -> Json<Value> {
+    let defaults = serde_json::to_value(crate::config::UlncLawConfig::default())
+        .unwrap_or_else(|_| json!({}));
+    let mut fields = Vec::new();
+    flatten_schema_rows(&defaults, "", &mut fields);
+    fields.sort_by(|a, b| {
+        a["path"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(b["path"].as_str().unwrap_or_default())
+    });
+    Json(json!({ "fields": fields }))
 }
 
 /// Env var holding a custom endpoint's key (lean hermes
@@ -3450,6 +3548,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/config", get(config_get).put(config_put))
         .route("/api/config/raw", get(config_raw_get).put(config_raw_put))
         .route("/api/env", get(env_list).put(env_set).delete(env_delete))
+        .route("/api/env/reveal", post(env_reveal))
+        .route("/api/config/defaults", get(config_defaults))
+        .route("/api/config/schema", get(config_schema))
         .route("/api/fs/list", get(fs_list))
         .route("/api/fs/read-text", get(fs_read_text))
         .route("/api/fs/write-text", post(fs_write_text))
@@ -12820,7 +12921,95 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             app.clone(), "POST", "/api/fs/mkdir", Some("sekret"),
             json!({ "path": file_path.display().to_string() }),
         ).await;
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/fs/mkdir", Some("sekret"),
+            json!({ "path": file_path.display().to_string() }),
+        ).await;
         assert_eq!(status, StatusCode::CONFLICT);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_env_reveal_and_config_defaults_schema() {
+        // Reveal reads `.env` under ULNCLAW_HOME; defaults/schema derive
+        // from the default config — isolate home like the other tests.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".env"), "DEMO_REVEAL_KEY=from-dotenv\n").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Requires auth.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/env/reveal", None,
+            json!({ "key": "DEMO_REVEAL_KEY" }),
+        ).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // `.env` value is revealed unredacted.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/env/reveal", Some("sekret"),
+            json!({ "key": "DEMO_REVEAL_KEY" }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["value"], "from-dotenv");
+
+        // Invalid key name -> 400 (does not consume the rate window).
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/env/reveal", Some("sekret"),
+            json!({ "key": "not a key!" }),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Unknown key -> 404 (consumes window slot #2).
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/env/reveal", Some("sekret"),
+            json!({ "key": "ULNCLAW_NO_SUCH_KEY" }),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Rate limit: 5 reveals per 30 s window (2 consumed above).
+        for _ in 0..3 {
+            let (status, _) = send_json(
+                app.clone(), "POST", "/api/env/reveal", Some("sekret"),
+                json!({ "key": "DEMO_REVEAL_KEY" }),
+            ).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/env/reveal", Some("sekret"),
+            json!({ "key": "DEMO_REVEAL_KEY" }),
+        ).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+
+        // Defaults: the full default config as JSON.
+        let (status, body) = get_json(app.clone(), "/api/config/defaults", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["defaults"].is_object());
+        assert!(body["defaults"]["gateway"].is_object());
+
+        // Schema: flattened dotted-path leaf rows, sorted, typed.
+        let (status, body) = get_json(app.clone(), "/api/config/schema", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let fields = body["fields"].as_array().expect("fields array");
+        assert!(!fields.is_empty());
+        let paths: Vec<&str> = fields.iter().map(|f| f["path"].as_str().unwrap()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted);
+        let port_row = fields
+            .iter()
+            .find(|f| f["path"] == "gateway.port")
+            .expect("gateway.port row");
+        assert_eq!(port_row["type"], "number");
+        assert!(port_row["default"].is_number());
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

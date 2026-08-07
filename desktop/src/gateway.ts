@@ -488,6 +488,13 @@ export interface EnvVarInfo {
   in_process_env: boolean;
 }
 
+/** One GET /api/config/schema field row (P336). */
+export interface ConfigSchemaField {
+  path: string;
+  type: string;
+  default: unknown;
+}
+
 /** Update-check result from GET /api/update/check (P324). */
 export interface UpdateCheckResult {
   install_method: string;
@@ -1572,6 +1579,40 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `env delete HTTP ${response.status}`);
+  }
+
+  /** POST /api/env/reveal — unredacted value for one key (P336).
+   * Rate-limited server-side: 5 reveals per 30 s window. */
+  async envReveal(key: string): Promise<string> {
+    const response = await fetch(this.endpoint("/api/env/reveal"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ key }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `env reveal HTTP ${response.status}`);
+    return String(value.value ?? "");
+  }
+
+  /** GET /api/config/defaults — full default config as JSON (P336). */
+  async configDefaults(): Promise<Record<string, unknown>> {
+    const response = await fetch(this.endpoint("/api/config/defaults"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `config defaults HTTP ${response.status}`);
+    return (value.defaults || {}) as Record<string, unknown>;
+  }
+
+  /** GET /api/config/schema — flattened dotted-path fields with type +
+   * default (P336). */
+  async configSchema(): Promise<ConfigSchemaField[]> {
+    const response = await fetch(this.endpoint("/api/config/schema"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `config schema HTTP ${response.status}`);
+    return (value.fields || []) as ConfigSchemaField[];
   }
 
   /** GET /api/fs/list — directory listing (P329). */

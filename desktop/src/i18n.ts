@@ -178,7 +178,7 @@ export interface Translations {
     restartNote: string; noKeys: string; noChanges: string; pending: string;
     rawButton: string; rawTitle: string; rawSave: string; rawConfirm: string; rawSaved: string; rawFailed: string;
     envAddLabel: string; envValuePlaceholder: string; envEmpty: string; envFile: string;
-    envProcess: string; envBoth: string; envRemoveTitle: string; envRemoveConfirm: string;
+    envProcess: string; envBoth: string; envRemoveTitle: string; envRemoveConfirm: string; envRevealTitle: string;
     envSaved: string; envFailed: string;
     memoryTitle: string; memoryTargetAll: string; memoryTargetMemory: string;
     memoryTargetUser: string; memoryReset: string; memoryNote: string;
@@ -188,6 +188,7 @@ export interface Translations {
     poolTitle: string; poolAddLabel: string; poolEmpty: string;
     poolRemoveConfirm: string; poolSaved: string; poolFailed: string; poolNote: string;
     oauthTitle: string; oauthLoggedIn: string; oauthLoggedOut: string; oauthPortal: string; oauthNote: string;
+    schemaTitle: string; schemaNote: string;
   };
   doctor: {
     run: string; running: string; online: string; issues: string;
@@ -502,6 +503,7 @@ const en: Translations = {
     envEmpty: "No environment keys found.", envFile: ".env", envProcess: "process env",
     envBoth: ".env + process env", envRemoveTitle: "Remove this key from .env",
     envRemoveConfirm: "Remove {key} from .env?",
+    envRevealTitle: "Reveal value (5 per 30 s)",
     envSaved: "Environment updated. Restart the gateway to apply.",
     envFailed: "Environment change failed: {error}",
     memoryTitle: "Persistent memory",
@@ -512,7 +514,7 @@ const en: Translations = {
     memoryResetConfirm: "Delete the selected memory files? This cannot be undone.",
     memoryResetDone: "Deleted: {files}", memoryResetNone: "Nothing to delete.",
     memoryResetFailed: "Reset failed: {error}",
-    poolTitle: "Credential pool", poolAddLabel: "Add pool key", poolEmpty: "No pooled credentials", poolRemoveConfirm: "Remove this pooled key?", poolSaved: "Credential pool updated", poolFailed: "Credential pool failed: {error}", poolNote: "Pooled keys rotate round-robin per request and take precedence over environment variables for their provider; remove every entry to fall back to env keys.", oauthTitle: "OAuth (device flow)", oauthLoggedIn: "Logged in", oauthLoggedOut: "Logged out", oauthPortal: "Open portal", oauthNote: "Read-only posture of the [oauth] device-flow login (ulnclaw oauth CLI); tokens live in oauth_tokens.json.",
+    poolTitle: "Credential pool", poolAddLabel: "Add pool key", poolEmpty: "No pooled credentials", poolRemoveConfirm: "Remove this pooled key?", poolSaved: "Credential pool updated", poolFailed: "Credential pool failed: {error}", poolNote: "Pooled keys rotate round-robin per request and take precedence over environment variables for their provider; remove every entry to fall back to env keys.", oauthTitle: "OAuth (device flow)", oauthLoggedIn: "Logged in", oauthLoggedOut: "Logged out", oauthPortal: "Open portal", oauthNote: "Read-only posture of the [oauth] device-flow login (ulnclaw oauth CLI); tokens live in oauth_tokens.json.", schemaTitle: "Config schema (defaults)", schemaNote: "Every config leaf with its type and default value — edit via the rows above or Raw TOML.",
   },
   doctor: {
     run: "Run doctor", running: "Running checks…",
@@ -925,6 +927,7 @@ const zh: Translations = {
     envEmpty: "未发现环境变量。", envFile: ".env", envProcess: "进程环境",
     envBoth: ".env + 进程环境", envRemoveTitle: "从 .env 移除此键",
     envRemoveConfirm: "从 .env 移除 {key}？",
+    envRevealTitle: "显示值（每 30 秒限 5 次）",
     envSaved: "环境变量已更新。重启网关后生效。",
     envFailed: "环境变量修改失败：{error}",
     memoryTitle: "持久记忆",
@@ -935,7 +938,7 @@ const zh: Translations = {
     memoryResetConfirm: "删除选定的记忆文件？此操作不可撤销。",
     memoryResetDone: "已删除：{files}", memoryResetNone: "无可删除内容。",
     memoryResetFailed: "重置失败：{error}",
-    poolTitle: "凭证池", poolAddLabel: "添加池密钥", poolEmpty: "暂无池凭证", poolRemoveConfirm: "移除该池密钥？", poolSaved: "凭证池已更新", poolFailed: "凭证池操作失败：{error}", poolNote: "池内密钥按请求轮转，且对其 provider 优先于环境变量；删光条目即回落到环境密钥。", oauthTitle: "OAuth（设备流程）", oauthLoggedIn: "已登录", oauthLoggedOut: "未登录", oauthPortal: "打开门户", oauthNote: "[oauth] 设备流程登录的只读状态（ulnclaw oauth CLI）；令牌存于 oauth_tokens.json。",
+    poolTitle: "凭证池", poolAddLabel: "添加池密钥", poolEmpty: "暂无池凭证", poolRemoveConfirm: "移除该池密钥？", poolSaved: "凭证池已更新", poolFailed: "凭证池操作失败：{error}", poolNote: "池内密钥按请求轮转，且对其 provider 优先于环境变量；删光条目即回落到环境密钥。", oauthTitle: "OAuth（设备流程）", oauthLoggedIn: "已登录", oauthLoggedOut: "未登录", oauthPortal: "打开门户", oauthNote: "[oauth] 设备流程登录的只读状态（ulnclaw oauth CLI）；令牌存于 oauth_tokens.json。", schemaTitle: "配置模式（默认值）", schemaNote: "列出每个配置叶子的类型与默认值——可通过上方字段或 Raw TOML 编辑。",
   },
   doctor: {
     run: "运行诊断", running: "检查中…",
@@ -1348,6 +1351,7 @@ const zhHant: Translations = {
     envEmpty: "未發現環境變數。", envFile: ".env", envProcess: "程序環境",
     envBoth: ".env + 程序環境", envRemoveTitle: "從 .env 移除此鍵",
     envRemoveConfirm: "從 .env 移除 {key}？",
+    envRevealTitle: "顯示值（每 30 秒限 5 次）",
     envSaved: "環境變數已更新。重啟閘道後生效。",
     envFailed: "環境變數修改失敗：{error}",
     memoryTitle: "持久記憶",
@@ -1358,7 +1362,7 @@ const zhHant: Translations = {
     memoryResetConfirm: "刪除選定的記憶檔案？此操作無法復原。",
     memoryResetDone: "已刪除：{files}", memoryResetNone: "無可刪除內容。",
     memoryResetFailed: "重置失敗：{error}",
-    poolTitle: "憑證池", poolAddLabel: "新增池金鑰", poolEmpty: "無池憑證", poolRemoveConfirm: "移除此池金鑰？", poolSaved: "憑證池已更新", poolFailed: "憑證池操作失敗：{error}", poolNote: "池內金鑰按請求輪換，且對其 provider 優先於環境變數；刪光條目即回落到環境密鑰。", oauthTitle: "OAuth（裝置流程）", oauthLoggedIn: "已登入", oauthLoggedOut: "未登入", oauthPortal: "開啟入口", oauthNote: "[oauth] 裝置流程登入的唯讀狀態（ulnclaw oauth CLI）；憑證存於 oauth_tokens.json。",
+    poolTitle: "憑證池", poolAddLabel: "新增池金鑰", poolEmpty: "無池憑證", poolRemoveConfirm: "移除此池金鑰？", poolSaved: "憑證池已更新", poolFailed: "憑證池操作失敗：{error}", poolNote: "池內金鑰按請求輪換，且對其 provider 優先於環境變數；刪光條目即回落到環境密鑰。", oauthTitle: "OAuth（裝置流程）", oauthLoggedIn: "已登入", oauthLoggedOut: "未登入", oauthPortal: "開啟入口", oauthNote: "[oauth] 裝置流程登入的唯讀狀態（ulnclaw oauth CLI）；憑證存於 oauth_tokens.json。", schemaTitle: "組態結構（預設值）", schemaNote: "列出每個組態葉子的類型與預設值——可透過上方欄位或 Raw TOML 編輯。",
   },
   doctor: {
     run: "執行診斷", running: "檢查中…",
@@ -1771,6 +1775,7 @@ const ja: Translations = {
     envEmpty: "環境キーが見つかりません。", envFile: ".env", envProcess: "プロセス環境",
     envBoth: ".env + プロセス環境", envRemoveTitle: "このキーを .env から削除",
     envRemoveConfirm: "{key} を .env から削除しますか？",
+    envRevealTitle: "値を表示（30 秒に 5 回まで）",
     envSaved: "環境を更新しました。反映にはゲートウェイを再起動してください。",
     envFailed: "環境の変更に失敗しました: {error}",
     memoryTitle: "永続メモリ",
@@ -1781,7 +1786,7 @@ const ja: Translations = {
     memoryResetConfirm: "選択したメモリファイルを削除しますか？元に戻せません。",
     memoryResetDone: "削除済み: {files}", memoryResetNone: "削除するものがありません。",
     memoryResetFailed: "リセットに失敗しました: {error}",
-    poolTitle: "認証情報プール", poolAddLabel: "プールキーを追加", poolEmpty: "プールされた認証情報はありません", poolRemoveConfirm: "このプールキーを削除しますか？", poolSaved: "認証情報プールを更新しました", poolFailed: "認証情報プールに失敗しました: {error}", poolNote: "プール内のキーはリクエストごとにラウンドロビンされ、そのプロバイダーでは環境変數より優先されます；全エントリを削除すると環境キーに戻ります。", oauthTitle: "OAuth（デバイスフロー）", oauthLoggedIn: "ログイン済み", oauthLoggedOut: "未ログイン", oauthPortal: "ポータルを開く", oauthNote: "[oauth] デバイスフローログインの読み取り専用状態（ulnclaw oauth CLI）；トークンは oauth_tokens.json に保存されます。",
+    poolTitle: "認証情報プール", poolAddLabel: "プールキーを追加", poolEmpty: "プールされた認証情報はありません", poolRemoveConfirm: "このプールキーを削除しますか？", poolSaved: "認証情報プールを更新しました", poolFailed: "認証情報プールに失敗しました: {error}", poolNote: "プール内のキーはリクエストごとにラウンドロビンされ、そのプロバイダーでは環境変數より優先されます；全エントリを削除すると環境キーに戻ります。", oauthTitle: "OAuth（デバイスフロー）", oauthLoggedIn: "ログイン済み", oauthLoggedOut: "未ログイン", oauthPortal: "ポータルを開く", oauthNote: "[oauth] デバイスフローログインの読み取り専用状態（ulnclaw oauth CLI）；トークンは oauth_tokens.json に保存されます。", schemaTitle: "設定スキーマ（既定値）", schemaNote: "すべての設定リーフを型と既定値で一覧表示 — 上の行または Raw TOML から編集できます。",
   },
   doctor: {
     run: "ドクターを実行", running: "チェック中…",
@@ -2194,6 +2199,7 @@ const ar: Translations = {
     envEmpty: "لا مفاتيح بيئة.", envFile: ".env", envProcess: "بيئة العملية",
     envBoth: ".env + بيئة العملية", envRemoveTitle: "إزالة هذا المفتاح من .env",
     envRemoveConfirm: "إزالة {key} من .env؟",
+    envRevealTitle: "إظهار القيمة (5 مرات لكل 30 ثانية)",
     envSaved: "تم تحديث البيئة. أعد تشغيل البوابة للتطبيق.",
     envFailed: "فشل تغيير البيئة: {error}",
     memoryTitle: "الذاكرة الدائمة",
@@ -2204,7 +2210,7 @@ const ar: Translations = {
     memoryResetConfirm: "حذف ملفات الذاكرة المحددة؟ لا يمكن التراجع.",
     memoryResetDone: "تم الحذف: {files}", memoryResetNone: "لا شيء لحذفه.",
     memoryResetFailed: "فشلت إعادة التعيين: {error}",
-    poolTitle: "مجمع بيانات الاعتماد", poolAddLabel: "إضافة مفتاح إلى المجمع", poolEmpty: "لا توجد بيانات اعتماد في المجمع", poolRemoveConfirm: "إزالة هذا المفتاح من المجمع؟", poolSaved: "تم تحديث مجمع بيانات الاعتماد", poolFailed: "فشل مجمع بيانات الاعتماد: {error}", poolNote: "تتداول مفاتيح المجمع بالتناوب لكل طلب وتتقدم على متغيرات البيئة لموفرها؛ إزالة جميع الإدخالات تعيد الاستخدام إلى مفاتيح البيئة.", oauthTitle: "OAuth (تدفق الأجهزة)", oauthLoggedIn: "تم تسجيل الدخول", oauthLoggedOut: "غير مسجل الدخول", oauthPortal: "فتح البوابة", oauthNote: "حالة قراءة فقط لتسجيل دخول [oauth] عبر الأجهزة (ulnclaw oauth CLI)؛ الرموز مخزنة في oauth_tokens.json.",
+    poolTitle: "مجمع بيانات الاعتماد", poolAddLabel: "إضافة مفتاح إلى المجمع", poolEmpty: "لا توجد بيانات اعتماد في المجمع", poolRemoveConfirm: "إزالة هذا المفتاح من المجمع؟", poolSaved: "تم تحديث مجمع بيانات الاعتماد", poolFailed: "فشل مجمع بيانات الاعتماد: {error}", poolNote: "تتداول مفاتيح المجمع بالتناوب لكل طلب وتتقدم على متغيرات البيئة لموفرها؛ إزالة جميع الإدخالات تعيد الاستخدام إلى مفاتيح البيئة.", oauthTitle: "OAuth (تدفق الأجهزة)", oauthLoggedIn: "تم تسجيل الدخول", oauthLoggedOut: "غير مسجل الدخول", oauthPortal: "فتح البوابة", oauthNote: "حالة قراءة فقط لتسجيل دخول [oauth] عبر الأجهزة (ulnclaw oauth CLI)؛ الرموز مخزنة في oauth_tokens.json.", schemaTitle: "مخطط الإعدادات (القيم الافتراضية)", schemaNote: "يعرض كل ورقة إعدادات مع نوعها وقيمتها الافتراضية — عدّل عبر الحقول أعلاه أو TOML الخام.",
   },
   doctor: {
     run: "تشغيل الفحص", running: "جارٍ الفحص…",

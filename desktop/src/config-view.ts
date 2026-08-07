@@ -74,6 +74,11 @@ export class ConfigWidget {
         </div>
         <p class="config-note" data-i18n="config.envKeysNote"></p>
       </div>
+      <div id="config-schema" class="config-env" hidden>
+        <h3 data-i18n="config.schemaTitle">Config schema (defaults)</h3>
+        <div id="config-schema-rows" class="config-env-rows"></div>
+        <p class="config-note" data-i18n="config.schemaNote"></p>
+      </div>
       <div id="config-memory" class="config-env" hidden>
         <h3 data-i18n="config.memoryTitle">Persistent memory</h3>
         <div id="config-memory-rows" class="config-env-rows"></div>
@@ -243,6 +248,7 @@ export class ConfigWidget {
       this.renderMemory().catch(() => undefined);
       this.renderPool().catch(() => undefined);
       this.renderOAuth().catch(() => undefined);
+      this.renderSchema().catch(() => undefined);
       this.status("");
       const fileEl = this.root.querySelector("#config-file") as HTMLElement;
       fileEl.textContent = this.configPath;
@@ -353,6 +359,12 @@ export class ConfigWidget {
           : t.config.envFile
         : t.config.envProcess;
       row.appendChild(source);
+      const reveal = document.createElement("button");
+      reveal.className = "ghost";
+      reveal.textContent = "\u{1F441}";
+      reveal.title = t.config.envRevealTitle;
+      reveal.onclick = () => this.toggleEnvReveal(variable.key, row);
+      row.appendChild(reveal);
       if (variable.in_file) {
         const remove = document.createElement("button");
         remove.className = "ghost danger";
@@ -362,6 +374,67 @@ export class ConfigWidget {
         row.appendChild(remove);
       }
       rows.appendChild(row);
+    }
+  }
+
+  /** Show/hide one env value inline via POST /api/env/reveal (P336). */
+  private async toggleEnvReveal(key: string, row: HTMLElement): Promise<void> {
+    const existing = row.querySelector(".config-env-reveal");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const client = this.client();
+    if (!client) return;
+    try {
+      const value = await client.envReveal(key);
+      const shown = document.createElement("code");
+      shown.className = "config-env-reveal";
+      shown.textContent = value;
+      row.appendChild(shown);
+    } catch (error) {
+      this.status(
+        t.config.envFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
+  }
+
+  /** Config schema/defaults reference over /api/config/schema (P336). */
+  private async renderSchema(): Promise<void> {
+    const client = this.client();
+    const block = this.root.querySelector("#config-schema") as HTMLElement;
+    const rows = this.root.querySelector("#config-schema-rows") as HTMLElement;
+    rows.innerHTML = "";
+    if (!client) {
+      block.hidden = true;
+      return;
+    }
+    try {
+      const fields = await client.configSchema();
+      if (!fields.length) {
+        block.hidden = true;
+        return;
+      }
+      block.hidden = false;
+      for (const field of fields) {
+        const row = document.createElement("div");
+        row.className = "config-env-row";
+        const keyEl = document.createElement("span");
+        keyEl.className = "config-env-chip";
+        keyEl.textContent = field.path;
+        row.appendChild(keyEl);
+        const meta = document.createElement("span");
+        meta.className = "jobs-counts";
+        meta.textContent = `${field.type} \u00b7 ${JSON.stringify(field.default)}`;
+        row.appendChild(meta);
+        rows.appendChild(row);
+      }
+    } catch {
+      block.hidden = true;
     }
   }
 
