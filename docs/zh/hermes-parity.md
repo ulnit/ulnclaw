@@ -525,3 +525,12 @@ provider 无关）；xAI 凭证池代理适配器（依赖 `hermes auth add` 凭
 macOS TCC 权限授予、cua-driver 内嵌守护/套接字模式，以及上下文级截图驱逐
 （P228 已移植视觉后处理一半——对返回截图按 `max_image_dimension` 做客户端
 最长边强制限制；驱逐一半在 v2026.8.3 检出中无参考实现）。
+
+另有若干 CLI 面刻意不移植（已记录为差异，按 v2026.8.3 审计）：
+`hermes console` —— “安全”命令控制台与 ulnclaw 聊天 REPL 的斜杠命令面重叠（`/help` `/tools` `/skills` `/sessions` ……已可在免 LLM 回合下应答）；
+`hermes dashboard` / `hermes serve` —— 独立 Web UI 服务器由 Tauri `desktop/` 应用 + 网关 OpenAI 兼容 API 面取代（网关保留 hermes dashboard 的本地应用 CORS 模型）；
+`hermes honcho` —— Honcho AI 托管记忆集成（第三方 SaaS）无 ulnclaw 对应物；本地记忆 + 已学技能 + 记忆图谱覆盖进程内范围；
+`hermes migrate` —— 配置格式迁移不适用（ulnclaw 无遗留格式可迁移）；
+`hermes claw` —— OpenClaw 迁移导入器不适用（ulnclaw 无 OpenClaw 谱系）；
+`hermes profile` —— 配置管理架构不同：ulnclaw 使用 `[profiles.<name>]` 配置覆盖 + 网关多路复用（`/p/<profile>/...` 镜像），而非每 profile 独立主目录的 CLI；
+`hermes whatsapp` —— Baileys 桥向导由网关监督的内置桥取代：`npm` 依赖在网关首次启动时安装，QR 配对经桥自身启动流程完成，`[messaging.whatsapp]` 开关平台（无需单独向导进程保持同步）。

@@ -650,3 +650,28 @@ context-level screenshot eviction (P228 ported the vision post-processing half �
 client-side longest-edge enforcement of `max_image_dimension` on returned
 screenshots; the eviction half has no reference implementation in the v2026.8.3
 checkout).
+
+Additional CLI surfaces deliberately not ported (documented as differences,
+audited against v2026.8.3):
+`hermes console` — the "safe" command console overlaps ulnclaw's chat REPL
+slash-command surface (`/help` `/tools` `/skills` `/sessions` …), which
+already answers without an LLM turn where hermes' console engine would;
+`hermes dashboard` / `hermes serve` — the standalone web-UI server is
+replaced by the Tauri `desktop/` app plus the gateway's OpenAI-compatible
+API surface (the gateway keeps the hermes dashboard CORS model for
+local-app dashboards);
+`hermes honcho` — the Honcho AI hosted-memory integration (a third-party
+SaaS) has no ulnclaw counterpart; local memory + learned skills + the
+memory graph cover the in-process scope;
+`hermes migrate` — config-format migrations are N/A (ulnclaw has no legacy
+format to migrate from);
+`hermes claw` — the OpenClaw migration importer is N/A (ulnclaw has no
+OpenClaw lineage);
+`hermes profile` — profile management is architecturally different:
+ulnclaw uses `[profiles.<name>]` config overrides + gateway multiplex
+(`/p/<profile>/...` mirrors) rather than a separate home-per-profile CLI;
+`hermes whatsapp` — the Baileys bridge wizard is replaced by the
+gateway-supervised built-in bridge: `npm` dependencies install on first
+gateway start, QR pairing happens through the bridge's own startup flow,
+and `[messaging.whatsapp]` toggles the platform (no separate wizard
+process to keep in sync).
