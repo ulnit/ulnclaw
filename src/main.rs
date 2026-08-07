@@ -347,6 +347,12 @@ enum Commands {
         /// Action: status (default)
         action: Option<String>,
     },
+    /// Interactive provider + model picker (hermes model)
+    Model {
+        /// Clear the models.dev picker cache before selecting
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Interactive onboarding wizard (hermes setup)
     Setup {
         /// Section to configure: model, terminal, gateway, tools, agent
@@ -2590,6 +2596,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
                 }
             }
         }
+        Commands::Model { refresh } => ulnclaw::model_cmd::run_model_picker(refresh),
         Commands::Setup { section, quick, reset, non_interactive } => {
             ulnclaw::setup_cmd::run_setup(section.as_deref(), quick, reset, non_interactive)
         }

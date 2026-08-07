@@ -760,7 +760,7 @@ fn section_agent(doc: &mut toml::Value) -> Result<(), String> {
 // Prompt primitives (mirror the main.rs qq_* helpers)
 // ---------------------------------------------------------------------------
 
-fn is_interactive_stdin() -> bool {
+pub(crate) fn is_interactive_stdin() -> bool {
     use std::io::IsTerminal;
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
@@ -769,7 +769,7 @@ fn print_header(title: &str) {
     println!("  ─── {} ───", title);
 }
 
-fn prompt_line(prompt: &str, default: &str) -> Result<String, String> {
+pub(crate) fn prompt_line(prompt: &str, default: &str) -> Result<String, String> {
     if default.is_empty() {
         print!("  {}: ", prompt);
     } else {
@@ -784,7 +784,7 @@ fn prompt_line(prompt: &str, default: &str) -> Result<String, String> {
     Ok(if trimmed.is_empty() { default.to_string() } else { trimmed.to_string() })
 }
 
-fn prompt_hidden(prompt: &str) -> Result<String, String> {
+pub(crate) fn prompt_hidden(prompt: &str) -> Result<String, String> {
     use crossterm::event::{Event, KeyCode, KeyEventKind};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
     print!("  {}: ", prompt);
@@ -823,7 +823,7 @@ fn prompt_hidden(prompt: &str) -> Result<String, String> {
     Ok(value)
 }
 
-fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
+pub(crate) fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
     let suffix = if default { "[Y/n]" } else { "[y/N]" };
     let answer = prompt_line(&format!("{} {}", prompt, suffix), "")?;
     Ok(match answer.trim().to_lowercase().as_str() {
@@ -833,7 +833,7 @@ fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
     })
 }
 
-fn prompt_choice(prompt: &str, choices: &[&str], default_index: usize) -> Result<usize, String> {
+pub(crate) fn prompt_choice(prompt: &str, choices: &[&str], default_index: usize) -> Result<usize, String> {
     println!();
     println!("  {}", prompt);
     for (idx, choice) in choices.iter().enumerate() {

@@ -193,24 +193,42 @@ fn fetch_from_network(url: &str) -> Result<Value, String> {
         }
         return Ok(value);
     }
-    // Tuple-style (connect, read) timeouts from hermes: a flat timeout let a
-    // blackholed connect stall the critical path. 5s connect fails fast on
-    // unreachable hosts; 15s total still tolerates a slow registry response.
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(TOTAL_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("client: {e}"))?;
-    let resp = client
-        .get(url)
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| format!("fetch: {e}"))?;
-    let value: Value = resp.json().map_err(|e| format!("json parse: {e}"))?;
-    if !is_non_empty_object(&value) {
-        return Err("models.dev returned an empty or invalid registry".into());
-    }
-    Ok(value)
+    fetch_with_reqwest(url)
+}
+
+/// Reqwest portion of the registry fetch. The blocking client owns an
+/// internal tokio runtime; building AND dropping it on a plain OS thread
+/// keeps it out of async caller contexts (gateway dispatch, `ulnclaw
+/// model`), avoiding the "Cannot drop a runtime in a context where
+/// blocking is not allowed" panic.
+fn fetch_with_reqwest(url: &str) -> Result<Value, String> {
+    let url_owned = url.to_string();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                // Tuple-style (connect, read) timeouts from hermes: a flat
+                // timeout let a blackholed connect stall the critical path.
+                // 5s connect fails fast on unreachable hosts; 15s total
+                // still tolerates a slow registry response.
+                let client = reqwest::blocking::Client::builder()
+                    .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+                    .timeout(Duration::from_secs(TOTAL_TIMEOUT_SECS))
+                    .build()
+                    .map_err(|e| format!("client: {e}"))?;
+                let resp = client
+                    .get(&url_owned)
+                    .send()
+                    .and_then(|r| r.error_for_status())
+                    .map_err(|e| format!("fetch: {e}"))?;
+                let value: Value = resp.json().map_err(|e| format!("json parse: {e}"))?;
+                if !is_non_empty_object(&value) {
+                    return Err("models.dev returned an empty or invalid registry".into());
+                }
+                Ok(value)
+            })
+            .join()
+            .map_err(|_| "models.dev fetch thread panicked".to_string())?
+    })
 }
 
 /// Give stale cache data a short in-memory grace before retrying refresh.

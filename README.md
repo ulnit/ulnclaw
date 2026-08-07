@@ -70,6 +70,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 
 # Interactive onboarding wizard (provider, terminal, platforms, tools)
 ./ulnclaw setup                 # or: ./ulnclaw setup model|terminal|gateway|tools|agent
+./ulnclaw model                 # switch provider/model interactively
 
 # Write a default config to ~/.ulnclaw/config.toml
 ./ulnclaw init
@@ -375,6 +376,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 
 # 交互式安装向导（provider、终端、消息平台、工具）
 ./ulnclaw setup                 # 或：./ulnclaw setup model|terminal|gateway|tools|agent
+./ulnclaw model                 # 交互式切换 provider/模型
 
 # 生成默认配置 ~/.ulnclaw/config.toml
 ./ulnclaw init
