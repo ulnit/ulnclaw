@@ -9,6 +9,8 @@
 //   * bottom-right — ambient confirmations (saved/enabled/…); auto-dismiss
 //     after 5 s, newest at the bottom, capped.
 
+import { t } from "./i18n";
+
 export type NotificationKind = "error" | "warning" | "info" | "success";
 
 export interface NotificationAction {
@@ -71,7 +73,7 @@ function ensureRoots(): { center: HTMLElement; corner: HTMLElement } {
     center.id = "notify-center";
     center.className = "notify-region notify-center";
     center.setAttribute("role", "region");
-    center.setAttribute("aria-label", "Notifications");
+    center.setAttribute("aria-label", t.notify.stackTitle);
     document.body.appendChild(center);
   }
   let corner = document.getElementById("notify-corner");
@@ -80,7 +82,7 @@ function ensureRoots(): { center: HTMLElement; corner: HTMLElement } {
     corner.id = "notify-corner";
     corner.className = "notify-region notify-corner";
     corner.setAttribute("role", "region");
-    corner.setAttribute("aria-label", "Notifications");
+    corner.setAttribute("aria-label", t.notify.stackTitle);
     document.body.appendChild(corner);
   }
   return { center, corner };
@@ -119,7 +121,7 @@ function itemNode(note: AppNotification): HTMLElement {
     const details = document.createElement("details");
     details.className = "notify-detail";
     const summary = document.createElement("summary");
-    summary.textContent = "Details";
+    summary.textContent = t.notify.details;
     const pre = document.createElement("pre");
     pre.textContent = note.detail;
     details.append(summary, pre);
@@ -141,7 +143,7 @@ function itemNode(note: AppNotification): HTMLElement {
   const close = document.createElement("button");
   close.className = "notify-close";
   close.type = "button";
-  close.setAttribute("aria-label", "Dismiss notification");
+  close.setAttribute("aria-label", t.notify.dismiss);
   close.textContent = "✕";
   close.onclick = () => dismissNotification(note.id);
   node.appendChild(close);
@@ -174,7 +176,7 @@ function render(): void {
       };
       const clear = document.createElement("button");
       clear.type = "button";
-      clear.textContent = "Clear all";
+      clear.textContent = t.notify.clearAll;
       clear.onclick = () => clearNotifications();
       bar.append(toggle, clear);
       center.appendChild(bar);

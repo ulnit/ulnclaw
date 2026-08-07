@@ -3,15 +3,16 @@
 // use) as a four-column card wall with quick actions.
 
 import type { GatewayClient, KanbanBoard, KanbanTask } from "./gateway";
+import { fmt, t } from "./i18n";
 
 // Engine statuses (hermes swarm): todo → ready → running → done, plus
 // scheduled / blocked / archived. The wall shows four columns; the "To do"
 // column gathers todo+ready+scheduled, "Doing" shows running tasks.
-const COLUMNS: { key: string; label: string; statuses: string[] }[] = [
-  { key: "todo", label: "To do", statuses: ["todo", "ready", "scheduled"] },
-  { key: "doing", label: "Doing", statuses: ["running"] },
-  { key: "blocked", label: "Blocked", statuses: ["blocked"] },
-  { key: "done", label: "Done", statuses: ["done"] },
+const COLUMNS: { key: "todo" | "doing" | "blocked" | "done"; statuses: string[] }[] = [
+  { key: "todo", statuses: ["todo", "ready", "scheduled"] },
+  { key: "doing", statuses: ["running"] },
+  { key: "blocked", statuses: ["blocked"] },
+  { key: "done", statuses: ["done"] },
 ];
 
 export class KanbanWidget {
@@ -29,10 +30,10 @@ export class KanbanWidget {
   mount(): void {
     this.root.innerHTML = `
       <header id="kanban-header">
-        <select id="kanban-board" title="Switch board"></select>
+        <select id="kanban-board" title="Switch board" data-i18n-title="kanban.switchBoard"></select>
         <span id="kanban-counts" class="kanban-counts"></span>
         <span class="spacer"></span>
-        <button id="kanban-refresh" class="ghost" title="Refresh">↻</button>
+        <button id="kanban-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="kanban-columns"></div>
       <dialog id="kanban-detail">
@@ -41,14 +42,14 @@ export class KanbanWidget {
           <pre id="kanban-detail-body" class="kanban-detail-body"></pre>
           <div id="kanban-detail-comments" class="kanban-comments"></div>
           <div class="kanban-detail-compose">
-            <input id="kanban-comment-input" type="text" placeholder="Add a comment…" />
-            <button id="kanban-comment-send" value="comment">Comment</button>
+            <input id="kanban-comment-input" type="text" placeholder="Add a comment…" data-i18n-ph="kanban.addComment" />
+            <button id="kanban-comment-send" value="comment" data-i18n="kanban.comment">Comment</button>
           </div>
           <menu>
-            <button id="kanban-detail-unblock" value="unblock">Unblock</button>
-            <button id="kanban-detail-block" value="block">Block…</button>
-            <button id="kanban-detail-complete" value="complete">Complete</button>
-            <button value="cancel">Close</button>
+            <button id="kanban-detail-unblock" value="unblock" data-i18n="kanban.unblock">Unblock</button>
+            <button id="kanban-detail-block" value="block" data-i18n="kanban.blockEllipsis">Block…</button>
+            <button id="kanban-detail-complete" value="complete" data-i18n="kanban.complete">Complete</button>
+            <button value="cancel" data-i18n="kanban.close">Close</button>
           </menu>
         </form>
       </dialog>`;
@@ -74,7 +75,7 @@ export class KanbanWidget {
       if (dialog.returnValue === "complete") {
         void client.kanbanComplete(id).then(() => void this.refresh());
       } else if (dialog.returnValue === "block") {
-        const reason = window.prompt("Why is it blocked?");
+        const reason = window.prompt(t.kanban.whyBlocked);
         if (reason && reason.trim()) {
           void client.kanbanBlock(id, reason.trim()).then(() => void this.refresh());
         }
@@ -118,6 +119,14 @@ export class KanbanWidget {
     this.renderColumns();
   }
 
+  /** Re-render cached data after a locale switch (P251). */
+  rerender(): void {
+    if (this.boards.length || this.tasks.length) {
+      this.renderBoards();
+      this.renderColumns();
+    }
+  }
+
   private renderBoards(): void {
     const select = this.root.querySelector("#kanban-board") as HTMLSelectElement;
     select.innerHTML = "";
@@ -130,7 +139,7 @@ export class KanbanWidget {
     }
     const counts = this.root.querySelector("#kanban-counts")!;
     const open = this.tasks.filter((t) => t.status !== "done" && t.status !== "archived").length;
-    counts.textContent = `${open} open · ${this.tasks.length} total`;
+    counts.textContent = fmt(t.kanban.counts, { open, total: this.tasks.length });
   }
 
   private renderColumns(): void {
@@ -143,7 +152,7 @@ export class KanbanWidget {
       const col = document.createElement("div");
       col.className = "kanban-column";
       col.innerHTML = `<div class="kanban-column-header">
-          <span>${column.label}</span><span class="kanban-badge">${tasks.length}</span>
+          <span>${t.kanban[column.key]}</span><span class="kanban-badge">${tasks.length}</span>
         </div>`;
       const cards = document.createElement("div");
       cards.className = "kanban-cards";
@@ -195,13 +204,13 @@ export class KanbanWidget {
     };
     if (["todo", "ready", "scheduled", "running"].includes(task.status)) {
       const done = document.createElement("button");
-      done.textContent = "✓ done";
+      done.textContent = t.kanban.doneAction;
       done.onclick = act(() => client!.kanbanComplete(task.id));
       actions.appendChild(done);
       const block = document.createElement("button");
-      block.textContent = "⛔ block";
+      block.textContent = t.kanban.blockAction;
       block.onclick = act(() => {
-        const reason = window.prompt("Why is it blocked?");
+        const reason = window.prompt(t.kanban.whyBlocked);
         return reason && reason.trim()
           ? client!.kanbanBlock(task.id, reason.trim())
           : Promise.resolve();
@@ -209,7 +218,7 @@ export class KanbanWidget {
       actions.appendChild(block);
     } else if (task.status === "blocked") {
       const unblock = document.createElement("button");
-      unblock.textContent = "↩ unblock";
+      unblock.textContent = t.kanban.unblockAction;
       unblock.onclick = act(() => client!.kanbanUnblock(task.id));
       actions.appendChild(unblock);
     }
@@ -224,7 +233,7 @@ export class KanbanWidget {
     box.className = "kanban-quickadd";
     const input = document.createElement("input");
     input.type = "text";
-    input.placeholder = "+ Add a task…";
+    input.placeholder = t.kanban.addTask;
     const submit = () => {
       const title = input.value.trim();
       const client = this.client();
@@ -252,8 +261,8 @@ export class KanbanWidget {
     (this.root.querySelector("#kanban-detail-title") as HTMLElement).textContent =
       `${detail.task.title} (${detail.task.status})`;
     const bodyEl = this.root.querySelector("#kanban-detail-body") as HTMLElement;
-    const parts = [detail.task.body || "(no description)"];
-    if (detail.task.result) parts.push(`\nResult: ${detail.task.result}`);
+    const parts = [detail.task.body || t.kanban.noDescription];
+    if (detail.task.result) parts.push(`\n${fmt(t.kanban.resultPrefix, { result: detail.task.result })}`);
     bodyEl.textContent = parts.join("\n");
 
     const comments = this.root.querySelector("#kanban-detail-comments")!;
@@ -270,7 +279,11 @@ export class KanbanWidget {
       comments.appendChild(row);
     }
     if (detail.comments.length === 0) {
-      comments.innerHTML = `<div class="kanban-comment empty">No comments yet.</div>`;
+      comments.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "kanban-comment empty";
+      empty.textContent = t.kanban.noComments;
+      comments.appendChild(empty);
     }
     (this.root.querySelector("#kanban-comment-input") as HTMLInputElement).value = "";
     const unblockBtn = this.root.querySelector("#kanban-detail-unblock") as HTMLButtonElement;

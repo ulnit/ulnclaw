@@ -4,6 +4,7 @@
 // Dependency-free <dialog> like the hatch/settings overlays.
 
 import type { GatewayClient, ModelOptionsPayload, ModelOptionRow } from "./gateway";
+import { fmt, t } from "./i18n";
 
 export interface ModelSelection {
   model: string;
@@ -26,7 +27,7 @@ export class ModelPickerOverlay {
     const header = document.createElement("div");
     header.className = "model-picker-header";
     const title = document.createElement("h2");
-    title.textContent = "🧠 Model for this session";
+    title.textContent = t.picker.title;
     header.appendChild(title);
     this.body = document.createElement("div");
     this.body.className = "model-picker-body";
@@ -38,20 +39,20 @@ export class ModelPickerOverlay {
     this.body.innerHTML = "";
     const loading = document.createElement("div");
     loading.className = "model-picker-loading";
-    loading.textContent = "Loading model inventory…";
+    loading.textContent = t.picker.loading;
     this.body.appendChild(loading);
     this.dialog.showModal();
 
     const client = this.client();
     if (!client) {
-      loading.textContent = "Gateway not connected.";
+      loading.textContent = t.picker.notConnected;
       return;
     }
     try {
       const payload = await client.modelOptions();
       this.render(payload);
     } catch (err) {
-      loading.textContent = `Failed to load models: ${err}`;
+      loading.textContent = fmt(t.picker.loadFailed, { error: err });
     }
   }
 
@@ -67,7 +68,7 @@ export class ModelPickerOverlay {
     defaultRow.innerHTML = "";
     const defLabel = document.createElement("div");
     defLabel.className = "model-picker-option-name";
-    defLabel.textContent = `${payload.model} (gateway default)`;
+    defLabel.textContent = `${payload.model} ${t.picker.gatewayDefault}`;
     const defMeta = document.createElement("div");
     defMeta.className = "model-picker-option-meta";
     defMeta.textContent = payload.provider;
@@ -78,7 +79,7 @@ export class ModelPickerOverlay {
     if (sessionLocked && sessionLocked !== payload.model) {
       const lockNote = document.createElement("div");
       lockNote.className = "model-picker-locknote";
-      lockNote.textContent = `🔒 This session is locked to ${sessionLocked}.`;
+      lockNote.textContent = fmt(t.picker.lockNote, { model: sessionLocked });
       this.body.appendChild(lockNote);
     }
 
@@ -89,7 +90,7 @@ export class ModelPickerOverlay {
     if (!(payload.providers || []).length) {
       const empty = document.createElement("div");
       empty.className = "model-picker-loading";
-      empty.textContent = "No providers reported by the gateway.";
+      empty.textContent = t.picker.noProviders;
       this.body.appendChild(empty);
     }
   }
@@ -106,8 +107,8 @@ export class ModelPickerOverlay {
     head.className = "model-picker-provider-head";
     const name = provider.name || provider.slug;
     const bits: string[] = [name];
-    if (provider.current) bits.push("current");
-    if (provider.authenticated === false) bits.push("⚠ not authenticated");
+    if (provider.current) bits.push(t.picker.currentBit);
+    if (provider.authenticated === false) bits.push(t.picker.notAuthenticatedBit);
     head.textContent = bits.join("  ·  ");
     wrap.appendChild(head);
 
@@ -116,8 +117,8 @@ export class ModelPickerOverlay {
       const hint = document.createElement("div");
       hint.className = "model-picker-option-meta";
       hint.textContent = provider.base_url
-        ? `No models listed${provider.base_url ? ` — ${provider.base_url}` : ""}`
-        : "No models listed";
+        ? `${t.picker.noModels} — ${provider.base_url}`
+        : t.picker.noModels;
       wrap.appendChild(hint);
       return wrap;
     }
@@ -132,7 +133,7 @@ export class ModelPickerOverlay {
       option.appendChild(label);
       if (provider.authenticated === false) {
         option.classList.add("disabled");
-        option.title = "Provider not authenticated";
+        option.title = t.picker.notAuthenticatedTitle;
       } else {
         option.onclick = () => this.pick(model, provider.slug);
       }
@@ -152,7 +153,7 @@ export class ModelPickerOverlay {
     } catch (err) {
       const note = document.createElement("div");
       note.className = "model-picker-locknote";
-      note.textContent = `Lock failed: ${err}`;
+      note.textContent = fmt(t.picker.lockFailed, { error: err });
       this.body.prepend(note);
     }
   }

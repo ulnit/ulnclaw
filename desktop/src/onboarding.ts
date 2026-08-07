@@ -7,6 +7,7 @@
 // re-check loop instead of a key form.
 
 import type { GatewayClient, ModelOptionRow, ModelOptionsPayload } from "./gateway";
+import { fmt, t } from "./i18n";
 
 const STORAGE_KEY = "ul…boarded";
 
@@ -21,11 +22,11 @@ export class OnboardingOverlay {
     this.dialog.id = "onboarding";
     this.dialog.innerHTML = `
       <div class="onb-glyph" aria-hidden="true">🦞</div>
-      <h2 class="onb-title">Welcome to ulnclaw</h2>
+      <h2 class="onb-title"></h2>
       <div class="onb-body"></div>
       <div class="onb-actions">
-        <button class="ghost onb-skip" type="button">Skip</button>
-        <button class="primary onb-next" type="button">Get started</button>
+        <button class="ghost onb-skip" type="button"></button>
+        <button class="primary onb-next" type="button"></button>
       </div>`;
     this.stepEl = this.dialog.querySelector(".onb-title")!;
     this.bodyEl = this.dialog.querySelector(".onb-body")!;
@@ -76,35 +77,28 @@ export class OnboardingOverlay {
   }
 
   private renderWelcome(): void {
-    this.stepEl.textContent = "Welcome to ulnclaw";
+    this.stepEl.textContent = t.onboarding.welcomeTitle;
     this.bodyEl.innerHTML = "";
     const intro = document.createElement("p");
     intro.className = "onb-text";
-    intro.textContent =
-      "ulnclaw is a Rust re-implementation of the Hermes Agent engine: 50+ tools, " +
-      "skills, scheduled jobs, messaging gateways and a local HTTP gateway — this " +
-      "desktop shell talks to the gateway over plain HTTP/SSE.";
+    intro.textContent = t.onboarding.intro;
     const bullets = document.createElement("ul");
     bullets.className = "onb-list";
-    for (const line of [
-      "Chat streams tokens live with tool-progress cards.",
-      "Kanban, Projects and Jobs dashboards live in the sidebar tabs.",
-      "Ctrl/Cmd+K opens the command palette; Ctrl/Cmd+F finds in chat.",
-    ]) {
+    for (const line of [t.onboarding.bullet1, t.onboarding.bullet2, t.onboarding.bullet3]) {
       const li = document.createElement("li");
       li.textContent = line;
       bullets.appendChild(li);
     }
     this.bodyEl.append(intro, bullets);
-    this.setActions("Skip", "Get started");
+    this.setActions(t.onboarding.skip, t.onboarding.getStarted);
   }
 
   private async renderProviders(): Promise<void> {
-    this.stepEl.textContent = "Model providers";
+    this.stepEl.textContent = t.onboarding.providersTitle;
     this.bodyEl.innerHTML = "";
     const loading = document.createElement("p");
     loading.className = "onb-text";
-    loading.textContent = "Loading provider inventory…";
+    loading.textContent = t.onboarding.loadingProviders;
     this.bodyEl.appendChild(loading);
 
     let payload: ModelOptionsPayload | null = null;
@@ -118,17 +112,15 @@ export class OnboardingOverlay {
     if (!payload) {
       const warning = document.createElement("p");
       warning.className = "onb-text";
-      warning.textContent =
-        "The gateway did not return a provider inventory. You can still continue — " +
-        "configure [model] in ~/.ulnclaw/config.toml and restart the gateway.";
+      warning.textContent = t.onboarding.noInventory;
       this.bodyEl.appendChild(warning);
-      this.setActions("Skip", "Finish");
+      this.setActions(t.onboarding.skip, t.onboarding.finish);
       return;
     }
 
     const current = document.createElement("p");
     current.className = "onb-text";
-    current.textContent = `Current model: ${payload.model} (${payload.provider})`;
+    current.textContent = fmt(t.onboarding.currentModel, { model: payload.model, provider: payload.provider });
     this.bodyEl.appendChild(current);
 
     const list = document.createElement("div");
@@ -145,10 +137,10 @@ export class OnboardingOverlay {
     const recheck = document.createElement("button");
     recheck.className = "ghost onb-recheck";
     recheck.type = "button";
-    recheck.textContent = "Re-check providers";
+    recheck.textContent = t.onboarding.recheck;
     recheck.onclick = () => void this.renderProviders();
     this.bodyEl.appendChild(recheck);
-    this.setActions("Skip", "Finish");
+    this.setActions(t.onboarding.skip, t.onboarding.finish);
   }
 
   private providerRow(row: ModelOptionRow): HTMLElement {
@@ -160,15 +152,15 @@ export class OnboardingOverlay {
     const status = document.createElement("div");
     status.className = "onb-provider-status";
     if (row.authenticated) {
-      status.textContent = row.current ? "✓ active" : "✓ configured";
+      status.textContent = row.current ? t.onboarding.active : t.onboarding.configured;
     } else if (row.key_env) {
-      status.textContent = `needs ${row.key_env}`;
+      status.textContent = fmt(t.onboarding.needsEnv, { env: row.key_env });
     } else {
-      status.textContent = "not configured";
+      status.textContent = t.onboarding.notConfigured;
     }
     node.append(name, status);
     if (!row.authenticated && row.key_env) {
-      node.title = `Set ${row.key_env} (env var or ~/.ulnclaw/.env), then re-check.`;
+      node.title = fmt(t.onboarding.needsEnvTitle, { env: row.key_env });
     }
     return node;
   }

@@ -5,6 +5,7 @@
 // routed page, bounded session/message scan.
 
 import type { GatewayClient, SessionRow } from "./gateway";
+import { t } from "./i18n";
 
 export type ArtifactKind = "image" | "file" | "link";
 export type ArtifactFilter = "all" | ArtifactKind;
@@ -99,7 +100,7 @@ export class ArtifactsOverlay {
     const header = document.createElement("div");
     header.className = "artifacts-header";
     const title = document.createElement("h2");
-    title.textContent = "🗂️ Artifacts";
+    title.textContent = t.artifacts.title;
     header.appendChild(title);
     this.body = document.createElement("div");
     this.body.className = "artifacts-body";
@@ -114,13 +115,13 @@ export class ArtifactsOverlay {
     this.body.innerHTML = "";
     const loading = document.createElement("div");
     loading.className = "artifacts-loading";
-    loading.textContent = "Scanning recent sessions…";
+    loading.textContent = t.artifacts.scanning;
     this.body.appendChild(loading);
     this.dialog.showModal();
 
     const client = this.client();
     if (!client) {
-      loading.textContent = "Gateway not connected.";
+      loading.textContent = t.artifacts.notConnected;
       return;
     }
     try {
@@ -191,7 +192,7 @@ export class ArtifactsOverlay {
     }
     const search = document.createElement("input");
     search.className = "artifacts-search";
-    search.placeholder = "Filter artifacts…";
+    search.placeholder = t.artifacts.filterPlaceholder;
     search.value = this.query;
     search.addEventListener("input", () => {
       this.query = search.value;
@@ -214,7 +215,7 @@ export class ArtifactsOverlay {
     if (visible.length === 0) {
       const empty = document.createElement("div");
       empty.className = "artifacts-empty";
-      empty.textContent = "No artifacts found in recent sessions.";
+      empty.textContent = t.artifacts.none;
       list.appendChild(empty);
       return;
     }
@@ -238,7 +239,7 @@ export class ArtifactsOverlay {
       const session = document.createElement("button");
       session.className = "artifacts-session";
       session.textContent = record.sessionTitle;
-      session.title = "Open session";
+      session.title = t.artifacts.openSession;
       session.onclick = (event) => {
         event.stopPropagation();
         this.dialog.close();

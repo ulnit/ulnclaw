@@ -875,3 +875,28 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .onb-provider-status { color: #8fa3c0; font-size: 12px; }
 .onb-provider.onb-ok .onb-provider-status { color: #7fc79a; }
 .onb-recheck { margin-top: 4px; }
+
+/* Language switcher (P251) — globe trigger + searchable locale popover */
+.language-btn { display: inline-flex; align-items: center; gap: 6px; }
+.language-pop {
+  position: fixed; z-index: 60; width: 230px;
+  background: var(--panel); border: 1px solid #2a3442; border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); padding: 6px;
+}
+.language-search {
+  width: 100%; box-sizing: border-box; margin-bottom: 6px;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid #2a3442; border-radius: 8px; padding: 6px 8px; font-size: 13px;
+}
+.language-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.language-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: transparent; border: none; border-radius: 8px;
+  color: #8fa3c0; padding: 7px 8px; font-size: 13px; cursor: pointer; text-align: left;
+}
+.language-item:hover { background: var(--panel-2); color: var(--text); }
+.language-item.active { color: var(--text); font-weight: 600; }
+.language-check { width: 14px; color: var(--accent); }
+.language-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.language-code { font-family: ui-monospace, monospace; font-size: 10px; text-transform: uppercase; color: #5c6b82; }
+.language-empty { padding: 14px 8px; text-align: center; color: #8fa3c0; font-size: 13px; }

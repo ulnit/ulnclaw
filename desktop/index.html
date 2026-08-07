@@ -11,23 +11,23 @@
       <aside id="sidebar">
         <div class="sidebar-header">
           <span class="wordmark">ulnclaw</span>
-          <span id="gateway-dot" class="dot" title="gateway status"></span>
+          <span id="gateway-dot" class="dot" title="gateway status" data-i18n-title="chrome.gatewayStatus"></span>
         </div>
         <div class="view-tabs">
-          <button id="tab-chat" class="tab active">Chat</button>
-          <button id="tab-kanban" class="tab">Kanban</button>
-          <button id="tab-projects" class="tab">Projects</button>
-          <button id="tab-jobs" class="tab">Jobs</button>
+          <button id="tab-chat" class="tab active" data-i18n="chrome.chatTab">Chat</button>
+          <button id="tab-kanban" class="tab" data-i18n="chrome.kanbanTab">Kanban</button>
+          <button id="tab-projects" class="tab" data-i18n="chrome.projectsTab">Projects</button>
+          <button id="tab-jobs" class="tab" data-i18n="chrome.jobsTab">Jobs</button>
         </div>
-        <button id="new-session" class="primary">New session</button>
+        <button id="new-session" class="primary" data-i18n="chrome.newSession">New session</button>
         <div id="session-list"></div>
         <div class="sidebar-footer">
-          <button id="settings-btn" class="ghost">Settings</button>
+          <button id="settings-btn" class="ghost" data-i18n="chrome.settings">Settings</button>
         </div>
       </aside>
       <main id="chat">
         <header id="chat-header">
-          <span id="chat-title">Select or start a session</span>
+          <span id="chat-title" data-i18n="chrome.selectOrStart">Select or start a session</span>
           <span id="model-badge"></span>
         </header>
         <div id="messages"></div>
@@ -35,8 +35,8 @@
         <footer id="composer">
           <div id="slash-pop" class="slash-pop" hidden></div>
           <div id="attach-chips" class="attach-chips" hidden></div>
-          <textarea id="input" rows="3" placeholder="Message ulnclaw… (Enter to send, Shift+Enter for newline)"></textarea>
-          <button id="send" class="primary">Send</button>
+          <textarea id="input" rows="3" placeholder="Message ulnclaw… (Enter to send, Shift+Enter for newline)" data-i18n-ph="chrome.inputPlaceholder"></textarea>
+          <button id="send" class="primary" data-i18n="chrome.send">Send</button>
         </footer>
       </main>
       <main id="kanban" hidden></main>
@@ -44,21 +44,21 @@
       <main id="jobs" hidden></main>
       <dialog id="settings">
         <form method="dialog">
-          <h2>Gateway settings</h2>
-          <label>Gateway URL
+          <h2 data-i18n="chrome.settingsTitle">Gateway settings</h2>
+          <label><span data-i18n="chrome.gatewayUrl">Gateway URL</span>
             <input id="setting-url" type="text" placeholder="http://127.0.0.1:8642" />
           </label>
-          <label>API key (optional, [gateway] key)
-            <input id="setting-key" type="password" placeholder="bearer token" />
+          <label><span data-i18n="chrome.apiKey">API key (optional, [gateway] key)</span>
+            <input id="setting-key" type="password" placeholder="bearer token" data-i18n-ph="chrome.bearerToken" />
           </label>
           <label class="check">
             <input id="setting-manage" type="checkbox" />
-            Manage the gateway process (start/stop with the app)
+            <span data-i18n="chrome.manageProcess">Manage the gateway process (start/stop with the app)</span>
           </label>
           <menu>
-            <button id="settings-onboarding" value="cancel">Replay onboarding</button>
-            <button value="cancel">Cancel</button>
-            <button id="settings-save" value="default">Save</button>
+            <button id="settings-onboarding" value="cancel" data-i18n="chrome.replayOnboarding">Replay onboarding</button>
+            <button value="cancel" data-i18n="chrome.cancel">Cancel</button>
+            <button id="settings-save" value="default" data-i18n="chrome.save">Save</button>
           </menu>
         </form>
       </dialog>

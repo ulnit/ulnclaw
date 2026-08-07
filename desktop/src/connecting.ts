@@ -6,7 +6,12 @@
 // connection lands, the overlay never resurrects — later drops surface
 // as toasts, not a modal wall.
 
-const TEXT = "CONNECTING";
+import { t } from "./i18n";
+
+function connectingText(): string {
+  return t.boot.connecting;
+}
+
 const TEXT_OUT_MS = 360;
 const POST_TEXT_HOLD_MS = 300;
 const OVERLAY_OUT_MS = 520;
@@ -24,20 +29,21 @@ function prefersReducedMotion(): boolean {
 
 function startScramble(): void {
   if (!textEl || prefersReducedMotion()) return;
+  const text = connectingText();
   let resolved = 0;
   scrambleTimer = window.setInterval(() => {
     if (!textEl) return;
-    resolved = Math.min(TEXT.length, resolved + 0.5);
+    resolved = Math.min(text.length, resolved + 0.5);
     let out = "";
-    for (let i = 0; i < TEXT.length; i += 1) {
+    for (let i = 0; i < text.length; i += 1) {
       if (i < resolved) {
-        out += TEXT[i];
+        out += text[i];
       } else {
         out += SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
       }
     }
     textEl.textContent = out;
-    if (resolved >= TEXT.length && scrambleTimer !== null) {
+    if (resolved >= text.length && scrambleTimer !== null) {
       window.clearInterval(scrambleTimer);
       scrambleTimer = null;
     }
@@ -52,7 +58,7 @@ export function showConnecting(): void {
   showing = true;
   overlay.classList.remove("connecting-out", "connecting-text-out");
   overlay.hidden = false;
-  if (textEl) textEl.textContent = prefersReducedMotion() ? TEXT : "";
+  if (textEl) textEl.textContent = prefersReducedMotion() ? connectingText() : "";
   startScramble();
 }
 
@@ -86,10 +92,10 @@ function mount(): void {
   overlay.hidden = true;
   textEl = document.createElement("div");
   textEl.className = "connecting-text";
-  textEl.textContent = TEXT;
+  textEl.textContent = connectingText();
   const sub = document.createElement("div");
   sub.className = "connecting-sub";
-  sub.textContent = "starting the ulnclaw gateway…";
+  sub.textContent = t.boot.starting;
   overlay.append(textEl, sub);
   document.body.appendChild(overlay);
 }

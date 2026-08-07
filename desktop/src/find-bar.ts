@@ -3,6 +3,8 @@
 // the Tauri webview: Ctrl/Cmd+F opens, Enter/Shift+Enter and
 // Ctrl/Cmd+G / Ctrl/Cmd+Shift+G step, Esc closes and clears.
 
+import { t } from "./i18n";
+
 export class FindBar {
   private bar: HTMLDivElement;
   private input: HTMLInputElement;
@@ -22,7 +24,7 @@ export class FindBar {
 
     this.input = document.createElement("input");
     this.input.type = "text";
-    this.input.placeholder = "Find in chat…";
+    this.input.placeholder = t.find.placeholder;
     this.input.addEventListener("input", () => this.runQuery(this.input.value));
     this.input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
@@ -38,13 +40,13 @@ export class FindBar {
     const prev = document.createElement("button");
     prev.className = "ghost find-step";
     prev.textContent = "\u{2191}";
-    prev.title = "Previous match (Shift+Enter)";
+    prev.title = t.find.prevTitle;
     prev.onclick = () => this.step(-1);
 
     const next = document.createElement("button");
     next.className = "ghost find-step";
     next.textContent = "\u{2193}";
-    next.title = "Next match (Enter)";
+    next.title = t.find.nextTitle;
     next.onclick = () => this.step(1);
 
     this.counter = document.createElement("span");
@@ -54,13 +56,22 @@ export class FindBar {
     const close = document.createElement("button");
     close.className = "ghost find-step";
     close.textContent = "\u{2715}";
-    close.title = "Close (Esc)";
+    close.title = t.find.closeTitle;
     close.onclick = () => this.close();
 
     this.bar.append(this.input, prev, next, this.counter, close);
     this.chatPane.appendChild(this.bar);
 
     document.addEventListener("keydown", (event) => this.onKey(event));
+  }
+
+  /** Re-apply translated chrome after a locale switch (P251). */
+  rerender(): void {
+    this.input.placeholder = t.find.placeholder;
+    const [prev, next, close] = Array.from(this.bar.querySelectorAll("button"));
+    if (prev) prev.title = t.find.prevTitle;
+    if (next) next.title = t.find.nextTitle;
+    if (close) close.title = t.find.closeTitle;
   }
 
   isOpen(): boolean {

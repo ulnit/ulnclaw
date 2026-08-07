@@ -5,6 +5,7 @@
 // Dependency-free <dialog> like the model-picker/hatch overlays.
 
 import type { SessionRow } from "./gateway";
+import { fmt, t } from "./i18n";
 
 export interface PaletteCommand {
   id: string;
@@ -67,7 +68,7 @@ export class CommandPalette {
     this.dialog.className = "command-palette-dialog";
     this.input = document.createElement("input");
     this.input.className = "command-palette-input";
-    this.input.placeholder = "Type a command… (Esc to close)";
+    this.input.placeholder = t.palette.placeholder;
     this.list = document.createElement("div");
     this.list.className = "command-palette-list";
     this.dialog.append(this.input, this.list);
@@ -112,27 +113,27 @@ export class CommandPalette {
   private async buildCommands(): Promise<PaletteCommand[]> {
     const hooks = this.hooks;
     const commands: PaletteCommand[] = [
-      { id: "new-session", label: "New session", group: "Sessions", hint: "start a fresh chat", run: () => hooks.newSession() },
-      { id: "view-chat", label: "Go to Chat", group: "Navigate", run: () => hooks.switchView("chat") },
-      { id: "view-kanban", label: "Go to Kanban", group: "Navigate", run: () => hooks.switchView("kanban") },
-      { id: "view-projects", label: "Go to Projects", group: "Navigate", run: () => hooks.switchView("projects") },
-      { id: "view-jobs", label: "Go to Jobs (cron)", group: "Navigate", run: () => hooks.switchView("jobs") },
-      { id: "find", label: "Find in chat", group: "Session", hint: "Ctrl/Cmd+F", run: () => hooks.findInChat() },
-      { id: "artifacts", label: "Browse artifacts…", group: "Session", hint: "links, files, images", run: () => hooks.artifacts() },
-      { id: "learning", label: "Learning graph…", group: "Session", hint: "learned skills + memory", run: () => hooks.learning() },
-      { id: "model", label: "Model for this session…", group: "Session", run: () => hooks.modelPicker() },
-      { id: "rename", label: "Rename session…", group: "Session", run: () => hooks.renameSession() },
-      { id: "delete", label: "Delete session…", group: "Session", run: () => hooks.deleteSession() },
-      { id: "refresh", label: "Refresh session list", group: "Gateway", run: () => hooks.refreshSessions() },
-      { id: "settings", label: "Open gateway settings…", group: "Gateway", run: () => hooks.openSettings() },
+      { id: "new-session", label: t.palette.newSession, group: t.palette.sessionsGroup, hint: t.palette.hintFreshChat, run: () => hooks.newSession() },
+      { id: "view-chat", label: t.palette.goToChat, group: t.palette.navigate, run: () => hooks.switchView("chat") },
+      { id: "view-kanban", label: t.palette.goToKanban, group: t.palette.navigate, run: () => hooks.switchView("kanban") },
+      { id: "view-projects", label: t.palette.goToProjects, group: t.palette.navigate, run: () => hooks.switchView("projects") },
+      { id: "view-jobs", label: t.palette.goToJobs, group: t.palette.navigate, run: () => hooks.switchView("jobs") },
+      { id: "find", label: t.palette.findInChat, group: t.palette.sessionGroup, hint: "Ctrl/Cmd+F", run: () => hooks.findInChat() },
+      { id: "artifacts", label: t.palette.browseArtifacts, group: t.palette.sessionGroup, hint: t.palette.hintArtifacts, run: () => hooks.artifacts() },
+      { id: "learning", label: t.palette.learningGraph, group: t.palette.sessionGroup, hint: t.palette.hintLearning, run: () => hooks.learning() },
+      { id: "model", label: t.palette.modelForSession, group: t.palette.sessionGroup, run: () => hooks.modelPicker() },
+      { id: "rename", label: t.palette.renameSession, group: t.palette.sessionGroup, run: () => hooks.renameSession() },
+      { id: "delete", label: t.palette.deleteSession, group: t.palette.sessionGroup, run: () => hooks.deleteSession() },
+      { id: "refresh", label: t.palette.refreshSessions, group: t.palette.gatewayGroup, run: () => hooks.refreshSessions() },
+      { id: "settings", label: t.palette.openSettings, group: t.palette.gatewayGroup, run: () => hooks.openSettings() },
     ];
     const current = hooks.currentSessionId();
     for (const session of hooks.sessions()) {
       const title = session.title || session.id.slice(0, 8);
       commands.push({
         id: `switch-${session.id}`,
-        label: `Switch to: ${title}`,
-        group: "Switch session",
+        label: fmt(t.palette.switchTo, { title }),
+        group: t.palette.switchSession,
         hint: session.id === current ? "current" : undefined,
         run: () => hooks.openSession(session.id),
       });
@@ -183,7 +184,7 @@ export class CommandPalette {
     if (visible.length === 0) {
       const empty = document.createElement("div");
       empty.className = "command-palette-empty";
-      empty.textContent = "No matching commands";
+      empty.textContent = t.palette.noMatches;
       this.list.appendChild(empty);
     }
   }

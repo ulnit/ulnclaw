@@ -3,13 +3,14 @@
 // create + edit + delete. Hermes cron-dashboard parity (P166).
 
 import type { CronJob, GatewayClient } from "./gateway";
+import { fmt, t } from "./i18n";
 
 function fmtWhen(ts: number | null): string {
   if (!ts) return "—";
   const date = new Date(ts * 1000);
   const delta = date.getTime() / 1000 - Date.now() / 1000;
   const abs = Math.abs(delta);
-  const suffix = delta >= 0 ? "from now" : "ago";
+  const suffix = delta >= 0 ? t.jobs.fromNow : t.jobs.ago;
   if (abs < 60) return `${Math.round(abs)}s ${suffix}`;
   if (abs < 3600) return `${Math.round(abs / 60)}m ${suffix}`;
   if (abs < 86400) return `${Math.round(abs / 3600)}h ${suffix}`;
@@ -31,31 +32,31 @@ export class JobsWidget {
       <header id="jobs-header">
         <span id="jobs-counts" class="jobs-counts"></span>
         <span class="spacer"></span>
-        <button id="jobs-refresh" class="ghost" title="Refresh">↻</button>
-        <button id="jobs-new" class="primary">New job</button>
+        <button id="jobs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="jobs-new" class="primary" data-i18n="jobs.newJob">New job</button>
       </header>
       <div id="jobs-list"></div>
       <dialog id="job-create">
         <form method="dialog">
-          <h2>New cron job</h2>
-          <label>Name
+          <h2 data-i18n="jobs.newCronJob">New cron job</h2>
+          <label><span data-i18n="jobs.nameLabel">Name</span>
             <input id="job-create-name" type="text" placeholder="daily digest" required />
           </label>
-          <label>Schedule (cron expression, @every 30m, or @at unix-ts)
+          <label><span data-i18n="jobs.scheduleLabel">Schedule (cron expression, @every 30m, or @at unix-ts)</span>
             <input id="job-create-schedule" type="text" placeholder="0 9 * * *" required />
           </label>
-          <label>Prompt
-            <textarea id="job-create-prompt" rows="3" placeholder="What should the agent do?" required></textarea>
+          <label><span data-i18n="jobs.promptLabel">Prompt</span>
+            <textarea id="job-create-prompt" rows="3" placeholder="What should the agent do?" data-i18n-ph="jobs.whatShouldAgentDo" required></textarea>
           </label>
-          <label>Skills (comma-separated, optional)
+          <label><span data-i18n="jobs.skillsLabel">Skills (comma-separated, optional)</span>
             <input id="job-create-skills" type="text" placeholder="blogwatcher" />
           </label>
-          <label>Repeat (runs remaining; empty = forever)
+          <label><span data-i18n="jobs.repeatLabel">Repeat (runs remaining; empty = forever)</span>
             <input id="job-create-repeat" type="number" min="1" placeholder="forever" />
           </label>
           <menu>
-            <button value="cancel">Cancel</button>
-            <button id="job-create-save" value="save">Create</button>
+            <button value="cancel" data-i18n="chrome.cancel">Cancel</button>
+            <button id="job-create-save" value="save" data-i18n="jobs.create">Create</button>
           </menu>
         </form>
       </dialog>`;
@@ -117,7 +118,7 @@ export class JobsWidget {
       repeat: repeat && repeat > 0 ? repeat : undefined,
     });
     if (!created) {
-      window.alert("Job creation failed (gateway unreachable or invalid schedule).");
+      window.alert(t.jobs.createFailed);
       return;
     }
     (this.root.querySelector("#job-create-name") as HTMLInputElement).value = "";
@@ -128,16 +129,21 @@ export class JobsWidget {
     await this.refresh();
   }
 
+  /** Re-render cached data after a locale switch (P251). */
+  rerender(): void {
+    if (this.jobs.length) this.render();
+  }
+
   private render(): void {
     const counts = this.root.querySelector("#jobs-counts") as HTMLElement;
     const enabled = this.jobs.filter((job) => job.enabled).length;
-    counts.textContent = `${enabled} active / ${this.jobs.length} jobs`;
+    counts.textContent = fmt(t.jobs.counts, { active: enabled, total: this.jobs.length });
 
     const list = this.root.querySelector("#jobs-list") as HTMLElement;
     list.innerHTML = "";
     if (!this.jobs.length) {
-      list.innerHTML =
-        '<p class="jobs-empty">No cron jobs yet — create one, or use `ulnclaw cron add` in the terminal.</p>';
+      list.innerHTML = '<p class="jobs-empty"></p>';
+      list.querySelector(".jobs-empty")!.textContent = t.jobs.empty;
       return;
     }
     for (const job of this.jobs) {
@@ -152,7 +158,7 @@ export class JobsWidget {
 
     const dot = document.createElement("span");
     dot.className = "dot " + (job.enabled ? "up" : "down");
-    dot.title = job.enabled ? "Active" : "Paused";
+    dot.title = job.enabled ? t.jobs.active : t.jobs.paused;
     row.appendChild(dot);
 
     const body = document.createElement("div");
@@ -180,9 +186,9 @@ export class JobsWidget {
     body.appendChild(prompt);
     const meta = document.createElement("div");
     meta.className = "job-meta";
-    meta.textContent = `next: ${fmtWhen(job.next_run)} · last: ${fmtWhen(job.last_run)}` +
+    meta.textContent = fmt(t.jobs.meta, { next: fmtWhen(job.next_run), last: fmtWhen(job.last_run) }) +
       (job.last_status ? ` (${job.last_status})` : "") +
-      (job.repeat !== null ? ` · ${job.repeat} run(s) left` : "");
+      (job.repeat !== null ? fmt(t.jobs.runsLeft, { count: job.repeat }) : "");
     body.appendChild(meta);
     row.appendChild(body);
 
@@ -196,27 +202,27 @@ export class JobsWidget {
       button.onclick = onclick;
       actions.appendChild(button);
     };
-    mk(job.enabled ? "⏸" : "▶", job.enabled ? "Pause" : "Resume", () => {
+    mk(job.enabled ? "⏸" : "▶", job.enabled ? t.jobs.pause : t.jobs.resume, () => {
       if (!client) return;
       void client.jobSetEnabled(job.id, !job.enabled).then(() => void this.refresh());
     });
-    mk("⚡", "Run now", () => {
+    mk("⚡", t.jobs.runNow, () => {
       if (!client) return;
       void client.jobRunNow(job.id).then(() => void this.refresh());
     });
-    mk("✎", "Edit prompt/schedule", () => {
+    mk("✎", t.jobs.edit, () => {
       if (!client) return;
-      const nextPrompt = window.prompt("Prompt:", job.prompt);
+      const nextPrompt = window.prompt(t.jobs.promptPrompt, job.prompt);
       if (nextPrompt === null) return;
-      const nextSchedule = window.prompt("Schedule:", job.schedule);
+      const nextSchedule = window.prompt(t.jobs.schedulePrompt, job.schedule);
       if (nextSchedule === null) return;
       void client
         .jobUpdate(job.id, { prompt: nextPrompt, schedule: nextSchedule })
         .then(() => void this.refresh());
     });
-    mk("🗑", "Delete", () => {
+    mk("🗑", t.jobs.delete, () => {
       if (!client) return;
-      if (!window.confirm(`Delete job "${job.name}"?`)) return;
+      if (!window.confirm(fmt(t.jobs.deleteConfirm, { name: job.name }))) return;
       void client.jobDelete(job.id).then(() => void this.refresh());
     }, true);
     row.appendChild(actions);

@@ -4,6 +4,7 @@
 // worktrees (`kanban create --project`) and group desktop sessions.
 
 import type { DiscoveredRepo, GatewayClient, Project } from "./gateway";
+import { fmt, t } from "./i18n";
 
 export class ProjectsWidget {
   private projects: Project[] = [];
@@ -22,36 +23,36 @@ export class ProjectsWidget {
       <header id="projects-header">
         <span id="projects-active" class="projects-active"></span>
         <label class="projects-archived-toggle">
-          <input id="projects-show-archived" type="checkbox" /> archived
+          <input id="projects-show-archived" type="checkbox" /> <span data-i18n="projects.archived">archived</span>
         </label>
         <span class="spacer"></span>
-        <button id="projects-scan" class="ghost" title="Scan the filesystem for git repos">Scan repos</button>
-        <button id="projects-refresh" class="ghost" title="Refresh">↻</button>
-        <button id="projects-new" class="primary">New project</button>
+        <button id="projects-scan" class="ghost" title="Scan the filesystem for git repos" data-i18n-title="projects.scanTitle" data-i18n="projects.scanRepos">Scan repos</button>
+        <button id="projects-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="projects-new" class="primary" data-i18n="projects.newProject">New project</button>
       </header>
       <div id="projects-list"></div>
       <section id="projects-repos-section">
-        <h3>Discovered repos</h3>
+        <h3 data-i18n="projects.discoveredRepos">Discovered repos</h3>
         <div id="projects-repos"></div>
       </section>
       <dialog id="project-create">
         <form method="dialog">
-          <h2>New project</h2>
-          <label>Name
+          <h2 data-i18n="projects.newProject">New project</h2>
+          <label><span data-i18n="projects.nameLabel">Name</span>
             <input id="project-create-name" type="text" placeholder="Hermes Agent" required />
           </label>
-          <label>Folders (comma-separated; first = primary)
+          <label><span data-i18n="projects.foldersLabel">Folders (comma-separated; first = primary)</span>
             <input id="project-create-folders" type="text" placeholder="~/code/hermes-agent" />
           </label>
-          <label>Bind kanban board (optional slug)
+          <label><span data-i18n="projects.boardLabel">Bind kanban board (optional slug)</span>
             <input id="project-create-board" type="text" placeholder="default" />
           </label>
           <label class="check">
-            <input id="project-create-use" type="checkbox" /> Set as active project
+            <input id="project-create-use" type="checkbox" /> <span data-i18n="projects.setActive">Set as active project</span>
           </label>
           <menu>
-            <button value="cancel">Cancel</button>
-            <button id="project-create-save" value="save">Create</button>
+            <button value="cancel" data-i18n="chrome.cancel">Cancel</button>
+            <button id="project-create-save" value="save" data-i18n="projects.create">Create</button>
           </menu>
         </form>
       </dialog>`;
@@ -101,10 +102,7 @@ export class ProjectsWidget {
   private async scan(): Promise<void> {
     const client = this.client();
     if (!client) return;
-    const rootsRaw = window.prompt(
-      "Scan roots (comma-separated; empty = home directory):",
-      "",
-    );
+    const rootsRaw = window.prompt(t.projects.scanRootsPrompt, "");
     if (rootsRaw === null) return;
     const roots = rootsRaw
       .split(",")
@@ -112,16 +110,16 @@ export class ProjectsWidget {
       .filter((entry) => entry.length > 0);
     const button = this.root.querySelector("#projects-scan") as HTMLButtonElement;
     button.disabled = true;
-    button.textContent = "Scanning…";
+    button.textContent = t.projects.scanning;
     try {
       const result = await client.projectScan(roots);
       if (result) {
-        window.alert(`Recorded ${result.recorded} repo(s) into the discovery cache.`);
+        window.alert(fmt(t.projects.scanRecorded, { count: result.recorded }));
       }
       await this.refresh();
     } finally {
       button.disabled = false;
-      button.textContent = "Scan repos";
+      button.textContent = t.projects.scanRepos;
     }
   }
 
@@ -144,7 +142,7 @@ export class ProjectsWidget {
       use,
     });
     if (!created) {
-      window.alert("Project creation failed (gateway unreachable or invalid input).");
+      window.alert(t.projects.createFailed);
       return;
     }
     (this.root.querySelector("#project-create-name") as HTMLInputElement).value = "";
@@ -153,18 +151,23 @@ export class ProjectsWidget {
     await this.refresh();
   }
 
+  /** Re-render cached data after a locale switch (P251). */
+  rerender(): void {
+    if (this.projects.length || this.repos.length) this.render();
+  }
+
   private render(): void {
     const active = this.root.querySelector("#projects-active") as HTMLElement;
     const activeProject = this.projects.find((p) => p.id === this.activeId) || null;
     active.textContent = activeProject
-      ? `Active: ${activeProject.name}`
-      : "No active project";
+      ? fmt(t.projects.activePrefix, { name: activeProject.name })
+      : t.projects.noActiveProject;
 
     const list = this.root.querySelector("#projects-list") as HTMLElement;
     list.innerHTML = "";
     if (!this.projects.length) {
-      list.innerHTML =
-        '<p class="projects-empty">No projects yet — create one, or scan the filesystem for git repos.</p>';
+      list.innerHTML = '<p class="projects-empty"></p>';
+      list.querySelector(".projects-empty")!.textContent = t.projects.empty;
     }
     for (const project of this.projects) {
       list.appendChild(this.renderCard(project));
@@ -173,8 +176,8 @@ export class ProjectsWidget {
     const repos = this.root.querySelector("#projects-repos") as HTMLElement;
     repos.innerHTML = "";
     if (!this.repos.length) {
-      repos.innerHTML =
-        '<p class="projects-empty">Discovery cache is empty — run “Scan repos”.</p>';
+      repos.innerHTML = '<p class="projects-empty"></p>';
+      repos.querySelector(".projects-empty")!.textContent = t.projects.reposEmpty;
     }
     for (const repo of this.repos) {
       repos.appendChild(this.renderRepo(repo));
@@ -200,13 +203,13 @@ export class ProjectsWidget {
     if (project.board_slug) {
       const board = document.createElement("span");
       board.className = "badge";
-      board.textContent = `board: ${project.board_slug}`;
+      board.textContent = fmt(t.projects.boardBadge, { slug: project.board_slug });
       header.appendChild(board);
     }
     if (project.archived) {
       const flag = document.createElement("span");
       flag.className = "badge";
-      flag.textContent = "archived";
+      flag.textContent = t.projects.archived;
       header.appendChild(flag);
     }
     card.appendChild(header);
@@ -224,7 +227,7 @@ export class ProjectsWidget {
       const item = document.createElement("li");
       const star = document.createElement("button");
       star.className = "icon";
-      star.title = folder.is_primary ? "Primary folder" : "Make primary";
+      star.title = folder.is_primary ? t.projects.primaryFolder : t.projects.makePrimary;
       star.textContent = folder.is_primary ? "★" : "☆";
       if (!folder.is_primary) {
         star.onclick = () => {
@@ -239,7 +242,7 @@ export class ProjectsWidget {
       item.appendChild(path);
       const remove = document.createElement("button");
       remove.className = "icon danger";
-      remove.title = "Remove folder";
+      remove.title = t.projects.removeFolder;
       remove.textContent = "✕";
       remove.onclick = () => {
         if (!client) return;
@@ -261,32 +264,32 @@ export class ProjectsWidget {
       return button;
     };
     if (project.id !== this.activeId) {
-      mk("Use", () => {
+      mk(t.projects.use, () => {
         if (!client) return;
         void client.projectSetActive(project.id).then(() => void this.refresh());
       });
     }
-    mk("Add folder", () => {
+    mk(t.projects.addFolder, () => {
       if (!client) return;
-      const path = window.prompt("Folder path:");
+      const path = window.prompt(t.projects.folderPathPrompt);
       if (!path || !path.trim()) return;
       void client.projectAddFolder(project.id, path.trim()).then(() => void this.refresh());
     });
-    mk(project.board_slug ? "Rebind board" : "Bind board", () => {
+    mk(project.board_slug ? t.projects.rebindBoard : t.projects.bindBoard, () => {
       if (!client) return;
-      const board = window.prompt("Board slug (empty unbinds):", project.board_slug || "");
+      const board = window.prompt(t.projects.boardSlugPrompt, project.board_slug || "");
       if (board === null) return;
       void client
         .projectUpdate(project.id, { board_slug: board.trim() })
         .then(() => void this.refresh());
     });
-    mk(project.archived ? "Restore" : "Archive", () => {
+    mk(project.archived ? t.projects.restore : t.projects.archive, () => {
       if (!client) return;
       void client.projectArchive(project.id, project.archived).then(() => void this.refresh());
     });
-    mk("Delete", () => {
+    mk(t.projects.delete, () => {
       if (!client) return;
-      if (!window.confirm(`Delete project "${project.name}"? This only removes the registry entry.`)) {
+      if (!window.confirm(fmt(t.projects.deleteConfirm, { name: project.name }))) {
         return;
       }
       void client.projectDelete(project.id).then(() => void this.refresh());
@@ -313,8 +316,8 @@ export class ProjectsWidget {
     row.appendChild(seen);
     const adopt = document.createElement("button");
     adopt.className = "ghost";
-    adopt.title = "Create a project from this repo";
-    adopt.textContent = "→ project";
+    adopt.title = t.projects.createFromRepo;
+    adopt.textContent = t.projects.toProject;
     adopt.onclick = () => {
       if (!client) return;
       void client

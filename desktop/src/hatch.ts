@@ -4,19 +4,20 @@
 // Hermes parity: apps/desktop/src/app/pet-generate (rebuilt as a
 // dependency-free <dialog> for the Tauri shell).
 
+import { fmt, t } from "./i18n";
 import type { GatewayClient, HatchJobStatus } from "./gateway";
 
 const POLL_MS = 1500;
 
-const STYLES: [string, string][] = [
-  ["auto", "Pixel art (hermes default)"],
-  ["pixel", "Pixel art"],
-  ["plush", "Plush toy"],
-  ["clay", "Claymation"],
-  ["sticker", "Glossy sticker"],
-  ["flat-vector", "Flat vector"],
-  ["3d-toy", "3D toy"],
-  ["painterly", "Painterly"],
+const STYLES: [string, "stylePixelDefault" | "stylePixel" | "stylePlush" | "styleClay" | "styleGlossy" | "styleFlat" | "style3d" | "stylePainterly"][] = [
+  ["auto", "stylePixelDefault"],
+  ["pixel", "stylePixel"],
+  ["plush", "stylePlush"],
+  ["clay", "styleClay"],
+  ["sticker", "styleGlossy"],
+  ["flat-vector", "styleFlat"],
+  ["3d-toy", "style3d"],
+  ["painterly", "stylePainterly"],
 ];
 
 export class HatchOverlay {
@@ -35,7 +36,7 @@ export class HatchOverlay {
     const header = document.createElement("div");
     header.className = "hatch-header";
     const title = document.createElement("h2");
-    title.textContent = "🥚 Hatch a pet";
+    title.textContent = t.hatch.title;
     header.appendChild(title);
     this.body = document.createElement("div");
     this.body.className = "hatch-body";
@@ -74,14 +75,12 @@ export class HatchOverlay {
 
     const hint = document.createElement("p");
     hint.className = "hatch-hint";
-    hint.textContent =
-      "Describe a pet; the image model sketches base looks, you pick one, " +
-      "and the hatch pipeline draws every animation row (a few minutes).";
+    hint.textContent = t.hatch.intro;
     this.body.appendChild(hint);
 
     const promptInput = document.createElement("textarea");
     promptInput.rows = 2;
-    promptInput.placeholder = "a tiny cyber fox with neon accents";
+    promptInput.placeholder = t.hatch.promptPlaceholder;
     promptInput.value = prompt;
     this.body.appendChild(promptInput);
 
@@ -92,26 +91,26 @@ export class HatchOverlay {
     for (const [value, label] of STYLES) {
       const option = document.createElement("option");
       option.value = value;
-      option.textContent = label;
+      option.textContent = t.hatch[label];
       styleSelect.appendChild(option);
     }
     const styleLabel = document.createElement("label");
-    styleLabel.append("Style ", styleSelect);
+    styleLabel.append(t.hatch.styleLabel, styleSelect);
 
     const draftSelect = document.createElement("select");
     for (const count of [1, 2, 3, 4]) {
       const option = document.createElement("option");
       option.value = String(count);
-      option.textContent = `${count} draft${count > 1 ? "s" : ""}`;
+      option.textContent = fmt(count > 1 ? t.hatch.draftMany : t.hatch.draftOne, { count });
       if (count === 2) option.selected = true;
       draftSelect.appendChild(option);
     }
     const draftLabel = document.createElement("label");
-    draftLabel.append("Drafts ", draftSelect);
+    draftLabel.append(t.hatch.draftsLabel, draftSelect);
 
     const nameInput = document.createElement("input");
     nameInput.type = "text";
-    nameInput.placeholder = "Name (optional)";
+    nameInput.placeholder = t.hatch.namePlaceholder;
     options.append(styleLabel, draftLabel, nameInput);
     this.body.appendChild(options);
 
@@ -119,13 +118,13 @@ export class HatchOverlay {
     actions.className = "hatch-actions";
     const cancelBtn = document.createElement("button");
     cancelBtn.className = "ghost";
-    cancelBtn.textContent = "Cancel";
+    cancelBtn.textContent = t.chrome.cancel;
     cancelBtn.onclick = () => this.dialog.close();
     const hatchBtn = document.createElement("button");
     hatchBtn.className = "primary";
-    hatchBtn.textContent = "Hatch";
+    hatchBtn.textContent = t.hatch.hatch;
     hatchBtn.disabled = !client;
-    if (!client) hatchBtn.title = "gateway offline";
+    if (!client) hatchBtn.title = t.hatch.gatewayOffline;
     actions.append(cancelBtn, hatchBtn);
     this.body.appendChild(actions);
 
@@ -142,7 +141,7 @@ export class HatchOverlay {
         })
         .then(({ job_id }) => {
           this.jobId = job_id;
-          this.renderWaiting("Designing base looks…");
+          this.renderWaiting(t.hatch.designing);
           this.startPolling(text);
         })
         .catch((err: unknown) => {
@@ -171,7 +170,7 @@ export class HatchOverlay {
 
     const hint = document.createElement("p");
     hint.className = "hatch-hint";
-    hint.textContent = "Pick the base look you like best — it anchors every animation row.";
+    hint.textContent = t.hatch.pickBase;
     this.body.appendChild(hint);
 
     const grid = document.createElement("div");
@@ -190,7 +189,7 @@ export class HatchOverlay {
         card.replaceChildren();
         const image = document.createElement("img");
         image.src = blobUrl;
-        image.alt = `draft ${index + 1}`;
+        image.alt = fmt(t.hatch.draftAlt, { index: index + 1 });
         card.appendChild(image);
         card.onclick = () => {
           for (const sibling of Array.from(grid.children)) {
@@ -199,7 +198,7 @@ export class HatchOverlay {
           this.pickDraft(index);
         };
       } catch {
-        card.textContent = "failed to load";
+        card.textContent = t.hatch.failedToLoad;
       }
     });
 
@@ -207,7 +206,7 @@ export class HatchOverlay {
     actions.className = "hatch-actions";
     const backBtn = document.createElement("button");
     backBtn.className = "ghost";
-    backBtn.textContent = "Start over";
+    backBtn.textContent = t.hatch.startOver;
     backBtn.onclick = () => {
       const prompt = job.prompt || "";
       if (this.jobId) void client.hatchCancel(this.jobId);
@@ -224,7 +223,7 @@ export class HatchOverlay {
     client
       .hatchPick(this.jobId, index)
       .then(() => {
-        this.renderWaiting("Drawing animation rows…");
+        this.renderWaiting(t.hatch.drawing);
         this.startPolling();
       })
       .catch((err: unknown) => {
@@ -274,17 +273,17 @@ export class HatchOverlay {
     const client = this.client();
     const result = job.result;
     if (!client || !result) {
-      this.renderError("hatch finished without a result");
+      this.renderError(t.hatch.errorNoResult);
       return;
     }
 
     const name = document.createElement("h3");
-    name.textContent = `(^_^)b ${result.display_name} hatched and adopted!`;
+    name.textContent = fmt(t.hatch.hatched, { name: result.display_name });
     this.body.appendChild(name);
 
     const preview = document.createElement("div");
     preview.className = "hatch-preview";
-    preview.textContent = "loading spritesheet…";
+    preview.textContent = t.hatch.loadingSpritesheet;
     this.body.appendChild(preview);
     client
       .hatchImageBlob(result.spritesheet)
@@ -296,19 +295,19 @@ export class HatchOverlay {
         preview.replaceChildren(image);
       })
       .catch(() => {
-        preview.textContent = "spritesheet preview unavailable";
+        preview.textContent = t.hatch.previewUnavailable;
       });
 
     const meta = document.createElement("p");
     meta.className = "hatch-hint";
-    meta.textContent = `${result.states.length} animation rows — it'll pop into the corner shortly.`;
+    meta.textContent = fmt(t.hatch.rowsMeta, { count: result.states.length });
     this.body.appendChild(meta);
 
     const actions = document.createElement("div");
     actions.className = "hatch-actions";
     const doneBtn = document.createElement("button");
     doneBtn.className = "primary";
-    doneBtn.textContent = "Done";
+    doneBtn.textContent = t.hatch.done;
     doneBtn.onclick = () => {
       this.dialog.close();
       this.onHatched();
@@ -327,11 +326,11 @@ export class HatchOverlay {
     actions.className = "hatch-actions";
     const retryBtn = document.createElement("button");
     retryBtn.className = "primary";
-    retryBtn.textContent = "Try again";
+    retryBtn.textContent = t.hatch.tryAgain;
     retryBtn.onclick = () => this.renderForm(prompt);
     const closeBtn = document.createElement("button");
     closeBtn.className = "ghost";
-    closeBtn.textContent = "Close";
+    closeBtn.textContent = t.hatch.close;
     closeBtn.onclick = () => this.dialog.close();
     actions.append(retryBtn, closeBtn);
     this.body.appendChild(actions);
@@ -340,7 +339,7 @@ export class HatchOverlay {
   private cancelButton(): HTMLButtonElement {
     const button = document.createElement("button");
     button.className = "ghost hatch-cancel";
-    button.textContent = "Cancel hatch";
+    button.textContent = t.hatch.cancelHatch;
     button.onclick = () => {
       const client = this.client();
       if (client && this.jobId) void client.hatchCancel(this.jobId);
@@ -365,7 +364,7 @@ export class HatchOverlay {
       }
       switch (job.status) {
         case "generating_drafts":
-          this.renderWaiting("Designing base looks…");
+          this.renderWaiting(t.hatch.designing);
           break;
         case "awaiting_pick":
           this.stopPolling();
@@ -380,11 +379,11 @@ export class HatchOverlay {
           break;
         case "cancelled":
           this.stopPolling();
-          this.renderError("hatch cancelled", prompt);
+          this.renderError(t.hatch.errorCancelled, prompt);
           break;
         case "failed":
           this.stopPolling();
-          this.renderError(job.error || "hatch failed", prompt);
+          this.renderError(job.error || t.hatch.errorFailed, prompt);
           break;
       }
     };

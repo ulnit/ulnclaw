@@ -3,6 +3,7 @@
 // memory chunks + relation edges) with search, node detail, edit, and
 // archive/delete over /api/learning/node. Overlay dialog scoped port.
 
+import { t } from "./i18n";
 import type { GatewayClient, LearningGraphPayload, LearningGraphNode } from "./gateway";
 
 export class LearningOverlay {
@@ -18,10 +19,10 @@ export class LearningOverlay {
     const header = document.createElement("div");
     header.className = "learning-header";
     const title = document.createElement("h2");
-    title.textContent = "✨ Learning";
+    title.textContent = t.learning.title;
     const sub = document.createElement("span");
     sub.className = "learning-sub";
-    sub.textContent = "learned skills + memory, linked";
+    sub.textContent = t.learning.tagline;
     header.append(title, sub);
     this.body = document.createElement("div");
     this.body.className = "learning-body";
@@ -36,13 +37,13 @@ export class LearningOverlay {
     this.body.innerHTML = "";
     const loading = document.createElement("div");
     loading.className = "learning-loading";
-    loading.textContent = "Building learning graph…";
+    loading.textContent = t.learning.building;
     this.body.appendChild(loading);
     this.dialog.showModal();
 
     const client = this.client();
     if (!client) {
-      loading.textContent = "Gateway not connected.";
+      loading.textContent = t.learning.notConnected;
       return;
     }
     try {
@@ -110,7 +111,7 @@ export class LearningOverlay {
     }
     const search = document.createElement("input");
     search.className = "learning-search";
-    search.placeholder = "Search nodes…";
+    search.placeholder = t.learning.searchPlaceholder;
     search.value = this.query;
     search.addEventListener("input", () => {
       this.query = search.value;
@@ -158,7 +159,7 @@ export class LearningOverlay {
       empty.textContent =
         graph.nodes.length === 0
           ? "No learning yet — skills the agent creates or uses, and memories, appear here."
-          : "No matching nodes.";
+          : t.learning.noMatches;
       list.appendChild(empty);
       return;
     }
@@ -219,12 +220,12 @@ export class LearningOverlay {
     actions.className = "learning-node-actions";
 
     const saveBtn = document.createElement("button");
-    saveBtn.textContent = "Save";
+    saveBtn.textContent = t.learning.save;
     saveBtn.disabled = true;
     saveBtn.onclick = async () => {
       try {
         await client.editLearningNode(node.id, area.value);
-        status.textContent = "Saved.";
+        status.textContent = t.learning.saved;
         setTimeout(() => {
           detailDialog.close();
           void this.open();
@@ -235,14 +236,14 @@ export class LearningOverlay {
     };
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "danger";
-    deleteBtn.textContent = node.kind === "skill" ? "Archive" : "Delete";
+    deleteBtn.textContent = node.kind === "skill" ? t.learning.archive : t.learning.delete;
     deleteBtn.disabled = true;
     deleteBtn.onclick = async () => {
       const verb = node.kind === "skill" ? "archive" : "delete";
       if (!window.confirm(`${verb} "${node.label}"?`)) return;
       try {
         await client.deleteLearningNode(node.id);
-        status.textContent = `${verb === "archive" ? "Archived" : "Deleted"}.`;
+        status.textContent = verb === "archive" ? t.learning.archived : t.learning.deleted;
         setTimeout(() => {
           detailDialog.close();
           void this.open();
@@ -253,7 +254,7 @@ export class LearningOverlay {
     };
     const closeBtn = document.createElement("button");
     closeBtn.className = "ghost";
-    closeBtn.textContent = "Close";
+    closeBtn.textContent = t.learning.close;
     closeBtn.onclick = () => detailDialog.close();
     actions.append(saveBtn, deleteBtn, closeBtn);
     detailDialog.append(head, area, status, actions);
@@ -261,7 +262,7 @@ export class LearningOverlay {
     detailDialog.showModal();
     detailDialog.addEventListener("close", () => detailDialog.remove());
 
-    area.textContent = "Loading…";
+    area.textContent = t.learning.loading;
     try {
       const detail = await client.learningNode(node.id);
       area.textContent = detail.content;

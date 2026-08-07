@@ -16,6 +16,8 @@ import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
 import { notifyError, notifySuccess } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
+import { applyStatic, fmt, onLocaleChange, t } from "./i18n";
+import { LanguageSwitcher } from "./language-switcher";
 import { OnboardingOverlay } from "./onboarding";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
@@ -101,7 +103,7 @@ function renderSessions(): void {
     if (session.project) {
       const badge = document.createElement("span");
       badge.className = "session-project-badge";
-      badge.title = `Project: ${session.project}`;
+      badge.title = fmt(t.session.projectBadge, { project: session.project });
       badge.textContent = session.project;
       item.appendChild(badge);
     }
@@ -109,7 +111,7 @@ function renderSessions(): void {
     actions.className = "session-actions";
     const renameBtn = document.createElement("button");
     renameBtn.className = "icon";
-    renameBtn.title = "Rename session";
+    renameBtn.title = t.palette.renameSession;
     renameBtn.textContent = "✎";
     renameBtn.onclick = (event) => {
       event.stopPropagation();
@@ -117,7 +119,7 @@ function renderSessions(): void {
     };
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "icon danger";
-    deleteBtn.title = "Delete session";
+    deleteBtn.title = t.palette.deleteSession;
     deleteBtn.textContent = "🗑";
     deleteBtn.onclick = (event) => {
       event.stopPropagation();
@@ -133,7 +135,7 @@ function renderSessions(): void {
 async function renameSession(session: SessionRow): Promise<void> {
   if (!state.client) return;
   const current = session.title || session.id.slice(0, 8);
-  const next = window.prompt("Session title:", current);
+  const next = window.prompt(t.session.titlePrompt, current);
   if (next === null || next.trim() === "" || next === current) return;
   try {
     await state.client.renameSession(session.id, next.trim());
@@ -143,27 +145,27 @@ async function renameSession(session: SessionRow): Promise<void> {
       el.chatTitle.textContent = session.title;
     }
     renderSessions();
-    notifySuccess("Session renamed.");
+    notifySuccess(t.session.renamed);
   } catch (error) {
-    notifyError(`Rename failed: ${error}`);
+    notifyError(fmt(t.session.renameFailed, { error }));
   }
 }
 
 async function deleteSession(session: SessionRow): Promise<void> {
   if (!state.client) return;
   const label = session.title || session.id.slice(0, 8);
-  if (!window.confirm(`Delete session "${label}" and its transcript?`)) return;
+  if (!window.confirm(fmt(t.session.deleteConfirm, { label }))) return;
   try {
     await state.client.deleteSession(session.id);
     state.sessions = state.sessions.filter((row) => row.id !== session.id);
     if (state.current?.id === session.id) {
       state.current = null;
-      el.chatTitle.textContent = "New session";
+      el.chatTitle.textContent = t.session.newTitle;
       el.messages.innerHTML = "";
     }
     renderSessions();
   } catch (error) {
-    notifyError(`Delete failed: ${error}`);
+    notifyError(fmt(t.session.deleteFailed, { error }));
   }
 }
 
@@ -192,7 +194,7 @@ async function openSession(session: SessionRow): Promise<void> {
       addMessage(message.role, message.content);
     }
   } catch (error) {
-    addMessage("system", `Could not load messages: ${error}`);
+    addMessage("system", fmt(t.session.loadFailed, { error }));
   }
   state.findBar?.refresh();
 }
@@ -218,7 +220,7 @@ async function sendTurn(): Promise<void> {
       refreshModelBadge();
       renderSessions();
     } catch (error) {
-      addMessage("system", `Could not create a session: ${error}`);
+      addMessage("system", fmt(t.session.createFailed, { error }));
       return;
     }
   }
@@ -271,17 +273,17 @@ async function sendTurn(): Promise<void> {
           caret.textContent = "▶";
           const name = document.createElement("span");
           name.className = "tname";
-          name.textContent = toolEvent.name || "tool";
+          name.textContent = toolEvent.name || t.tools.fallbackName;
           const status = document.createElement("span");
           status.className = "status";
-          status.textContent = "running…";
+          status.textContent = t.tools.running;
           head.append(caret, name, status);
           const body = document.createElement("div");
           body.className = "tool-card-body";
           if (toolEvent.arguments) {
             const label = document.createElement("div");
             label.className = "label";
-            label.textContent = "arguments";
+            label.textContent = t.tools.arguments;
             const pre = document.createElement("pre");
             pre.textContent = toolEvent.arguments;
             body.append(label, pre);
@@ -295,12 +297,12 @@ async function sendTurn(): Promise<void> {
           if (card) {
             card.classList.remove("running");
             card.classList.add("done");
-            card.querySelector(".status")!.textContent = "done";
+            card.querySelector(".status")!.textContent = t.tools.done;
             if (toolEvent.result) {
               const body = card.querySelector(".tool-card-body")!;
               const label = document.createElement("div");
               label.className = "label";
-              label.textContent = "result";
+              label.textContent = t.tools.result;
               const pre = document.createElement("pre");
               pre.textContent = toolEvent.result;
               body.append(label, pre);
@@ -314,7 +316,7 @@ async function sendTurn(): Promise<void> {
     await refreshSessions();
   } catch (error) {
     bubble.classList.remove("streaming");
-    bubble.textContent = `error: ${error}`;
+    bubble.textContent = fmt(t.session.errorPrefix, { error });
   } finally {
     state.busy = false;
     el.send.disabled = false;
@@ -337,10 +339,10 @@ function refreshModelBadge(): void {
       : null;
   if (locked) {
     el.modelBadge.textContent = `\u{1F512} ${locked}`;
-    el.modelBadge.title = "Session model lock — click to change";
+    el.modelBadge.title = t.session.modelLockTitle;
   } else {
     el.modelBadge.textContent = gatewayModel;
-    el.modelBadge.title = "Gateway default model — click to pick a session model";
+    el.modelBadge.title = t.session.gatewayModelTitle;
   }
   el.modelBadge.classList.toggle("locked", !!locked);
 }
@@ -349,7 +351,7 @@ async function pollHealth(): Promise<void> {
   if (!state.client) return;
   const ok = await state.client.health();
   el.dot.className = "dot " + (ok ? "up" : "down");
-  el.dot.title = ok ? "gateway reachable" : "gateway unreachable";
+  el.dot.title = ok ? t.session.reachable : t.session.unreachable;
   if (ok) {
     const model = await state.client.models();
     if (model) {
@@ -365,22 +367,24 @@ async function pollHealth(): Promise<void> {
 // small session command set; the popup surfaces both while typing.
 // ---------------------------------------------------------------------------
 
-const GATEWAY_SLASH_COMMANDS: [string, string][] = [
-  ["/help", "gateway slash commands"],
-  ["/skills", "list skills"],
-  ["/tools", "list enabled tools"],
-  ["/recap", "recap this session"],
-  ["/title", "show or set the session title"],
-  ["/usage", "this session's token usage"],
-];
+function gatewaySlashCommands(): [string, string][] {
+  return [
+    ["/help", t.slash.help],
+    ["/skills", t.slash.skills],
+    ["/tools", t.slash.tools],
+    ["/recap", t.slash.recap],
+    ["/title", t.slash.title],
+    ["/usage", t.slash.usage],
+  ];
+}
 
 let slashIndex = 0;
 
 function slashCandidates(prefix: string): { name: string; desc: string }[] {
-  const builtins = GATEWAY_SLASH_COMMANDS.map(([name, desc]) => ({ name, desc }));
+  const builtins = gatewaySlashCommands().map(([name, desc]) => ({ name, desc }));
   const skills = state.skills.map((skill) => ({
     name: `/${skill.name}`,
-    desc: skill.description || "skill",
+    desc: skill.description || t.slash.skillFallback,
   }));
   const lowered = prefix.toLowerCase();
   return [...builtins, ...skills].filter((item) => item.name.toLowerCase().startsWith(lowered));
@@ -449,7 +453,7 @@ function renderAttachChips(): void {
     name.title = upload.path;
     const remove = document.createElement("button");
     remove.textContent = "✕";
-    remove.title = "Remove attachment";
+    remove.title = t.session.removeAttachment;
     remove.onclick = () => {
       state.pendingUploads.splice(index, 1);
       renderAttachChips();
@@ -472,7 +476,7 @@ async function handlePasteImages(event: ClipboardEvent): Promise<void> {
       state.pendingUploads.push(upload);
       renderAttachChips();
     } catch (error) {
-      addMessage("system", `Clipboard upload failed: ${error}`);
+      addMessage("system", fmt(t.session.uploadFailed, { error }));
     }
   }
 }
@@ -538,7 +542,7 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
     case "preview.open": {
       const url = String(payload.url ?? "");
       if (url) window.open(url, "_blank");
-      bridgeNotice(`Preview: ${String(payload.label || url)}`);
+      bridgeNotice(fmt(t.bridge.preview, { label: String(payload.label || url) }));
       break;
     }
     case "pane.reveal": {
@@ -551,8 +555,8 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       break;
     }
     case "terminal.close": {
-      const running = payload.running ? " (still running)" : "";
-      bridgeNotice(`Terminal closed: ${String(payload.process_id ?? "?")}${running}`);
+      const running = payload.running ? t.bridge.stillRunning : "";
+      bridgeNotice(fmt(t.bridge.terminalClosed, { id: String(payload.process_id ?? "?"), running }));
       break;
     }
     case "message.reaction": {
@@ -575,7 +579,7 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       void state.client.answerTerminalRead(
         id,
         text.length > 0,
-        text.length > 0 ? text : "terminal pane is empty",
+        text.length > 0 ? text : t.bridge.terminalEmpty,
       );
       break;
     }
@@ -608,6 +612,8 @@ function startDesktopEvents(): void {
 }
 
 async function start(): Promise<void> {
+  // Translate the static chrome for any persisted non-en locale (P251).
+  applyStatic();
   state.bridge = await loadBridge();
   state.client = new GatewayClient(state.settings);
 
@@ -622,7 +628,7 @@ async function start(): Promise<void> {
         await new Promise((resolve) => setTimeout(resolve, 1500));
       } catch (error) {
         console.warn("gateway spawn failed:", error);
-        notifyError(`Gateway spawn failed: ${error}`);
+        notifyError(fmt(t.boot.spawnFailed, { error }));
       }
     }
   }
@@ -647,10 +653,7 @@ async function start(): Promise<void> {
       }
     }
     hideConnecting();
-    notifyError(
-      "Gateway unreachable — check the gateway URL and API key in Settings.",
-      "The desktop shell polls /health once the gateway is up; managed mode spawns it automatically when the ulnclaw binary is on PATH."
-    );
+    notifyError(t.boot.unreachable, t.boot.unreachableDetail);
   })();
 
   el.settingsOnboarding.onclick = () => {
@@ -660,7 +663,7 @@ async function start(): Promise<void> {
 
   el.newSession.onclick = async () => {
     state.current = null;
-    el.chatTitle.textContent = "New session";
+    el.chatTitle.textContent = t.session.newTitle;
     el.messages.innerHTML = "";
     renderSessions();
     el.input.focus();
@@ -779,9 +782,13 @@ async function start(): Promise<void> {
   const hatchBtn = document.createElement("button");
   hatchBtn.id = "hatch-btn";
   hatchBtn.className = "ghost";
-  hatchBtn.textContent = "\u{1F95A} Hatch pet";
+  hatchBtn.textContent = t.chrome.hatchPet;
   const settingsBtn = document.getElementById("settings-btn")!;
   settingsBtn.parentElement!.insertBefore(hatchBtn, settingsBtn);
+
+  // Language switcher (P251, hermes language-switcher parity): globe
+  // trigger in the sidebar footer with a searchable locale popover.
+  new LanguageSwitcher(settingsBtn.parentElement!);
   state.hatch = new HatchOverlay(() => state.client, () => state.pet?.refresh());
   hatchBtn.onclick = () => state.hatch!.open();
 
@@ -852,6 +859,22 @@ async function start(): Promise<void> {
     switchView,
     openSettings: () => el.settingsBtn.click(),
     refreshSessions: () => refreshSessions(),
+  });
+
+  // Translate widget skeletons mounted after the initial applyStatic
+  // (idempotent — covers non-en persisted locales on cold boot).
+  applyStatic();
+
+  // Locale switch re-render (P251): static attributes are handled by
+  // setLocale -> applyStatic; refresh the dynamic chrome and views.
+  onLocaleChange(() => {
+    renderSessions();
+    refreshModelBadge();
+    hatchBtn.textContent = t.chrome.hatchPet;
+    state.kanban?.rerender();
+    state.projects?.rerender();
+    state.jobs?.rerender();
+    state.findBar?.rerender();
   });
 
   await pollHealth();
