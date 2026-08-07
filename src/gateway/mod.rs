@@ -6043,6 +6043,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_upload_media_stores_in_cache() {
+        // Serialize against tests that temporarily override ULNCLAW_HOME —
+        // the upload handler resolves the media cache against the live home.
+        let _guard = crate::models_dev::test_env_lock();
         let state = streaming_state();
         let home = state.agent.context().home.clone();
         let app = router(state);

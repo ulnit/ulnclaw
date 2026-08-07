@@ -447,6 +447,7 @@ pub async fn run(cfg: YuanbaoConfig, dispatcher: Arc<Dispatcher>, pairing: Optio
             Err(code) => {
                 if NO_RECONNECT_CLOSE_CODES.contains(&code) {
                     eprintln!("[yuanbao] close code {code} is non-recoverable, NOT reconnecting");
+                    clear_active_handle();
                     return;
                 }
                 let delay = [2u64, 5, 10, 30, 60][backoff_idx.min(4)];
@@ -534,6 +535,10 @@ async fn run_session(runner: &Arc<Runner>, ws_url: &str) -> std::result::Result<
 
     // Step 4: heartbeat + receive loops.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    register_active_handle(Arc::new(YuanbaoHandle {
+        runner: runner.clone(),
+        out_tx: out_tx.clone(),
+    }));
     let (hb_tx, mut hb_rx) = tokio::sync::mpsc::channel::<()>(4);
     let runner_hb = runner.clone();
     let heartbeat = tokio::spawn(async move {
@@ -2168,12 +2173,24 @@ async fn send_msg_body_ws(
     group_code: &str,
     elements: &[proto::MsgBodyElement],
 ) -> std::result::Result<(), String> {
+    send_msg_body_ws_ref(runner, out_tx, chat_id, group_code, elements, "").await
+}
+
+/// `send_msg_body_ws` with an optional group quote-reply ref_msg_id.
+async fn send_msg_body_ws_ref(
+    runner: &Arc<Runner>,
+    out_tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    chat_id: &str,
+    group_code: &str,
+    elements: &[proto::MsgBodyElement],
+    ref_msg_id: &str,
+) -> std::result::Result<(), String> {
     let msg_id = new_uuid();
     let from_account = runner.bot_id.lock().unwrap().clone();
     let bytes = if group_code.is_empty() {
         proto::encode_send_c2c_message(chat_id, elements, &from_account, &msg_id, 0, None, "", "")
     } else {
-        proto::encode_send_group_message(group_code, elements, &from_account, &msg_id, "", "", None, "", "")
+        proto::encode_send_group_message(group_code, elements, &from_account, &msg_id, "", "", None, ref_msg_id, "")
     };
     out_tx.send(bytes).await.map_err(|e| format!("send channel closed: {e}"))?;
 
@@ -2409,51 +2426,49 @@ async fn send_media_via(
     path: &std::path::Path,
     caption: &str,
 ) {
+    if let Err(e) = send_media_checked(runner, out_tx, chat_id, group_code, path, caption).await {
+        eprintln!("[yuanbao] media send failed for {}: {e}", path.display());
+    }
+}
+
+/// `send_media_via` with a Result for tool-facing callers (P248).
+async fn send_media_checked(
+    runner: &Arc<Runner>,
+    out_tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    chat_id: &str,
+    group_code: &str,
+    path: &std::path::Path,
+    caption: &str,
+) -> std::result::Result<(), String> {
     let file_path = path;
-    let file_bytes = match std::fs::read(file_path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("[yuanbao] media read failed for {}: {e}", path.display());
-            return;
-        }
-    };
+    let file_bytes = std::fs::read(file_path)
+        .map_err(|e| format!("media read failed: {e}"))?;
     if file_bytes.is_empty() {
-        eprintln!("[yuanbao] empty media file: {}", path.display());
-        return;
+        return Err("empty media file".to_string());
     }
     if file_bytes.len() as u64 > MEDIA_MAX_SIZE_MB * 1024 * 1024 {
-        eprintln!(
-            "[yuanbao] media too large ({} MB > {MEDIA_MAX_SIZE_MB} MB): {}",
-            file_bytes.len() / (1024 * 1024),
-            path.display()
-        );
-        return;
+        return Err(format!(
+            "media too large ({} MB > {MEDIA_MAX_SIZE_MB} MB)",
+            file_bytes.len() / (1024 * 1024)
+        ));
     }
     let filename = file_path
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".to_string());
     let mime_type = crate::media_cache::mime_for_ext(file_path);
-    let credentials = match get_cos_credentials(runner, &filename).await {
-        Ok(credentials) => credentials,
-        Err(e) => {
-            eprintln!("[yuanbao] COS credentials failed: {e}");
-            return;
-        }
-    };
+    let credentials = get_cos_credentials(runner, &filename)
+        .await
+        .map_err(|e| format!("COS credentials failed: {e}"))?;
     let is_image = mime_type.starts_with("image/");
     let (width, height) = if is_image {
         parse_image_size(&file_bytes).unwrap_or((0, 0))
     } else {
         (0, 0)
     };
-    let url = match upload_to_cos(&file_bytes, &filename, &mime_type, &credentials).await {
-        Ok(url) => url,
-        Err(e) => {
-            eprintln!("[yuanbao] COS upload failed: {e}");
-            return;
-        }
-    };
+    let url = upload_to_cos(&file_bytes, &filename, &mime_type, &credentials)
+        .await
+        .map_err(|e| format!("COS upload failed: {e}"))?;
     let uuid = media_md5_hex(&file_bytes);
     let element = if is_image {
         image_msg_body_element(&url, &uuid, file_bytes.len() as u64, width, height, &mime_type)
@@ -2470,9 +2485,7 @@ async fn send_media_via(
             },
         });
     }
-    if let Err(e) = send_msg_body_ws(runner, out_tx, chat_id, group_code, &elements).await {
-        eprintln!("[yuanbao] media send failed to {chat_id}: {e}");
-    }
+    send_msg_body_ws(runner, out_tx, chat_id, group_code, &elements).await
 }
 
 /// Send one sticker (hermes `StickerHandler` + `send_sticker`): fuzzy
@@ -2504,6 +2517,186 @@ async fn send_sticker_via(
     }
     if !last_error.is_empty() {
         eprintln!("[yuanbao] sticker send failed to {chat_id}: {last_error}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live adapter handle for the yb_* tools (hermes `get_active_adapter`)
+// ---------------------------------------------------------------------------
+
+/// Handle onto the running Yuanbao adapter session, used by the yb_*
+/// tools (hermes `get_active_adapter`). Re-registered on every WS
+/// session start.
+pub struct YuanbaoHandle {
+    runner: Arc<Runner>,
+    out_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+}
+
+static ACTIVE_HANDLE: std::sync::OnceLock<Mutex<Option<Arc<YuanbaoHandle>>>> =
+    std::sync::OnceLock::new();
+
+fn active_handle_slot() -> &'static Mutex<Option<Arc<YuanbaoHandle>>> {
+    ACTIVE_HANDLE.get_or_init(|| Mutex::new(None))
+}
+
+/// The live adapter handle, if the yuanbao transport is running.
+pub fn active_handle() -> Option<Arc<YuanbaoHandle>> {
+    active_handle_slot().lock().unwrap().clone()
+}
+
+fn register_active_handle(handle: Arc<YuanbaoHandle>) {
+    *active_handle_slot().lock().unwrap() = Some(handle);
+}
+
+fn clear_active_handle() {
+    *active_handle_slot().lock().unwrap() = None;
+}
+
+/// Parse a tool-facing chat target: `direct:{account}` / `group:{code}`
+/// / bare account id (hermes chat_id convention).
+pub fn parse_chat_target(chat_id: &str) -> (String, String) {
+    let trimmed = chat_id.trim();
+    if let Some(rest) = trimmed.strip_prefix("direct:") {
+        (rest.trim().to_string(), String::new())
+    } else if let Some(rest) = trimmed.strip_prefix("group:") {
+        (String::new(), rest.trim().to_string())
+    } else {
+        (trimmed.to_string(), String::new())
+    }
+}
+
+/// Resolve a sticker by id, name, or random when empty (hermes
+/// `send_sticker` lookup order).
+fn resolve_sticker(raw: &str) -> std::result::Result<&'static crate::yuanbao_sticker::Sticker, String> {
+    if raw.is_empty() {
+        return Ok(crate::yuanbao_sticker::get_random_sticker(None));
+    }
+    if raw.chars().all(|c| c.is_ascii_digit()) {
+        if let Some(sticker) = crate::yuanbao_sticker::get_sticker_by_id(raw) {
+            return Ok(sticker);
+        }
+    }
+    crate::yuanbao_sticker::get_sticker_by_name(raw).ok_or_else(|| {
+        format!(
+            "Sticker not found: '{raw}'. Use yb_search_sticker first to discover available stickers."
+        )
+    })
+}
+
+impl YuanbaoHandle {
+    /// WS session liveness (tools gate on this).
+    pub fn is_connected(&self) -> bool {
+        self.runner.connected.load(Ordering::SeqCst)
+    }
+
+    /// Send one encoded biz request and await the correlated response
+    /// payload (hermes `send_biz_request`).
+    pub async fn send_biz_request(&self, bytes: Vec<u8>, req_id: &str) -> std::result::Result<Vec<u8>, String> {
+        self.out_tx
+            .send(bytes)
+            .await
+            .map_err(|e| format!("send channel closed: {e}"))?;
+        let deadline = Instant::now() + Duration::from_secs(DEFAULT_SEND_TIMEOUT_SECS);
+        loop {
+            if Instant::now() >= deadline {
+                return Err(format!("yuanbao biz request timeout (req_id={req_id})"));
+            }
+            if let Some(data) = pending_responses().lock().unwrap().remove(req_id) {
+                return Ok(data);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Group name/owner/member count (hermes `query_group_info_raw`).
+    pub async fn query_group_info(&self, group_code: &str) -> std::result::Result<proto::QueryGroupInfoRsp, String> {
+        let req_id = format!("qgi_{}", proto::next_seq_no());
+        let bytes = proto::encode_query_group_info(group_code, &req_id);
+        let data = self.send_biz_request(bytes, &req_id).await?;
+        Ok(proto::decode_query_group_info_rsp(&data))
+    }
+
+    /// Group member list (hermes `get_group_member_list_raw`).
+    pub async fn get_group_member_list(&self, group_code: &str) -> std::result::Result<proto::MemberListRsp, String> {
+        let req_id = format!("gml_{}", proto::next_seq_no());
+        let bytes = proto::encode_get_group_member_list(group_code, 0, 200, &req_id);
+        let data = self.send_biz_request(bytes, &req_id).await?;
+        Ok(proto::decode_get_group_member_list_rsp(&data))
+    }
+
+    /// DM text to a member (hermes `adapter.send_dm`) — a C2C message
+    /// carrying the source group context, chunked like send_text_via.
+    pub async fn send_dm(&self, user_id: &str, message: &str, group_code: &str) -> std::result::Result<(), String> {
+        let from_account = self.runner.bot_id.lock().unwrap().clone();
+        for chunk in chunk_markdown_text(message, MAX_TEXT_CHUNK) {
+            let element = proto::MsgBodyElement {
+                msg_type: "TIMTextElem".into(),
+                msg_content: proto::MsgContent {
+                    text: chunk.clone(),
+                    ..Default::default()
+                },
+            };
+            let msg_id = new_uuid();
+            let bytes = proto::encode_send_c2c_message(
+                user_id,
+                &[element],
+                &from_account,
+                &msg_id,
+                0,
+                None,
+                group_code,
+                "",
+            );
+            self.out_tx
+                .send(bytes)
+                .await
+                .map_err(|e| format!("send channel closed: {e}"))?;
+            let deadline = Instant::now() + Duration::from_secs(DEFAULT_SEND_TIMEOUT_SECS);
+            loop {
+                if Instant::now() >= deadline {
+                    return Err(format!("yuanbao DM timeout (req_id={msg_id})"));
+                }
+                if let Some(data) = pending_responses().lock().unwrap().remove(&msg_id) {
+                    let code = proto::decode_send_rsp_code(&data);
+                    if code != 0 {
+                        return Err(format!("yuanbao DM response code={code} (req_id={msg_id})"));
+                    }
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Send a built-in sticker (hermes `adapter.send_sticker`). Returns
+    /// `(sticker_id, name)` of the delivered sticker.
+    pub async fn send_sticker(
+        &self,
+        chat_id: &str,
+        sticker_name: &str,
+        reply_to: Option<&str>,
+    ) -> std::result::Result<(String, String), String> {
+        let (target_chat, target_group) = parse_chat_target(chat_id);
+        let sticker = resolve_sticker(sticker_name)?;
+        let element = crate::yuanbao_sticker::build_sticker_msg_body(sticker);
+        send_msg_body_ws_ref(
+            &self.runner,
+            &self.out_tx,
+            &target_chat,
+            &target_group,
+            std::slice::from_ref(&element),
+            reply_to.unwrap_or(""),
+        )
+        .await?;
+        Ok((sticker.sticker_id.to_string(), sticker.name.to_string()))
+    }
+
+    /// Upload + send a local media file (hermes `send_image_file` /
+    /// `send_document` — type chosen by mime).
+    pub async fn send_media(&self, chat_id: &str, path: &std::path::Path) -> std::result::Result<(), String> {
+        let (target_chat, target_group) = parse_chat_target(chat_id);
+        send_media_checked(&self.runner, &self.out_tx, &target_chat, &target_group, path, "").await
     }
 }
 

@@ -1371,6 +1371,10 @@ fn register_gated_stubs(registry: &mut ToolRegistry) {
     // Spotify — seven Web API tools with PKCE OAuth from auth.json
     // (hermes plugins/spotify).
     crate::spotify_tool::register(registry);
+
+    // Yuanbao group/sticker/DM tools (hermes tools/yuanbao_tools.py):
+    // gated on the live adapter session.
+    crate::yuanbao_tool::register(registry);
 }
 
 #[cfg(test)]

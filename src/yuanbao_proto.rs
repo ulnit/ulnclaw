@@ -1059,6 +1059,139 @@ pub fn decode_send_rsp_code(data: &[u8]) -> u64 {
 // Tests
 // ---------------------------------------------------------------------------
 
+// ============================================================
+// Group queries (hermes encode_query_group_info /
+// encode_get_group_member_list + rsp decoders) — biz RPCs used by
+// the yb_* tools (P248).
+// ============================================================
+
+/// Encode a QueryGroupInfoReq ConnMsg (hermes `encode_query_group_info`).
+///
+/// QueryGroupInfoReq fields: 1 = group_code.
+pub fn encode_query_group_info(group_code: &str, req_id: &str) -> Vec<u8> {
+    let body = encode_string_field(1, group_code);
+    encode_conn_msg_full(
+        &ConnHead {
+            cmd_type: CMD_TYPE_REQUEST,
+            cmd: "query_group_info".into(),
+            seq_no: next_seq_no() as u64,
+            msg_id: req_id.to_string(),
+            module: BIZ_PKG.into(),
+            ..Default::default()
+        },
+        &body,
+    )
+}
+
+/// Encode a GetGroupMemberListReq ConnMsg (hermes
+/// `encode_get_group_member_list`).
+///
+/// GetGroupMemberListReq fields: 1 = group_code, 2 = offset, 3 = limit.
+pub fn encode_get_group_member_list(
+    group_code: &str,
+    offset: u64,
+    limit: u64,
+    req_id: &str,
+) -> Vec<u8> {
+    let mut body = encode_string_field(1, group_code);
+    if offset != 0 {
+        body.extend(encode_varint_field(2, offset));
+    }
+    body.extend(encode_varint_field(3, limit));
+    encode_conn_msg_full(
+        &ConnHead {
+            cmd_type: CMD_TYPE_REQUEST,
+            cmd: "get_group_member_list".into(),
+            seq_no: next_seq_no() as u64,
+            msg_id: req_id.to_string(),
+            module: BIZ_PKG.into(),
+            ..Default::default()
+        },
+        &body,
+    )
+}
+
+/// Decoded QueryGroupInfoRsp (hermes `decode_query_group_info_rsp`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueryGroupInfoRsp {
+    pub code: u64,
+    pub message: String,
+    pub group_name: String,
+    pub owner_id: String,
+    pub owner_nickname: String,
+    pub member_count: u64,
+}
+
+/// Decode a QueryGroupInfoRsp biz payload.
+///
+/// QueryGroupInfoRsp: 1 = code, 2 = message, 3 = GroupInfo{1 = name,
+/// 2 = owner user id, 3 = owner nickname, 4 = group size}.
+pub fn decode_query_group_info_rsp(data: &[u8]) -> QueryGroupInfoRsp {
+    let map = fields_to_dict(parse_fields(data));
+    let mut rsp = QueryGroupInfoRsp {
+        code: get_varint(&map, 1),
+        message: get_string(&map, 2),
+        ..Default::default()
+    };
+    let group_info = get_bytes(&map, 3);
+    if !group_info.is_empty() {
+        let gi = fields_to_dict(parse_fields(&group_info));
+        rsp.group_name = get_string(&gi, 1);
+        rsp.owner_id = get_string(&gi, 2);
+        rsp.owner_nickname = get_string(&gi, 3);
+        rsp.member_count = get_varint(&gi, 4);
+    }
+    rsp
+}
+
+/// One group member (hermes MemberInfo: 1 = user_id, 2 = nickname,
+/// 3 = role/user_type, 4 = join_time, 5 = name_card).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberInfo {
+    pub user_id: String,
+    pub nickname: String,
+    pub role: u64,
+    pub join_time: u64,
+    pub name_card: String,
+}
+
+/// Decoded GetGroupMemberListRsp (hermes
+/// `decode_get_group_member_list_rsp`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberListRsp {
+    pub code: u64,
+    pub message: String,
+    pub members: Vec<MemberInfo>,
+    pub next_offset: u64,
+    pub is_complete: bool,
+}
+
+/// Decode a GetGroupMemberListRsp biz payload.
+pub fn decode_get_group_member_list_rsp(data: &[u8]) -> MemberListRsp {
+    let map = fields_to_dict(parse_fields(data));
+    let mut rsp = MemberListRsp {
+        code: get_varint(&map, 1),
+        message: get_string(&map, 2),
+        next_offset: get_varint(&map, 4),
+        is_complete: get_varint(&map, 5) != 0,
+        ..Default::default()
+    };
+    if let Some(entries) = map.get(&3) {
+        for entry in entries {
+            let FieldValue::Bytes(member_bytes) = entry else { continue };
+            let m = fields_to_dict(parse_fields(member_bytes));
+            rsp.members.push(MemberInfo {
+                user_id: get_string(&m, 1),
+                nickname: get_string(&m, 2),
+                role: get_varint(&m, 3),
+                join_time: get_varint(&m, 4),
+                name_card: get_string(&m, 5),
+            });
+        }
+    }
+    rsp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1332,6 +1465,79 @@ mod tests {
         assert_eq!(decoded.msg_type, "TIMFaceElem");
         assert_eq!(decoded.msg_content.index, 7);
         assert_eq!(decoded.msg_content.data, "{\"sticker_id\":\"225\"}");
+    }
+
+    #[test]
+    fn group_info_request_round_trips() {
+        let bytes = encode_query_group_info("328306697", "qgi_1");
+        let msg = decode_conn_msg(&bytes);
+        assert_eq!(msg.head.cmd, "query_group_info");
+        assert_eq!(msg.head.cmd_type, CMD_TYPE_REQUEST);
+        assert_eq!(msg.head.msg_id, "qgi_1");
+        assert_eq!(msg.head.module, BIZ_PKG);
+        let map = fields_to_dict(parse_fields(&msg.data));
+        assert_eq!(get_string(&map, 1), "328306697");
+    }
+
+    #[test]
+    fn member_list_request_round_trips() {
+        let bytes = encode_get_group_member_list("777", 0, 200, "gml_2");
+        let msg = decode_conn_msg(&bytes);
+        assert_eq!(msg.head.cmd, "get_group_member_list");
+        assert_eq!(msg.head.msg_id, "gml_2");
+        let map = fields_to_dict(parse_fields(&msg.data));
+        assert_eq!(get_string(&map, 1), "777");
+        // offset=0 omitted (hermes parity); limit always present.
+        assert!(map.get(&2).is_none());
+        assert_eq!(get_varint(&map, 3), 200);
+    }
+
+    #[test]
+    fn group_info_rsp_decodes_nested_group_info() {
+        let gi = {
+            let mut buf = encode_string_field(1, "派名");
+            buf.extend(encode_string_field(2, "owner-u"));
+            buf.extend(encode_string_field(3, "OwnerNick"));
+            buf.extend(encode_varint_field(4, 42));
+            buf
+        };
+        let mut payload = encode_varint_field(1, 0);
+        payload.extend(encode_string_field(2, "ok"));
+        payload.extend(encode_bytes_field(3, &gi));
+        let rsp = decode_query_group_info_rsp(&payload);
+        assert_eq!(rsp.code, 0);
+        assert_eq!(rsp.message, "ok");
+        assert_eq!(rsp.group_name, "派名");
+        assert_eq!(rsp.owner_id, "owner-u");
+        assert_eq!(rsp.owner_nickname, "OwnerNick");
+        assert_eq!(rsp.member_count, 42);
+    }
+
+    #[test]
+    fn member_list_rsp_decodes_repeated_members() {
+        let member = {
+            let mut buf = encode_string_field(1, "u1");
+            buf.extend(encode_string_field(2, "Alice"));
+            buf.extend(encode_varint_field(3, 2));
+            buf.extend(encode_varint_field(4, 1700000000));
+            buf.extend(encode_string_field(5, "阿里"));
+            buf
+        };
+        let mut payload = encode_varint_field(1, 0);
+        payload.extend(encode_string_field(2, ""));
+        payload.extend(encode_bytes_field(3, &member));
+        payload.extend(encode_bytes_field(3, &member));
+        payload.extend(encode_varint_field(4, 2));
+        payload.extend(encode_varint_field(5, 1));
+        let rsp = decode_get_group_member_list_rsp(&payload);
+        assert_eq!(rsp.code, 0);
+        assert_eq!(rsp.members.len(), 2);
+        assert_eq!(rsp.members[0].user_id, "u1");
+        assert_eq!(rsp.members[0].nickname, "Alice");
+        assert_eq!(rsp.members[0].role, 2);
+        assert_eq!(rsp.members[0].name_card, "阿里");
+        assert_eq!(rsp.next_offset, 2);
+        assert!(rsp.is_complete);
     }
 
     #[test]

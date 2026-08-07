@@ -1370,6 +1370,8 @@ mod tests {
         if cfg!(windows) {
             return;
         }
+        // Serialize against tests that temporarily override ULNCLAW_HOME.
+        let _guard = crate::models_dev::test_env_lock();
         let dir = std::env::temp_dir().join(format!("ulnclaw-hook-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("hook.sh");
