@@ -177,6 +177,8 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("F3", "toggle the conversation preview in the details pane"),
         ("F5", "reload the session list from disk"),
         ("F8", "archive the highlighted session (y confirms)"),
+        ("F9", "delete the highlighted session forever (y confirms)"),
+        ("/", "search message bodies (FTS) while no filter is typed \u{2014} Enter runs, Esc cancels"),
         ("F1", "toggle this help overlay"),
         ("Ctrl+L", "redraw the screen"),
         ("Ctrl+C", "quit"),
@@ -193,13 +195,28 @@ pub fn browse_archive_confirm_text(label: &str) -> String {
     format!("Archive \u{201C}{label}\u{201D}?  y = archive \u{00B7} any other key = cancel")
 }
 
+/// Footer confirmation prompt for deleting the highlighted session from
+/// the browser (P340). Deletion is permanent — the wording says so.
+pub fn browse_delete_confirm_text(label: &str) -> String {
+    let mut label: String = label.chars().take(40).collect();
+    if label.chars().count() == 40 {
+        label.push('\u{2026}');
+    }
+    format!("Delete \u{201C}{label}\u{201D} forever?  y = delete \u{00B7} any other key = cancel")
+}
+
+/// Footer prompt while typing a transcript-search query (P340).
+pub fn browse_transcript_search_prompt(query: &str) -> String {
+    format!("transcript search: {query}\u{258F}  Enter = search \u{00B7} Esc = cancel")
+}
+
 #[cfg(test)]
 mod browse_tui_upgrade_tests {
     #[test]
     fn browse_help_entries_cover_core_keys() {
         let entries = super::browse_help_entries();
         let keys: Vec<&str> = entries.iter().map(|(k, _)| *k).collect();
-        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F5", "F8", "Shift+Tab"] {
+        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F5", "F8", "F9", "/", "Shift+Tab"] {
             assert!(keys.contains(&expected), "missing help row for {expected}");
         }
         // Every entry has a non-empty description.
@@ -224,6 +241,28 @@ mod browse_tui_upgrade_tests {
         assert!(short.contains("you: Fix the build please"));
         // No usable content → empty string.
         assert_eq!(super::browse_conversation_preview(&[("tool".to_string(), None)], 100), "");
+    }
+
+    #[test]
+    fn browse_delete_confirm_text_truncates_long_labels() {
+        let text = super::browse_delete_confirm_text("Fix the build");
+        assert!(text.contains("Fix the build"));
+        assert!(text.contains("y = delete"));
+        assert!(text.contains("forever"));
+
+        let long = "x".repeat(80);
+        let text = super::browse_delete_confirm_text(&long);
+        assert!(text.contains(&"x".repeat(40)));
+        assert!(!text.contains(&"x".repeat(41)));
+        assert!(text.ends_with("cancel"));
+    }
+
+    #[test]
+    fn browse_transcript_search_prompt_shows_query_and_keys() {
+        let text = super::browse_transcript_search_prompt("panic");
+        assert!(text.contains("panic"));
+        assert!(text.contains("Enter = search"));
+        assert!(text.contains("Esc = cancel"));
     }
 
     #[test]

@@ -8345,12 +8345,33 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     }
                     Ok(exchange)
                 };
+                // P340: transcript search (FTS over message bodies) and
+                // permanent delete — both through fresh store connections
+                // (the picker may outlive this scope's borrow of `store`).
+                let search_home = home.clone();
+                let transcript_search = move |query: &str| {
+                    let search_store =
+                        SqliteSessionStore::open(search_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    search_store
+                        .search_messages(query, 200)
+                        .map_err(|e| e.to_string())
+                };
+                let delete_home = home.clone();
+                let delete = move |id: &str| {
+                    let delete_store =
+                        SqliteSessionStore::open(delete_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    delete_store.delete_session(id).map_err(|e| e.to_string())
+                };
                 match run_session_browse_tui(
                     rows.clone(),
                     project_by_session.clone(),
                     Some(&reload),
                     Some(&archive),
                     Some(&preview),
+                    Some(&transcript_search),
+                    Some(&delete),
                 ) {
                     Ok(selected) => selected,
                     Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
@@ -8616,6 +8637,8 @@ fn run_session_browse_tui(
     reload: Option<&dyn Fn() -> Result<(Vec<ulnclaw::session::sqlite::BrowseRow>, std::collections::HashMap<String, String>), String>>,
     archive: Option<&dyn Fn(&str) -> Result<(), String>>,
     preview: Option<&dyn Fn(&str) -> Result<Vec<(String, Option<String>)>, String>>,
+    transcript_search: Option<&dyn Fn(&str) -> Result<Vec<(String, String)>, String>>,
+    delete: Option<&dyn Fn(&str) -> Result<(), String>>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -8667,6 +8690,14 @@ fn run_session_browse_tui(
     let mut show_preview = preview.is_some();
     let mut preview_cache: std::collections::HashMap<String, Vec<(String, Option<String>)>> =
         std::collections::HashMap::new();
+    // P340: transcript-search state — `/` opens the query prompt, Enter
+    // runs the FTS search and narrows the list to matching sessions,
+    // Esc clears the results. F9 deletes the highlighted session after
+    // an inline confirmation (mirrors the F8 archive flow).
+    let mut search_mode = false;
+    let mut search_query = String::new();
+    let mut search_hits: Option<Vec<(String, String)>> = None;
+    let mut confirm_delete = false;
 
     loop {
         // Tab cycles "all sources" plus each distinct source present in
@@ -8692,6 +8723,11 @@ fn run_session_browse_tui(
                 browse_row_matches(r, projects.get(&r.id).map(String::as_str), &filter)
             })
             .collect();
+        if let Some(hits) = search_hits.as_ref() {
+            let hit_ids: std::collections::HashSet<&str> =
+                hits.iter().map(|(id, _)| id.as_str()).collect();
+            filtered.retain(|r| hit_ids.contains(r.id.as_str()));
+        }
         if sort_alpha {
             filtered.sort_by(|a, b| {
                 ulnclaw::tui_text::browse_title_sort_key(a.title.as_deref())
@@ -8857,6 +8893,18 @@ fn run_session_browse_tui(
                     projects.get(&selected_row.id).map(String::as_str),
                     content_w,
                 );
+                // P340: transcript-match snippet above the preview.
+                if let Some(hits) = search_hits.as_ref() {
+                    if let Some((_, snippet)) =
+                        hits.iter().find(|(id, _)| *id == selected_row.id)
+                    {
+                        pane_lines.push(String::new());
+                        pane_lines.push("\u{2500} transcript match \u{2500}".to_string());
+                        pane_lines.extend(ulnclaw::tui_text::wrap_display_text(
+                            snippet, content_w,
+                        ));
+                    }
+                }
                 // P278: first-exchange preview under the metadata.
                 if show_preview {
                     if let Some(preview_fn) = preview {
@@ -8925,7 +8973,26 @@ fn run_session_browse_tui(
         // footer).
         queue!(out, cursor::MoveTo(0, rows_h.saturating_sub(1) as u16))
             .map_err(|e| e.to_string())?;
-        if confirm_archive {
+        if search_mode {
+            queue!(
+                out,
+                SetForegroundColor(Color::Yellow),
+                Print(ulnclaw::tui_text::browse_transcript_search_prompt(&search_query)),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
+        } else if confirm_delete {
+            let label = highlighted_label.clone().unwrap_or_default();
+            queue!(
+                out,
+                SetForegroundColor(Color::Red),
+                Print(ulnclaw::tui_text::browse_delete_confirm_text(&label)),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
+        } else if confirm_archive {
             let label = highlighted_label.clone().unwrap_or_default();
             queue!(
                 out,
@@ -8973,9 +9040,96 @@ fn run_session_browse_tui(
                 }
                 // Any keypress clears the transient notice (P224).
                 notice = None;
+                // P340: transcript-search prompt captures keys until
+                // Enter (run) or Esc (cancel).
+                if search_mode {
+                    match key.code {
+                        KeyCode::Esc => {
+                            search_mode = false;
+                            search_query.clear();
+                        }
+                        KeyCode::Enter => {
+                            search_mode = false;
+                            let query = search_query.trim().to_string();
+                            search_query.clear();
+                            if query.is_empty() {
+                                continue;
+                            }
+                            match transcript_search {
+                                Some(search_fn) => match search_fn(&query) {
+                                    Ok(hits) => {
+                                        let total = hits.len();
+                                        let hit_ids: std::collections::HashSet<&str> =
+                                            hits.iter().map(|(id, _)| id.as_str()).collect();
+                                        let in_list = rows
+                                            .iter()
+                                            .filter(|r| hit_ids.contains(r.id.as_str()))
+                                            .count();
+                                        search_hits = Some(hits);
+                                        cursor_idx = 0;
+                                        scroll_offset = 0;
+                                        notice = Some(format!(
+                                            "Transcript search \u{201C}{query}\u{201D} \u{2014} {total} match(es), {in_list} in list. Esc clears."
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        notice = Some(format!("Search failed: {e}"));
+                                    }
+                                },
+                                None => {
+                                    notice =
+                                        Some("Transcript search is unavailable here.".to_string());
+                                }
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            search_query.pop();
+                        }
+                        KeyCode::Char(ch) => {
+                            search_query.push(ch);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 // Help overlay is modal: any key dismisses it (P224).
                 if show_help {
                     show_help = false;
+                    continue;
+                }
+                // P340: delete confirmation is modal — y deletes forever,
+                // any other key cancels.
+                if confirm_delete {
+                    confirm_delete = false;
+                    if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                        if let Some(id) = highlighted_id.clone() {
+                            match delete {
+                                Some(delete_fn) => match delete_fn(&id) {
+                                    Ok(()) => {
+                                        rows.retain(|r| r.id != id);
+                                        if let Some(hits) = search_hits.as_mut() {
+                                            hits.retain(|(hit_id, _)| *hit_id != id);
+                                        }
+                                        if let Some(reload_fn) = reload {
+                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn() {
+                                                rows = fresh_rows;
+                                                projects = fresh_projects;
+                                            }
+                                        }
+                                        cursor_idx = 0;
+                                        scroll_offset = 0;
+                                        notice = Some(format!("Deleted {id}."));
+                                    }
+                                    Err(e) => {
+                                        notice = Some(format!("Delete failed: {e}"));
+                                    }
+                                },
+                                None => {
+                                    notice = Some("Deleting is unavailable here.".to_string());
+                                }
+                            }
+                        }
+                    }
                     continue;
                 }
                 // Archive confirmation is modal (P224): y archives, any
@@ -9012,7 +9166,14 @@ fn run_session_browse_tui(
                 }
                 match key.code {
                     KeyCode::Esc => {
-                        // hermes: first Esc clears the search, second quits.
+                        // P340: an active transcript-search result clears
+                        // first, then the filter, then quit (hermes ladder).
+                        if search_hits.is_some() {
+                            search_hits = None;
+                            cursor_idx = 0;
+                            scroll_offset = 0;
+                            continue;
+                        }
                         if filter.is_empty() {
                             return Ok(None);
                         }
@@ -9127,6 +9288,19 @@ fn run_session_browse_tui(
                         if highlighted_id.is_some() && archive.is_some() {
                             confirm_archive = true;
                         }
+                    }
+                    KeyCode::F(9) => {
+                        // P340: delete the highlighted session after an
+                        // inline confirmation (permanent).
+                        if highlighted_id.is_some() && delete.is_some() {
+                            confirm_delete = true;
+                        }
+                    }
+                    KeyCode::Char('/') if filter.is_empty() && search_hits.is_none() => {
+                        // P340: open the transcript-search prompt. A `/`
+                        // typed into an active filter still filters.
+                        search_mode = true;
+                        search_query.clear();
                     }
                     KeyCode::Backspace => {
                         if filter.pop().is_some() {
