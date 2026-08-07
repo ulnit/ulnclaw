@@ -481,6 +481,13 @@ export interface CheckpointPruneStats {
   bytes_freed: number;
 }
 
+/** One GET /api/env row (P320). */
+export interface EnvVarInfo {
+  key: string;
+  in_file: boolean;
+  in_process_env: boolean;
+}
+
 export interface McpServerRow {
   name: string;
   kind: "stdio" | "http" | "sse";
@@ -1275,6 +1282,36 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`search HTTP ${response.status}`);
     const value = await response.json();
     return (value.results || []) as SessionSearchHit[];
+  }
+
+  /** GET /api/env — env-key posture, values never returned (P320). */
+  async envList(): Promise<{ path: string; vars: EnvVarInfo[] }> {
+    const response = await fetch(this.endpoint("/api/env"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `env HTTP ${response.status}`);
+    return value as { path: string; vars: EnvVarInfo[] };
+  }
+
+  /** PUT /api/env — set an ALL_CAPS key in .env. */
+  async envSet(key: string, value: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/env"), {
+      method: "PUT",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    });
+    const value2 = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value2.error || `env set HTTP ${response.status}`);
+  }
+
+  /** DELETE /api/env — remove a key's line from .env. */
+  async envDelete(key: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/env"), {
+      method: "DELETE",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ key }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `env delete HTTP ${response.status}`);
   }
 
   /** GET /api/config/raw — raw config.toml text with comments (P318). */

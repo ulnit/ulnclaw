@@ -169,6 +169,9 @@ export interface Translations {
     removeTitle: string; redactedNote: string; envKeys: string; envKeysNote: string;
     restartNote: string; noKeys: string; noChanges: string; pending: string;
     rawButton: string; rawTitle: string; rawSave: string; rawConfirm: string; rawSaved: string; rawFailed: string;
+    envAddLabel: string; envValuePlaceholder: string; envEmpty: string; envFile: string;
+    envProcess: string; envBoth: string; envRemoveTitle: string; envRemoveConfirm: string;
+    envSaved: string; envFailed: string;
   };
   doctor: {
     run: string; running: string; online: string; issues: string;
@@ -466,6 +469,12 @@ const en: Translations = {
     rawConfirm: "Replace config.toml with this exact text? Restart the gateway to apply.",
     rawSaved: "Raw config saved. Restart the gateway to apply.",
     rawFailed: "Raw save failed: {error}",
+    envAddLabel: "Add env key", envValuePlaceholder: "value (stored in .env)",
+    envEmpty: "No environment keys found.", envFile: ".env", envProcess: "process env",
+    envBoth: ".env + process env", envRemoveTitle: "Remove this key from .env",
+    envRemoveConfirm: "Remove {key} from .env?",
+    envSaved: "Environment updated. Restart the gateway to apply.",
+    envFailed: "Environment change failed: {error}",
   },
   doctor: {
     run: "Run doctor", running: "Running checks…",
@@ -847,6 +856,12 @@ const zh: Translations = {
     rawConfirm: "用此原文替换 config.toml？重启网关后生效。",
     rawSaved: "已保存原始配置。重启网关后生效。",
     rawFailed: "原文保存失败：{error}",
+    envAddLabel: "添加环境变量", envValuePlaceholder: "值（存入 .env）",
+    envEmpty: "未发现环境变量。", envFile: ".env", envProcess: "进程环境",
+    envBoth: ".env + 进程环境", envRemoveTitle: "从 .env 移除此键",
+    envRemoveConfirm: "从 .env 移除 {key}？",
+    envSaved: "环境变量已更新。重启网关后生效。",
+    envFailed: "环境变量修改失败：{error}",
   },
   doctor: {
     run: "运行诊断", running: "检查中…",
@@ -1228,6 +1243,12 @@ const zhHant: Translations = {
     rawConfirm: "用此原文取代 config.toml？重啟閘道後生效。",
     rawSaved: "已儲存原始組態。重啟閘道後生效。",
     rawFailed: "原文儲存失敗：{error}",
+    envAddLabel: "新增環境變數", envValuePlaceholder: "值（存入 .env）",
+    envEmpty: "未發現環境變數。", envFile: ".env", envProcess: "程序環境",
+    envBoth: ".env + 程序環境", envRemoveTitle: "從 .env 移除此鍵",
+    envRemoveConfirm: "從 .env 移除 {key}？",
+    envSaved: "環境變數已更新。重啟閘道後生效。",
+    envFailed: "環境變數修改失敗：{error}",
   },
   doctor: {
     run: "執行診斷", running: "檢查中…",
@@ -1609,6 +1630,12 @@ const ja: Translations = {
     rawConfirm: "config.toml をこのテキストで置き換えますか？反映にはゲートウェイの再起動が必要です。",
     rawSaved: "生設定を保存しました。反映にはゲートウェイを再起動してください。",
     rawFailed: "生文の保存に失敗: {error}",
+    envAddLabel: "環境キーを追加", envValuePlaceholder: "値（.env に保存）",
+    envEmpty: "環境キーが見つかりません。", envFile: ".env", envProcess: "プロセス環境",
+    envBoth: ".env + プロセス環境", envRemoveTitle: "このキーを .env から削除",
+    envRemoveConfirm: "{key} を .env から削除しますか？",
+    envSaved: "環境を更新しました。反映にはゲートウェイを再起動してください。",
+    envFailed: "環境の変更に失敗しました: {error}",
   },
   doctor: {
     run: "ドクターを実行", running: "チェック中…",
@@ -1990,6 +2017,12 @@ const ar: Translations = {
     rawConfirm: "استبدال config.toml بهذا النص حرفياً؟ أعد تشغيل البوابة للتطبيق.",
     rawSaved: "تم حفظ الإعداد الخام. أعد تشغيل البوابة للتطبيق.",
     rawFailed: "فشل حفظ النص: {error}",
+    envAddLabel: "إضافة مفتاح بيئة", envValuePlaceholder: "القيمة (تُحفظ في .env)",
+    envEmpty: "لا مفاتيح بيئة.", envFile: ".env", envProcess: "بيئة العملية",
+    envBoth: ".env + بيئة العملية", envRemoveTitle: "إزالة هذا المفتاح من .env",
+    envRemoveConfirm: "إزالة {key} من .env؟",
+    envSaved: "تم تحديث البيئة. أعد تشغيل البوابة للتطبيق.",
+    envFailed: "فشل تغيير البيئة: {error}",
   },
   doctor: {
     run: "تشغيل الفحص", running: "جارٍ الفحص…",

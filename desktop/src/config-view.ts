@@ -65,7 +65,13 @@ export class ConfigWidget {
       <p class="config-note" data-i18n="config.restartNote"></p>
       <div id="config-env" class="config-env" hidden>
         <h3 data-i18n="config.envKeys">Environment keys (.env)</h3>
-        <div id="config-env-chips" class="config-env-chips"></div>
+        <div id="config-env-rows" class="config-env-rows"></div>
+        <div class="config-add">
+          <span class="config-add-label" data-i18n="config.envAddLabel">Add env key</span>
+          <input id="config-env-add-key" type="text" placeholder="ALL_CAPS_KEY" />
+          <input id="config-env-add-value" type="password" data-i18n-ph="config.envValuePlaceholder" placeholder="value (stored in .env)" />
+          <button id="config-env-add-btn" class="ghost" data-i18n="config.add">Add</button>
+        </div>
         <p class="config-note" data-i18n="config.envKeysNote"></p>
       </div>
       <dialog id="config-raw-dialog" class="config-raw-dialog">
@@ -78,6 +84,9 @@ export class ConfigWidget {
         </menu>
       </dialog>
     `;
+    this.root.querySelector("#config-env-add-btn")!.addEventListener("click", () => {
+      this.addEnvKey().catch(() => undefined);
+    });
     this.root.querySelector("#config-raw")!.addEventListener("click", () => {
       this.openRaw().catch(() => undefined);
     });
@@ -193,7 +202,7 @@ export class ConfigWidget {
       this.configPath = payload.path;
       flatten(payload.config as Record<string, unknown>, "", this.base);
       this.renderRows();
-      this.renderEnv();
+      this.renderEnv().catch(() => undefined);
       this.status("");
       const fileEl = this.root.querySelector("#config-file") as HTMLElement;
       fileEl.textContent = this.configPath;
@@ -263,20 +272,101 @@ export class ConfigWidget {
     this.updatePendingBadge();
   }
 
-  private renderEnv(): void {
+  /** Env section (P320): /api/env posture rows (file vs process env),
+   * per-key delete, and an add form writing through PUT /api/env. */
+  private async renderEnv(): Promise<void> {
+    const client = this.client();
     const block = this.root.querySelector("#config-env") as HTMLElement;
-    const chips = this.root.querySelector("#config-env-chips") as HTMLElement;
-    chips.innerHTML = "";
-    if (this.envKeys.length === 0) {
-      block.hidden = true;
+    const rows = this.root.querySelector("#config-env-rows") as HTMLElement;
+    rows.innerHTML = "";
+    block.hidden = false;
+    let vars: { key: string; in_file: boolean; in_process_env: boolean }[];
+    if (client) {
+      try {
+        const payload = await client.envList();
+        vars = payload.vars;
+      } catch {
+        vars = this.envKeys.map((key) => ({ key, in_file: true, in_process_env: false }));
+      }
+    } else {
+      vars = this.envKeys.map((key) => ({ key, in_file: true, in_process_env: false }));
+    }
+    if (!vars.length) {
+      const empty = document.createElement("p");
+      empty.className = "config-note";
+      empty.textContent = t.config.envEmpty;
+      rows.appendChild(empty);
       return;
     }
-    block.hidden = false;
-    for (const key of this.envKeys) {
-      const chip = document.createElement("span");
-      chip.className = "config-env-chip";
-      chip.textContent = key;
-      chips.appendChild(chip);
+    for (const variable of vars) {
+      const row = document.createElement("div");
+      row.className = "config-env-row";
+      const keyEl = document.createElement("span");
+      keyEl.className = "config-env-chip";
+      keyEl.textContent = variable.key;
+      row.appendChild(keyEl);
+      const source = document.createElement("span");
+      source.className = "jobs-counts";
+      source.textContent = variable.in_file
+        ? variable.in_process_env
+          ? t.config.envBoth
+          : t.config.envFile
+        : t.config.envProcess;
+      row.appendChild(source);
+      if (variable.in_file) {
+        const remove = document.createElement("button");
+        remove.className = "ghost danger";
+        remove.textContent = "\u{1F5D1}";
+        remove.title = t.config.envRemoveTitle;
+        remove.onclick = () => this.removeEnvKey(variable.key);
+        row.appendChild(remove);
+      }
+      rows.appendChild(row);
+    }
+  }
+
+  private async addEnvKey(): Promise<void> {
+    const client = this.client();
+    const keyEl = this.root.querySelector("#config-env-add-key") as HTMLInputElement;
+    const valueEl = this.root.querySelector("#config-env-add-value") as HTMLInputElement;
+    const key = keyEl.value.trim();
+    if (!client || !key) {
+      keyEl.focus();
+      return;
+    }
+    try {
+      await client.envSet(key, valueEl.value);
+      keyEl.value = "";
+      valueEl.value = "";
+      await this.renderEnv();
+      this.status(t.config.envSaved);
+    } catch (error) {
+      this.status(
+        t.config.envFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
+  }
+
+  private async removeEnvKey(key: string): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (!window.confirm(t.config.envRemoveConfirm.replace("{key}", key))) return;
+    try {
+      await client.envDelete(key);
+      await this.renderEnv();
+      this.status(t.config.envSaved);
+    } catch (error) {
+      this.status(
+        t.config.envFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
     }
   }
 

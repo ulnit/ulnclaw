@@ -644,6 +644,106 @@ fn redact_config_value(value: &mut Value, prefix: &str, redacted: &mut Vec<Strin
 /// `GET /api/config` — config.toml as nested JSON with secret-looking
 /// leaves redacted, plus the .env key names present on disk (names only,
 /// never values). Desktop Config view backing endpoint (ulnclaw extension).
+// ── Environment keys (hermes /api/env parity) ──────────────────────────────
+
+/// `GET /api/env` — env-key posture: every `.env` file key plus the
+/// known provider keys set in the process environment. Values are never
+/// returned (hermes `/api/env` exposes metadata only).
+async fn env_list() -> Response {
+    let home = crate::config::ulnclaw_home();
+    let file_keys = crate::config::load_env_file(&home.join(".env"));
+    let mut vars: Vec<Value> = Vec::new();
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut file_entries: Vec<&String> = file_keys.keys().collect();
+    file_entries.sort();
+    for key in file_entries {
+        seen.insert(key.clone());
+        vars.push(json!({
+            "key": key,
+            "in_file": true,
+            "in_process_env": std::env::var(key).is_ok(),
+        }));
+    }
+    for (_label, keys) in crate::status::KEY_TABLE {
+        for key in keys.iter() {
+            if seen.contains(*key) {
+                continue;
+            }
+            if std::env::var(key).is_ok() {
+                seen.insert(key.to_string());
+                vars.push(json!({
+                    "key": key,
+                    "in_file": false,
+                    "in_process_env": true,
+                }));
+            }
+        }
+    }
+    Json(json!({
+        "object": "ulnclaw.env",
+        "path": home.join(".env").display().to_string(),
+        "vars": vars,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct EnvKeyBody {
+    key: String,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+/// `PUT /api/env` — set an ALL_CAPS key in `.env` (hermes `setEnvVar`
+/// parity; same path as `ulnclaw config set KEY value`).
+async fn env_set(Json(body): Json<EnvKeyBody>) -> Response {
+    let key = body.key.trim().to_string();
+    if !crate::config_cmd::is_env_config_key(&key) {
+        return bad_request(
+            "key must be an ALL_CAPS environment-style key (e.g. OPENAI_API_KEY)",
+            Some("invalid_request"),
+        );
+    }
+    let value = body.value.unwrap_or_default();
+    match crate::config_cmd::set_config_value(&key, &value, true) {
+        Ok(_) => Json(json!({"ok": true, "key": key})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /api/env` — remove a key's line from `.env` (hermes
+/// `deleteEnvVar` parity). 404 when the key is not in the file.
+async fn env_delete(Json(body): Json<EnvKeyBody>) -> Response {
+    let key = body.key.trim().to_string();
+    if !crate::config_cmd::is_env_config_key(&key) {
+        return bad_request(
+            "key must be an ALL_CAPS environment-style key (e.g. OPENAI_API_KEY)",
+            Some("invalid_request"),
+        );
+    }
+    let home = crate::config::ulnclaw_home();
+    let present = crate::config::load_env_file(&home.join(".env")).contains_key(&key);
+    if !present {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("'{key}' is not in .env")})),
+        )
+            .into_response();
+    }
+    match crate::config_cmd::unset_config_value(&key) {
+        Ok(_) => Json(json!({"ok": true, "key": key})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/config/raw` — raw config.toml text with comments
 /// preserved (hermes `/api/config/raw` parity).
 async fn config_raw_get() -> Response {
@@ -1627,6 +1727,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/usage", get(usage))
         .route("/api/config", get(config_get).put(config_put))
         .route("/api/config/raw", get(config_raw_get).put(config_raw_put))
+        .route("/api/env", get(env_list).put(env_set).delete(env_delete))
         .route("/api/doctor", get(doctor_report))
         .route("/api/monitoring", get(monitoring_status))
         .route("/api/logs/tail", get(logs_tail))
@@ -9993,6 +10094,80 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["ok"], true);
         let written = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
         assert!(written.contains("port = 8787"));
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_env_endpoints_list_set_delete() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".env"), "TEST_ENV_ALPHA=one\n").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/env", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Listing reports the seeded key without its value.
+        let (status, body) = get_json(app.clone(), "/api/env", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let vars = body["vars"].as_array().unwrap().clone();
+        let alpha = vars.iter().find(|v| v["key"] == "TEST_ENV_ALPHA").unwrap();
+        assert_eq!(alpha["in_file"], true);
+        assert!(!body.to_string().contains("one"));
+
+        // Non-env-style keys are rejected.
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/env",
+            Some(r#"{"key": "not.env.style", "value": "x"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Setting writes the .env line.
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/env",
+            Some(r#"{"key": "TEST_ENV_BETA", "value": "two"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let env_text = std::fs::read_to_string(dir.path().join(".env")).unwrap();
+        assert!(env_text.contains("TEST_ENV_BETA=two"));
+
+        // Deleting removes it; deleting again 404s.
+        let (status, body) = request_json(
+            app.clone(),
+            "DELETE",
+            "/api/env",
+            Some(r#"{"key": "TEST_ENV_BETA"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let (status, _) = request_json(
+            app,
+            "DELETE",
+            "/api/env",
+            Some(r#"{"key": "TEST_ENV_BETA"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
