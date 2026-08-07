@@ -50,6 +50,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="mcpPanel.title">MCP servers</h3>
         <div id="mcp-rows"></div>
       </section>
+      <section id="doctor-system" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="systemPanel.title">System</h3>
+        <div id="system-rows"></div>
+      </section>
       <section id="doctor-storage" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="storagePanel.title">Session store</h3>
         <div id="storage-rows"></div>
@@ -86,6 +90,7 @@ export class DoctorWidget {
     this.loadMonitoring().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
+    this.loadSystem().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
     this.loadKanban().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
@@ -315,6 +320,57 @@ export class DoctorWidget {
     }
     note.textContent = message;
     note.classList.toggle("error", isError);
+  }
+
+  private fmtUptime(seconds: number): string {
+    const days = Math.floor(seconds / 86_400);
+    const hours = Math.floor((seconds % 86_400) / 3_600);
+    const minutes = Math.floor((seconds % 3_600) / 60);
+    if (days > 0) return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  }
+
+  /** Gateway/system facts: version, platform, paths, uptime, counts. */
+  private async loadSystem(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-system") as HTMLElement;
+    const rows = this.root.querySelector("#system-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const info = await client.systemInfo();
+      const v = t.systemPanel;
+      const entries: [string, string][] = [
+        [v.version, `${info.service} ${info.version}`],
+        [v.platform, `${info.os}/${info.arch} · pid ${info.pid}${info.desktop_managed ? ` · ${v.desktopManaged}` : ""}`],
+        [v.uptime, this.fmtUptime(info.uptime_secs)],
+        [v.contents, `${info.sessions} ${v.sessionsWord} · ${info.messages} ${v.messagesWord} · ${info.active_runs} ${v.runsWord}`],
+        [v.jobs, `${info.cron_jobs_enabled} ${v.enabledWord} · ${info.cron_jobs_disabled} ${v.disabledWord}`],
+        [v.plugins, String(info.plugins_loaded)],
+        [v.home, info.home],
+        [v.config, info.config_path],
+      ];
+      rows.innerHTML = "";
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        valueEl.title = value;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
   }
 
   private fmtBytes(bytes: number): string {

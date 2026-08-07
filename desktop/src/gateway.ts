@@ -322,6 +322,24 @@ export interface InsightsReport {
   activity: { peak_hour: number | null; peak_weekday: number | null };
 }
 
+export interface SystemInfo {
+  service: string;
+  version: string;
+  os: string;
+  arch: string;
+  home: string;
+  config_path: string;
+  pid: number;
+  uptime_secs: number;
+  desktop_managed: boolean;
+  sessions: number;
+  messages: number;
+  active_runs: number;
+  cron_jobs_enabled: number;
+  cron_jobs_disabled: number;
+  plugins_loaded: number;
+}
+
 export interface PairingPlatform {
   platform: string;
   locked_out: boolean;
@@ -860,6 +878,13 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`mcp servers HTTP ${response.status}`);
     const value = await response.json();
     return (value.servers || []) as McpServerRow[];
+  }
+
+  /** GET /api/system — gateway/system facts for the Doctor panel. */
+  async systemInfo(): Promise<SystemInfo> {
+    const response = await fetch(this.endpoint("/api/system"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`system HTTP ${response.status}`);
+    return (await response.json()) as SystemInfo;
   }
 
   /** GET /api/pairing — pending/approved pairings per platform. */

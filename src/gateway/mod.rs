@@ -919,6 +919,54 @@ async fn insights(
     }
 }
 
+/// `GET /api/system` — gateway/system facts for the desktop Doctor
+/// system panel: version, platform, home/config paths, uptime, process
+/// id and store/run/cron/plugins counts (ulnclaw extension; hermes
+/// SystemPage parity).
+async fn system_info(State(state): State<Arc<GatewayState>>) -> Response {
+    let uptime_secs = state.started_at.elapsed().as_secs();
+    let sessions = state.store.count_sessions().unwrap_or(0);
+    let messages = state.store.count_messages().unwrap_or(0);
+    let active_runs = state.runs.lock().await.len();
+    let mut cron_jobs_enabled = 0usize;
+    let mut cron_jobs_disabled = 0usize;
+    if let Some(cron) = state.cron.get() {
+        if let Ok(jobs) = cron.list() {
+            for job in &jobs {
+                if job.enabled {
+                    cron_jobs_enabled += 1;
+                } else {
+                    cron_jobs_disabled += 1;
+                }
+            }
+        }
+    }
+    let plugins_loaded = crate::plugins::loaded_plugins().len();
+    let payload = tokio::task::spawn_blocking(move || {
+        let home = crate::config::ulnclaw_home();
+        json!({
+            "service": "ulnclaw-gateway",
+            "version": crate::VERSION,
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "home": home.to_string_lossy(),
+            "config_path": home.join("config.toml").to_string_lossy(),
+            "pid": std::process::id(),
+            "uptime_secs": uptime_secs,
+            "desktop_managed": std::env::var("ULNCLAW_DESKTOP").is_ok(),
+            "sessions": sessions,
+            "messages": messages,
+            "active_runs": active_runs,
+            "cron_jobs_enabled": cron_jobs_enabled,
+            "cron_jobs_disabled": cron_jobs_disabled,
+            "plugins_loaded": plugins_loaded,
+        })
+    })
+    .await
+    .unwrap_or_else(|e| json!({"error": format!("system task failed: {e}")}));
+    Json(payload).into_response()
+}
+
 /// Body for the pairing mutation endpoints.
 #[derive(Debug, Deserialize)]
 struct PairingActionBody {
@@ -1257,6 +1305,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/insights", get(insights))
+        .route("/api/system", get(system_info))
         .route("/api/pairing", get(pairing_status))
         .route("/api/pairing/approve", post(pairing_approve))
         .route("/api/pairing/revoke", post(pairing_revoke))
@@ -8875,6 +8924,24 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_system_endpoint_reports_gateway_facts() {
+        let app = router(test_state());
+
+        let (status, _) = get_json(app.clone(), "/api/system", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app, "/api/system", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["service"], "ulnclaw-gateway");
+        assert_eq!(body["version"], crate::VERSION);
+        assert!(body["uptime_secs"].as_u64().is_some());
+        assert!(body["pid"].as_u64().unwrap() > 0);
+        assert!(body["home"].as_str().is_some());
+        assert!(body["sessions"].as_u64().is_some());
+        assert!(body["plugins_loaded"].as_u64().is_some());
     }
 
     #[tokio::test]
