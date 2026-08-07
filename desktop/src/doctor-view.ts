@@ -119,6 +119,12 @@ export class DoctorWidget {
       <section id="doctor-logs" class="doctor-monitoring doctor-logs" hidden>
         <h3 class="config-section" data-i18n="logsPanel.title">Gateway log</h3>
         <div class="logs-controls">
+          <select id="logs-file">
+            <option value="gateway">gateway.log</option>
+            <option value="agent">agent.log</option>
+            <option value="errors">errors.log</option>
+          </select>
+          <input id="logs-search" type="text" data-i18n-ph="logsPanel.searchPlaceholder" placeholder="search\u2026" />
           <select id="logs-level">
             <option value="" data-i18n="logsPanel.allLevels">All levels</option>
             <option value="INFO">INFO+</option>
@@ -1148,7 +1154,10 @@ export class DoctorWidget {
     }
     try {
       const level = (this.root.querySelector("#logs-level") as HTMLSelectElement).value || undefined;
-      const payload = await client.logsTail(LOGS_LINES, level);
+      const file = (this.root.querySelector("#logs-file") as HTMLSelectElement).value || "gateway";
+      const search =
+        (this.root.querySelector("#logs-search") as HTMLInputElement).value.trim() || undefined;
+      const payload = await client.logsFile(file, { lines: LOGS_LINES, level, search });
       body.textContent = payload.lines.join("\n");
       (this.root.querySelector("#logs-path") as HTMLElement).textContent = payload.path;
       section.hidden = false;
@@ -1159,6 +1168,16 @@ export class DoctorWidget {
         (this.root.querySelector("#logs-level") as HTMLSelectElement).addEventListener(
           "change",
           () => this.loadLogs().catch(() => undefined),
+        );
+        (this.root.querySelector("#logs-file") as HTMLSelectElement).addEventListener(
+          "change",
+          () => this.loadLogs().catch(() => undefined),
+        );
+        (this.root.querySelector("#logs-search") as HTMLInputElement).addEventListener(
+          "keydown",
+          (event) => {
+            if (event.key === "Enter") this.loadLogs().catch(() => undefined);
+          },
         );
       }
     } catch {

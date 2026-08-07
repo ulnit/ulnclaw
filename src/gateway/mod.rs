@@ -1194,6 +1194,133 @@ async fn monitoring_status(State(state): State<Arc<GatewayState>>) -> Json<Value
     }))
 }
 
+#[derive(Debug, Deserialize)]
+struct LogsQuery {
+    file: Option<String>,
+    lines: Option<usize>,
+    level: Option<String>,
+    component: Option<String>,
+    search: Option<String>,
+    session: Option<String>,
+    since: Option<String>,
+}
+
+/// `GET /api/logs` — without `file`: inventory of every known log file;
+/// with `file`: filtered tail of that log (hermes `/api/logs` parity,
+/// plus ulnclaw's `session`/`since` filters from `ulnclaw logs`).
+async fn logs_api(Query(query): Query<LogsQuery>) -> Response {
+    let dir = crate::logs::logs_dir();
+    let Some(file) = query.file.clone() else {
+        let mut files = Vec::new();
+        for (name, file_name) in crate::logs::LOG_FILES {
+            let path = dir.join(file_name);
+            let meta = std::fs::metadata(&path);
+            let bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let modified = meta
+                .as_ref()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+            files.push(json!({
+                "name": name,
+                "file": file_name,
+                "path": path,
+                "bytes": bytes,
+                "modified": modified,
+                "exists": path.exists(),
+            }));
+        }
+        return Json(json!({ "dir": dir, "files": files })).into_response();
+    };
+    let Some((_, file_name)) = crate::logs::LOG_FILES
+        .iter()
+        .find(|(name, _)| *name == file.as_str())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("Unknown log file: {file}") })),
+        )
+            .into_response();
+    };
+    let path = dir.join(file_name);
+    if !path.exists() {
+        return Json(json!({ "file": file, "path": path, "lines": [] })).into_response();
+    }
+    let search = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|needle| !needle.is_empty())
+        .map(str::to_lowercase);
+    let num_lines = query.lines.unwrap_or(100).min(500);
+    let component_prefixes = match query
+        .component
+        .as_deref()
+        .map(str::trim)
+        .filter(|component| !component.is_empty())
+    {
+        Some(component) if component.to_lowercase() != "all" => {
+            match crate::logs::COMPONENT_PREFIXES
+                .iter()
+                .find(|(name, _)| *name == component)
+            {
+                Some((_, prefixes)) => Some(
+                    prefixes
+                        .iter()
+                        .map(|prefix| prefix.to_string())
+                        .collect::<Vec<_>>(),
+                ),
+                None => {
+                    let available = crate::logs::COMPONENT_PREFIXES
+                        .iter()
+                        .map(|(name, _)| *name)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!(
+                            "Unknown component: {component}. Available: {available}"
+                        ) })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        _ => None,
+    };
+    let filters = crate::logs::LogFilters {
+        min_level: query
+            .level
+            .clone()
+            .filter(|level| !level.trim().is_empty() && level.to_uppercase() != "ALL")
+            .map(|level| level.trim().to_uppercase()),
+        session: query
+            .session
+            .clone()
+            .filter(|session| !session.trim().is_empty()),
+        since: query.since.as_deref().and_then(crate::logs::parse_since),
+        component_prefixes,
+    };
+    let read_lines = if search.is_some() { 2000 } else { num_lines };
+    let mut lines = match crate::logs::read_tail(&path, read_lines, &filters) {
+        Ok(lines) => lines,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Failed to read log: {err}") })),
+            )
+                .into_response();
+        }
+    };
+    if let Some(needle) = search {
+        lines.retain(|line| line.to_lowercase().contains(&needle));
+        let start = lines.len().saturating_sub(num_lines);
+        lines = lines.split_off(start);
+    }
+    Json(json!({ "file": file, "path": path, "lines": lines })).into_response()
+}
+
 /// Query parameters for `GET /api/logs/tail`.
 #[derive(Debug, Deserialize)]
 struct LogsTailQuery {
@@ -2001,6 +2128,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/ops/dump", get(ops_dump))
         .route("/api/monitoring", get(monitoring_status))
         .route("/api/logs/tail", get(logs_tail))
+        .route("/api/logs", get(logs_api))
         .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/insights", get(insights))
         .route("/api/channels", get(channels_status))
@@ -10564,6 +10692,85 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_logs_endpoints_inventory_and_tail() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        std::fs::write(
+            logs_dir.join("agent.log"),
+            "2026-08-08 INFO hello world\n2026-08-08 ERROR bad thing\n",
+        )
+        .unwrap();
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/logs", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Inventory lists the three known files with existence posture.
+        let (status, body) = get_json(app.clone(), "/api/logs", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let files = body["files"].as_array().unwrap();
+        assert_eq!(files.len(), 3);
+        let agent = files.iter().find(|f| f["name"] == "agent").unwrap();
+        assert_eq!(agent["exists"], true);
+        let errors = files.iter().find(|f| f["name"] == "errors").unwrap();
+        assert_eq!(errors["exists"], false);
+
+        // Tail returns both lines.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/logs?file=agent",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["lines"].as_array().unwrap().len(), 2);
+
+        // Level filter keeps only ERROR+.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/logs?file=agent&level=ERROR",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let lines = body["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].as_str().unwrap().contains("bad thing"));
+
+        // Search filter matches case-insensitively.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/logs?file=agent&search=HELLO",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["lines"].as_array().unwrap().len(), 1);
+
+        // Unknown file and unknown component are rejected.
+        let (status, _) = get_json(app.clone(), "/api/logs?file=nope", Some("sekret")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = get_json(
+            app.clone(),
+            "/api/logs?file=agent&component=nope",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

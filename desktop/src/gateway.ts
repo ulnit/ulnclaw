@@ -566,6 +566,16 @@ export interface McpOAuthFlow {
   tools?: { name: string; description?: string | null }[];
 }
 
+/** Log-file inventory row from GET /api/logs (P325). */
+export interface LogFileInfo {
+  name: string;
+  file: string;
+  path: string;
+  bytes: number;
+  modified: number | null;
+  exists: boolean;
+}
+
 export interface LogsTailPayload {
   path: string;
   lines: string[];
@@ -1252,6 +1262,30 @@ export class GatewayClient {
   }
 
   /** GET /api/logs/tail — tail of gateway.log with optional min level. */
+  /** GET /api/logs — log-file inventory (P325). */
+  async logsList(): Promise<{ dir: string; files: LogFileInfo[] }> {
+    const response = await fetch(this.endpoint("/api/logs"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`logs HTTP ${response.status}`);
+    return (await response.json()) as { dir: string; files: LogFileInfo[] };
+  }
+
+  /** GET /api/logs?file=… — filtered tail of one log file (P325). */
+  async logsFile(
+    file: string,
+    opts?: { lines?: number; level?: string; search?: string },
+  ): Promise<{ file: string; path: string; lines: string[] }> {
+    const params = new URLSearchParams({ file });
+    if (opts?.lines) params.set("lines", String(opts.lines));
+    if (opts?.level) params.set("level", opts.level);
+    if (opts?.search) params.set("search", opts.search);
+    const response = await fetch(this.endpoint(`/api/logs?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `logs HTTP ${response.status}`);
+    return value as { file: string; path: string; lines: string[] };
+  }
+
   async logsTail(lines = 200, level?: string): Promise<LogsTailPayload> {
     const params = new URLSearchParams({ lines: String(lines) });
     if (level) params.set("level", level);
