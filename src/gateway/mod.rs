@@ -900,6 +900,79 @@ async fn doctor_report(
     .into_response()
 }
 
+/// `GET /api/memory` — persistent-memory status (hermes `/api/memory`
+/// parity): builtin provider posture plus the per-file census (sizes,
+/// bullet-entry counts) and configured char limits.
+async fn memory_status_api(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let home = state.agent.context().home.clone();
+    let config = state.agent.context().config.clone();
+    let files = crate::memory_cmd::memory_files(&home);
+    let mut builtin_files = serde_json::Map::new();
+    for file in &files {
+        let key = if file.file == "MEMORY.md" { "memory" } else { "user" };
+        builtin_files.insert(key.into(), json!(file.bytes));
+    }
+    Json(json!({
+        "active": "builtin",
+        "providers": [{
+            "name": "builtin",
+            "ready": true,
+            "description": "MEMORY.md + USER.md bullet files under the ulnclaw home",
+        }],
+        "builtin_files": builtin_files,
+        "files": files.iter().map(|file| json!({
+            "file": file.file,
+            "desc": file.desc,
+            "exists": file.exists,
+            "bytes": file.bytes,
+            "entries": file.entries,
+        })).collect::<Vec<_>>(),
+        "char_limits": {
+            "memory": config.memory.memory_char_limit,
+            "user": config.memory.user_char_limit,
+        },
+        "dir": crate::memory_cmd::memory_dir(&home),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryResetRequest {
+    #[serde(default)]
+    target: Option<String>,
+}
+
+/// `POST /api/memory/reset` — erase persistent-memory stores
+/// (hermes `/api/memory/reset` parity); target defaults to `all`.
+async fn memory_reset_api(
+    State(state): State<Arc<GatewayState>>,
+    Json(request): Json<MemoryResetRequest>,
+) -> Response {
+    let target = request
+        .target
+        .clone()
+        .unwrap_or_else(|| "all".to_string());
+    let Some(reset_target) = crate::memory_cmd::ResetTarget::parse(&target) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "target must be all, memory, or user" })),
+        )
+            .into_response();
+    };
+    let home = state.agent.context().home.clone();
+    let mut deleted: Vec<&'static str> = Vec::new();
+    for candidate in crate::memory_cmd::reset_candidates(&home, reset_target) {
+        if let Err(err) = std::fs::remove_file(&candidate.path) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Could not delete {}: {err}", candidate.file) })),
+            )
+                .into_response();
+        }
+        deleted.push(candidate.file);
+    }
+    Json(json!({ "ok": true, "deleted": deleted })).into_response()
+}
+
 /// `GET /api/ops/security-audit` — in-process parity of
 /// `ulnclaw security audit --json`: scans MCP servers that pin a package
 /// version (npx pkg@ver / uvx pkg==ver) against OSV. Hermes
@@ -1819,6 +1892,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/config", get(config_get).put(config_put))
         .route("/api/config/raw", get(config_raw_get).put(config_raw_put))
         .route("/api/env", get(env_list).put(env_set).delete(env_delete))
+        .route("/api/memory", get(memory_status_api))
+        .route("/api/memory/reset", post(memory_reset_api))
         .route("/api/doctor", get(doctor_report))
         .route("/api/ops/security-audit", get(ops_security_audit))
         .route("/api/ops/prompt-size", get(ops_prompt_size))
@@ -10300,6 +10375,74 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let text = body["text"].as_str().unwrap_or_default().to_string();
         assert!(text.contains("ulnclaw dump"));
         assert_eq!(body["show_keys"], false);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_memory_endpoints_status_and_reset() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        let mem_dir = dir.path().join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("MEMORY.md"), "- note one\n- note two\n").unwrap();
+        std::fs::write(mem_dir.join("USER.md"), "- user fact\n").unwrap();
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/memory", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Status reports both files with sizes and entry counts.
+        let (status, body) = get_json(app.clone(), "/api/memory", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["active"], "builtin");
+        assert_eq!(body["builtin_files"]["memory"], 22);
+        assert_eq!(body["builtin_files"]["user"], 12);
+        assert_eq!(body["files"].as_array().unwrap().len(), 2);
+
+        // Unknown target is rejected.
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/memory/reset",
+            Some(r#"{"target": "nope"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Reset only the user store.
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/memory/reset",
+            Some(r#"{"target": "user"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["deleted"], serde_json::json!(["USER.md"]));
+        assert!(mem_dir.join("MEMORY.md").exists());
+        assert!(!mem_dir.join("USER.md").exists());
+
+        // Reset everything remaining.
+        let (status, body) = request_json(
+            app,
+            "POST",
+            "/api/memory/reset",
+            Some(r#"{"target": "all"}"#),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["deleted"], serde_json::json!(["MEMORY.md"]));
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

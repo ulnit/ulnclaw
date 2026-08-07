@@ -172,6 +172,11 @@ export interface Translations {
     envAddLabel: string; envValuePlaceholder: string; envEmpty: string; envFile: string;
     envProcess: string; envBoth: string; envRemoveTitle: string; envRemoveConfirm: string;
     envSaved: string; envFailed: string;
+    memoryTitle: string; memoryTargetAll: string; memoryTargetMemory: string;
+    memoryTargetUser: string; memoryReset: string; memoryNote: string;
+    memoryMissing: string; memoryEntries: string; memoryLimit: string;
+    memoryResetConfirm: string; memoryResetDone: string; memoryResetNone: string;
+    memoryResetFailed: string;
   };
   doctor: {
     run: string; running: string; online: string; issues: string;
@@ -477,6 +482,14 @@ const en: Translations = {
     envRemoveConfirm: "Remove {key} from .env?",
     envSaved: "Environment updated. Restart the gateway to apply.",
     envFailed: "Environment change failed: {error}",
+    memoryTitle: "Persistent memory",
+    memoryTargetAll: "All (MEMORY.md + USER.md)", memoryTargetMemory: "MEMORY.md only",
+    memoryTargetUser: "USER.md only", memoryReset: "Reset\u2026",
+    memoryNote: "Bullet entries the agent keeps across sessions; reset deletes the files irreversibly.",
+    memoryMissing: "not created yet", memoryEntries: "entries", memoryLimit: "limit",
+    memoryResetConfirm: "Delete the selected memory files? This cannot be undone.",
+    memoryResetDone: "Deleted: {files}", memoryResetNone: "Nothing to delete.",
+    memoryResetFailed: "Reset failed: {error}",
   },
   doctor: {
     run: "Run doctor", running: "Running checks…",
@@ -871,6 +884,14 @@ const zh: Translations = {
     envRemoveConfirm: "从 .env 移除 {key}？",
     envSaved: "环境变量已更新。重启网关后生效。",
     envFailed: "环境变量修改失败：{error}",
+    memoryTitle: "持久记忆",
+    memoryTargetAll: "全部（MEMORY.md + USER.md）", memoryTargetMemory: "仅 MEMORY.md",
+    memoryTargetUser: "仅 USER.md", memoryReset: "重置…",
+    memoryNote: "智能体跨会话保留的条目记忆；重置会不可恢复地删除文件。",
+    memoryMissing: "尚未创建", memoryEntries: "条", memoryLimit: "上限",
+    memoryResetConfirm: "删除选定的记忆文件？此操作不可撤销。",
+    memoryResetDone: "已删除：{files}", memoryResetNone: "无可删除内容。",
+    memoryResetFailed: "重置失败：{error}",
   },
   doctor: {
     run: "运行诊断", running: "检查中…",
@@ -1265,6 +1286,14 @@ const zhHant: Translations = {
     envRemoveConfirm: "從 .env 移除 {key}？",
     envSaved: "環境變數已更新。重啟閘道後生效。",
     envFailed: "環境變數修改失敗：{error}",
+    memoryTitle: "持久記憶",
+    memoryTargetAll: "全部（MEMORY.md + USER.md）", memoryTargetMemory: "僅 MEMORY.md",
+    memoryTargetUser: "僅 USER.md", memoryReset: "重置…",
+    memoryNote: "智慧體跨工作階段保留的條目記憶；重置會不可適回地刪除檔案。",
+    memoryMissing: "尚未建立", memoryEntries: "條", memoryLimit: "上限",
+    memoryResetConfirm: "刪除選定的記憶檔案？此操作無法復原。",
+    memoryResetDone: "已刪除：{files}", memoryResetNone: "無可刪除內容。",
+    memoryResetFailed: "重置失敗：{error}",
   },
   doctor: {
     run: "執行診斷", running: "檢查中…",
@@ -1659,6 +1688,14 @@ const ja: Translations = {
     envRemoveConfirm: "{key} を .env から削除しますか？",
     envSaved: "環境を更新しました。反映にはゲートウェイを再起動してください。",
     envFailed: "環境の変更に失敗しました: {error}",
+    memoryTitle: "永続メモリ",
+    memoryTargetAll: "すべて（MEMORY.md + USER.md）", memoryTargetMemory: "MEMORY.md のみ",
+    memoryTargetUser: "USER.md のみ", memoryReset: "リセット…",
+    memoryNote: "セッションを跨いで保持されるエージェントのブレット記憶；リセットはファイルを不可逆に削除します。",
+    memoryMissing: "未作成", memoryEntries: "件", memoryLimit: "上限",
+    memoryResetConfirm: "選択したメモリファイルを削除しますか？元に戻せません。",
+    memoryResetDone: "削除済み: {files}", memoryResetNone: "削除するものがありません。",
+    memoryResetFailed: "リセットに失敗しました: {error}",
   },
   doctor: {
     run: "ドクターを実行", running: "チェック中…",
@@ -2053,6 +2090,14 @@ const ar: Translations = {
     envRemoveConfirm: "إزالة {key} من .env؟",
     envSaved: "تم تحديث البيئة. أعد تشغيل البوابة للتطبيق.",
     envFailed: "فشل تغيير البيئة: {error}",
+    memoryTitle: "الذاكرة الدائمة",
+    memoryTargetAll: "الكل (MEMORY.md + USER.md)", memoryTargetMemory: "MEMORY.md فقط",
+    memoryTargetUser: "USER.md فقط", memoryReset: "إعادة تعيين…",
+    memoryNote: "ذكريات الوكيل المحتفظ بها عبر الجلسات؛ إعادة التعيين تحذف الملفات نهائيًا.",
+    memoryMissing: "غير منشأ بعد", memoryEntries: "إدخالات", memoryLimit: "الحد",
+    memoryResetConfirm: "حذف ملفات الذاكرة المحددة؟ لا يمكن التراجع.",
+    memoryResetDone: "تم الحذف: {files}", memoryResetNone: "لا شيء لحذفه.",
+    memoryResetFailed: "فشلت إعادة التعيين: {error}",
   },
   doctor: {
     run: "تشغيل الفحص", running: "جارٍ الفحص…",

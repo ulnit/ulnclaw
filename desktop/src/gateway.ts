@@ -488,6 +488,16 @@ export interface EnvVarInfo {
   in_process_env: boolean;
 }
 
+/** Persistent-memory status from GET /api/memory (P323). */
+export interface MemoryStatus {
+  active: string;
+  providers: { name: string; ready: boolean; description: string }[];
+  builtin_files: Record<string, number>;
+  files: { file: string; desc: string; exists: boolean; bytes: number; entries: number }[];
+  char_limits: { memory: number; user: number };
+  dir: string;
+}
+
 /** Security audit report from GET /api/ops/security-audit (P321). */
 export interface SecurityAuditReport {
   total_components_scanned: number;
@@ -1385,6 +1395,25 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `env delete HTTP ${response.status}`);
+  }
+
+  /** GET /api/memory — persistent-memory status census (P323). */
+  async memoryStatus(): Promise<MemoryStatus> {
+    const response = await fetch(this.endpoint("/api/memory"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`memory HTTP ${response.status}`);
+    return (await response.json()) as MemoryStatus;
+  }
+
+  /** POST /api/memory/reset — erase memory stores; returns deleted files (P323). */
+  async memoryReset(target: "all" | "memory" | "user"): Promise<string[]> {
+    const response = await fetch(this.endpoint("/api/memory/reset"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ target }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `memory reset HTTP ${response.status}`);
+    return Array.isArray(value.deleted) ? value.deleted : [];
   }
 
   /** GET /api/ops/security-audit — OSV audit of pinned MCP components (P321). */

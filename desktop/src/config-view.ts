@@ -74,6 +74,20 @@ export class ConfigWidget {
         </div>
         <p class="config-note" data-i18n="config.envKeysNote"></p>
       </div>
+      <div id="config-memory" class="config-env" hidden>
+        <h3 data-i18n="config.memoryTitle">Persistent memory</h3>
+        <div id="config-memory-rows" class="config-env-rows"></div>
+        <div class="config-add">
+          <select id="config-memory-target">
+            <option value="all" data-i18n="config.memoryTargetAll">All (MEMORY.md + USER.md)</option>
+            <option value="memory" data-i18n="config.memoryTargetMemory">MEMORY.md only</option>
+            <option value="user" data-i18n="config.memoryTargetUser">USER.md only</option>
+          </select>
+          <button id="config-memory-reset-btn" class="ghost danger" data-i18n="config.memoryReset">Reset\u2026</button>
+          <span id="config-memory-status" class="config-note"></span>
+        </div>
+        <p class="config-note" data-i18n="config.memoryNote"></p>
+      </div>
       <dialog id="config-raw-dialog" class="config-raw-dialog">
         <h2 data-i18n="config.rawTitle">Raw config.toml</h2>
         <textarea id="config-raw-text" spellcheck="false"></textarea>
@@ -86,6 +100,9 @@ export class ConfigWidget {
     `;
     this.root.querySelector("#config-env-add-btn")!.addEventListener("click", () => {
       this.addEnvKey().catch(() => undefined);
+    });
+    this.root.querySelector("#config-memory-reset-btn")!.addEventListener("click", () => {
+      this.resetMemory().catch(() => undefined);
     });
     this.root.querySelector("#config-raw")!.addEventListener("click", () => {
       this.openRaw().catch(() => undefined);
@@ -203,6 +220,7 @@ export class ConfigWidget {
       flatten(payload.config as Record<string, unknown>, "", this.base);
       this.renderRows();
       this.renderEnv().catch(() => undefined);
+      this.renderMemory().catch(() => undefined);
       this.status("");
       const fileEl = this.root.querySelector("#config-file") as HTMLElement;
       fileEl.textContent = this.configPath;
@@ -322,6 +340,64 @@ export class ConfigWidget {
         row.appendChild(remove);
       }
       rows.appendChild(row);
+    }
+  }
+
+  /** Persistent-memory census + reset over /api/memory (P323). */
+  private async renderMemory(): Promise<void> {
+    const client = this.client();
+    const block = this.root.querySelector("#config-memory") as HTMLElement;
+    const rows = this.root.querySelector("#config-memory-rows") as HTMLElement;
+    rows.innerHTML = "";
+    if (!client) {
+      block.hidden = true;
+      return;
+    }
+    try {
+      const status = await client.memoryStatus();
+      block.hidden = false;
+      block.title = status.dir;
+      for (const file of status.files) {
+        const row = document.createElement("div");
+        row.className = "config-env-row";
+        const keyEl = document.createElement("span");
+        keyEl.className = "config-env-chip";
+        keyEl.textContent = file.file;
+        row.appendChild(keyEl);
+        const meta = document.createElement("span");
+        meta.className = "jobs-counts";
+        if (file.exists) {
+          const limit = file.file === "MEMORY.md" ? status.char_limits.memory : status.char_limits.user;
+          meta.textContent = `${file.desc} \u00b7 ${file.entries} ${t.config.memoryEntries} \u00b7 ${file.bytes} B \u00b7 ${t.config.memoryLimit} ${limit}`;
+        } else {
+          meta.textContent = t.config.memoryMissing;
+        }
+        row.appendChild(meta);
+        rows.appendChild(row);
+      }
+    } catch {
+      block.hidden = true;
+    }
+  }
+
+  private async resetMemory(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const target = (this.root.querySelector("#config-memory-target") as HTMLSelectElement)
+      .value as "all" | "memory" | "user";
+    if (!window.confirm(t.config.memoryResetConfirm)) return;
+    const note = this.root.querySelector("#config-memory-status") as HTMLElement;
+    try {
+      const deleted = await client.memoryReset(target);
+      note.textContent = deleted.length
+        ? t.config.memoryResetDone.replace("{files}", deleted.join(", "))
+        : t.config.memoryResetNone;
+      await this.renderMemory();
+    } catch (error) {
+      note.textContent = t.config.memoryResetFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 
