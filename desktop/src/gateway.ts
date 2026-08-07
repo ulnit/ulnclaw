@@ -270,6 +270,37 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface WebhookSubscription {
+  name: string;
+  url: string;
+  description: string;
+  events: string[];
+  deliver: string;
+  deliver_only: boolean;
+  script: string | null;
+  created_at: string;
+  has_secret: boolean;
+  secret_preview: string;
+}
+
+export interface WebhookListPayload {
+  base_url: string;
+  subscriptions: WebhookSubscription[];
+}
+
+export interface WebhookCreateBody {
+  name: string;
+  description?: string;
+  events?: string;
+  prompt?: string;
+  skills?: string;
+  deliver?: string;
+  deliver_chat_id?: string;
+  deliver_only?: boolean;
+  script?: string;
+  secret?: string;
+}
+
 export interface DoctorCheck {
   level: "ok" | "warn" | "fail" | "info";
   text: string;
@@ -630,6 +661,58 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`usage HTTP ${response.status}`);
     return (await response.json()) as UsagePayload;
+  }
+
+  /** GET /api/webhooks/subscriptions — dynamic webhook routes. */
+  async webhooksList(): Promise<WebhookListPayload> {
+    const response = await fetch(this.endpoint("/api/webhooks/subscriptions"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`webhooks HTTP ${response.status}`);
+    return (await response.json()) as WebhookListPayload;
+  }
+
+  /** POST /api/webhooks/subscriptions — create/update a subscription. */
+  async webhooksCreate(body: WebhookCreateBody): Promise<{ ok: boolean; name: string; message: string }> {
+    const response = await fetch(this.endpoint("/api/webhooks/subscriptions"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    const value = (await response.json().catch(() => ({}))) as {
+      ok?: boolean; name?: string; message?: string; error?: string;
+    };
+    if (!response.ok) throw new Error(value.error || `webhook create HTTP ${response.status}`);
+    return { ok: Boolean(value.ok), name: value.name || "", message: value.message || "" };
+  }
+
+  /** DELETE /api/webhooks/subscriptions/:name. */
+  async webhooksDelete(name: string): Promise<void> {
+    const response = await fetch(
+      this.endpoint(`/api/webhooks/subscriptions/${encodeURIComponent(name)}`),
+      { method: "DELETE", headers: this.headers() },
+    );
+    if (!response.ok) {
+      const value = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(value.error || `webhook delete HTTP ${response.status}`);
+    }
+  }
+
+  /** POST /api/webhooks/subscriptions/:name/test — signed test fire. */
+  async webhooksTest(name: string, payload?: string): Promise<{ ok: boolean; message: string }> {
+    const response = await fetch(
+      this.endpoint(`/api/webhooks/subscriptions/${encodeURIComponent(name)}/test`),
+      {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(payload ? { payload } : {}),
+      },
+    );
+    const value = (await response.json().catch(() => ({}))) as {
+      ok?: boolean; message?: string; error?: string;
+    };
+    if (!response.ok) throw new Error(value.error || `webhook test HTTP ${response.status}`);
+    return { ok: Boolean(value.ok), message: value.message || "" };
   }
 
   /** GET /api/sessions/:id/export — download the transcript as md/html. */

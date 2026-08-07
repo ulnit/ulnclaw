@@ -41,7 +41,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -776,6 +776,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/usage", get(usage))
         .route("/api/config", get(config_get).put(config_put))
         .route("/api/doctor", get(doctor_report))
+        .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
+        .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
+        .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(create_response))
         .route(
@@ -1012,6 +1015,129 @@ async fn dynamic_webhook_route(
     };
     let route = crate::webhook_subscriptions::to_webhook_route(&name, &sub);
     process_generic_webhook(state, wh.rate_limit, route, headers, body).await
+}
+
+// ── Webhook subscription management API (desktop Webhooks panel) ─────────
+
+fn subscription_row(name: &str, sub: &crate::webhook_subscriptions::Subscription, base: &str) -> Value {
+    let preview: String = if sub.secret.len() > 4 {
+        format!("{}…", &sub.secret[..4])
+    } else {
+        String::new()
+    };
+    json!({
+        "name": name,
+        "url": format!("{base}/webhooks/{name}"),
+        "description": sub.description,
+        "events": sub.events,
+        "deliver": sub.deliver,
+        "deliver_only": sub.deliver_only,
+        "script": sub.script,
+        "created_at": sub.created_at,
+        "has_secret": !sub.secret.is_empty(),
+        "secret_preview": preview,
+    })
+}
+
+/// `GET /api/webhooks/subscriptions` — list dynamic webhook subscriptions
+/// (secrets masked to a 4-char preview; desktop Webhooks panel).
+async fn webhook_subscriptions_list(State(state): State<Arc<GatewayState>>) -> Response {
+    let base = crate::webhook_subscriptions::base_url(&state.agent.context().config);
+    let subs = crate::webhook_subscriptions::load_subscriptions();
+    let rows: Vec<Value> = subs
+        .iter()
+        .map(|(name, sub)| subscription_row(name, sub, &base))
+        .collect();
+    Json(json!({ "base_url": base, "subscriptions": rows })).into_response()
+}
+
+#[derive(Deserialize)]
+struct WebhookSubscribeBody {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    events: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    skills: Option<String>,
+    #[serde(default)]
+    deliver: Option<String>,
+    #[serde(default)]
+    deliver_chat_id: Option<String>,
+    #[serde(default)]
+    deliver_only: bool,
+    #[serde(default)]
+    script: Option<String>,
+    #[serde(default)]
+    secret: Option<String>,
+}
+
+/// `POST /api/webhooks/subscriptions` — create or update a subscription
+/// (same validation as `ulnclaw webhook subscribe`; hot-reloaded by the
+/// gateway on the next request).
+async fn webhook_subscriptions_create(
+    axum::Json(body): axum::Json<WebhookSubscribeBody>,
+) -> Response {
+    let opts = crate::webhook_subscriptions::SubscribeOptions {
+        description: body.description,
+        events: body.events,
+        secret: body.secret,
+        prompt: body.prompt,
+        skills: body.skills,
+        deliver: body.deliver,
+        deliver_chat_id: body.deliver_chat_id,
+        deliver_only: body.deliver_only,
+        script: body.script,
+    };
+    match crate::webhook_subscriptions::cmd_subscribe(&body.name, &opts) {
+        Ok(message) => Json(json!({
+            "ok": true,
+            "name": crate::webhook_subscriptions::normalize_name(&body.name),
+            "message": message.trim(),
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+/// `DELETE /api/webhooks/subscriptions/:name` — remove a subscription.
+async fn webhook_subscriptions_delete(Path(name): Path<String>) -> Response {
+    let normalized = name.trim().to_lowercase();
+    let mut subs = crate::webhook_subscriptions::load_subscriptions();
+    if subs.remove(&normalized).is_none() {
+        return not_found(&format!("no webhook subscription named '{normalized}'"));
+    }
+    if let Err(e) = crate::webhook_subscriptions::save_subscriptions(&subs) {
+        return server_error(&e);
+    }
+    Json(json!({ "ok": true, "removed": normalized })).into_response()
+}
+
+#[derive(Deserialize)]
+struct WebhookTestBody {
+    #[serde(default)]
+    payload: Option<String>,
+}
+
+/// `POST /api/webhooks/subscriptions/:name/test` — fire a signed test
+/// payload at the subscription's own webhook URL (`ulnclaw webhook test`).
+async fn webhook_subscriptions_test(
+    Path(name): Path<String>,
+    axum::Json(body): axum::Json<WebhookTestBody>,
+) -> Response {
+    let normalized = name.trim().to_lowercase();
+    let payload = body.payload.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::webhook_subscriptions::cmd_test(&normalized, payload.as_deref())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("task failed: {e}")));
+    match result {
+        Ok(message) => Json(json!({ "ok": true, "message": message.trim() })).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))).into_response(),
+    }
 }
 
 /// Shared generic-webhook pipeline (signature check, rate limit,
@@ -7923,6 +8049,74 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         // Unknown session → 404.
         let (status, _) = get_json(app, "/api/sessions/ghost/export", Some("sekret")).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_subscriptions_crud() {
+        // Subscriptions persist under ULNCLAW_HOME — isolate it.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Empty list to start.
+        let (status, body) = get_json(app.clone(), "/api/webhooks/subscriptions", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["subscriptions"], json!([]));
+
+        // Create.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/webhooks/subscriptions", Some("sekret"),
+            json!({"name": "Build Events", "description": "CI pings", "events": "push,ci", "deliver": "log"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["name"], "build-events");
+
+        // List shows the row with a webhook URL and masked secret.
+        let (status, body) = get_json(app.clone(), "/api/webhooks/subscriptions", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = body["subscriptions"].as_array().expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], "build-events");
+        assert_eq!(rows[0]["events"], json!(["push", "ci"]));
+        assert_eq!(rows[0]["url"], format!("{}/webhooks/build-events", body["base_url"].as_str().unwrap()));
+        assert_eq!(rows[0]["has_secret"], true);
+
+        // Invalid name → 400.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/webhooks/subscriptions", Some("sekret"),
+            json!({"name": "no spaces allowed!"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Test-fire wiring (unknown name yields the CLI's soft message).
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/webhooks/subscriptions/ghost/test", Some("sekret"),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["message"].as_str().unwrap().contains("No subscription"));
+
+        // Delete, then 404 on repeat.
+        let (status, body) = send_json(
+            app.clone(), "DELETE", "/api/webhooks/subscriptions/build-events", Some("sekret"),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["removed"], "build-events");
+        let (status, _) = send_json(
+            app.clone(), "DELETE", "/api/webhooks/subscriptions/build-events", Some("sekret"),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     // ------------------------------------------------------------------

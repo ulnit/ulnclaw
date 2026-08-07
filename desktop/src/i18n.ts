@@ -56,7 +56,7 @@ export function fmt(template: string, vars: Record<string, unknown>): string {
 
 export interface Translations {
   chrome: {
-    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string;
+    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
@@ -121,6 +121,16 @@ export interface Translations {
     run: string; running: string; online: string; issues: string;
     noIssues: string; failed: string; empty: string;
   };
+  webhooks: {
+    count: string; empty: string; loadFailed: string; createTitle: string;
+    name: string; namePh: string; description: string; descriptionPh: string;
+    events: string; eventsPh: string; deliver: string; deliverChat: string;
+    deliverOnly: string; prompt: string; promptPh: string; skills: string;
+    script: string; scriptPh: string; secret: string; create: string;
+    test: string; copy: string; delete: string; direct: string; allEvents: string;
+    copied: string; copyFailed: string; removed: string; removeFailed: string;
+    testing: string; testFailed: string; createFailed: string;
+  };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -145,7 +155,7 @@ export interface Translations {
   palette: {
     placeholder: string; noMatches: string; navigate: string; sessionGroup: string;
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
-    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; newSession: string; switchSession: string;
+    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; goToWebhooks: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
@@ -178,7 +188,7 @@ export interface Translations {
 
 const en: Translations = {
   chrome: {
-    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor",
+    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks",
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
@@ -305,6 +315,22 @@ const en: Translations = {
     issues: "Issues found", noIssues: "✓ No issues found.",
     failed: "Doctor run failed: {error}", empty: "No checks reported.",
   },
+  webhooks: {
+    count: "{count} subscription(s)", empty: "No dynamic webhook subscriptions yet.",
+    loadFailed: "Failed to load subscriptions: {error}", createTitle: "New subscription",
+    name: "Name", namePh: "build-events", description: "Description", descriptionPh: "CI notifications",
+    events: "Events", eventsPh: "push, ci (empty = all)", deliver: "Deliver target",
+    deliverChat: "Deliver chat id (optional)",
+    deliverOnly: "Direct delivery (no agent, zero LLM cost)",
+    prompt: "Prompt / message", promptPh: "Summarize this event…",
+    skills: "Skills (comma-separated)", script: "Script (optional)", scriptPh: "./handle.sh",
+    secret: "Secret (blank = auto-mint)", create: "Create",
+    test: "Test", copy: "Copy URL", delete: "Delete", direct: "direct", allEvents: "(all)",
+    copied: "URL copied to clipboard.", copyFailed: "Clipboard copy failed.",
+    removed: "Removed subscription {name}.", removeFailed: "Remove failed: {error}",
+    testing: "Firing signed test payload…", testFailed: "Test failed: {error}",
+    createFailed: "Create failed: {error}",
+  },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -348,7 +374,7 @@ const en: Translations = {
     placeholder: "Type a command… (Esc to close)", noMatches: "No matching commands",
     navigate: "Navigate", sessionGroup: "Session", sessionsGroup: "Sessions",
     gatewayGroup: "Gateway", goToChat: "Go to Chat", goToKanban: "Go to Kanban",
-    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor",
+    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor", goToWebhooks: "Go to Webhooks",
     newSession: "New session", switchSession: "Switch session",
     findInChat: "Find in chat", modelForSession: "Model for this session…",
     resumeSession: "Resume session… (/resume)",
@@ -412,7 +438,7 @@ const en: Translations = {
 
 const zh: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks",
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
@@ -539,6 +565,22 @@ const zh: Translations = {
     issues: "发现的问题", noIssues: "✓ 未发现问题。",
     failed: "诊断失败：{error}", empty: "没有检查项。",
   },
+  webhooks: {
+    count: "{count} 个订阅", empty: "还没有动态 webhook 订阅。",
+    loadFailed: "加载订阅失败：{error}", createTitle: "新建订阅",
+    name: "名称", namePh: "build-events", description: "描述", descriptionPh: "CI 通知",
+    events: "事件", eventsPh: "push, ci（空 = 全部）", deliver: "投递目标",
+    deliverChat: "投递会话 id（可选）",
+    deliverOnly: "直接投递（不走 agent，零 LLM 成本）",
+    prompt: "提示词 / 消息", promptPh: "总结这个事件…",
+    skills: "技能（逗号分隔）", script: "脚本（可选）", scriptPh: "./handle.sh",
+    secret: "密钥（留空自动生成）", create: "创建",
+    test: "测试", copy: "复制 URL", delete: "删除", direct: "直接", allEvents: "（全部）",
+    copied: "URL 已复制到剪贴板。", copyFailed: "复制到剪贴板失败。",
+    removed: "已删除订阅 {name}。", removeFailed: "删除失败：{error}",
+    testing: "发送签名测试载荷…", testFailed: "测试失败：{error}",
+    createFailed: "创建失败：{error}",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -582,7 +624,7 @@ const zh: Translations = {
     placeholder: "输入命令…（Esc 关闭）", noMatches: "没有匹配的命令",
     navigate: "导航", sessionGroup: "会话", sessionsGroup: "会话列表",
     gatewayGroup: "网关", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断",
+    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断", goToWebhooks: "前往 Webhooks",
     newSession: "新建会话", switchSession: "切换会话",
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
     resumeSession: "恢复会话…（/resume）",
@@ -646,7 +688,7 @@ const zh: Translations = {
 
 const zhHant: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks",
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
@@ -773,6 +815,22 @@ const zhHant: Translations = {
     issues: "發現的問題", noIssues: "✓ 未發現問題。",
     failed: "診斷失敗：{error}", empty: "沒有檢查項。",
   },
+  webhooks: {
+    count: "{count} 個訂閱", empty: "還沒有動態 webhook 訂閱。",
+    loadFailed: "載入訂閱失敗：{error}", createTitle: "新建訂閱",
+    name: "名稱", namePh: "build-events", description: "描述", descriptionPh: "CI 通知",
+    events: "事件", eventsPh: "push, ci（空 = 全部）", deliver: "投遞目標",
+    deliverChat: "投遞會話 id（可選）",
+    deliverOnly: "直接投遞（不走 agent，零 LLM 成本）",
+    prompt: "提示詞 / 訊息", promptPh: "總結這個事件…",
+    skills: "技能（逗號分隔）", script: "指令碼（可選）", scriptPh: "./handle.sh",
+    secret: "金鑰（留空自動產生）", create: "建立",
+    test: "測試", copy: "複製 URL", delete: "刪除", direct: "直接", allEvents: "（全部）",
+    copied: "URL 已複製到剪貼簿。", copyFailed: "複製到剪貼簿失敗。",
+    removed: "已刪除訂閱 {name}。", removeFailed: "刪除失敗：{error}",
+    testing: "發送簽名測試負載…", testFailed: "測試失敗：{error}",
+    createFailed: "建立失敗：{error}",
+  },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -816,7 +874,7 @@ const zhHant: Translations = {
     placeholder: "輸入命令…（Esc 關閉）", noMatches: "沒有符合的命令",
     navigate: "導覽", sessionGroup: "工作階段", sessionsGroup: "工作階段清單",
     gatewayGroup: "閘道", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷",
+    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷", goToWebhooks: "前往 Webhooks",
     newSession: "新增工作階段", switchSession: "切換工作階段",
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
     resumeSession: "恢復工作階段…（/resume）",
@@ -880,7 +938,7 @@ const zhHant: Translations = {
 
 const ja: Translations = {
   chrome: {
-    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター",
+    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook",
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
@@ -1007,6 +1065,22 @@ const ja: Translations = {
     issues: "見つかった問題", noIssues: "✓ 問題は見つかりませんでした。",
     failed: "ドクター実行に失敗：{error}", empty: "チェック項目がありません。",
   },
+  webhooks: {
+    count: "{count} 件の購読", empty: "動的 webhook 購読はまだありません。",
+    loadFailed: "購読の読み込みに失敗：{error}", createTitle: "新規購読",
+    name: "名前", namePh: "build-events", description: "説明", descriptionPh: "CI 通知",
+    events: "イベント", eventsPh: "push, ci（空 = すべて）", deliver: "配信先",
+    deliverChat: "配信チャット ID（任意）",
+    deliverOnly: "直接配信（エージェントなし、LLM コストゼロ）",
+    prompt: "プロンプト / メッセージ", promptPh: "このイベントを要約…",
+    skills: "スキル（カンマ区切り）", script: "スクリプト（任意）", scriptPh: "./handle.sh",
+    secret: "シークレット（空欄 = 自動生成）", create: "作成",
+    test: "テスト", copy: "URL をコピー", delete: "削除", direct: "直接", allEvents: "（すべて）",
+    copied: "URL をクリップボードにコピーしました。", copyFailed: "コピーに失敗しました。",
+    removed: "購読 {name} を削除しました。", removeFailed: "削除に失敗：{error}",
+    testing: "署名付きテストペイロードを送信中…", testFailed: "テストに失敗：{error}",
+    createFailed: "作成に失敗：{error}",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1050,7 +1124,7 @@ const ja: Translations = {
     placeholder: "コマンドを入力…（Esc で閉じる）", noMatches: "一致するコマンドがありません",
     navigate: "移動", sessionGroup: "セッション", sessionsGroup: "セッション一覧",
     gatewayGroup: "ゲートウェイ", goToChat: "チャットへ", goToKanban: "カンバンへ",
-    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ",
+    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ", goToWebhooks: "Webhook へ",
     newSession: "新規セッション", switchSession: "セッションを切り替え",
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
     resumeSession: "セッションを再開…（/resume）",
@@ -1114,7 +1188,7 @@ const ja: Translations = {
 
 const ar: Translations = {
   chrome: {
-    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص",
+    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس",
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
@@ -1241,6 +1315,22 @@ const ar: Translations = {
     issues: "المشاكل المكتشفة", noIssues: "✓ لم يتم العثور على مشاكل.",
     failed: "فشل الفحص: {error}", empty: "لا توجد فحوصات.",
   },
+  webhooks: {
+    count: "{count} اشتراك(ات)", empty: "لا توجد اشتراكات ويب هوك ديناميكية بعد.",
+    loadFailed: "فشل تحميل الاشتراكات: {error}", createTitle: "اشتراك جديد",
+    name: "الاسم", namePh: "build-events", description: "الوصف", descriptionPh: "إشعارات CI",
+    events: "الأحداث", eventsPh: "push, ci (فارغ = الكل)", deliver: "هدف التسليم",
+    deliverChat: "معرّف دردشة التسليم (اختياري)",
+    deliverOnly: "تسليم مباشر (بدون وكيل، صفر تكلفة LLM)",
+    prompt: "الموجّه / الرسالة", promptPh: "لخّص هذا الحدث…",
+    skills: "المهارات (مفصولة بفواصل)", script: "النص البرمجي (اختياري)", scriptPh: "./handle.sh",
+    secret: "السر (فارغ = توليد تلقائي)", create: "إنشاء",
+    test: "اختبار", copy: "نسخ الرابط", delete: "حذف", direct: "مباشر", allEvents: "(الكل)",
+    copied: "تم نسخ الرابط إلى الحافظة.", copyFailed: "فشل النسخ إلى الحافظة.",
+    removed: "تم حذف الاشتراك {name}.", removeFailed: "فشل الحذف: {error}",
+    testing: "إرسال حمولة اختبار موقعة…", testFailed: "فشل الاختبار: {error}",
+    createFailed: "فشل الإنشاء: {error}",
+  },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",
@@ -1284,7 +1374,7 @@ const ar: Translations = {
     placeholder: "اكتب أمرًا… (Esc للإغلاق)", noMatches: "لا أوامر مطابقة",
     navigate: "تنقّل", sessionGroup: "الجلسة", sessionsGroup: "الجلسات",
     gatewayGroup: "البوابة", goToChat: "إلى الدردشة", goToKanban: "إلى كانبان",
-    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص",
+    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص", goToWebhooks: "إلى ويب هوكس",
     newSession: "جلسة جديدة", switchSession: "تبديل الجلسة",
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
     resumeSession: "استئناف جلسة… (/resume)",
