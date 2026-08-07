@@ -61,6 +61,7 @@ export interface Translations {
     selectOrStart: string; inputPlaceholder: string; send: string;
     micTitle: string; micRecording: string; micFailed: string;
     attachTitle: string; fsTitle: string; fsUpTitle: string; fsEmpty: string; fsFailed: string;
+    fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
     manageProcess: string; replayOnboarding: string; cancel: string; save: string;
     settingsTheme: string; settingsFont: string;
@@ -304,7 +305,7 @@ const en: Translations = {
     micTitle: "Voice input (record and transcribe)",
     micRecording: "Recording\u2026 click to stop",
     micFailed: "Voice input failed: {error}",
-    attachTitle: "Attach a file from the gateway filesystem", fsTitle: "Attach a file", fsUpTitle: "Up one directory", fsEmpty: "Empty directory", fsFailed: "File browser failed: {error}",
+    attachTitle: "Attach a file from the gateway filesystem", fsTitle: "Attach a file", fsUpTitle: "Up one directory", fsEmpty: "Empty directory", fsFailed: "File browser failed: {error}", fsDownloadTitle: "Download this file", fsMkdirTitle: "New folder", fsMkdirPrompt: "New folder name:",
     settingsTitle: "Gateway settings", gatewayUrl: "Gateway URL",
     apiKey: "API key (optional, [gateway] key)", bearerToken: "bearer token",
     manageProcess: "Manage the gateway process (start/stop with the app)",
@@ -727,7 +728,7 @@ const zh: Translations = {
     micTitle: "语音输入（录音并转写）",
     micRecording: "录音中…点击停止",
     micFailed: "语音输入失败：{error}",
-    attachTitle: "从网关文件系统附加文件", fsTitle: "附加文件", fsUpTitle: "上一级目录", fsEmpty: "空目录", fsFailed: "文件浏览失败：{error}",
+    attachTitle: "从网关文件系统附加文件", fsTitle: "附加文件", fsUpTitle: "上一级目录", fsEmpty: "空目录", fsFailed: "文件浏览失败：{error}", fsDownloadTitle: "下载此文件", fsMkdirTitle: "新建文件夹", fsMkdirPrompt: "新文件夹名称：",
     settingsTitle: "网关设置", gatewayUrl: "网关 URL",
     apiKey: "API 密钥（可选，[gateway] key）", bearerToken: "bearer 令牌",
     manageProcess: "管理网关进程（随应用启动/停止）",
@@ -1150,7 +1151,7 @@ const zhHant: Translations = {
     micTitle: "語音輸入（錄音並轉寫）",
     micRecording: "錄音中…點選停止",
     micFailed: "語音輸入失敗：{error}",
-    attachTitle: "從閘道檔案系統附加檔案", fsTitle: "附加檔案", fsUpTitle: "上一層目錄", fsEmpty: "空目錄", fsFailed: "檔案瀏覽失敗：{error}",
+    attachTitle: "從閘道檔案系統附加檔案", fsTitle: "附加檔案", fsUpTitle: "上一層目錄", fsEmpty: "空目錄", fsFailed: "檔案瀏覽失敗：{error}", fsDownloadTitle: "下載此檔案", fsMkdirTitle: "新增資料夾", fsMkdirPrompt: "新資料夾名稱：",
     settingsTitle: "閘道設定", gatewayUrl: "閘道 URL",
     apiKey: "API 金鑰（選填，[gateway] key）", bearerToken: "bearer 權杖",
     manageProcess: "管理閘道程序（隨應用程式啟動/停止）",
@@ -1573,7 +1574,7 @@ const ja: Translations = {
     micTitle: "音声入力（録音して文字起こし）",
     micRecording: "録音中…クリックで停止",
     micFailed: "音声入力に失敗しました: {error}",
-    attachTitle: "ゲートウェイのファイルシステムからファイルを添付", fsTitle: "ファイルを添付", fsUpTitle: "一つ上のディレクトリへ", fsEmpty: "空のディレクトリ", fsFailed: "ファイルブラウザーに失敗しました: {error}",
+    attachTitle: "ゲートウェイのファイルシステムからファイルを添付", fsTitle: "ファイルを添付", fsUpTitle: "一つ上のディレクトリへ", fsEmpty: "空のディレクトリ", fsFailed: "ファイルブラウザーに失敗しました: {error}", fsDownloadTitle: "このファイルをダウンロード", fsMkdirTitle: "新しいフォルダー", fsMkdirPrompt: "新しいフォルダー名:",
     settingsTitle: "ゲートウェイ設定", gatewayUrl: "ゲートウェイ URL",
     apiKey: "API キー（任意、[gateway] key）", bearerToken: "bearer トークン",
     manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）",
@@ -1996,7 +1997,7 @@ const ar: Translations = {
     micTitle: "إدخال صوتي (تسجيل وتحويل إلى نص)",
     micRecording: "جارٍ التسجيل… انقر للإيقاف",
     micFailed: "فشل الإدخال الصوتي: {error}",
-    attachTitle: "إرفاق ملف من نظام ملفات البوابة", fsTitle: "إرفاق ملف", fsUpTitle: "مجلد واحد للأعلى", fsEmpty: "مجلد فارغ", fsFailed: "فشل متصفح الملفات: {error}",
+    attachTitle: "إرفاق ملف من نظام ملفات البوابة", fsTitle: "إرفاق ملف", fsUpTitle: "مجلد واحد للأعلى", fsEmpty: "مجلد فارغ", fsFailed: "فشل متصفح الملفات: {error}", fsDownloadTitle: "تنزيل هذا الملف", fsMkdirTitle: "مجلد جديد", fsMkdirPrompt: "اسم المجلد الجديد:",
     settingsTitle: "إعدادات البوابة", gatewayUrl: "عنوان البوابة",
     apiKey: "مفتاح API (اختياري، [gateway] key)", bearerToken: "رمز bearer",
     manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)",

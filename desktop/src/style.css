@@ -1384,6 +1384,10 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .fs-entry { display: block; width: 100%; text-align: left; background: none; color: inherit; border: none; border-radius: 6px; padding: 4px 8px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fs-entry:hover { background: rgba(128,128,128,0.18); }
 .fs-entry.dir { font-weight: 600; }
+.fs-entry-row { display: flex; align-items: center; gap: 4px; }
+.fs-entry-row .fs-entry { flex: 1; }
+.fs-entry-download { color: var(--dim); border: none; background: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; }
+.fs-entry-download:hover { background: rgba(128,128,128,0.18); color: var(--text); }
 .job-delivery-error { color: var(--bad, #a04545); }
 .config-env-row { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
 

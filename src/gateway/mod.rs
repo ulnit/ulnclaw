@@ -2027,6 +2027,96 @@ async fn fs_read_data_url(Query(query): Query<FsPathQuery>) -> Response {
     Json(json!({ "dataUrl": format!("data:{};base64,{}", fs_mime_type(&target), encoded) })).into_response()
 }
 
+/// `GET /api/fs/download` — stream a file as an attachment download
+/// (hermes `/api/files/download` parity; auth also rides `?token=` per
+/// the middleware carve-out so shell/browser-opened downloads work).
+async fn fs_download(Query(query): Query<FsPathQuery>) -> Response {
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let meta = match fs_regular_file(&target) {
+        Ok(meta) => meta,
+        Err(response) => return response,
+    };
+    if meta.len() > FS_DATA_URL_MAX_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": "File too large" })),
+        )
+            .into_response();
+    }
+    let data = match std::fs::read(&target) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "File is not readable" })),
+            )
+                .into_response();
+        }
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": err.to_string() })))
+                .into_response();
+        }
+    };
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().replace('"', ""))
+        .unwrap_or_else(|| "download".to_string());
+    let headers = [
+        (
+            axum::http::header::CONTENT_TYPE,
+            fs_mime_type(&target).to_string(),
+        ),
+        (
+            axum::http::header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{name}\""),
+        ),
+    ];
+    (StatusCode::OK, headers, data).into_response()
+}
+
+/// `POST /api/fs/mkdir` — create a directory (parents included)
+/// (hermes `/api/files/mkdir` parity).
+async fn fs_mkdir(Json(body): Json<Value>) -> Response {
+    let raw = body["path"].as_str().unwrap_or_default().trim().to_string();
+    if raw.is_empty() {
+        return bad_request("path is required", None);
+    }
+    let target = match fs_resolve_path(&raw) {
+        Ok(target) => target,
+        Err((status, message)) => return (status, Json(json!({ "error": message }))).into_response(),
+    };
+    if target.exists() {
+        if !target.is_dir() {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "A file already exists at that path" })),
+            )
+                .into_response();
+        }
+    } else if let Err(err) = std::fs::create_dir_all(&target) {
+        if err.kind() == std::io::ErrorKind::PermissionDenied {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Directory is not writable" })),
+            )
+                .into_response();
+        }
+        return bad_request(&err.to_string(), None);
+    }
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Json(json!({
+        "ok": true,
+        "entry": { "name": name, "path": target, "isDirectory": true },
+    }))
+    .into_response()
+}
+
 /// `GET /api/fs/git-root` — nearest enclosing git checkout
 /// (hermes `/api/fs/git-root` parity).
 async fn fs_git_root(Query(query): Query<FsPathQuery>) -> Response {
@@ -3364,6 +3454,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/read-text", get(fs_read_text))
         .route("/api/fs/write-text", post(fs_write_text))
         .route("/api/fs/read-data-url", get(fs_read_data_url))
+        .route("/api/fs/download", get(fs_download))
+        .route("/api/fs/mkdir", post(fs_mkdir))
         .route("/api/fs/git-root", get(fs_git_root))
         .route("/api/fs/default-cwd", get(fs_default_cwd))
         .route("/api/model/info", get(model_info_api))
@@ -4601,7 +4693,7 @@ async fn auth_middleware(
     let Some(expected) = state.key.as_deref() else {
         return next.run(request).await;
     };
-    let authorized = headers
+    let mut authorized = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .map(|v| {
@@ -4609,6 +4701,16 @@ async fn auth_middleware(
             constant_time_eq(token, expected)
         })
         .unwrap_or(false);
+    // Hermes precedent: browser-opened downloads can't set the bearer
+    // header, so /api/fs/download also accepts ?token= query auth.
+    if !authorized && path == "/api/fs/download" {
+        if let Some(query) = request.uri().query() {
+            authorized = url::form_urlencoded::parse(query.as_bytes())
+                .find(|(key, _)| key == "token")
+                .map(|(_, value)| constant_time_eq(&value, expected))
+                .unwrap_or(false);
+        }
+    }
     if authorized {
         next.run(request).await
     } else {
@@ -12658,6 +12760,69 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(!preview.contains("tok-long-enough-value"), "raw token leaked");
 
         match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fs_download_mkdir_and_query_token() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let file_path = tmp.path().join("hello.txt");
+        std::fs::write(&file_path, "download me").unwrap();
+        let uri = format!("/api/fs/download?path={}", file_path.display());
+
+        let state = test_state();
+        let app = router(state);
+
+        // Bearer auth: attachment headers + exact bytes.
+        let request = axum::http::Request::builder()
+            .uri(&uri)
+            .header("authorization", "Bearer sekret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(disposition.contains("hello.txt"), "disposition: {}", disposition);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"download me");
+
+        // Query-token auth (browser-opened download precedent).
+        let token_uri = format!("{uri}&token=sekret");
+        let (status, _) = get_json(app.clone(), &token_uri, None).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // No credentials -> 401.
+        let (status, _) = get_json(app.clone(), &uri, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // mkdir: nested creation + conflict with an existing file.
+        let nested = tmp.path().join("newdir").join("sub");
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/fs/mkdir", Some("sekret"),
+            json!({ "path": nested.display().to_string() }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["entry"]["isDirectory"], true);
+        assert!(nested.is_dir());
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/fs/mkdir", Some("sekret"),
+            json!({ "path": file_path.display().to_string() }),
+        ).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+
+        match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }

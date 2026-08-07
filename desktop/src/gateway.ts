@@ -1592,6 +1592,24 @@ export class GatewayClient {
     return (await response.json()) as { cwd: string; branch: string };
   }
 
+  /** Build a download URL for browser opening (?token= auth, P335). */
+  fsDownloadUrl(path: string): string {
+    const params = new URLSearchParams({ path });
+    if (this.settings.key) params.set("token", this.settings.key);
+    return this.endpoint(`/api/fs/download?${params.toString()}`);
+  }
+
+  /** POST /api/fs/mkdir — create a directory (P335). */
+  async fsMkdir(path: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/fs/mkdir"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
+  }
+
   /** GET /api/fs/read-data-url — small file as base64 data URL (P329). */
   async fsReadDataUrl(path: string): Promise<string> {
     const params = new URLSearchParams({ path });

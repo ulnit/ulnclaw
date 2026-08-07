@@ -121,6 +121,7 @@ const el = {
   fsEntries: document.getElementById("fs-entries")!,
   fsStatus: document.getElementById("fs-status")!,
   fsClose: document.getElementById("fs-close") as HTMLButtonElement,
+  fsMkdir: document.getElementById("fs-mkdir") as HTMLButtonElement,
 };
 
 function renderSessions(): void {
@@ -789,14 +790,27 @@ async function renderFsEntries(path: string): Promise<void> {
     return;
   }
   for (const entry of entries) {
-    const row = document.createElement("button");
-    row.className = "fs-entry" + (entry.isDirectory ? " dir" : "");
-    row.textContent = (entry.isDirectory ? "\u{1F4C1} " : "\u{1F4C4} ") + entry.name;
-    row.title = entry.path;
-    row.onclick = () => {
+    const row = document.createElement("div");
+    row.className = "fs-entry-row";
+    const main = document.createElement("button");
+    main.className = "fs-entry" + (entry.isDirectory ? " dir" : "");
+    main.textContent = (entry.isDirectory ? "\u{1F4C1} " : "\u{1F4C4} ") + entry.name;
+    main.title = entry.path;
+    main.onclick = () => {
       if (entry.isDirectory) void renderFsEntries(entry.path);
       else void pickFsFile(entry);
     };
+    row.appendChild(main);
+    if (!entry.isDirectory) {
+      const download = document.createElement("button");
+      download.className = "ghost fs-entry-download";
+      download.textContent = "\u2B07";
+      download.title = t.chrome.fsDownloadTitle;
+      download.onclick = () => {
+        if (state.client) window.open(state.client.fsDownloadUrl(entry.path), "_blank");
+      };
+      row.appendChild(download);
+    }
     el.fsEntries.appendChild(row);
   }
 }
@@ -1115,6 +1129,18 @@ async function start(): Promise<void> {
     if (target) void renderFsEntries(target);
   };
   el.fsClose.onclick = () => el.fsDialog.close();
+  el.fsMkdir.onclick = () => {
+    const name = window.prompt(t.chrome.fsMkdirPrompt);
+    if (!name || !name.trim()) return;
+    const base = el.fsPath.value.trim().replace(/\/+$/, "");
+    const target = `${base}/${name.trim()}`;
+    state.client
+      ?.fsMkdir(target)
+      .then(() => renderFsEntries(base || "/"))
+      .catch((error) => {
+        el.fsStatus.textContent = fmt(t.chrome.fsFailed, { error });
+      });
+  };
   el.input.addEventListener("keydown", (event) => {
     if (!el.slashPop.hidden) {
       const items = slashCandidates(el.input.value);
