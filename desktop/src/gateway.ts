@@ -265,6 +265,8 @@ export interface CronJob {
   created_at: number;
   last_run: number | null;
   last_status: string | null;
+  deliver?: string | null;
+  last_delivery_error?: string | null;
 }
 
 const SETTINGS_KEY = "ulnclaw.gateway";
@@ -1763,7 +1765,7 @@ export class GatewayClient {
 
   async jobUpdate(
     id: string,
-    patch: { name?: string; schedule?: string; prompt?: string; enabled?: boolean },
+    patch: { name?: string; schedule?: string; prompt?: string; enabled?: boolean; deliver?: string | null },
   ): Promise<CronJob | null> {
     const value = await this.kanbanJson(`/api/jobs/${encodeURIComponent(id)}`, {
       method: "PATCH",

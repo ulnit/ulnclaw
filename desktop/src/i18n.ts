@@ -106,6 +106,7 @@ export interface Translations {
     scheduleLabel: string; promptLabel: string; skillsLabel: string; repeatLabel: string; deliverLabel: string;
     create: string; createFailed: string; counts: string; empty: string; meta: string;
     runsLeft: string; deleteConfirm: string;
+    deliverBadge: string; deliverTitle: string; deliveryError: string; deliverPrompt: string;
   };
   usage: {
     windowNote: string; perSession: string; empty: string;
@@ -373,6 +374,9 @@ const en: Translations = {
     empty: "No cron jobs yet — create one, or use `ulnclaw cron add` in the terminal.",
     meta: "next: {next} · last: {last}", runsLeft: " · {count} run(s) left",
     deleteConfirm: "Delete job “{name}”?",
+    deliverBadge: "\u2192 {target}", deliverTitle: "Delivery target for job results",
+    deliveryError: "last delivery failed (hover for details)",
+    deliverPrompt: "Delivery target (local/origin/platform; empty clears):",
   },
   usage: {
     windowNote: "Token accounting · last {count} sessions",
@@ -751,6 +755,9 @@ const zh: Translations = {
     empty: "还没有定时任务 —— 创建一个，或在终端使用 `ulnclaw cron add`。",
     meta: "下次：{next} · 上次：{last}", runsLeft: " · 剩余 {count} 次运行",
     deleteConfirm: "删除任务「{name}」？",
+    deliverBadge: "\u2192 {target}", deliverTitle: "定时任务结果的投递目标",
+    deliveryError: "上次投递失败（悬停查看详情）",
+    deliverPrompt: "投递目标（local/origin/平台名；留空清除）：",
   },
   usage: {
     windowNote: "令牌核算 · 最近 {count} 个会话",
@@ -1129,6 +1136,9 @@ const zhHant: Translations = {
     empty: "還沒有定時工作 —— 建立一個，或在終端機使用 `ulnclaw cron add`。",
     meta: "下次：{next} · 上次：{last}", runsLeft: " · 剩餘 {count} 次執行",
     deleteConfirm: "刪除工作「{name}」？",
+    deliverBadge: "\u2192 {target}", deliverTitle: "定時任務結果的投遞目標",
+    deliveryError: "上次投遞失敗（懸停檢視詳情）",
+    deliverPrompt: "投遞目標（local/origin/平台名；留空清除）：",
   },
   usage: {
     windowNote: "令牌核算 · 最近 {count} 個工作階段",
@@ -1507,6 +1517,9 @@ const ja: Translations = {
     empty: "まだ cron ジョブがありません — 作成するか、ターミナルで `ulnclaw cron add` を使用してください。",
     meta: "次回：{next} · 前回：{last}", runsLeft: " · 残り {count} 回",
     deleteConfirm: "ジョブ「{name}」を削除しますか？",
+    deliverBadge: "\u2192 {target}", deliverTitle: "ジョブ結果の配信先",
+    deliveryError: "前回の配信に失敗（ホバーで詳細）",
+    deliverPrompt: "配信先（local/origin/プラットフォーム名；空でクリア）:",
   },
   usage: {
     windowNote: "トークン集計 · 直近 {count} セッション",
@@ -1885,6 +1898,9 @@ const ar: Translations = {
     empty: "لا مهام cron بعد — أنشئ واحدة أو استخدم `ulnclaw cron add` في الطرفي.",
     meta: "التالية: {next} · الأخيرة: {last}", runsLeft: " · {count} تشغيلات متبقية",
     deleteConfirm: "حذف المهمة «{name}»؟",
+    deliverBadge: "\u2192 {target}", deliverTitle: "وجهة تسليم نتائج المهمة",
+    deliveryError: "فشل آخر تسليم (مرّر للتفاصيل)",
+    deliverPrompt: "وجهة التسليم (local/origin/المنصة؛ فارغ للمسح):",
   },
   usage: {
     windowNote: "إحصاء الرموز · آخر {count} جلسة",

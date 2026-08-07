@@ -1358,3 +1358,4 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 
 .config-raw-dialog { width: min(760px, 92vw); border: none; border-radius: 10px; padding: 16px; }
 .config-raw-dialog textarea { width: 100%; height: 52vh; font-family: var(--mono, monospace); font-size: 12.5px; }
+.job-delivery-error { color: var(--bad, #a04545); }

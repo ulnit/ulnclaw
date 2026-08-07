@@ -199,6 +199,13 @@ export class JobsWidget {
       skills.textContent = job.skills.join(", ");
       nameLine.appendChild(skills);
     }
+    if (job.deliver) {
+      const deliver = document.createElement("span");
+      deliver.className = "job-skills";
+      deliver.title = t.jobs.deliverTitle;
+      deliver.textContent = fmt(t.jobs.deliverBadge, { target: job.deliver });
+      nameLine.appendChild(deliver);
+    }
     body.appendChild(nameLine);
     const prompt = document.createElement("div");
     prompt.className = "job-prompt";
@@ -210,6 +217,13 @@ export class JobsWidget {
       (job.last_status ? ` (${job.last_status})` : "") +
       (job.repeat !== null ? fmt(t.jobs.runsLeft, { count: job.repeat }) : "");
     body.appendChild(meta);
+    if (job.last_delivery_error) {
+      const deliveryError = document.createElement("div");
+      deliveryError.className = "job-meta job-delivery-error";
+      deliveryError.title = job.last_delivery_error;
+      deliveryError.textContent = `\u26a0 ${t.jobs.deliveryError}`;
+      body.appendChild(deliveryError);
+    }
     row.appendChild(body);
 
     const actions = document.createElement("div");
@@ -236,8 +250,14 @@ export class JobsWidget {
       if (nextPrompt === null) return;
       const nextSchedule = window.prompt(t.jobs.schedulePrompt, job.schedule);
       if (nextSchedule === null) return;
+      const nextDeliver = window.prompt(t.jobs.deliverPrompt, job.deliver || "");
+      if (nextDeliver === null) return;
       void client
-        .jobUpdate(job.id, { prompt: nextPrompt, schedule: nextSchedule })
+        .jobUpdate(job.id, {
+          prompt: nextPrompt,
+          schedule: nextSchedule,
+          deliver: nextDeliver.trim() || null,
+        })
         .then(() => void this.refresh());
     });
     mk("🗑", t.jobs.delete, () => {
