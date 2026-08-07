@@ -88,6 +88,11 @@ export class ConfigWidget {
         </div>
         <p class="config-note" data-i18n="config.memoryNote"></p>
       </div>
+      <div id="config-oauth" class="config-env" hidden>
+        <h3 data-i18n="config.oauthTitle">OAuth (device flow)</h3>
+        <div id="config-oauth-rows" class="config-env-rows"></div>
+        <p class="config-note" data-i18n="config.oauthNote"></p>
+      </div>
       <div id="config-pool" class="config-env" hidden>
         <h3 data-i18n="config.poolTitle">Credential pool</h3>
         <div id="config-pool-rows" class="config-env-rows"></div>
@@ -237,6 +242,7 @@ export class ConfigWidget {
       this.renderEnv().catch(() => undefined);
       this.renderMemory().catch(() => undefined);
       this.renderPool().catch(() => undefined);
+      this.renderOAuth().catch(() => undefined);
       this.status("");
       const fileEl = this.root.querySelector("#config-file") as HTMLElement;
       fileEl.textContent = this.configPath;
@@ -414,6 +420,51 @@ export class ConfigWidget {
         "{error}",
         error instanceof Error ? error.message : String(error),
       );
+    }
+  }
+
+  /** OAuth device-flow posture over /api/oauth/status (P334). */
+  private async renderOAuth(): Promise<void> {
+    const client = this.client();
+    const block = this.root.querySelector("#config-oauth") as HTMLElement;
+    const rows = this.root.querySelector("#config-oauth-rows") as HTMLElement;
+    rows.innerHTML = "";
+    if (!client) {
+      block.hidden = true;
+      return;
+    }
+    try {
+      const status = await client.oauthStatus();
+      block.hidden = false;
+      const row = document.createElement("div");
+      row.className = "config-env-row";
+      const chip = document.createElement("span");
+      chip.className = "config-env-chip";
+      chip.textContent = status.logged_in
+        ? `${t.config.oauthLoggedIn}${status.expired ? " (expired)" : ""}`
+        : t.config.oauthLoggedOut;
+      row.appendChild(chip);
+      const meta = document.createElement("span");
+      meta.className = "jobs-counts";
+      const bits: string[] = [`provider: ${status.provider}`];
+      if (status.logged_in) {
+        bits.push(status.token_preview);
+        if (status.scopes) bits.push(status.scopes);
+        if (status.expires_at > 0) bits.push(new Date(status.expires_at * 1000).toLocaleString());
+      }
+      meta.textContent = bits.join(" · ");
+      row.appendChild(meta);
+      if (status.portal_url) {
+        const link = document.createElement("a");
+        link.href = status.portal_url;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.textContent = t.config.oauthPortal;
+        row.appendChild(link);
+      }
+      rows.appendChild(row);
+    } catch {
+      block.hidden = true;
     }
   }
 

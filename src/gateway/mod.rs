@@ -1257,6 +1257,49 @@ async fn model_recommended_default(
     Json(json!({ "provider": provider, "model": model }))
 }
 
+/// `GET /api/health` — lightweight liveness probe in the hermes
+/// dashboard shape (`/health` stays the canonical ulnclaw probe).
+async fn api_health(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    Json(json!({
+        "ok": true,
+        "version": crate::VERSION,
+        "auth_required": state.key.is_some(),
+    }))
+}
+
+/// `GET /api/ssh/ownership` — wire parity with hermes: ulnclaw has no
+/// SSH ownership flow (the desktop shell manages its own gateway child),
+/// so the posture is always "not active".
+async fn ssh_ownership() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "SSH ownership is not active" })),
+    )
+        .into_response()
+}
+
+/// `GET /api/oauth/status` — read-only device-flow auth posture (lean
+/// hermes `/api/portal` parity over ulnclaw's service-agnostic `[oauth]`
+/// flow; no Nous subscription features).
+async fn oauth_status(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let home = state.agent.context().home.clone();
+    let config = state.agent.context().config.clone();
+    let tokens = crate::oauth::load_tokens(&home);
+    Json(json!({
+        "logged_in": tokens.logged_in(),
+        "expired": tokens.expired(),
+        "provider": config.model.provider,
+        "portal_url": config.oauth.portal_url,
+        "scopes": tokens.scope,
+        "expires_at": tokens.expires_at,
+        "token_preview": if tokens.logged_in() {
+            crate::status::redact_key(&tokens.access_token)
+        } else {
+            String::new()
+        },
+    }))
+}
+
 /// Built-in dashboard themes (hermes `_BUILTIN_DASHBOARD_THEMES`). The
 /// frontend owns the full definitions; the backend ships name/label/
 /// description and stores the active selection.
@@ -3336,6 +3379,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/memory/reset", post(memory_reset_api))
         .route("/api/update/check", get(update_check_api))
         .route("/api/update", post(update_apply_api))
+        .route("/api/health", get(api_health))
+        .route("/api/ssh/ownership", get(ssh_ownership))
+        .route("/api/oauth/status", get(oauth_status))
         .route("/api/dashboard/themes", get(dashboard_themes))
         .route("/api/dashboard/theme", put(dashboard_theme_set))
         .route("/api/dashboard/font", get(dashboard_font_get).put(dashboard_font_set))
@@ -12562,6 +12608,54 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             app.clone(), "DELETE", "/api/providers/custom-endpoints/mylab", Some(token), json!({}),
         ).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_health_ssh_ownership_oauth_status_endpoints() {
+        // oauth status reads tokens from the agent home (ULNCLAW_HOME).
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // /api/health: hermes dashboard liveness shape.
+        let (status, body) = get_json(app.clone(), "/api/health", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["auth_required"], true);
+        assert!(body["version"].as_str().unwrap().len() > 0);
+
+        // /api/ssh/ownership: always "not active" in ulnclaw.
+        let (status, body) = get_json(app.clone(), "/api/ssh/ownership", Some(token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body["error"].as_str().unwrap().contains("not active"));
+
+        // /api/oauth/status: logged out without a token store.
+        let (status, body) = get_json(app.clone(), "/api/oauth/status", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["logged_in"], false);
+        assert_eq!(body["provider"], "openai");
+
+        // Seeded token store flips the posture with a redacted preview.
+        std::fs::write(
+            tmp.path().join("oauth_tokens.json"),
+            r#"{"access_token": "tok-long-enough-value", "refresh_token": "", "expires_at": 0, "scope": "read"}"#,
+        )
+        .unwrap();
+        let (status, body) = get_json(app.clone(), "/api/oauth/status", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["logged_in"], true);
+        assert_eq!(body["scopes"], "read");
+        let preview = body["token_preview"].as_str().unwrap();
+        assert!(!preview.contains("tok-long-enough-value"), "raw token leaked");
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

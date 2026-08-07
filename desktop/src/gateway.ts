@@ -573,6 +573,17 @@ export interface FsEntry {
   isDirectory: boolean;
 }
 
+/** OAuth device-flow posture from GET /api/oauth/status (P334). */
+export interface OAuthStatus {
+  logged_in: boolean;
+  expired: boolean;
+  provider: string;
+  portal_url: string;
+  scopes: string;
+  expires_at: number;
+  token_preview: string;
+}
+
 /** Custom provider endpoint row from GET /api/providers/custom-endpoints (P333). */
 export interface CustomEndpoint {
   id: string;
@@ -1590,6 +1601,14 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
     return typeof value.dataUrl === "string" ? value.dataUrl : "";
+  }
+
+  /** GET /api/oauth/status — device-flow auth posture (P334). */
+  async oauthStatus(): Promise<OAuthStatus> {
+    const response = await fetch(this.endpoint("/api/oauth/status"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `oauth HTTP ${response.status}`);
+    return value as OAuthStatus;
   }
 
   /** GET /api/providers/custom-endpoints — custom provider rows (P333). */
