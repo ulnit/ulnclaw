@@ -56,7 +56,7 @@ export function fmt(template: string, vars: Record<string, unknown>): string {
 
 export interface Translations {
   chrome: {
-    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string; pluginsTab: string;
+    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string; pluginsTab: string; pairingTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
@@ -138,6 +138,12 @@ export interface Translations {
     disabledBadge: string; enable: string; disable: string; noConfigHooks: string;
     toggleFailed: string; configHooksTitle: string;
   };
+  pairingView: {
+    count: string; none: string; loadFailed: string; clearPending: string; lockedOut: string;
+    pendingTitle: string; approvedTitle: string; age: string; approve: string; revoke: string;
+    emptyPlatform: string; approvedNote: string; approveFailed: string; revokedNote: string;
+    revokeFailed: string; clearedNote: string;
+  };
   config: {
     loading: string; notConnected: string; loadFailed: string; save: string;
     reload: string; saving: string; saved: string; saveFailed: string;
@@ -207,7 +213,7 @@ export interface Translations {
   palette: {
     placeholder: string; noMatches: string; navigate: string; sessionGroup: string;
     sessionsGroup: string; gatewayGroup: string; goToChat: string; goToKanban: string;
-    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; goToWebhooks: string; goToRuns: string; goToSkills: string; goToSessions: string; goToModels: string; goToPlugins: string; newSession: string; switchSession: string;
+    goToProjects: string; goToJobs: string; goToUsage: string; goToConfig: string; goToDoctor: string; goToWebhooks: string; goToRuns: string; goToSkills: string; goToSessions: string; goToModels: string; goToPlugins: string; goToPairing: string; newSession: string; switchSession: string;
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string;
@@ -240,7 +246,7 @@ export interface Translations {
 
 const en: Translations = {
   chrome: {
-    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks", runsTab: "Runs", skillsTab: "Skills", sessionsTab: "Sessions", modelsTab: "Models", pluginsTab: "Plugins",
+    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks", runsTab: "Runs", skillsTab: "Skills", sessionsTab: "Sessions", modelsTab: "Models", pluginsTab: "Plugins", pairingTab: "Pairing",
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
@@ -386,6 +392,14 @@ const en: Translations = {
     noConfigHooks: "No [hooks] shell hooks configured.", toggleFailed: "Toggle failed: {error}",
     configHooksTitle: "Config shell hooks",
   },
+  pairingView: {
+    count: "{platforms} platform(s) · {pending} pending", none: "No pairing activity yet — unknown senders who DM an enabled bot receive a pairing code.",
+    loadFailed: "Pairing request failed: {error}", clearPending: "Clear pending", lockedOut: "locked out",
+    pendingTitle: "Pending", approvedTitle: "Approved", age: "{minutes}m old", approve: "Approve", revoke: "Revoke",
+    emptyPlatform: "No pending or approved pairings.", approvedNote: "Approved {code}.",
+    approveFailed: "Approve failed: {error}", revokedNote: "Revoked {user}.",
+    revokeFailed: "Revoke failed: {error}", clearedNote: "Cleared {count} pending code(s).",
+  },
   config: {
     loading: "Loading config…", notConnected: "Gateway not connected.",
     loadFailed: "Failed to load config: {error}",
@@ -499,7 +513,7 @@ const en: Translations = {
     placeholder: "Type a command… (Esc to close)", noMatches: "No matching commands",
     navigate: "Navigate", sessionGroup: "Session", sessionsGroup: "Sessions",
     gatewayGroup: "Gateway", goToChat: "Go to Chat", goToKanban: "Go to Kanban",
-    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor", goToWebhooks: "Go to Webhooks", goToRuns: "Go to Runs", goToSkills: "Go to Skills", goToSessions: "Go to Sessions", goToModels: "Go to Models", goToPlugins: "Go to Plugins",
+    goToProjects: "Go to Projects", goToJobs: "Go to Jobs (cron)", goToUsage: "Go to Usage", goToConfig: "Go to Config", goToDoctor: "Go to Doctor", goToWebhooks: "Go to Webhooks", goToRuns: "Go to Runs", goToSkills: "Go to Skills", goToSessions: "Go to Sessions", goToModels: "Go to Models", goToPlugins: "Go to Plugins", goToPairing: "Go to Pairing",
     newSession: "New session", switchSession: "Switch session",
     findInChat: "Find in chat", modelForSession: "Model for this session…",
     resumeSession: "Resume session… (/resume)",
@@ -563,7 +577,7 @@ const en: Translations = {
 
 const zh: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks", runsTab: "运行", skillsTab: "技能", sessionsTab: "会话记录", modelsTab: "模型", pluginsTab: "插件",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks", runsTab: "运行", skillsTab: "技能", sessionsTab: "会话记录", modelsTab: "模型", pluginsTab: "插件", pairingTab: "配对",
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
@@ -709,6 +723,14 @@ const zh: Translations = {
     noConfigHooks: "未配置 [hooks] 外壳钩子。", toggleFailed: "切换失败:{error}",
     configHooksTitle: "配置外壳钩子",
   },
+  pairingView: {
+    count: "{platforms} 个平台 · {pending} 个待批", none: "暂无配对活动——向已启用机器人私聊的陌生发送者会收到配对码。",
+    loadFailed: "配对请求失败:{error}", clearPending: "清除待批", lockedOut: "已锁定",
+    pendingTitle: "待批准", approvedTitle: "已批准", age: "{minutes} 分钟前", approve: "批准", revoke: "吊销",
+    emptyPlatform: "无待批或已批准的配对。", approvedNote: "已批准 {code}。",
+    approveFailed: "批准失败:{error}", revokedNote: "已吊销 {user}。",
+    revokeFailed: "吊销失败:{error}", clearedNote: "已清除 {count} 个待批配对码。",
+  },
   config: {
     loading: "加载配置…", notConnected: "未连接网关。",
     loadFailed: "加载配置失败：{error}",
@@ -822,7 +844,7 @@ const zh: Translations = {
     placeholder: "输入命令…（Esc 关闭）", noMatches: "没有匹配的命令",
     navigate: "导航", sessionGroup: "会话", sessionsGroup: "会话列表",
     gatewayGroup: "网关", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断", goToWebhooks: "前往 Webhooks", goToRuns: "前往运行", goToSkills: "前往技能", goToSessions: "前往会话记录", goToModels: "前往模型", goToPlugins: "前往插件",
+    goToProjects: "前往项目", goToJobs: "前往任务（cron）", goToUsage: "前往用量", goToConfig: "前往配置", goToDoctor: "前往诊断", goToWebhooks: "前往 Webhooks", goToRuns: "前往运行", goToSkills: "前往技能", goToSessions: "前往会话记录", goToModels: "前往模型", goToPlugins: "前往插件", goToPairing: "前往配对",
     newSession: "新建会话", switchSession: "切换会话",
     findInChat: "聊天内查找", modelForSession: "本会话模型…",
     resumeSession: "恢复会话…（/resume）",
@@ -886,7 +908,7 @@ const zh: Translations = {
 
 const zhHant: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks", runsTab: "執行", skillsTab: "技能", sessionsTab: "會話記錄", modelsTab: "模型", pluginsTab: "外掛",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks", runsTab: "執行", skillsTab: "技能", sessionsTab: "會話記錄", modelsTab: "模型", pluginsTab: "外掛", pairingTab: "配對",
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
@@ -1032,6 +1054,14 @@ const zhHant: Translations = {
     noConfigHooks: "未設定 [hooks] 殼層掛鉤。", toggleFailed: "切換失敗:{error}",
     configHooksTitle: "設定殼層掛鉤",
   },
+  pairingView: {
+    count: "{platforms} 個平台 · {pending} 個待批", none: "暫無配對活動——向已啟用機器人私訊的陌生傳送者會收到配對碼。",
+    loadFailed: "配對請求失敗:{error}", clearPending: "清除待批", lockedOut: "已鎖定",
+    pendingTitle: "待核准", approvedTitle: "已核准", age: "{minutes} 分鐘前", approve: "核准", revoke: "撤銷",
+    emptyPlatform: "無待批或已核准的配對。", approvedNote: "已核准 {code}。",
+    approveFailed: "核准失敗:{error}", revokedNote: "已撤銷 {user}。",
+    revokeFailed: "撤銷失敗:{error}", clearedNote: "已清除 {count} 個待批配對碼。",
+  },
   config: {
     loading: "載入設定…", notConnected: "未連線閘道。",
     loadFailed: "載入設定失敗：{error}",
@@ -1145,7 +1175,7 @@ const zhHant: Translations = {
     placeholder: "輸入命令…（Esc 關閉）", noMatches: "沒有符合的命令",
     navigate: "導覽", sessionGroup: "工作階段", sessionsGroup: "工作階段清單",
     gatewayGroup: "閘道", goToChat: "前往聊天", goToKanban: "前往看板",
-    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷", goToWebhooks: "前往 Webhooks", goToRuns: "前往執行", goToSkills: "前往技能", goToSessions: "前往會話記錄", goToModels: "前往模型", goToPlugins: "前往外掛",
+    goToProjects: "前往專案", goToJobs: "前往工作（cron）", goToUsage: "前往用量", goToConfig: "前往設定", goToDoctor: "前往診斷", goToWebhooks: "前往 Webhooks", goToRuns: "前往執行", goToSkills: "前往技能", goToSessions: "前往會話記錄", goToModels: "前往模型", goToPlugins: "前往外掛", goToPairing: "前往配對",
     newSession: "新增工作階段", switchSession: "切換工作階段",
     findInChat: "聊天內尋找", modelForSession: "本工作階段模型…",
     resumeSession: "恢復工作階段…（/resume）",
@@ -1209,7 +1239,7 @@ const zhHant: Translations = {
 
 const ja: Translations = {
   chrome: {
-    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook", runsTab: "実行", skillsTab: "スキル", sessionsTab: "履歴", modelsTab: "モデル", pluginsTab: "プラグイン",
+    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook", runsTab: "実行", skillsTab: "スキル", sessionsTab: "履歴", modelsTab: "モデル", pluginsTab: "プラグイン", pairingTab: "ペアリング",
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
@@ -1355,6 +1385,14 @@ const ja: Translations = {
     noConfigHooks: "[hooks] シェルフックは未設定です。", toggleFailed: "切り替えに失敗しました: {error}",
     configHooksTitle: "設定シェルフック",
   },
+  pairingView: {
+    count: "{platforms} プラットフォーム · 保留 {pending} 件", none: "ペアリングはまだありません — 有効なボットに DM した未知の送信者にはペアリングコードが届きます。",
+    loadFailed: "ペアリング要求に失敗しました: {error}", clearPending: "保留をクリア", lockedOut: "ロックアウト中",
+    pendingTitle: "保留中", approvedTitle: "承認済み", age: "{minutes} 分経過", approve: "承認", revoke: "取り消し",
+    emptyPlatform: "保留中・承認済みのペアリングはありません。", approvedNote: "{code} を承認しました。",
+    approveFailed: "承認に失敗しました: {error}", revokedNote: "{user} を取り消しました。",
+    revokeFailed: "取り消しに失敗しました: {error}", clearedNote: "{count} 件の保留コードをクリアしました。",
+  },
   config: {
     loading: "設定を読み込み中…", notConnected: "ゲートウェイに未接続です。",
     loadFailed: "設定の読み込みに失敗：{error}",
@@ -1468,7 +1506,7 @@ const ja: Translations = {
     placeholder: "コマンドを入力…（Esc で閉じる）", noMatches: "一致するコマンドがありません",
     navigate: "移動", sessionGroup: "セッション", sessionsGroup: "セッション一覧",
     gatewayGroup: "ゲートウェイ", goToChat: "チャットへ", goToKanban: "カンバンへ",
-    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ", goToWebhooks: "Webhook へ", goToRuns: "実行へ", goToSkills: "スキルへ", goToSessions: "履歴へ", goToModels: "モデルへ", goToPlugins: "プラグインへ",
+    goToProjects: "プロジェクトへ", goToJobs: "ジョブ（cron）へ", goToUsage: "使用量へ", goToConfig: "設定へ", goToDoctor: "ドクターへ", goToWebhooks: "Webhook へ", goToRuns: "実行へ", goToSkills: "スキルへ", goToSessions: "履歴へ", goToModels: "モデルへ", goToPlugins: "プラグインへ", goToPairing: "ペアリングへ",
     newSession: "新規セッション", switchSession: "セッションを切り替え",
     findInChat: "チャット内を検索", modelForSession: "このセッションのモデル…",
     resumeSession: "セッションを再開…（/resume）",
@@ -1532,7 +1570,7 @@ const ja: Translations = {
 
 const ar: Translations = {
   chrome: {
-    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس", runsTab: "التشغيلات", skillsTab: "المهارات", sessionsTab: "السجلات", modelsTab: "النماذج", pluginsTab: "الإضافات",
+    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس", runsTab: "التشغيلات", skillsTab: "المهارات", sessionsTab: "السجلات", modelsTab: "النماذج", pluginsTab: "الإضافات", pairingTab: "الاقتران",
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
@@ -1678,6 +1716,14 @@ const ar: Translations = {
     noConfigHooks: "لا توجد خطافات [hooks] مهيأة.", toggleFailed: "فشل التبديل: {error}",
     configHooksTitle: "خطافات الصدفة المهيأة",
   },
+  pairingView: {
+    count: "{platforms} منصة · {pending} معلقة", none: "لا يوجد نشاط اقتران بعد — المرسلون غير المعروفين الذين يراسلون بوتًا مفعّلًا يتلقون رمز اقتران.",
+    loadFailed: "فشل طلب الاقتران: {error}", clearPending: "مسح المعلق", lockedOut: "مقفل",
+    pendingTitle: "معلق", approvedTitle: "معتمد", age: "منذ {minutes} دقيقة", approve: "اعتماد", revoke: "إلغاء",
+    emptyPlatform: "لا توجد اقترانات معلقة أو معتمدة.", approvedNote: "تم اعتماد {code}.",
+    approveFailed: "فشل الاعتماد: {error}", revokedNote: "تم إلغاء {user}.",
+    revokeFailed: "فشل الإلغاء: {error}", clearedNote: "تم مسح {count} رمز اقتران معلق.",
+  },
   config: {
     loading: "جارٍ تحميل الإعدادات…", notConnected: "البوابة غير متصلة.",
     loadFailed: "فشل تحميل الإعدادات: {error}",
@@ -1791,7 +1837,7 @@ const ar: Translations = {
     placeholder: "اكتب أمرًا… (Esc للإغلاق)", noMatches: "لا أوامر مطابقة",
     navigate: "تنقّل", sessionGroup: "الجلسة", sessionsGroup: "الجلسات",
     gatewayGroup: "البوابة", goToChat: "إلى الدردشة", goToKanban: "إلى كانبان",
-    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص", goToWebhooks: "إلى ويب هوكس", goToRuns: "إلى التشغيلات", goToSkills: "إلى المهارات", goToSessions: "إلى السجلات", goToModels: "إلى النماذج", goToPlugins: "إلى الإضافات",
+    goToProjects: "إلى المشاريع", goToJobs: "إلى المهام (cron)", goToUsage: "إلى الاستخدام", goToConfig: "إلى الإعدادات", goToDoctor: "إلى التشخيص", goToWebhooks: "إلى ويب هوكس", goToRuns: "إلى التشغيلات", goToSkills: "إلى المهارات", goToSessions: "إلى السجلات", goToModels: "إلى النماذج", goToPlugins: "إلى الإضافات", goToPairing: "إلى الاقتران",
     newSession: "جلسة جديدة", switchSession: "تبديل الجلسة",
     findInChat: "البحث في الدردشة", modelForSession: "نموذج هذه الجلسة…",
     resumeSession: "استئناف جلسة… (/resume)",

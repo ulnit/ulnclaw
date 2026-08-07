@@ -919,6 +919,177 @@ async fn insights(
     }
 }
 
+/// Body for the pairing mutation endpoints.
+#[derive(Debug, Deserialize)]
+struct PairingActionBody {
+    #[serde(default)]
+    platform: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+}
+
+/// `GET /api/pairing` — pending + approved pairings per platform with
+/// lockout state (desktop Pairing view; hermes `pairing list` parity).
+async fn pairing_status(State(_state): State<Arc<GatewayState>>) -> Response {
+    let result = tokio::task::spawn_blocking(|| {
+        let home = crate::config::ulnclaw_home();
+        let store = crate::pairing::PairingStore::open(&home);
+        let mut platforms = Vec::new();
+        for platform in store.known_platforms() {
+            let pending: Vec<Value> = store
+                .list_pending(&platform)
+                .iter()
+                .map(|request| {
+                    json!({
+                        "request_id": request.request_id,
+                        "user_id": request.user_id,
+                        "user_name": request.user_name,
+                        "age_minutes": request.age_minutes,
+                    })
+                })
+                .collect();
+            let approved: Vec<Value> = store
+                .list_approved(&platform)
+                .iter()
+                .map(|grant| {
+                    json!({
+                        "user_id": grant.user_id,
+                        "user_name": grant.user_name,
+                    })
+                })
+                .collect();
+            platforms.push(json!({
+                "platform": platform,
+                "locked_out": store.is_locked_out(&platform),
+                "pending": pending,
+                "approved": approved,
+            }));
+        }
+        json!({"platforms": platforms})
+    })
+    .await;
+    match result {
+        Ok(payload) => Json(payload).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("pairing task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/pairing/approve` — approve a pending pairing code
+/// (hermes `pairing approve <platform> <code>`).
+async fn pairing_approve(
+    State(_state): State<Arc<GatewayState>>,
+    Json(body): Json<PairingActionBody>,
+) -> Response {
+    let Some(platform) = body.platform.filter(|p| !p.trim().is_empty()) else {
+        return bad_request("platform is required", Some("invalid_request"));
+    };
+    let Some(code) = body.code.filter(|c| !c.trim().is_empty()) else {
+        return bad_request("code is required", Some("invalid_request"));
+    };
+    let result = tokio::task::spawn_blocking({
+        let platform = platform.clone();
+        let code = code.clone();
+        move || {
+            let home = crate::config::ulnclaw_home();
+            let store = crate::pairing::PairingStore::open(&home);
+            store.approve_code(&platform, &code)
+        }
+    })
+    .await
+    .unwrap_or(None);
+    match result {
+        Some(grant) => Json(json!({
+            "ok": true,
+            "platform": platform,
+            "user_id": grant.user_id,
+            "user_name": grant.user_name,
+        }))
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("no pending pairing matching {code} on {platform}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/pairing/revoke` — revoke an approved pairing (hermes
+/// `pairing revoke <platform> <user-id>`).
+async fn pairing_revoke(
+    State(_state): State<Arc<GatewayState>>,
+    Json(body): Json<PairingActionBody>,
+) -> Response {
+    let Some(platform) = body.platform.filter(|p| !p.trim().is_empty()) else {
+        return bad_request("platform is required", Some("invalid_request"));
+    };
+    let Some(user_id) = body.user_id.filter(|u| !u.trim().is_empty()) else {
+        return bad_request("user_id is required", Some("invalid_request"));
+    };
+    let revoked = tokio::task::spawn_blocking({
+        let platform = platform.clone();
+        let user_id = user_id.clone();
+        move || {
+            let home = crate::config::ulnclaw_home();
+            let store = crate::pairing::PairingStore::open(&home);
+            store.revoke(&platform, &user_id)
+        }
+    })
+    .await
+    .unwrap_or(false);
+    if revoked {
+        Json(json!({"ok": true, "platform": platform, "user_id": user_id})).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("{user_id} is not paired on {platform}")})),
+        )
+            .into_response()
+    }
+}
+
+/// `POST /api/pairing/clear-pending` — drop pending codes for one
+/// platform, or all known platforms when omitted (hermes `pairing
+/// clear-pending`).
+async fn pairing_clear_pending(
+    State(_state): State<Arc<GatewayState>>,
+    Json(body): Json<PairingActionBody>,
+) -> Response {
+    let result = tokio::task::spawn_blocking(move || {
+        let home = crate::config::ulnclaw_home();
+        let store = crate::pairing::PairingStore::open(&home);
+        let targets: Vec<String> = match body.platform.filter(|p| !p.trim().is_empty()) {
+            Some(platform) => vec![platform],
+            None => {
+                let mut all = store.known_platforms();
+                if all.is_empty() {
+                    all = vec!["telegram".into(), "discord".into(), "slack".into()];
+                }
+                all
+            }
+        };
+        let mut cleared = 0usize;
+        for platform in &targets {
+            cleared += store.clear_pending(platform);
+        }
+        cleared
+    })
+    .await;
+    match result {
+        Ok(cleared) => Json(json!({"ok": true, "cleared": cleared})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("clear-pending task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/plugins` — plugin inventory: loaded plugins (manifest,
 /// disabled flag, dir), config shell hooks (`[hooks]`) and the disabled
 /// list (desktop Plugins view; hermes `plugins list` parity).
@@ -1086,6 +1257,10 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/insights", get(insights))
+        .route("/api/pairing", get(pairing_status))
+        .route("/api/pairing/approve", post(pairing_approve))
+        .route("/api/pairing/revoke", post(pairing_revoke))
+        .route("/api/pairing/clear-pending", post(pairing_clear_pending))
         .route("/api/plugins", get(plugins_inventory))
         .route("/api/plugins/:name/enable", post(plugin_enable))
         .route("/api/plugins/:name/disable", post(plugin_disable))
@@ -8695,6 +8870,69 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (status, _) =
             post_json(app, "/api/plugins/demo/enable", "{}", "sekret").await;
         assert_eq!(status, StatusCode::OK);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pairing_endpoints_inventory_and_validation() {
+        // Isolate ULNCLAW_HOME: the pairing store lives under <home>/pairing.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        let (status, _) = get_json(app.clone(), "/api/pairing", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Fresh home → no pairing activity yet.
+        let (status, body) = get_json(app.clone(), "/api/pairing", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["platforms"].as_array().unwrap().len(), 0);
+
+        // Validation: missing fields are rejected.
+        let (status, _) =
+            post_json(app.clone(), "/api/pairing/approve", "{}", "sekret").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/pairing/approve",
+            r#"{"platform": "telegram"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Approving a code nobody issued → not found.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/pairing/approve",
+            r#"{"platform": "telegram", "code": "ABC123"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Revoking an unknown pairing → not found.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/pairing/revoke",
+            r#"{"platform": "telegram", "user_id": "u1"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Clear-pending over an empty store clears zero.
+        let (status, body) =
+            post_json(app, "/api/pairing/clear-pending", "{}", "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["cleared"], 0);
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

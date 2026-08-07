@@ -322,6 +322,13 @@ export interface InsightsReport {
   activity: { peak_hour: number | null; peak_weekday: number | null };
 }
 
+export interface PairingPlatform {
+  platform: string;
+  locked_out: boolean;
+  pending: { request_id: string; user_id: string; user_name: string; age_minutes: number }[];
+  approved: { user_id: string; user_name: string }[];
+}
+
 export interface PluginRow {
   name: string;
   version: string;
@@ -853,6 +860,52 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`mcp servers HTTP ${response.status}`);
     const value = await response.json();
     return (value.servers || []) as McpServerRow[];
+  }
+
+  /** GET /api/pairing — pending/approved pairings per platform. */
+  async pairingStatus(): Promise<PairingPlatform[]> {
+    const response = await fetch(this.endpoint("/api/pairing"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`pairing HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.platforms || []) as PairingPlatform[];
+  }
+
+  /** POST /api/pairing/approve — approve a pending code/request id. */
+  async pairingApprove(platform: string, code: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/pairing/approve"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ platform, code }),
+    });
+    if (!response.ok) {
+      const value = await response.json().catch(() => ({}));
+      throw new Error(value.error || `approve HTTP ${response.status}`);
+    }
+  }
+
+  /** POST /api/pairing/revoke — revoke an approved pairing. */
+  async pairingRevoke(platform: string, userId: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/pairing/revoke"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ platform, user_id: userId }),
+    });
+    if (!response.ok) {
+      const value = await response.json().catch(() => ({}));
+      throw new Error(value.error || `revoke HTTP ${response.status}`);
+    }
+  }
+
+  /** POST /api/pairing/clear-pending — drop pending codes. */
+  async pairingClearPending(platform?: string): Promise<number> {
+    const response = await fetch(this.endpoint("/api/pairing/clear-pending"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(platform ? { platform } : {}),
+    });
+    if (!response.ok) throw new Error(`clear-pending HTTP ${response.status}`);
+    const value = await response.json();
+    return Number(value.cleared || 0);
   }
 
   /** GET /api/plugins — plugin inventory (manifests, hooks, deny-list). */
