@@ -668,7 +668,10 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/runs/:id", get(get_run))
         .route("/v1/runs/:id/events", get(run_events))
         .route("/v1/runs/:id/approval", post(resolve_approval))
-        .route("/v1/runs/:id/stop", post(stop_run));
+        .route("/v1/runs/:id/stop", post(stop_run))
+        .route("/api/mcp/servers/:name/auth", post(mcp_server_auth))
+        .route("/api/mcp/oauth/flows/:flow_id", get(mcp_oauth_flow_status))
+        .route("/api/mcp/oauth/callback/:server_name", get(mcp_oauth_callback));
     let router = attach_webhook_routes(router, &state);
     router
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
@@ -1542,6 +1545,19 @@ fn is_cron_fire_path(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The MCP OAuth browser redirect target — open (no bearer key), like
+/// hermes' `/api/mcp/oauth/callback/{server}` route. Matches the bare
+/// path and `/p/<profile>` multiplex mirrors.
+fn is_mcp_oauth_callback_path(path: &str) -> bool {
+    if path.starts_with("/api/mcp/oauth/callback/") {
+        return true;
+    }
+    path.strip_prefix("/p/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(_, tail)| tail.starts_with("api/mcp/oauth/callback/"))
+        .unwrap_or(false)
+}
+
 async fn auth_middleware(
     State(state): State<Arc<GatewayState>>,
     headers: HeaderMap,
@@ -1557,6 +1573,7 @@ async fn auth_middleware(
         || path == "/v1/health"
         || path.starts_with("/webhooks/")
         || is_cron_fire_path(&path)
+        || is_mcp_oauth_callback_path(&path)
     {
         return next.run(request).await;
     }
@@ -5198,6 +5215,244 @@ fn bad_request(message: &str, code: Option<&str>) -> Response {
     )
         .into_response()
 }
+
+// ---------------------------------------------------------------------------
+// MCP OAuth dashboard bridge (hermes web_routers/mcp.py `auth_mcp_server`
+// / `mcp_oauth_flow_status` / `mcp_oauth_callback` + web_server.py
+// `_run_dashboard_mcp_oauth`)
+// ---------------------------------------------------------------------------
+
+/// Build the externally reachable callback URL for a dashboard flow
+/// (hermes `_mcp_oauth_callback_url`): scheme from X-Forwarded-Proto,
+/// host from the Host header, percent-encoded server name.
+fn mcp_oauth_callback_url(headers: &HeaderMap, server_name: &str) -> String {
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("127.0.0.1:8642");
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("http");
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(server_name.as_bytes()).collect();
+    format!("{scheme}://{host}/api/mcp/oauth/callback/{encoded}")
+}
+
+/// `POST /api/mcp/servers/:name/auth` — start MCP OAuth and hand the
+/// authorization URL to the dashboard browser (hermes `auth_mcp_server`).
+async fn mcp_server_auth(
+    State(_state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    use crate::mcp::dashboard_oauth::{self as bridge, DashboardOAuthFlow, RegistryError};
+
+    bridge::registry().gc();
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let Some(server) = config.mcp.servers.iter().find(|srv| srv.name == name).cloned() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": format!("Server '{}' not found", name)})),
+        )
+            .into_response();
+    };
+    if server.url.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "stdio servers authenticate via env keys, not OAuth"})),
+        )
+            .into_response();
+    }
+    if !server.headers.is_empty() && server.auth.as_deref() != Some("oauth") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "This server uses header/API-key auth, not OAuth"})),
+        )
+            .into_response();
+    }
+
+    let home = crate::config::ulnclaw_home();
+    let redirect_uri = server
+        .oauth
+        .redirect_uri
+        .clone()
+        .unwrap_or_else(|| mcp_oauth_callback_url(&headers, &name));
+    let flow = DashboardOAuthFlow::new(
+        uuid::Uuid::new_v4().simple().to_string(),
+        name.clone(),
+        None,
+        home.to_string_lossy().to_string(),
+        redirect_uri,
+    );
+    if let Err(err) = bridge::registry().insert(flow.clone()) {
+        let (status, detail) = match err {
+            RegistryError::TooManyPending => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many MCP OAuth flows are already in progress".to_string(),
+            ),
+            RegistryError::AlreadyInProgress => (
+                StatusCode::CONFLICT,
+                format!("MCP OAuth for '{}' is already in progress", name),
+            ),
+        };
+        return (status, Json(json!({"detail": detail}))).into_response();
+    }
+
+    tokio::spawn(run_dashboard_mcp_oauth(flow.clone(), server));
+
+    if let Err(exc) = flow
+        .wait_for_authorization_url(std::time::Duration::from_secs(30))
+        .await
+    {
+        flow.mark_error(&exc.to_string());
+    }
+    Json(flow.snapshot()).into_response()
+}
+
+/// `GET /api/mcp/oauth/flows/:flow_id` — poll flow status + discovered
+/// tools (hermes `mcp_oauth_flow_status`).
+async fn mcp_oauth_flow_status(Path(flow_id): Path<String>) -> Response {
+    use crate::mcp::dashboard_oauth as bridge;
+
+    bridge::registry().gc();
+    let Some(flow) = bridge::registry().get(&flow_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "OAuth flow not found or expired"})),
+        )
+            .into_response();
+    };
+    Json(flow.snapshot_with_tools()).into_response()
+}
+
+#[derive(Deserialize)]
+struct McpOAuthCallbackParams {
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// `GET /api/mcp/oauth/callback/:server_name` — the OAuth provider
+/// redirect target (hermes `mcp_oauth_callback`). Open route: the
+/// browser carries no bearer token; the `state` parameter authenticates
+/// the delivery.
+async fn mcp_oauth_callback(
+    Path(server_name): Path<String>,
+    Query(params): Query<McpOAuthCallbackParams>,
+) -> Response {
+    use crate::mcp::dashboard_oauth as bridge;
+
+    bridge::registry().gc();
+    let server_name = bridge::percent_decode(&server_name);
+    let Some(flow) = bridge::registry().find_for_callback(&server_name, params.state.as_deref())
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            axum::response::Html(
+                "<h1>OAuth flow expired</h1><p>Return to ulnclaw and try again.</p>",
+            ),
+        )
+            .into_response();
+    };
+    if let Err(exc) = flow.deliver_callback(
+        params.code.as_deref(),
+        params.state.as_deref(),
+        params.error.as_deref(),
+    ) {
+        let status = if exc.to_string().contains("already received") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return (
+            status,
+            axum::response::Html(
+                "<h1>OAuth callback rejected</h1><p>The callback was invalid or already used.</p>",
+            ),
+        )
+            .into_response();
+    }
+    if params.error.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::response::Html(
+                "<h1>Authorization failed</h1><p>Return to ulnclaw for details.</p>",
+            ),
+        )
+            .into_response();
+    }
+    axum::response::Html(
+        "<h1>Authorization received</h1><p>You can close this tab and return to ulnclaw.</p>",
+    )
+    .into_response()
+}
+
+/// Dashboard OAuth worker (hermes `_run_dashboard_mcp_oauth`): force a
+/// fresh authorization (tokens backed up first, restored on failure),
+/// run the normal OAuth flow with the task-local flow installed, then
+/// probe the authorized server for its tool list.
+///
+/// Divergence: hermes additionally reconnects the server into the live
+/// agent registry; the ulnclaw gateway is a standalone daemon without a
+/// tool registry, so new tokens take effect on the next session / lazy
+/// spawn.
+async fn run_dashboard_mcp_oauth(
+    flow: Arc<crate::mcp::dashboard_oauth::DashboardOAuthFlow>,
+    server: crate::mcp::McpServerConfig,
+) {
+    use crate::mcp::dashboard_oauth as bridge;
+
+    let url = server.url.clone().unwrap_or_default();
+    let home = crate::config::ulnclaw_home();
+    let backup = crate::mcp::oauth::load_tokens(&home, &server.name);
+    let result: Result<()> = bridge::scope_flow(flow.clone(), async {
+        // Force a fresh authorization like hermes `manager.remove` ahead
+        // of the probe; the backup is restored if the flow fails.
+        crate::mcp::oauth::remove_tokens(&home, &server.name);
+        let token =
+            crate::mcp::oauth::get_access_token(&home, &server.name, &url, &server.oauth, true)
+                .await?;
+        // Post-auth probe: capture the tool list the dashboard shows
+        // next to the approved flow (hermes `_probe_single_server`).
+        let client = crate::mcp::remote::RemoteMcpClient::connect(
+            &url,
+            server.transport.as_deref(),
+            &server.headers,
+            Some(token),
+            None,
+        )
+        .await?;
+        let tools = client.list_tools().await?;
+        let slim: Vec<Value> = tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "name": tool.get("name").cloned().unwrap_or(Value::Null),
+                    "description": tool.get("description").cloned().unwrap_or(Value::Null),
+                })
+            })
+            .collect();
+        flow.set_tools(slim);
+        flow.mark_approved()?;
+        Ok(())
+    })
+    .await;
+    if let Err(exc) = result {
+        if let Some(tokens) = backup {
+            crate::mcp::oauth::save_tokens(&home, &server.name, &tokens).ok();
+        }
+        flow.mark_error(&exc.to_string());
+    }
+    flow.mark_worker_done();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7915,6 +8170,268 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let repos = body["repos"].as_array().unwrap();
         assert_eq!(repos.len(), 1);
         assert_eq!(repos[0]["label"], "repo-x");
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // MCP OAuth dashboard bridge (P242)
+    // ------------------------------------------------------------------
+
+    fn mcp_auth_request(name: &str) -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::builder()
+            .uri(format!("/api/mcp/servers/{}/auth", name))
+            .method("POST")
+            .header("authorization", "Bearer sekret")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn mcp_auth_validates_server_config() {
+        use tower::ServiceExt;
+
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            r#"
+[[mcp.servers]]
+name = "stdio-srv"
+command = "npx"
+args = ["-y", "some-server"]
+
+[[mcp.servers]]
+name = "header-srv"
+url = "https://mcp.example.com/mcp"
+[mcp.servers.headers]
+Authorization = "Bearer static-token"
+"#,
+        )
+        .unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+
+        let response = app.clone().oneshot(mcp_auth_request("nope")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(mcp_auth_request("stdio-srv"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("env keys"));
+
+        let response = app
+            .clone()
+            .oneshot(mcp_auth_request("header-srv"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("header/API-key"));
+
+        match prev {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_oauth_callback_without_flow_is_open_and_renders_expired() {
+        use tower::ServiceExt;
+
+        let app = router(test_state());
+        // No bearer token — the route is open (browser redirect).
+        let request = axum::http::Request::builder()
+            .uri("/api/mcp/oauth/callback/nobody-here-srv?code=c&state=s")
+            .method("GET")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("OAuth flow expired"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn mcp_oauth_dashboard_flow_end_to_end() {
+        use axum::extract::Form;
+        use axum::routing::post;
+        use tower::ServiceExt;
+
+        let _guard = crate::models_dev::test_env_lock();
+
+        // Fake authorization server.
+        async fn as_register() -> axum::Json<Value> {
+            axum::Json(json!({"client_id": "dyn-client", "client_secret": null}))
+        }
+        async fn as_token(
+            Form(form): Form<std::collections::HashMap<String, String>>,
+        ) -> axum::Json<Value> {
+            assert_eq!(form.get("code").map(String::as_str), Some("auth-code-e2e"));
+            assert!(form
+                .get("redirect_uri")
+                .map(|u| u.contains("/api/mcp/oauth/callback/e2e-srv"))
+                .unwrap_or(false));
+            axum::Json(json!({
+                "access_token": "access-e2e",
+                "refresh_token": "refresh-e2e",
+                "expires_in": 3600
+            }))
+        }
+        let as_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let as_port = as_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let app = Router::new()
+                .route("/register", post(as_register))
+                .route("/token", post(as_token));
+            axum::serve(as_listener, app).await.ok();
+        });
+
+        // Fake Streamable HTTP MCP server gated on the OAuth bearer.
+        async fn mcp_rpc(
+            headers: HeaderMap,
+            axum::extract::Json(req): axum::extract::Json<Value>,
+        ) -> (StatusCode, axum::extract::Json<Value>) {
+            let auth = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if auth != "Bearer access-e2e" {
+                return (StatusCode::UNAUTHORIZED, axum::extract::Json(json!({})));
+            }
+            let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
+            let Some(id) = req.get("id").cloned() else {
+                return (StatusCode::ACCEPTED, axum::extract::Json(Value::Null));
+            };
+            let result = match method {
+                "initialize" => {
+                    json!({"serverInfo": {"name": "mock"}, "protocolVersion": "2025-03-26"})
+                }
+                "tools/list" => json!({"tools": [{
+                    "name": "ping",
+                    "description": "ping tool",
+                    "inputSchema": {"type": "object", "properties": {}}
+                }]}),
+                _ => json!({}),
+            };
+            (
+                StatusCode::OK,
+                axum::extract::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})),
+            )
+        }
+        let mcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mcp_port = mcp_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(mcp_listener, Router::new().route("/mcp", post(mcp_rpc)))
+                .await
+                .ok();
+        });
+
+        // Config: one OAuth-protected remote server.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            format!(
+                r#"
+[[mcp.servers]]
+name = "e2e-srv"
+url = "http://127.0.0.1:{}/mcp"
+auth = "oauth"
+
+[[mcp.servers]]
+name = "e2e-meta"
+url = "http://127.0.0.1:{}/mcp"
+"#,
+                mcp_port, as_port
+            ),
+        )
+        .unwrap();
+        // Point the OAuth metadata at the fake AS (no discovery endpoint
+        // on it). The worker reads home from ULNCLAW_HOME.
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+        let as_base = format!("http://127.0.0.1:{}", as_port);
+        std::fs::create_dir_all(tmp.path().join("mcp-tokens")).unwrap();
+        std::fs::write(
+            tmp.path().join("mcp-tokens/e2e-srv.meta.json"),
+            format!(
+                r#"{{"authorization_endpoint":"{0}/authorize","token_endpoint":"{0}/token","registration_endpoint":"{0}/register"}}"#,
+                as_base
+            ),
+        )
+        .unwrap();
+
+        let app = router(test_state());
+
+        // Start the flow.
+        let response = app
+            .clone()
+            .oneshot(mcp_auth_request("e2e-srv"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let snapshot: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(snapshot["status"], "authorization_required", "{snapshot}");
+        let flow_id = snapshot["flow_id"].as_str().unwrap().to_string();
+        let auth_url = snapshot["authorization_url"].as_str().expect("auth url");
+        let state_value: String = url::Url::parse(auth_url)
+            .unwrap()
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.into_owned())
+            .expect("state present");
+
+        // Browser redirect hits the open callback route.
+        let request = axum::http::Request::builder()
+            .uri(format!(
+                "/api/mcp/oauth/callback/e2e-srv?code=auth-code-e2e&state={}",
+                state_value
+            ))
+            .method("GET")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("Authorization received"));
+
+        // Poll the flow status until the worker finishes (token exchange
+        // + authenticated tool probe).
+        let mut final_snapshot = Value::Null;
+        for _ in 0..200 {
+            let (status, body) = get_json(
+                app.clone(),
+                &format!("/api/mcp/oauth/flows/{}", flow_id),
+                Some("sekret"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            if body["status"] == "approved" || body["status"] == "error" {
+                final_snapshot = body;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(final_snapshot["status"], "approved", "{final_snapshot}");
+        assert_eq!(final_snapshot["tools"][0]["name"], "ping");
+        assert!(final_snapshot["error"].is_null());
+
+        // Tokens persisted under the home.
+        let tokens: Value =
+            serde_json::from_str(&std::fs::read_to_string(tmp.path().join("mcp-tokens/e2e-srv.json")).unwrap())
+                .unwrap();
+        assert_eq!(tokens["access_token"], "access-e2e");
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

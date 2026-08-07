@@ -167,6 +167,15 @@ pub fn save_tokens(home: &Path, server_name: &str, tokens: &StoredTokens) -> Res
     write_json_private(&path, &serde_json::to_value(tokens).unwrap_or_default())
 }
 
+/// Delete only the stored tokens for a server (client registration and
+/// metadata stay put — they remain valid across re-authorization). Used
+/// by the dashboard OAuth worker to force a fresh authorization (hermes
+/// `manager.remove` ahead of the probe).
+pub fn remove_tokens(home: &Path, server_name: &str) {
+    let path = token_dir(home).join(format!("{}.json", safe_filename(server_name)));
+    std::fs::remove_file(path).ok();
+}
+
 pub fn load_client_info(home: &Path, server_name: &str) -> Option<ClientInfo> {
     let path = token_dir(home).join(format!("{}.client.json", safe_filename(server_name)));
     serde_json::from_value(read_json(&path)?).ok()
@@ -576,7 +585,7 @@ pub async fn get_access_token(
         // 2. Refresh grant.
         if let Some(refresh_token) = tokens.refresh_token.clone() {
             let metadata = resolve_metadata(home, server_name, server_url).await?;
-            let client = resolve_client(home, server_name, &metadata, cfg).await?;
+            let client = resolve_client(home, server_name, &metadata, cfg, None).await?;
             match refresh_grant(
                 &metadata.token_endpoint,
                 &client,
@@ -605,12 +614,29 @@ pub async fn get_access_token(
     }
     let metadata = resolve_metadata(home, server_name, server_url).await?;
 
-    let (listener, port) = bind_callback_listener(cfg.redirect_port)?;
-    let redirect_uri = cfg
-        .redirect_uri
-        .clone()
-        .unwrap_or_else(|| format!("http://{}:{}/callback", cfg.redirect_host_or_default(), port));
-    let client = resolve_client(home, server_name, &metadata, cfg).await?;
+    // In a dashboard-mediated flow (hermes `dashboard_oauth_flow`
+    // contextvar) the authorization URL is published to the gateway flow
+    // and the browser redirect lands on the gateway's callback route
+    // instead of a loopback listener (hermes `_resolve_callback_port`
+    // dashboard branch: no port reserved, redirect_uri = the gateway
+    // callback URL).
+    let dashboard_flow = crate::mcp::dashboard_oauth::current_flow();
+    let (listener, redirect_uri) = match dashboard_flow.as_ref() {
+        Some(flow) => (
+            None,
+            cfg.redirect_uri
+                .clone()
+                .unwrap_or_else(|| flow.redirect_uri.clone()),
+        ),
+        None => {
+            let (listener, port) = bind_callback_listener(cfg.redirect_port)?;
+            let uri = cfg.redirect_uri.clone().unwrap_or_else(|| {
+                format!("http://{}:{}/callback", cfg.redirect_host_or_default(), port)
+            });
+            (Some(listener), uri)
+        }
+    };
+    let client = resolve_client(home, server_name, &metadata, cfg, Some(&redirect_uri)).await?;
 
     let (state, verifier, challenge) = generate_pkce();
     let auth_url = build_authorization_url(
@@ -621,14 +647,22 @@ pub async fn get_access_token(
         &challenge,
         cfg.scope.as_deref(),
     );
-    println!(
-        "[mcp-oauth] {}: authorize in your browser (waiting up to {}s for the callback):",
-        server_name, CALLBACK_TIMEOUT_SECS
-    );
-    println!("  {}", auth_url);
-    open_browser(&auth_url);
-
-    let code = wait_for_callback(listener, &state).await?;
+    let code = if let Some(flow) = dashboard_flow.as_ref() {
+        flow.publish_authorization_url(&auth_url)?;
+        flow.wait_for_callback(Duration::from_secs(CALLBACK_TIMEOUT_SECS))
+            .await?
+            .0
+    } else {
+        println!(
+            "[mcp-oauth] {}: authorize in your browser (waiting up to {}s for the callback):",
+            server_name, CALLBACK_TIMEOUT_SECS
+        );
+        println!("  {}", auth_url);
+        open_browser(&auth_url);
+        let listener = listener
+            .expect("loopback listener is always bound outside dashboard-mediated flows");
+        wait_for_callback(listener, &state).await?
+    };
     let tokens = exchange_code(
         &metadata.token_endpoint,
         &client,
@@ -655,7 +689,7 @@ pub async fn recover_token(
     if let Some(tokens) = load_tokens(home, server_name) {
         if let Some(refresh_token) = tokens.refresh_token {
             let metadata = resolve_metadata(home, server_name, server_url).await?;
-            let client = resolve_client(home, server_name, &metadata, cfg).await?;
+            let client = resolve_client(home, server_name, &metadata, cfg, None).await?;
             match refresh_grant(
                 &metadata.token_endpoint,
                 &client,
@@ -703,6 +737,7 @@ async fn resolve_client(
     server_name: &str,
     metadata: &OAuthMetadata,
     cfg: &McpOAuthConfig,
+    effective_redirect_uri: Option<&str>,
 ) -> Result<ClientInfo> {
     if let Some(client) = load_client_info(home, server_name) {
         return Ok(client);
@@ -719,9 +754,16 @@ async fn resolve_client(
                 server_name
             )));
         };
-        let redirect_uri = cfg.redirect_uri.clone().unwrap_or_else(|| {
-            format!("http://{}/callback", cfg.redirect_host_or_default())
-        });
+        // The registered redirect_uri must equal the one used in the
+        // authorization request (providers reject mismatches); pass the
+        // effective URI when the caller already resolved it.
+        let redirect_uri = effective_redirect_uri
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                cfg.redirect_uri.clone().unwrap_or_else(|| {
+                    format!("http://{}/callback", cfg.redirect_host_or_default())
+                })
+            });
         register_client(registration_endpoint, &redirect_uri, cfg.client_name_or_default()).await?
     };
     save_client_info(home, server_name, &client).ok();
@@ -1050,6 +1092,111 @@ mod tests {
         assert_eq!(refreshed.refresh_token.as_deref(), Some("refresh-2"));
         let grants = issued.lock().await;
         assert_eq!(grants.len(), 2);
+    }
+
+    /// Dashboard-mediated flow (P242): get_access_token runs inside a
+    /// `scope_flow` task-local — the authorization URL is published to the
+    /// flow (no loopback listener, no browser), the redirect_uri is the
+    /// gateway callback URL, and the code arrives via `deliver_callback`.
+    #[tokio::test]
+    async fn dashboard_mediated_flow_end_to_end() {
+        use axum::extract::{Form, State};
+        use axum::routing::post;
+        use axum::Router;
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct AsState {
+            issued: Arc<tokio::sync::Mutex<Vec<Value>>>,
+        }
+
+        async fn register() -> axum::Json<Value> {
+            axum::Json(json!({"client_id": "dyn-client", "client_secret": null}))
+        }
+        async fn token(
+            State(state): State<AsState>,
+            Form(form): Form<std::collections::HashMap<String, String>>,
+        ) -> axum::Json<Value> {
+            state.issued.lock().await.push(json!(form.clone()));
+            // The registered redirect_uri must be the gateway callback URL.
+            assert!(form
+                .get("redirect_uri")
+                .map(|u| u.contains("/api/mcp/oauth/callback/dash-srv"))
+                .unwrap_or(false));
+            axum::Json(json!({
+                "access_token": "access-dash",
+                "refresh_token": "refresh-dash",
+                "expires_in": 3600
+            }))
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state = AsState {
+            issued: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        };
+        tokio::spawn(async move {
+            let app = Router::new()
+                .route("/register", post(register))
+                .route("/token", post(token))
+                .with_state(state);
+            axum::serve(listener, app).await.ok();
+        });
+
+        let base = format!("http://127.0.0.1:{}", port);
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        let metadata = OAuthMetadata {
+            authorization_endpoint: format!("{}/authorize", base),
+            token_endpoint: format!("{}/token", base),
+            registration_endpoint: Some(format!("{}/register", base)),
+        };
+        save_metadata(&home, "dash-srv", &metadata).unwrap();
+
+        let flow = crate::mcp::dashboard_oauth::DashboardOAuthFlow::new(
+            "flow-dash".into(),
+            "dash-srv".into(),
+            None,
+            home.to_string_lossy().to_string(),
+            "http://127.0.0.1:8642/api/mcp/oauth/callback/dash-srv".into(),
+        );
+        let cfg = McpOAuthConfig::default();
+        let worker_flow = flow.clone();
+        let worker_home = home.clone();
+        let worker_base = base.clone();
+        let worker = tokio::spawn(crate::mcp::dashboard_oauth::scope_flow(
+            worker_flow,
+            async move {
+                get_access_token(&worker_home, "dash-srv", &worker_base, &cfg, true).await
+            },
+        ));
+
+        // The authorization URL surfaces through the flow, carrying the
+        // gateway redirect_uri and a state parameter.
+        let url = flow
+            .wait_for_authorization_url(std::time::Duration::from_secs(10))
+            .await
+            .expect("authorization url published");
+        let parsed = url::Url::parse(&url).expect("valid url");
+        let redirect: String = parsed
+            .query_pairs()
+            .find(|(k, _)| k == "redirect_uri")
+            .map(|(_, v)| v.into_owned())
+            .unwrap();
+        assert_eq!(redirect, "http://127.0.0.1:8642/api/mcp/oauth/callback/dash-srv");
+        let state_value: String = parsed
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.into_owned())
+            .expect("state present");
+
+        // The gateway callback route delivers the browser redirect.
+        flow.deliver_callback(Some("auth-code-dash"), Some(&state_value), None)
+            .unwrap();
+        let token = worker.await.unwrap().expect("flow completed");
+        assert_eq!(token, "access-dash");
+        let stored = load_tokens(&home, "dash-srv").expect("tokens saved");
+        assert_eq!(stored.access_token, "access-dash");
     }
 
     #[tokio::test]

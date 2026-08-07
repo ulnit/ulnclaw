@@ -17,6 +17,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+pub mod dashboard_oauth;
 pub mod oauth;
 pub mod remote;
 pub mod schema_cache;
