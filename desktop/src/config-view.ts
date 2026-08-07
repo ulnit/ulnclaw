@@ -110,6 +110,11 @@ export class ConfigWidget {
         </div>
         <p class="config-note" data-i18n="config.poolNote"></p>
       </div>
+      <div id="config-messaging" class="config-env" hidden>
+        <h3 data-i18n="config.messagingTitle">Messaging platforms</h3>
+        <div id="config-messaging-rows" class="config-env-rows"></div>
+        <p class="config-note" data-i18n="config.messagingNote"></p>
+      </div>
       <dialog id="config-raw-dialog" class="config-raw-dialog">
         <h2 data-i18n="config.rawTitle">Raw config.toml</h2>
         <textarea id="config-raw-text" spellcheck="false"></textarea>
@@ -249,6 +254,7 @@ export class ConfigWidget {
       this.renderPool().catch(() => undefined);
       this.renderOAuth().catch(() => undefined);
       this.renderSchema().catch(() => undefined);
+      this.renderMessaging().catch(() => undefined);
       this.status("");
       const fileEl = this.root.querySelector("#config-file") as HTMLElement;
       fileEl.textContent = this.configPath;
@@ -435,6 +441,91 @@ export class ConfigWidget {
       }
     } catch {
       block.hidden = true;
+    }
+  }
+
+  /** Messaging-platform posture + enable toggle + test probe over
+   * /api/messaging/platforms (hermes ChannelsPage parity; P341). */
+  private async renderMessaging(): Promise<void> {
+    const client = this.client();
+    const block = this.root.querySelector("#config-messaging") as HTMLElement;
+    const rows = this.root.querySelector("#config-messaging-rows") as HTMLElement;
+    rows.innerHTML = "";
+    if (!client) {
+      block.hidden = true;
+      return;
+    }
+    let platforms;
+    try {
+      platforms = await client.messagingPlatforms();
+    } catch {
+      block.hidden = true;
+      return;
+    }
+    if (!platforms.length) {
+      block.hidden = true;
+      return;
+    }
+    block.hidden = false;
+    for (const platform of platforms) {
+      const row = document.createElement("div");
+      row.className = "config-env-row";
+      const chip = document.createElement("span");
+      chip.className = "config-env-chip";
+      chip.textContent = platform.name;
+      chip.title = platform.description;
+      row.appendChild(chip);
+      const state = document.createElement("span");
+      state.className = "jobs-counts";
+      const missingEnv = platform.env_vars.filter((envVar) => envVar.required && !envVar.is_set);
+      state.textContent = platform.enabled
+        ? missingEnv.length
+          ? `${platform.state} \u00b7 ${missingEnv.map((envVar) => envVar.key).join(", ")}`
+          : platform.state
+        : platform.state;
+      row.appendChild(state);
+      const toggle = document.createElement("button");
+      toggle.className = "ghost";
+      toggle.textContent = platform.enabled
+        ? t.config.messagingDisable
+        : t.config.messagingEnable;
+      toggle.onclick = async () => {
+        toggle.disabled = true;
+        try {
+          await client.messagingPlatformUpdate(platform.id, { enabled: !platform.enabled });
+          this.status(t.config.restartNote);
+          await this.renderMessaging();
+        } catch (error) {
+          this.status(
+            t.config.messagingFailed.replace(
+              "{error}",
+              error instanceof Error ? error.message : String(error),
+            ),
+            true,
+          );
+        } finally {
+          toggle.disabled = false;
+        }
+      };
+      row.appendChild(toggle);
+      if (platform.enabled) {
+        const test = document.createElement("button");
+        test.className = "ghost";
+        test.textContent = t.config.messagingTest;
+        test.onclick = async () => {
+          test.disabled = true;
+          try {
+            const result = await client.messagingPlatformTest(platform.id);
+            state.textContent = result.message;
+          } catch (error) {
+            state.textContent = error instanceof Error ? error.message : String(error);
+          } finally {
+            test.disabled = false;
+          }
+        };
+        row.appendChild(test);
+      }
+      rows.appendChild(row);
     }
   }
 
