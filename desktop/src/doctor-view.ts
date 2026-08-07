@@ -3,7 +3,7 @@
 // grouped by section, with an issues panel up top. Online provider
 // probes are opt-in since they are slow.
 
-import type { GatewayClient, DoctorCheck, MonitoringPayload } from "./gateway";
+import type { GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload } from "./gateway";
 import { t } from "./i18n";
 
 const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
@@ -19,6 +19,7 @@ const LOGS_LINES = 150;
 export class DoctorWidget {
   private busy = false;
   private logsTimer: number | null = null;
+  private mcpPollers: number[] = [];
 
   constructor(
     private root: HTMLElement,
@@ -90,6 +91,8 @@ export class DoctorWidget {
       window.clearInterval(this.logsTimer);
       this.logsTimer = null;
     }
+    for (const poller of this.mcpPollers) window.clearInterval(poller);
+    this.mcpPollers = [];
   }
 
   private status(message: string): void {
@@ -213,12 +216,95 @@ export class DoctorWidget {
         value.textContent = `${server.kind} · ${server.target} · ${auth}`;
         value.title = server.target;
         row.append(label, value);
+        if (server.auth === "oauth" && !server.oauth_tokens) {
+          const connect = document.createElement("button");
+          connect.className = "ghost mcp-connect";
+          connect.textContent = t.mcpPanel.connect;
+          connect.addEventListener("click", () => {
+            this.startMcpOAuth(server, row, connect).catch(() => undefined);
+          });
+          row.appendChild(connect);
+        }
         rows.appendChild(row);
       }
       section.hidden = false;
     } catch {
       section.hidden = true;
     }
+  }
+
+  /** Initiate an MCP OAuth flow, surface the authorization URL, and
+   * poll the flow until approved/error (hermes dashboard parity). */
+  private async startMcpOAuth(
+    server: McpServerRow,
+    row: HTMLElement,
+    button: HTMLButtonElement,
+  ): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    button.disabled = true;
+    button.textContent = t.mcpPanel.connecting;
+    let flow: McpOAuthFlow;
+    try {
+      flow = await client.mcpAuth(server.name);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = t.mcpPanel.connect;
+      this.mcpFlowNote(row, error instanceof Error ? error.message : String(error), true);
+      return;
+    }
+    const flowId = flow.flow_id;
+    const poll = window.setInterval(async () => {
+      const current = this.client();
+      if (!current) return;
+      try {
+        flow = await current.mcpFlowStatus(flowId);
+      } catch (error) {
+        window.clearInterval(poll);
+        this.mcpPollers = this.mcpPollers.filter((id) => id !== poll);
+        button.disabled = false;
+        button.textContent = t.mcpPanel.connect;
+        this.mcpFlowNote(row, error instanceof Error ? error.message : String(error), true);
+        return;
+      }
+      if (flow.authorization_url && !row.querySelector(".mcp-auth-link")) {
+        this.mcpAuthLink(row, flow.authorization_url);
+      }
+      if (flow.status === "approved") {
+        window.clearInterval(poll);
+        this.mcpPollers = this.mcpPollers.filter((id) => id !== poll);
+        this.mcpFlowNote(row, t.mcpPanel.approved, false);
+        window.setTimeout(() => this.loadMcp().catch(() => undefined), 500);
+      } else if (flow.status === "error") {
+        window.clearInterval(poll);
+        this.mcpPollers = this.mcpPollers.filter((id) => id !== poll);
+        button.disabled = false;
+        button.textContent = t.mcpPanel.connect;
+        this.mcpFlowNote(row, flow.error || t.mcpPanel.failed, true);
+      }
+    }, 2_000);
+    this.mcpPollers.push(poll);
+  }
+
+  private mcpAuthLink(row: HTMLElement, url: string): void {
+    const link = document.createElement("a");
+    link.className = "mcp-auth-link";
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = t.mcpPanel.openAuth;
+    row.appendChild(link);
+  }
+
+  private mcpFlowNote(row: HTMLElement, message: string, isError: boolean): void {
+    let note = row.querySelector(".mcp-flow-note") as HTMLElement | null;
+    if (!note) {
+      note = document.createElement("span");
+      note.className = "mcp-flow-note config-note";
+      row.appendChild(note);
+    }
+    note.textContent = message;
+    note.classList.toggle("error", isError);
   }
 
   private async loadLogs(): Promise<void> {

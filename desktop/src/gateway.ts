@@ -313,6 +313,15 @@ export interface McpServerRow {
   oauth_tokens: boolean;
 }
 
+export interface McpOAuthFlow {
+  flow_id: string;
+  server_name: string;
+  status: "starting" | "authorization_required" | "approved" | "error";
+  authorization_url: string | null;
+  error: string | null;
+  tools?: { name: string; description?: string | null }[];
+}
+
 export interface LogsTailPayload {
   path: string;
   lines: string[];
@@ -797,6 +806,28 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`mcp servers HTTP ${response.status}`);
     const value = await response.json();
     return (value.servers || []) as McpServerRow[];
+  }
+
+  /** POST /api/mcp/servers/:name/auth — start an OAuth flow for an MCP server. */
+  async mcpAuth(name: string): Promise<McpOAuthFlow> {
+    const response = await fetch(
+      this.endpoint(`/api/mcp/servers/${encodeURIComponent(name)}/auth`),
+      { method: "POST", headers: this.headers() },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.detail || `mcp auth HTTP ${response.status}`);
+    return value as McpOAuthFlow;
+  }
+
+  /** GET /api/mcp/oauth/flows/:flowId — poll OAuth flow status. */
+  async mcpFlowStatus(flowId: string): Promise<McpOAuthFlow> {
+    const response = await fetch(
+      this.endpoint(`/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`),
+      { headers: this.headers() },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.detail || `mcp flow HTTP ${response.status}`);
+    return value as McpOAuthFlow;
   }
 
   /** GET /api/logs/tail — tail of gateway.log with optional min level. */
