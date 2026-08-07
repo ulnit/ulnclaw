@@ -78,6 +78,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="egressPanel.title">Egress proxy</h3>
         <pre id="egress-body" class="logs-body"></pre>
       </section>
+      <section id="doctor-learning" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="learningPanel.title">Learning graph</h3>
+        <div id="learning-rows"></div>
+      </section>
       <section id="doctor-metrics" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="metricsPanel.title">Prometheus metrics</h3>
         <details id="metrics-details">
@@ -119,6 +123,7 @@ export class DoctorWidget {
     this.loadMetrics().catch(() => undefined);
     this.loadEgress().catch(() => undefined);
     this.loadChannels().catch(() => undefined);
+    this.loadLearning().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
       this.logsTimer = window.setInterval(() => {
@@ -645,6 +650,76 @@ export class DoctorWidget {
       disabledRow.append(disabledLabel, disabledValue);
       rows.appendChild(disabledRow);
 
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** Learning-graph census (hermes star-map parity): node/edge counts,
+   * density, and top clusters from GET /api/learning/graph. */
+  private async loadLearning(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-learning") as HTMLElement;
+    const rows = this.root.querySelector("#learning-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const graph = await client.learningGraph();
+      const num = (key: string): number => {
+        const value = graph.stats[key];
+        return typeof value === "number" ? value : 0;
+      };
+      const skillNodes = graph.nodes.filter((node) => node.kind === "skill").length;
+      const memoryNodes = graph.nodes.filter((node) => node.kind === "memory").length;
+      const v = t.learningPanel;
+      const entries: [string, string][] = [
+        [v.skills, String(num("learned_skills") || skillNodes)],
+        [v.memoryNodes, String(num("memory_nodes") || memoryNodes)],
+        [
+          v.edges,
+          `${num("related_edges") + num("memory_skill_edges")} (${num("related_edges")} ${v.skillEdgesWord} \u00b7 ${num("memory_skill_edges")} ${v.memoryEdgesWord})`,
+        ],
+        [v.density, String(num("edges_per_node"))],
+        [v.linked, `${num("linked_nodes")} (${num("isolated_pct")}% ${v.isolated})`],
+        [v.origin, `${num("agent_created")} ${v.agentCreatedWord} \u00b7 ${num("used")} ${v.usedWord}`],
+        [v.categories, String(num("categories") || graph.clusters.length)],
+      ];
+      rows.innerHTML = "";
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        valueEl.title = value;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
+      if (graph.clusters.length > 0) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = v.topCategories;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = graph.clusters
+          .slice(0, 8)
+          .map((cluster) => `${cluster.category} \u00d7${cluster.count}`)
+          .join(" \u00b7 ");
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
+      const hint = document.createElement("div");
+      hint.className = "config-note";
+      hint.textContent = v.hint;
+      rows.appendChild(hint);
       section.hidden = false;
     } catch {
       section.hidden = true;

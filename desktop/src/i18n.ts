@@ -202,6 +202,7 @@ export interface Translations {
   metricsPanel: { title: string; summary: string; };
   egressPanel: { title: string; };
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; };
+  learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -494,6 +495,7 @@ const en: Translations = {
   metricsPanel: { title: "Prometheus metrics", summary: "Show raw /metrics exposition" },
   egressPanel: { title: "Egress proxy" },
   channelsPanel: { title: "Messaging channels", enabled: "Enabled", disabled: "Disabled", noneEnabled: "(none)" },
+  learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -836,6 +838,7 @@ const zh: Translations = {
   metricsPanel: { title: "Prometheus 指标", summary: "显示 /metrics 原始输出" },
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "消息通道", enabled: "已启用", disabled: "未启用", noneEnabled: "（无）" },
+  learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -1178,6 +1181,7 @@ const zhHant: Translations = {
   metricsPanel: { title: "Prometheus 指標", summary: "顯示 /metrics 原始輸出" },
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "訊息通道", enabled: "已啟用", disabled: "未啟用", noneEnabled: "（無）" },
+  learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -1520,6 +1524,7 @@ const ja: Translations = {
   metricsPanel: { title: "Prometheus メトリクス", summary: "/metrics 生の出力を表示" },
   egressPanel: { title: "エグレスプロキシ" },
   channelsPanel: { title: "メッセージングチャネル", enabled: "有効", disabled: "無効", noneEnabled: "（なし）" },
+  learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1862,6 +1867,7 @@ const ar: Translations = {
   metricsPanel: { title: "مقاييس Prometheus", summary: "عرض إخراج /metrics الخام" },
   egressPanel: { title: "وكيل الخروج" },
   channelsPanel: { title: "قنوات المراسلة", enabled: "مفعلة", disabled: "معطلة", noneEnabled: "(لا شيء)" },
+  learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",
