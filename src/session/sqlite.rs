@@ -110,6 +110,17 @@ pub struct SessionRow {
     pub output_tokens: i64,
 }
 
+/// Per-model usage aggregate (hermes `_get_models_analytics` row).
+#[derive(Debug, Clone)]
+pub struct ModelUsageRow {
+    pub model: String,
+    pub sessions: i64,
+    pub messages: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub last_used_at: f64,
+}
+
 /// One gateway platform-conversation row for the MCP channel bridge
 /// (hermes mcp_serve `_row_to_index_entry` input shape).
 #[derive(Debug, Clone)]
@@ -1156,6 +1167,44 @@ impl SqliteSessionStore {
             sessions.push(row.map_err(|e| AgentError::session(e.to_string()))?);
         }
         Ok(sessions)
+    }
+
+    /// Per-model usage aggregation since a UNIX cutoff (hermes
+    /// `_get_models_analytics` grouping): sessions, messages, tokens and
+    /// last use per model, largest footprint first.
+    pub fn model_usage_since(&self, cutoff: f64) -> Result<Vec<ModelUsageRow>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT model,
+                        COUNT(*) AS sessions,
+                        SUM(COALESCE(message_count, 0)) AS messages,
+                        SUM(COALESCE(input_tokens, 0)) AS input_tokens,
+                        SUM(COALESCE(output_tokens, 0)) AS output_tokens,
+                        MAX(started_at) AS last_used_at
+                 FROM sessions
+                 WHERE started_at > ?1 AND model IS NOT NULL AND model != ''
+                 GROUP BY model
+                 ORDER BY SUM(COALESCE(input_tokens, 0)) + SUM(COALESCE(output_tokens, 0)) DESC",
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![cutoff], |row| {
+                Ok(ModelUsageRow {
+                    model: row.get(0)?,
+                    sessions: row.get(1)?,
+                    messages: row.get(2)?,
+                    input_tokens: row.get(3)?,
+                    output_tokens: row.get(4)?,
+                    last_used_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AgentError::session(e.to_string()))?);
+        }
+        Ok(out)
     }
 
     /// Gateway platform conversations for the MCP channel bridge (hermes

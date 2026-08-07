@@ -151,6 +151,7 @@ export interface Translations {
     unauthenticated: string; docs: string; noModels: string;
     colModel: string; colFamily: string; colContext: string; colMaxOut: string;
     colCaps: string; colPrice: string;
+    usageTitle: string; usageEmpty: string; usageSessions: string; usageMessages: string; usageTokens: string;
   };
   pluginsView: {
     count: string; none: string; loadFailed: string; hooksWord: string; toolsWord: string;
@@ -448,6 +449,8 @@ const en: Translations = {
     currentBadge: "current", authenticated: "authenticated", unauthenticated: "no credentials",
     docs: "Docs", noModels: "No models listed.",
     colModel: "Model", colFamily: "Family", colContext: "Context", colMaxOut: "Max out", colCaps: "Caps", colPrice: "$/Mtok",
+    usageTitle: "Model usage (30 days)", usageEmpty: "No model usage recorded yet.",
+    usageSessions: "sessions", usageMessages: "msgs", usageTokens: "tokens",
   },
   pluginsView: {
     count: "{count} plugins", none: "No plugins found — install a plugin directory with a plugin.toml manifest into ~/.ulnclaw/plugins.",
@@ -865,6 +868,8 @@ const zh: Translations = {
     currentBadge: "当前", authenticated: "已认证", unauthenticated: "无凭据",
     docs: "文档", noModels: "未列出模型。",
     colModel: "模型", colFamily: "家族", colContext: "上下文", colMaxOut: "最大输出", colCaps: "能力", colPrice: "$/Mtok",
+    usageTitle: "模型用量（30 天）", usageEmpty: "尚无模型用量记录。",
+    usageSessions: "会话", usageMessages: "消息", usageTokens: "令牌",
   },
   pluginsView: {
     count: "{count} 个插件", none: "未发现插件——请将带 plugin.toml 清单的插件目录安装到 ~/.ulnclaw/plugins。",
@@ -1282,6 +1287,8 @@ const zhHant: Translations = {
     currentBadge: "目前", authenticated: "已認證", unauthenticated: "無憑證",
     docs: "文件", noModels: "未列出模型。",
     colModel: "模型", colFamily: "家族", colContext: "上下文", colMaxOut: "最大輸出", colCaps: "能力", colPrice: "$/Mtok",
+    usageTitle: "模型用量（30 天）", usageEmpty: "尚無模型用量紀錄。",
+    usageSessions: "工作階段", usageMessages: "訊息", usageTokens: "記號",
   },
   pluginsView: {
     count: "{count} 個外掛", none: "未發現外掛——請將帶 plugin.toml 清單的外掛目錄安裝到 ~/.ulnclaw/plugins。",
@@ -1699,6 +1706,8 @@ const ja: Translations = {
     currentBadge: "現在", authenticated: "認証済み", unauthenticated: "資格情報なし",
     docs: "ドキュメント", noModels: "モデルがリストされていません。",
     colModel: "モデル", colFamily: "ファミリー", colContext: "コンテキスト", colMaxOut: "最大出力", colCaps: "機能", colPrice: "$/Mtok",
+    usageTitle: "モデル使用量（30 日）", usageEmpty: "モデル使用量はまだ記録されていません。",
+    usageSessions: "セッション", usageMessages: "メッセージ", usageTokens: "トークン",
   },
   pluginsView: {
     count: "{count} プラグイン", none: "プラグインが見つかりません — plugin.toml マニフェスト付きのプラグインディレクトリを ~/.ulnclaw/plugins にインストールしてください。",
@@ -2116,6 +2125,8 @@ const ar: Translations = {
     currentBadge: "الحالي", authenticated: "موثق", unauthenticated: "بدون بيانات اعتماد",
     docs: "الوثائق", noModels: "لا توجد نماذج مدرجة.",
     colModel: "النموذج", colFamily: "العائلة", colContext: "السياق", colMaxOut: "أقصى إخراج", colCaps: "القدرات", colPrice: "$/Mtok",
+    usageTitle: "استخدام النماذج (30 يومًا)", usageEmpty: "لا يوجد استخدام للنماذج بعد.",
+    usageSessions: "جلسات", usageMessages: "رسائل", usageTokens: "رموز",
   },
   pluginsView: {
     count: "{count} إضافة", none: "لا توجد إضافات — ثبّت دليل إضافة ببيان plugin.toml في ~/.ulnclaw/plugins.",

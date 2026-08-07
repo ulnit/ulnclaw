@@ -1020,6 +1020,47 @@ async fn audio_transcribe(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct AnalyticsModelsQuery {
+    days: Option<i64>,
+}
+
+/// `GET /api/analytics/models` — per-model usage aggregation
+/// (hermes `/api/analytics/models` parity): sessions, messages, tokens
+/// and last use per model over the last N days (1-365, default 30).
+async fn analytics_models(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<AnalyticsModelsQuery>,
+) -> Json<Value> {
+    let days = query.days.unwrap_or(30).clamp(1, 365);
+    let cutoff = now_secs() - (days as f64) * 86400.0;
+    let store = state.store.clone();
+    let rows = tokio::task::spawn_blocking(move || store.model_usage_since(cutoff))
+        .await
+        .ok()
+        .and_then(|result| result.ok())
+        .unwrap_or_default();
+    let models: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "model": row.model,
+                "sessions": row.sessions,
+                "messages": row.messages,
+                "input_tokens": row.input_tokens,
+                "output_tokens": row.output_tokens,
+                "total_tokens": row.input_tokens + row.output_tokens,
+                "last_used_at": row.last_used_at,
+            })
+        })
+        .collect();
+    Json(json!({
+        "days": days,
+        "cutoff": cutoff,
+        "models": models,
+    }))
+}
+
 /// `GET /api/update/check` — non-applying update check (hermes
 /// `/api/hermes/update/check` parity): fetches upstream and reports how far
 /// behind the install is without changing anything.
@@ -2311,6 +2352,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/capabilities", get(capabilities))
         .route("/metrics", get(metrics))
         .route("/api/usage", get(usage))
+        .route("/api/analytics/models", get(analytics_models))
         .route("/api/config", get(config_get).put(config_put))
         .route("/api/config/raw", get(config_raw_get).put(config_raw_put))
         .route("/api/env", get(env_list).put(env_set).delete(env_delete))
@@ -11098,6 +11140,54 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         )
         .await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_analytics_models_endpoint_aggregates_per_model() {
+        let state = test_state();
+        let app = router(state.clone());
+
+        // Seed two sessions: one with a model + usage, one model-less.
+        let with_model = state
+            .store
+            .create_session("gateway", Some("test-model"), None)
+            .unwrap();
+        state.store.update_usage(&with_model, 100, 40, 3).unwrap();
+        state
+            .store
+            .create_session("gateway", None, None)
+            .unwrap();
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/analytics/models", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Aggregation reports only the model-backed session.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/analytics/models?days=30",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["days"], 30);
+        let models = body["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["model"], "test-model");
+        assert_eq!(models[0]["sessions"], 1);
+        assert_eq!(models[0]["input_tokens"], 100);
+        assert_eq!(models[0]["output_tokens"], 40);
+        assert_eq!(models[0]["total_tokens"], 140);
+
+        // Days clamp into 1-365.
+        let (status, body) = get_json(
+            app,
+            "/api/analytics/models?days=9999",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["days"], 365);
     }
 
     #[tokio::test]

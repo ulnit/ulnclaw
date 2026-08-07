@@ -37,6 +37,8 @@ export class ModelsViewWidget {
       </header>
       <div id="models-view-status" class="config-status" hidden></div>
       <div id="models-view-body" class="models-view-body"></div>
+      <h3 class="config-section" data-i18n="modelsView.usageTitle">Model usage (30 days)</h3>
+      <div id="models-view-usage"></div>
     `;
     this.root.querySelector("#models-view-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
@@ -67,6 +69,7 @@ export class ModelsViewWidget {
     try {
       const payload = await client.modelOptions();
       this.render(payload);
+      this.renderUsage().catch(() => undefined);
       this.status("");
     } catch (error) {
       this.status(
@@ -103,6 +106,40 @@ export class ModelsViewWidget {
 
     (this.root.querySelector("#models-view-count") as HTMLElement).textContent =
       v.count.replace("{providers}", String(payload.providers.length));
+  }
+
+  /** Per-model usage table over /api/analytics/models (P328). */
+  private async renderUsage(): Promise<void> {
+    const client = this.client();
+    const box = this.root.querySelector("#models-view-usage") as HTMLElement;
+    if (!client) {
+      box.innerHTML = "";
+      return;
+    }
+    const v = t.modelsView;
+    try {
+      const payload = await client.analyticsModels(30);
+      if (payload.models.length === 0) {
+        box.innerHTML = `<p class="config-note">${escapeHtml(v.usageEmpty)}</p>`;
+        return;
+      }
+      const rows = payload.models
+        .map((row) => {
+          const when = row.last_used_at
+            ? new Date(row.last_used_at * 1000).toLocaleString()
+            : "\u2014";
+          return `
+            <div class="monitoring-row">
+              <span class="monitoring-label">${escapeHtml(row.model)}</span>
+              <span class="monitoring-value">${row.sessions} ${escapeHtml(v.usageSessions)} \u00b7 ${row.messages} ${escapeHtml(v.usageMessages)} \u00b7 ${row.total_tokens.toLocaleString()} ${escapeHtml(v.usageTokens)}</span>
+              <span class="jobs-counts">${escapeHtml(when)}</span>
+            </div>`;
+        })
+        .join("");
+      box.innerHTML = rows;
+    } catch {
+      box.innerHTML = "";
+    }
   }
 
   private renderProvider(provider: ModelOptionRow, currentModel: string): string {

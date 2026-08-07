@@ -566,6 +566,17 @@ export interface McpOAuthFlow {
   tools?: { name: string; description?: string | null }[];
 }
 
+/** Per-model usage row from GET /api/analytics/models (P328). */
+export interface ModelUsageRow {
+  model: string;
+  sessions: number;
+  messages: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  last_used_at: number;
+}
+
 /** Shell-hook consent census from GET /api/ops/hooks (P326). */
 export interface HooksConsentPayload {
   hooks: { event: string; command: string; known: boolean; consented: boolean; state: string }[];
@@ -1491,6 +1502,15 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `env delete HTTP ${response.status}`);
+  }
+
+  /** GET /api/analytics/models — per-model usage aggregation (P328). */
+  async analyticsModels(days = 30): Promise<{ days: number; models: ModelUsageRow[] }> {
+    const response = await fetch(this.endpoint(`/api/analytics/models?days=${days}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`analytics HTTP ${response.status}`);
+    return (await response.json()) as { days: number; models: ModelUsageRow[] };
   }
 
   /** POST /api/audio/transcribe — voice-note transcription (P327). */
