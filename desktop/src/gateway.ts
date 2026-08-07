@@ -270,6 +270,27 @@ export interface ConfigPayload {
   note: string;
 }
 
+export interface RunApproval {
+  command: string;
+  reason: string;
+  choices: string[];
+  resolved?: string;
+}
+
+export interface RunRow {
+  run_id: string;
+  status: string;
+  session_id: string | null;
+  message: string;
+  created_at: number;
+  finished_at: number | null;
+  result: string | null;
+  error: string | null;
+  iterations: number | null;
+  stop_requested: boolean;
+  approval: RunApproval | null;
+}
+
 export interface MonitoringPayload {
   enabled: boolean;
   metrics: boolean;
@@ -674,6 +695,36 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`usage HTTP ${response.status}`);
     return (await response.json()) as UsagePayload;
+  }
+
+  /** GET /v1/runs — tracked async runs (with pending approvals). */
+  async listRuns(): Promise<RunRow[]> {
+    const response = await fetch(this.endpoint("/v1/runs"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`runs HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.data || value || []) as RunRow[];
+  }
+
+  /** POST /v1/runs/:id/approval — resolve a pending approval. */
+  async approveRun(runId: string, decision: "once" | "session" | "always" | "deny"): Promise<void> {
+    const response = await fetch(this.endpoint(`/v1/runs/${runId}/approval`), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ decision }),
+    });
+    if (!response.ok) {
+      const value = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+      throw new Error(value.error?.message || `approve HTTP ${response.status}`);
+    }
+  }
+
+  /** POST /v1/runs/:id/stop — request a stop of a running/queued run. */
+  async stopRun(runId: string): Promise<void> {
+    const response = await fetch(this.endpoint(`/v1/runs/${runId}/stop`), {
+      method: "POST",
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`stop run HTTP ${response.status}`);
   }
 
   /** GET /api/monitoring — health-export posture for the Doctor view. */
