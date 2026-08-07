@@ -35,6 +35,7 @@ export class SessionsViewWidget {
       <header id="sessions-view-header">
         <span id="sessions-view-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <button id="sessions-view-fork" class="ghost" data-i18n-title="sessionsView.forkTitle" hidden>⑂</button>
         <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
         <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳</button>
         <button id="sessions-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
@@ -61,6 +62,9 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-recap")!.addEventListener("click", () => {
       this.toggleRecap().catch(() => undefined);
+    });
+    this.root.querySelector("#sessions-view-fork")!.addEventListener("click", () => {
+      this.forkSelected().catch(() => undefined);
     });
   }
 
@@ -153,6 +157,7 @@ export class SessionsViewWidget {
       pane.scrollTop = 0;
       exportBtn.hidden = false;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = false;
+      (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = false;
     } catch (error) {
       if (this.selected !== sessionId) return;
       pane.innerHTML = `<p class="empty">${escapeHtml(
@@ -163,6 +168,7 @@ export class SessionsViewWidget {
       )}</p>`;
       exportBtn.hidden = true;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = true;
+      (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = true;
     }
   }
 
@@ -212,6 +218,30 @@ export class SessionsViewWidget {
           </div>`;
       })
       .join("");
+  }
+
+  private async forkSelected(): Promise<void> {
+    const client = this.client();
+    if (!client || !this.selected) return;
+    try {
+      const forked = await client.forkSession(this.selected);
+      this.status(
+        t.sessionsView.forked.replace("{id}", forked.id.slice(0, 12)),
+        false,
+      );
+      await this.refresh();
+      this.selected = forked.id;
+      this.renderList();
+      this.loadTranscript(forked.id).catch(() => undefined);
+    } catch (error) {
+      this.status(
+        t.sessionsView.forkFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
   }
 
   private async toggleRecap(): Promise<void> {

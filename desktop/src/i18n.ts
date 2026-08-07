@@ -124,6 +124,7 @@ export interface Translations {
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
     recap: string; recapTitle: string; recapFailed: string;
+    forkTitle: string; forked: string; forkFailed: string;
   };
   config: {
     loading: string; notConnected: string; loadFailed: string; save: string;
@@ -356,6 +357,7 @@ const en: Translations = {
     exportFailed: "Export failed.",
     roleUser: "User", roleAssistant: "Assistant", roleTool: "Tool", roleSystem: "System",
     recap: "Recap", recapTitle: "Show or hide the gateway-built session recap", recapFailed: "Recap failed: {error}",
+    forkTitle: "Fork this session into a new branch", forked: "Forked as {id}", forkFailed: "Fork failed: {error}",
   },
   config: {
     loading: "Loading config…", notConnected: "Gateway not connected.",
@@ -663,6 +665,7 @@ const zh: Translations = {
     exportFailed: "导出失败。",
     roleUser: "用户", roleAssistant: "助手", roleTool: "工具", roleSystem: "系统",
     recap: "回顾", recapTitle: "显示/隐藏网关生成的会话回顾", recapFailed: "生成回顾失败:{error}",
+    forkTitle: "将此会话分叉为新分支", forked: "已分叉为 {id}", forkFailed: "分叉失败:{error}",
   },
   config: {
     loading: "加载配置…", notConnected: "未连接网关。",
@@ -970,6 +973,7 @@ const zhHant: Translations = {
     exportFailed: "匯出失敗。",
     roleUser: "使用者", roleAssistant: "助理", roleTool: "工具", roleSystem: "系統",
     recap: "回顧", recapTitle: "顯示/隱藏閘道產生的會話回顧", recapFailed: "產生回顧失敗:{error}",
+    forkTitle: "將此會話分叉為新分支", forked: "已分叉為 {id}", forkFailed: "分叉失敗:{error}",
   },
   config: {
     loading: "載入設定…", notConnected: "未連線閘道。",
@@ -1277,6 +1281,7 @@ const ja: Translations = {
     exportFailed: "エクスポートに失敗しました。",
     roleUser: "ユーザー", roleAssistant: "アシスタント", roleTool: "ツール", roleSystem: "システム",
     recap: "リキャップ", recapTitle: "ゲートウェイ生成のセッション要約を表示/非表示", recapFailed: "リキャップに失敗しました: {error}",
+    forkTitle: "このセッションを新しいブランチにフォーク", forked: "{id} としてフォークしました", forkFailed: "フォークに失敗しました: {error}",
   },
   config: {
     loading: "設定を読み込み中…", notConnected: "ゲートウェイに未接続です。",
@@ -1584,6 +1589,7 @@ const ar: Translations = {
     exportFailed: "فشل التصدير.",
     roleUser: "المستخدم", roleAssistant: "المساعد", roleTool: "أداة", roleSystem: "النظام",
     recap: "ملخص", recapTitle: "إظهار أو إخفاء ملخص الجلسة المُنشأ من البوابة", recapFailed: "فشل الملخص: {error}",
+    forkTitle: "تفريع هذه الجلسة إلى فرع جديد", forked: "تم التفريع باسم {id}", forkFailed: "فشل التفريع: {error}",
   },
   config: {
     loading: "جارٍ تحميل الإعدادات…", notConnected: "البوابة غير متصلة.",

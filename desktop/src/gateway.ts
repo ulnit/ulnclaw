@@ -958,6 +958,18 @@ export class GatewayClient {
     return { ok: Boolean(value.ok), message: value.message || "" };
   }
 
+  /** POST /api/sessions/:id/fork — copy the session into a new branch. */
+  async forkSession(sessionId: string): Promise<SessionRow> {
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/fork`), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({}),
+    });
+    if (!response.ok) throw new Error(`fork HTTP ${response.status}`);
+    const value = await response.json();
+    return value.session as SessionRow;
+  }
+
   /** GET /api/sessions/:id/recap — gateway-built session recap text. */
   async sessionRecap(sessionId: string): Promise<string> {
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/recap`), {
