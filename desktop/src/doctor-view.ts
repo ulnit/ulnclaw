@@ -90,6 +90,16 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="learningPanel.title">Learning graph</h3>
         <div id="learning-rows"></div>
       </section>
+      <section id="doctor-ops" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="opsPanel.title">Ops actions</h3>
+        <div class="logs-controls">
+          <button id="ops-audit-btn" class="ghost" data-i18n="opsPanel.securityAudit">Security audit</button>
+          <button id="ops-prompt-size-btn" class="ghost" data-i18n="opsPanel.promptSize">Prompt size</button>
+          <button id="ops-dump-btn" class="ghost" data-i18n="opsPanel.dump">Debug dump</button>
+          <span id="ops-status" class="config-note"></span>
+        </div>
+        <pre id="ops-body" class="logs-body" hidden></pre>
+      </section>
       <section id="doctor-metrics" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="metricsPanel.title">Prometheus metrics</h3>
         <details id="metrics-details">
@@ -116,6 +126,15 @@ export class DoctorWidget {
     this.root.querySelector("#doctor-run")!.addEventListener("click", () => {
       this.run().catch(() => undefined);
     });
+    this.root.querySelector("#ops-audit-btn")!.addEventListener("click", () => {
+      this.runOps("securityAudit").catch(() => undefined);
+    });
+    this.root.querySelector("#ops-prompt-size-btn")!.addEventListener("click", () => {
+      this.runOps("promptSize").catch(() => undefined);
+    });
+    this.root.querySelector("#ops-dump-btn")!.addEventListener("click", () => {
+      this.runOps("dump").catch(() => undefined);
+    });
   }
 
   start(): void {
@@ -134,6 +153,7 @@ export class DoctorWidget {
     this.loadEgress().catch(() => undefined);
     this.loadChannels().catch(() => undefined);
     this.loadLearning().catch(() => undefined);
+    this.loadOps().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
       this.logsTimer = window.setInterval(() => {
@@ -962,6 +982,64 @@ export class DoctorWidget {
       section.hidden = false;
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** Show the ops panel when a gateway is connected (P321). */
+  private async loadOps(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-ops") as HTMLElement;
+    section.hidden = !client;
+  }
+
+  /** Run an ops action over /api/ops/* and render the output (P321). */
+  private async runOps(action: "securityAudit" | "promptSize" | "dump"): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const body = this.root.querySelector("#ops-body") as HTMLPreElement;
+    const note = this.root.querySelector("#ops-status") as HTMLElement;
+    const label = t.opsPanel[action];
+    note.textContent = t.opsPanel.running.replace("{action}", label);
+    body.hidden = true;
+    try {
+      let text: string;
+      if (action === "securityAudit") {
+        const report = await client.opsSecurityAudit();
+        text =
+          report.finding_count === 0
+            ? report.note ?? t.opsPanel.auditClean.replace("{total}", String(report.total_components_scanned))
+            : report.findings
+                .map((finding) => {
+                  const fix = finding.vuln.fixed_versions.length
+                    ? ` (fix: ${finding.vuln.fixed_versions.join(", ")})`
+                    : "";
+                  return `[${finding.vuln.severity}] ${finding.component.name}@${finding.component.version} \u2014 ${finding.vuln.osv_id}: ${finding.vuln.summary}${fix}`;
+                })
+                .join("\n");
+      } else if (action === "promptSize") {
+        const report = await client.opsPromptSize();
+        const lines = [
+          `model: ${report.model} (${report.provider})`,
+          `system prompt: ${report.system_prompt_chars} chars / ${report.system_prompt_bytes} bytes`,
+          "",
+          ...report.sections.map((row) => `  ${row.label}: ${row.chars} chars / ${row.bytes} bytes`),
+          "",
+          `tools: ${report.tools_count} tools / ${report.tools_json_bytes} bytes of JSON schema`,
+          ...report.toolsets.map((row) => `  ${row.toolset}: ${row.tools} tools / ${row.json_bytes} bytes`),
+          "",
+          `skills: ${report.skills.length} installed / ${report.skills_total_bytes} bytes on disk`,
+        ];
+        text = lines.join("\n");
+      } else {
+        text = await client.opsDump();
+      }
+      body.textContent = text;
+      body.hidden = false;
+      note.textContent = "";
+    } catch (error) {
+      note.textContent = t.opsPanel.failed
+        .replace("{action}", label)
+        .replace("{error}", String(error));
     }
   }
 

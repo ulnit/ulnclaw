@@ -488,6 +488,33 @@ export interface EnvVarInfo {
   in_process_env: boolean;
 }
 
+/** Security audit report from GET /api/ops/security-audit (P321). */
+export interface SecurityAuditReport {
+  total_components_scanned: number;
+  finding_count: number;
+  findings: {
+    component: { name: string; version: string; ecosystem: string; source: string };
+    vuln: { osv_id: string; severity: string; summary: string; fixed_versions: string[] };
+  }[];
+  note?: string;
+}
+
+/** Prompt-size breakdown from GET /api/ops/prompt-size (P321). */
+export interface PromptSizeReport {
+  model: string;
+  provider: string;
+  system_prompt_chars: number;
+  system_prompt_bytes: number;
+  sections: { label: string; chars: number; bytes: number }[];
+  memory_file_bytes: number;
+  user_profile_file_bytes: number;
+  tools_count: number;
+  tools_json_bytes: number;
+  toolsets: { toolset: string; tools: number; json_bytes: number }[];
+  skills: { name: string; skill_md_bytes: number }[];
+  skills_total_bytes: number;
+}
+
 export interface McpServerRow {
   name: string;
   kind: "stdio" | "http" | "sse";
@@ -1312,6 +1339,29 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `env delete HTTP ${response.status}`);
+  }
+
+  /** GET /api/ops/security-audit — OSV audit of pinned MCP components (P321). */
+  async opsSecurityAudit(): Promise<SecurityAuditReport> {
+    const response = await fetch(this.endpoint("/api/ops/security-audit"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `security-audit HTTP ${response.status}`);
+    return value as SecurityAuditReport;
+  }
+
+  /** GET /api/ops/prompt-size — system-prompt token breakdown (P321). */
+  async opsPromptSize(): Promise<PromptSizeReport> {
+    const response = await fetch(this.endpoint("/api/ops/prompt-size"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`prompt-size HTTP ${response.status}`);
+    return (await response.json()) as PromptSizeReport;
+  }
+
+  /** GET /api/ops/dump — redacted diagnostic dump text (P321). */
+  async opsDump(): Promise<string> {
+    const response = await fetch(this.endpoint("/api/ops/dump"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`dump HTTP ${response.status}`);
+    const value = await response.json();
+    return typeof value.text === "string" ? value.text : "";
   }
 
   /** GET /api/config/raw — raw config.toml text with comments (P318). */

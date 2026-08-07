@@ -900,6 +900,97 @@ async fn doctor_report(
     .into_response()
 }
 
+/// `GET /api/ops/security-audit` — in-process parity of
+/// `ulnclaw security audit --json`: scans MCP servers that pin a package
+/// version (npx pkg@ver / uvx pkg==ver) against OSV. Hermes
+/// `/api/ops/security-audit` parity; runs inline instead of spawning a
+/// child process.
+async fn ops_security_audit(State(state): State<Arc<GatewayState>>) -> Response {
+    let config = state.agent.context().config.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let components = crate::security_audit::discover_mcp_components(&config);
+        let total = components.len();
+        if total == 0 {
+            return Ok(json!({
+                "total_components_scanned": 0,
+                "finding_count": 0,
+                "findings": [],
+                "note": "No auditable components found. Only MCP servers that pin a package version (npx pkg@ver / uvx pkg==ver) are scanned.",
+            }));
+        }
+        crate::security_audit::run_audit(components).map(|findings| {
+            json!({
+                "total_components_scanned": total,
+                "finding_count": findings.len(),
+                "findings": findings,
+            })
+        })
+    })
+    .await;
+    match result {
+        Ok(Ok(payload)) => Json(payload).into_response(),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/ops/prompt-size` — in-process parity of
+/// `ulnclaw prompt-size --json`: system-prompt token breakdown under the
+/// active toolset policy (hermes `/api/ops/prompt-size` parity).
+async fn ops_prompt_size(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = state.agent.context().config.clone();
+    let payload = tokio::task::spawn_blocking(move || {
+        let home = crate::config::ulnclaw_home();
+        let mut registry = crate::tools::ToolRegistry::new();
+        crate::tools::builtin::register_builtin_tools(&mut registry);
+        crate::toolsets::apply_toolset_policy(
+            &mut registry,
+            &config.enabled_toolsets,
+            &config.disabled_toolsets,
+        );
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let data = crate::prompt_size::compute_prompt_breakdown(&config, &home, &cwd, &registry);
+        serde_json::to_value(&data).unwrap_or(Value::Null)
+    })
+    .await
+    .unwrap_or(Value::Null);
+    Json(payload)
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsDumpQuery {
+    profile: Option<String>,
+}
+
+/// `GET /api/ops/dump` — in-process parity of `ulnclaw dump`: redacted
+/// diagnostic dump (secret keys stay hidden; hermes `/api/ops/dump`
+/// parity).
+async fn ops_dump(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<OpsDumpQuery>,
+) -> Json<Value> {
+    let config = state.agent.context().config.clone();
+    let profile = query.profile.clone();
+    let text = tokio::task::spawn_blocking(move || {
+        crate::dump::build_dump(&config, profile.as_deref(), false)
+    })
+    .await
+    .unwrap_or_default();
+    Json(json!({
+        "text": text,
+        "profile": query.profile,
+        "show_keys": false,
+    }))
+}
+
 /// `GET /api/monitoring` — structured view of `ulnclaw monitoring status`:
 /// export posture + OTLP destination + emitter queue depth (content-free
 /// by design; desktop Doctor view monitoring panel).
@@ -1729,6 +1820,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/config/raw", get(config_raw_get).put(config_raw_put))
         .route("/api/env", get(env_list).put(env_set).delete(env_delete))
         .route("/api/doctor", get(doctor_report))
+        .route("/api/ops/security-audit", get(ops_security_audit))
+        .route("/api/ops/prompt-size", get(ops_prompt_size))
+        .route("/api/ops/dump", get(ops_dump))
         .route("/api/monitoring", get(monitoring_status))
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/mcp/servers", get(mcp_servers_list))
@@ -10171,6 +10265,44 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ops_endpoints_audit_prompt_size_dump() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/ops/prompt-size", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Prompt-size returns the structured breakdown.
+        let (status, body) = get_json(app.clone(), "/api/ops/prompt-size", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["system_prompt_bytes"].as_u64().is_some());
+        assert!(body["sections"].is_array());
+
+        // Security audit without pinned MCP components short-circuits.
+        let (status, body) = get_json(app.clone(), "/api/ops/security-audit", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["total_components_scanned"], 0);
+        assert_eq!(body["finding_count"], 0);
+
+        // Dump returns redacted diagnostic text.
+        let (status, body) = get_json(app.clone(), "/api/ops/dump", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let text = body["text"].as_str().unwrap_or_default().to_string();
+        assert!(text.contains("ulnclaw dump"));
+        assert_eq!(body["show_keys"], false);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
     }

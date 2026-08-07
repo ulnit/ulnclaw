@@ -220,6 +220,7 @@ export interface Translations {
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
+  opsPanel: { title: string; securityAudit: string; promptSize: string; dump: string; running: string; auditClean: string; failed: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -556,6 +557,12 @@ const en: Translations = {
     prune: "Prune\u2026", prunePrompt: "Retention window in days:",
     pruned: "Pruned: {orphan} orphan, {stale} stale; freed {bytes}.",
     pruneFailed: "Prune failed: {error}",
+  },
+  opsPanel: {
+    title: "Ops actions", securityAudit: "Security audit", promptSize: "Prompt size",
+    dump: "Debug dump", running: "Running {action}\u2026",
+    auditClean: "No findings ({total} component(s) scanned).",
+    failed: "{action} failed: {error}",
   },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
@@ -944,6 +951,12 @@ const zh: Translations = {
     pruned: "已清理：{orphan} 个孤儿、{stale} 个过期；释放 {bytes}。",
     pruneFailed: "清理失败：{error}",
   },
+  opsPanel: {
+    title: "运维操作", securityAudit: "安全审计", promptSize: "提示词体积",
+    dump: "调试转储", running: "正在运行 {action}…",
+    auditClean: "未发现问题（已扫描 {total} 个组件）。",
+    failed: "{action} 失败：{error}",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -1330,6 +1343,12 @@ const zhHant: Translations = {
     prune: "清理\u2026", prunePrompt: "保留窗口（天）：",
     pruned: "已清理：{orphan} 個孤兒、{stale} 個過期；釋放 {bytes}。",
     pruneFailed: "清理失敗：{error}",
+  },
+  opsPanel: {
+    title: "維運操作", securityAudit: "安全稽核", promptSize: "提示詞體積",
+    dump: "除錯傾印", running: "正在執行 {action}…",
+    auditClean: "未發現問題（已掃描 {total} 個元件）。",
+    failed: "{action} 失敗：{error}",
   },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
@@ -1718,6 +1737,12 @@ const ja: Translations = {
     pruned: "枝切り完了: 孤立 {orphan}、期限切れ {stale}; {bytes} 解放。",
     pruneFailed: "枝切りに失敗しました: {error}",
   },
+  opsPanel: {
+    title: "運用アクション", securityAudit: "セキュリティ監査", promptSize: "プロンプトサイズ",
+    dump: "デバッグダンプ", running: "{action} を実行中…",
+    auditClean: "所見なし（{total} 個のコンポーネントをスキャン済み）。",
+    failed: "{action} に失敗しました: {error}",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -2104,6 +2129,12 @@ const ar: Translations = {
     prune: "تشذيب\u2026", prunePrompt: "نافذة الاحتفاظ بالأيام:",
     pruned: "تم التشذيب: {orphan} يتيمة، {stale} قديمة؛ حُرر {bytes}.",
     pruneFailed: "فشل التشذيب: {error}",
+  },
+  opsPanel: {
+    title: "إجراءات التشغيل", securityAudit: "تدقيق الأمان", promptSize: "حجم الموجه",
+    dump: "تفريغ التشخيص", running: "جارٍ تشغيل {action}…",
+    auditClean: "لا نتائج (تم فحص {total} مكوّنًا).",
+    failed: "فشل {action}: {error}",
   },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
