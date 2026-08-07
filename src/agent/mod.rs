@@ -635,11 +635,29 @@ impl Agent {
             let responses = crate::plugins::invoke_hook("pre_llm_call", payload).await;
             let injections = crate::plugins::context_injections(&responses);
             if !injections.is_empty() {
+                // Bound oversized hook context via disk spill (hermes
+                // hook_output_spill, P234): the blob is appended to every
+                // subsequent API call, so a runaway hook must not inflate
+                // the whole session.
+                let spill_cfg = &self.context.config.hooks.output_spill;
+                let home = crate::config::ulnclaw_home();
+                let spilled: Vec<String> = injections
+                    .iter()
+                    .map(|context| {
+                        crate::hook_output_spill::spill_if_oversized(
+                            context,
+                            session_id.as_deref(),
+                            "hook",
+                            spill_cfg,
+                            &home,
+                        )
+                    })
+                    .collect();
                 if let Some(last) = messages.last_mut() {
                     if last.role == Role::User {
                         let mut content = last.content.clone().unwrap_or_default();
                         content.push_str("\n\n");
-                        content.push_str(&injections.join("\n\n"));
+                        content.push_str(&spilled.join("\n\n"));
                         last.content = Some(content);
                     }
                 }

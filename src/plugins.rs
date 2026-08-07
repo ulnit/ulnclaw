@@ -73,6 +73,11 @@ pub struct HooksConfig {
     /// Accept new hook commands without the first-use consent prompt.
     #[serde(default)]
     pub auto_accept: bool,
+    /// Oversized hook-context spill settings (hermes
+    /// `hooks.output_spill`); the named field takes precedence over the
+    /// flattened event map.
+    #[serde(default, skip_serializing_if = "crate::hook_output_spill::SpillConfig::is_default")]
+    pub output_spill: crate::hook_output_spill::SpillConfig,
     /// Event name → command lines (every other key).
     #[serde(flatten)]
     pub events: HashMap<String, Vec<String>>,
