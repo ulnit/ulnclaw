@@ -21,6 +21,7 @@ import { applyStatic, fmt, onLocaleChange, t } from "./i18n";
 import { LanguageSwitcher } from "./language-switcher";
 import { OnboardingOverlay } from "./onboarding";
 import { SessionPickerDialog } from "./session-picker";
+import { clearIntro, renderIntro } from "./intro";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -165,6 +166,7 @@ async function deleteSession(session: SessionRow): Promise<void> {
       state.current = null;
       el.chatTitle.textContent = t.session.newTitle;
       el.messages.innerHTML = "";
+      renderIntro(el.messages, "new");
     }
     renderSessions();
   } catch (error) {
@@ -192,10 +194,14 @@ async function openSession(session: SessionRow): Promise<void> {
   renderSessions();
   try {
     const messages = await state.client!.messages(session.id);
+    let rendered = 0;
     for (const message of messages) {
       if (message.role === "system" || !message.content) continue;
       addMessage(message.role, message.content);
+      rendered += 1;
     }
+    // Empty transcript → welcome copy (P255, hermes chat intro parity).
+    if (rendered === 0) renderIntro(el.messages, session.id);
   } catch (error) {
     addMessage("system", fmt(t.session.loadFailed, { error }));
   }
@@ -245,6 +251,7 @@ async function sendTurn(): Promise<void> {
   hideSlashPop();
   el.toolProgress.hidden = true;
   el.toolProgress.textContent = "";
+  clearIntro(el.messages);
   addMessage("user", message);
   const bubble = addMessage("assistant", "");
   bubble.classList.add("streaming");
@@ -682,6 +689,7 @@ async function start(): Promise<void> {
     state.current = null;
     el.chatTitle.textContent = t.session.newTitle;
     el.messages.innerHTML = "";
+    renderIntro(el.messages, "new");
     renderSessions();
     el.input.focus();
   };

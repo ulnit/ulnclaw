@@ -151,6 +151,9 @@ export interface Translations {
   };
   language: { switchTo: string; searchPlaceholder: string; noResults: string; description: string };
   sessionPicker: { title: string; searchPlaceholder: string; noResults: string; messages: string };
+  intro: { headline1: string; body1: string; headline2: string; body2: string;
+    headline3: string; body3: string; headline4: string; body4: string;
+    headline5: string; body5: string };
 }
 
 const en: Translations = {
@@ -337,6 +340,18 @@ const en: Translations = {
   sessionPicker: {
     title: "Sessions", searchPlaceholder: "Search sessions…",
     noResults: "No matching sessions", messages: "{count} messages",
+  },
+  intro: {
+    headline1: "What are we moving today?",
+    body1: "Send a bug, branch, plan, or rough idea. I'll inspect the repo and turn it into the next concrete step.",
+    headline2: "What's on your mind?",
+    body2: "Bring the code, question, or stuck part. I'll read the room before making changes.",
+    headline3: "What should ulnclaw look at?",
+    body3: "Send the task, failing path, or half-formed plan. I'll help turn it into action.",
+    headline4: "Where should we start?",
+    body4: "Bring the problem, goal, or file. I'll inspect first and keep the next step concrete.",
+    headline5: "What needs attention?",
+    body5: "Send the context you have. I'll help sort it into a plan or a fix.",
   },
 };
 
@@ -525,6 +540,18 @@ const zh: Translations = {
     title: "会话", searchPlaceholder: "搜索会话…",
     noResults: "没有匹配的会话", messages: "{count} 条消息",
   },
+  intro: {
+    headline1: "今天想推进什么？",
+    body1: "丢一个 bug、分支、计划或粗糙的想法过来，我会查看仓库并把它变成下一步具体行动。",
+    headline2: "你在想什么？",
+    body2: "带上代码、问题或卡住的地方，我会先摸清状况再动手。",
+    headline3: "想让 ulnclaw 看什么？",
+    body3: "发来任务、失败路径或半成品计划，我帮你把它变成行动。",
+    headline4: "从哪里开始？",
+    body4: "带上问题、目标或文件，我会先检查，再让下一步保持具体。",
+    headline5: "有什么需要处理？",
+    body5: "把你手头的上下文发来，我帮你梳理成计划或修复。",
+  },
 };
 
 const zhHant: Translations = {
@@ -711,6 +738,18 @@ const zhHant: Translations = {
   sessionPicker: {
     title: "工作階段", searchPlaceholder: "搜尋工作階段…",
     noResults: "沒有符合的工作階段", messages: "{count} 則訊息",
+  },
+  intro: {
+    headline1: "今天想推進什麼？",
+    body1: "丟一個 bug、分支、計畫或粗糙的想法過來，我會檢視儲存庫並把它變成下一步具體行動。",
+    headline2: "你在想什麼？",
+    body2: "帶上程式碼、問題或卡住的地方，我會先摸清狀況再動手。",
+    headline3: "想讓 ulnclaw 看什麼？",
+    body3: "發來任務、失敗路徑或半成品計畫，我幫你把它變成行動。",
+    headline4: "從哪裡開始？",
+    body4: "帶上問題、目標或檔案，我會先檢視，再讓下一步保持具體。",
+    headline5: "有什麼需要處理？",
+    body5: "把你手邊的上下文發來，我幫你梳理成計畫或修復。",
   },
 };
 
@@ -899,6 +938,18 @@ const ja: Translations = {
     title: "セッション", searchPlaceholder: "セッションを検索…",
     noResults: "一致するセッションがありません", messages: "{count} メッセージ",
   },
+  intro: {
+    headline1: "今日は何を動かしますか？",
+    body1: "バグ、ブランチ、計画、荒いアイデアをどうぞ。リポジトリを調べ、次の具体的なステップにします。",
+    headline2: "何を考えていますか？",
+    body2: "コードや質問、詰まっている部分をどうぞ。変更前に状況を読み取ります。",
+    headline3: "ulnclaw に何を見せますか？",
+    body3: "タスクや失敗パス、途中の計画をどうぞ。実行に移すのを手伝います。",
+    headline4: "どこから始めますか？",
+    body4: "問題や目標、ファイルをどうぞ。まず調べ、次のステップを具体的に保ちます。",
+    headline5: "何が必要ですか？",
+    body5: "手持ちの文脈をどうぞ。計画や修正に整理します。",
+  },
 };
 
 const ar: Translations = {
@@ -1085,6 +1136,18 @@ const ar: Translations = {
   sessionPicker: {
     title: "الجلسات", searchPlaceholder: "البحث في الجلسات…",
     noResults: "لا جلسات مطابقة", messages: "{count} رسائل",
+  },
+  intro: {
+    headline1: "ماذا ننجز اليوم؟",
+    body1: "أرسل خللًا أو فرعًا أو خطة أو فكرة أولية؛ سأفحص المستودع وأحوّلها إلى خطوة ملموسة.",
+    headline2: "بمَ تفكر؟",
+    body2: "أحضر الكود أو السؤال أو الجزء العالق؛ سأقرأ السياق قبل إجراء التغييرات.",
+    headline3: "ماذا يجب أن ينظر ulnclaw؟",
+    body3: "أرسل المهمة أو المسار الفاشل أو الخطة غير المكتملة؛ سأساعد في تحويلها إلى تنفيذ.",
+    headline4: "من أين نبدأ؟",
+    body4: "أحضر المشكلة أو الهدف أو الملف؛ سأفحص أولًا وأبقي الخطوة التالية ملموسة.",
+    headline5: "ما الذي يحتاج انتباهًا؟",
+    body5: "أرسل ما لديك من سياق؛ سأساعد في ترتيبه في خطة أو إصلاح.",
   },
 };
 

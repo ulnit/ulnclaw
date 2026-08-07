@@ -981,3 +981,10 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .session-picker-meta { font-size: 11px; color: #8fa3c0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-picker-check { color: var(--accent); width: 14px; }
 .session-picker-empty { padding: 18px 8px; text-align: center; color: #8fa3c0; font-size: 13px; }
+
+/* Chat intro (P255) */
+.chat-intro {
+  max-width: 520px; margin: 12vh auto 0; padding: 0 24px; text-align: center;
+}
+.chat-intro-headline { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+.chat-intro-body { font-size: 13px; color: #8fa3c0; line-height: 1.6; }
