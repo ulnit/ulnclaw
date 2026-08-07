@@ -129,6 +129,13 @@ enum Commands {
         #[command(subcommand)]
         action: GoogleChatOauthAction,
     },
+    /// Spotify PKCE OAuth login/status/logout (hermes `hermes auth spotify`) —
+    /// tokens persist under providers.spotify in auth.json and power the
+    /// `spotify_*` tools
+    SpotifyAuth {
+        #[command(subcommand)]
+        action: SpotifyAuthAction,
+    },
     /// Filesystem checkpoint management (snapshot list/restore/prune)
     Checkpoints {
         #[command(subcommand)]
@@ -2239,6 +2246,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Weixin { action } => weixin_cmd(action).await,
         Commands::Qq { action } => qq_cmd(action).await,
         Commands::GoogleChatOauth { action } => google_chat_oauth_cmd(action).await,
+        Commands::SpotifyAuth { action } => spotify_auth_cmd(action).await,
         Commands::Checkpoints { action } => checkpoints_cmd(&config, action).await,
         Commands::Diff { staged, all, dir, paths } => {
             let mode = if all {
@@ -5356,6 +5364,77 @@ async fn qq_setup_wizard(timeout: u64) -> Result<(), String> {
     println!("  ℹ App ID: {}", credentials.app_id);
     println!("  ℹ Policy persisted to {}", home.join("config.toml").display());
     Ok(())
+}
+
+/// Spotify PKCE OAuth CLI (hermes `hermes auth spotify` —
+/// `login_spotify_command`).
+#[derive(Subcommand)]
+enum SpotifyAuthAction {
+    /// Authorize via browser + loopback PKCE callback
+    Login {
+        /// Spotify app client id (fallback ULNCLAW_SPOTIFY_CLIENT_ID /
+        /// SPOTIFY_CLIENT_ID / stored state)
+        #[arg(long)]
+        client_id: Option<String>,
+        /// Loopback redirect URI (default http://127.0.0.1:43827/spotify/callback)
+        #[arg(long)]
+        redirect_uri: Option<String>,
+        /// Override the requested OAuth scope
+        #[arg(long)]
+        scope: Option<String>,
+        /// Only print the authorization URL
+        #[arg(long)]
+        no_browser: bool,
+        /// Seconds to wait for the loopback callback (default 180)
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
+    /// Show stored Spotify auth state
+    Status,
+    /// Remove stored Spotify credentials
+    Logout,
+}
+
+async fn spotify_auth_cmd(action: SpotifyAuthAction) -> Result<(), String> {
+    match action {
+        SpotifyAuthAction::Login {
+            client_id,
+            redirect_uri,
+            scope,
+            no_browser,
+            timeout,
+        } => ulnclaw::spotify_auth::login(
+            client_id.as_deref(),
+            redirect_uri.as_deref(),
+            scope.as_deref(),
+            !no_browser,
+            timeout,
+        )
+        .await
+        .map(|message| println!("{message}"))
+        .map_err(|e| e.to_string()),
+        SpotifyAuthAction::Status => {
+            let status = ulnclaw::spotify_auth::auth_status();
+            if status["logged_in"] == serde_json::json!(true) {
+                println!("Spotify: logged in");
+                if let Some(scope) = status.get("scope").and_then(serde_json::Value::as_str) {
+                    println!("  scope:      {scope}");
+                }
+                if let Some(expires) = status.get("expires_at").and_then(serde_json::Value::as_str) {
+                    println!("  expires_at: {expires}");
+                }
+                println!("  refresh:    {}", if status["has_refresh_token"] == serde_json::json!(true) { "stored" } else { "missing" });
+            } else {
+                println!("Spotify: not logged in (run `ulnclaw spotify-auth login`)");
+            }
+            Ok(())
+        }
+        SpotifyAuthAction::Logout => {
+            ulnclaw::spotify_auth::logout().map_err(|e| e.to_string())?;
+            println!("Spotify credentials removed.");
+            Ok(())
+        }
+    }
 }
 
 /// Google Chat per-user OAuth CLI (hermes

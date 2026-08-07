@@ -1368,38 +1368,9 @@ fn register_gated_stubs(registry: &mut ToolRegistry) {
     // + tools/feishu_drive_tool.py): tenant-token Open API client.
     crate::feishu_doc_tool::register(registry);
 
-    // Messaging platforms — faithful tool surface, gated on credentials.
-    let platforms: [(&str, &str, &str, &str); 1] = [
-        ("spotify_playback", "spotify", "Control Spotify playback (play/pause/skip/current track).", "SPOTIFY_CLIENT_ID"),
-    ];
-    for (name, toolset, description, env_var) in platforms {
-        let env_var = env_var.to_string();
-        registry.register(
-            tool(name)
-                .description(description)
-                .parameters(json!({"type": "object", "properties": {}, "required": []}))
-                .handler(move |_args, _ctx| {
-                    let name = name.to_string();
-                    async move {
-                        Ok(json!({
-                            "success": false,
-                            "error": format!("{}: platform backend is not implemented in this build.", name)
-                        }))
-                    }
-                })
-                .toolset(toolset)
-                .emoji("🔌")
-                .check_fn(move || {
-                    if crate::config::get_env_value(&env_var).is_some() {
-                        ToolAvailability::available()
-                    } else {
-                        ToolAvailability::unavailable(format!("{} not set", env_var))
-                    }
-                })
-                .build()
-                .unwrap_or_else(|_| panic!("{} builds", name)),
-        );
-    }
+    // Spotify — seven Web API tools with PKCE OAuth from auth.json
+    // (hermes plugins/spotify).
+    crate::spotify_tool::register(registry);
 }
 
 #[cfg(test)]

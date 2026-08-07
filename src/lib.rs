@@ -96,6 +96,8 @@ pub mod clarify_gateway;
 pub mod computer_use;
 pub mod discord_tool;
 pub mod feishu_doc_tool;
+pub mod spotify_auth;
+pub mod spotify_tool;
 pub mod config;
 pub mod config_cmd;
 pub mod context;
