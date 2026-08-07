@@ -993,6 +993,59 @@ async fn insights(
     }
 }
 
+/// `GET /api/channels` — messaging-platform inventory: every known
+/// platform with its `[messaging.<platform>].enabled` posture (desktop
+/// Doctor channels panel; hermes ChannelsPage parity).
+async fn channels_status(State(_state): State<Arc<GatewayState>>) -> Response {
+    let result = tokio::task::spawn_blocking(|| {
+        let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let m = &config.messaging;
+        let channels: Vec<(&str, bool)> = vec![
+            ("telegram", m.telegram.enabled),
+            ("discord", m.discord.enabled),
+            ("slack", m.slack.enabled),
+            ("signal", m.signal.enabled),
+            ("weixin", m.weixin.enabled),
+            ("qq", m.qq.enabled),
+            ("yuanbao", m.yuanbao.enabled),
+            ("email", m.email.enabled),
+            ("mattermost", m.mattermost.enabled),
+            ("matrix", m.matrix.enabled),
+            ("dingtalk", m.dingtalk.enabled),
+            ("wecom", m.wecom.enabled),
+            ("feishu", m.feishu.enabled),
+            ("homeassistant", m.homeassistant.enabled),
+            ("sms", m.sms.enabled),
+            ("whatsapp", m.whatsapp.enabled),
+            ("irc", m.irc.enabled),
+            ("ntfy", m.ntfy.enabled),
+            ("simplex", m.simplex.enabled),
+            ("teams", m.teams.enabled),
+            ("line", m.line.enabled),
+            ("google_chat", m.google_chat.enabled),
+            ("buzz", m.buzz.enabled),
+            ("photon", m.photon.enabled),
+            ("raft", m.raft.enabled),
+            ("a2a", m.a2a.enabled),
+        ];
+        let rows: Vec<Value> = channels
+            .into_iter()
+            .map(|(name, enabled)| json!({"name": name, "enabled": enabled}))
+            .collect();
+        let enabled_count = rows.iter().filter(|r| r["enabled"] == Value::Bool(true)).count();
+        json!({"channels": rows, "enabled_count": enabled_count})
+    })
+    .await;
+    match result {
+        Ok(payload) => Json(payload).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("channels task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/egress/status` — egress-proxy status text (same
 /// `format_status_text` the `/egress` slash command and CLI print;
 /// tokens always redacted). Desktop Doctor egress panel.
@@ -1394,6 +1447,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/mcp/servers", get(mcp_servers_list))
         .route("/api/insights", get(insights))
+        .route("/api/channels", get(channels_status))
         .route("/api/egress/status", get(egress_status))
         .route("/api/system", get(system_info))
         .route("/api/pairing", get(pairing_status))
@@ -9079,6 +9133,26 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_channels_endpoint_lists_platforms() {
+        let app = router(test_state());
+
+        let (status, _) = get_json(app.clone(), "/api/channels", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app, "/api/channels", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let channels = body["channels"].as_array().expect("channels");
+        assert!(channels.len() >= 20);
+        let names: Vec<&str> = channels
+            .iter()
+            .filter_map(|c| c["name"].as_str())
+            .collect();
+        assert!(names.contains(&"telegram"));
+        assert!(names.contains(&"matrix"));
+        assert!(body["enabled_count"].as_u64().is_some());
     }
 
     #[tokio::test]

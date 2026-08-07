@@ -201,6 +201,7 @@ export interface Translations {
   systemPanel: { title: string; version: string; platform: string; uptime: string; contents: string; sessionsWord: string; messagesWord: string; runsWord: string; jobs: string; enabledWord: string; disabledWord: string; plugins: string; home: string; config: string; desktopManaged: string; };
   metricsPanel: { title: string; summary: string; };
   egressPanel: { title: string; };
+  channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -492,6 +493,7 @@ const en: Translations = {
   systemPanel: { title: "System", version: "Version", platform: "Platform", uptime: "Uptime", contents: "Store", sessionsWord: "sessions", messagesWord: "messages", runsWord: "active runs", jobs: "Cron jobs", enabledWord: "enabled", disabledWord: "disabled", plugins: "Plugins", home: "Home", config: "Config", desktopManaged: "desktop-managed" },
   metricsPanel: { title: "Prometheus metrics", summary: "Show raw /metrics exposition" },
   egressPanel: { title: "Egress proxy" },
+  channelsPanel: { title: "Messaging channels", enabled: "Enabled", disabled: "Disabled", noneEnabled: "(none)" },
   hatch: {
     title: "\u{1F95A} Hatch a pet", styleLabel: "Style ", draftsLabel: "Drafts ",
     designing: "Designing base looks…", drawing: "Drawing animation rows…",
@@ -833,6 +835,7 @@ const zh: Translations = {
   systemPanel: { title: "系统", version: "版本", platform: "平台", uptime: "运行时长", contents: "存储", sessionsWord: "会话", messagesWord: "消息", runsWord: "活动运行", jobs: "定时任务", enabledWord: "启用", disabledWord: "禁用", plugins: "插件", home: "主目录", config: "配置", desktopManaged: "桌面托管" },
   metricsPanel: { title: "Prometheus 指标", summary: "显示 /metrics 原始输出" },
   egressPanel: { title: "出站代理" },
+  channelsPanel: { title: "消息通道", enabled: "已启用", disabled: "未启用", noneEnabled: "（无）" },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -1174,6 +1177,7 @@ const zhHant: Translations = {
   systemPanel: { title: "系統", version: "版本", platform: "平台", uptime: "執行時長", contents: "儲存", sessionsWord: "會話", messagesWord: "訊息", runsWord: "活動執行", jobs: "排程工作", enabledWord: "啟用", disabledWord: "停用", plugins: "外掛", home: "主目錄", config: "設定", desktopManaged: "桌面託管" },
   metricsPanel: { title: "Prometheus 指標", summary: "顯示 /metrics 原始輸出" },
   egressPanel: { title: "出站代理" },
+  channelsPanel: { title: "訊息通道", enabled: "已啟用", disabled: "未啟用", noneEnabled: "（無）" },
   hatch: {
     title: "\u{1F95A} 孵化寵物", styleLabel: "風格 ", draftsLabel: "草稿數 ",
     designing: "設計基礎外觀中…", drawing: "繪製動畫列中…",
@@ -1515,6 +1519,7 @@ const ja: Translations = {
   systemPanel: { title: "システム", version: "バージョン", platform: "プラットフォーム", uptime: "稼働時間", contents: "ストア", sessionsWord: "セッション", messagesWord: "メッセージ", runsWord: "実行中", jobs: "cron ジョブ", enabledWord: "有効", disabledWord: "無効", plugins: "プラグイン", home: "ホーム", config: "設定", desktopManaged: "デスクトップ管理" },
   metricsPanel: { title: "Prometheus メトリクス", summary: "/metrics 生の出力を表示" },
   egressPanel: { title: "エグレスプロキシ" },
+  channelsPanel: { title: "メッセージングチャネル", enabled: "有効", disabled: "無効", noneEnabled: "（なし）" },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1856,6 +1861,7 @@ const ar: Translations = {
   systemPanel: { title: "النظام", version: "الإصدار", platform: "المنصة", uptime: "مدة التشغيل", contents: "المخزن", sessionsWord: "جلسة", messagesWord: "رسالة", runsWord: "تشغيل نشط", jobs: "مهام cron", enabledWord: "مفعلة", disabledWord: "معطلة", plugins: "الإضافات", home: "المجلد الرئيسي", config: "الإعدادات", desktopManaged: "بإدارة سطح المكتب" },
   metricsPanel: { title: "مقاييس Prometheus", summary: "عرض إخراج /metrics الخام" },
   egressPanel: { title: "وكيل الخروج" },
+  channelsPanel: { title: "قنوات المراسلة", enabled: "مفعلة", disabled: "معطلة", noneEnabled: "(لا شيء)" },
   hatch: {
     title: "\u{1F95A} فقّس حيوانًا أليفًا", styleLabel: "النمط ", draftsLabel: "المسودات ",
     designing: "جارٍ تصميم المظاهر الأساسية…", drawing: "جارٍ رسم صفوف الحركة…",

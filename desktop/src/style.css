@@ -1305,6 +1305,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .mcp-tools-list { margin: 6px 0 2px 12px; display: flex; flex-direction: column; gap: 3px; }
 .mcp-tool code { font-family: var(--mono, monospace); font-size: 0.95em; }
 .mcp-tool-desc { opacity: 0.6; margin-left: 8px; }
+.channels-disabled { opacity: 0.5; }
 
 /* Runs view (P279) */
 .runs-list { padding: 8px 16px; display: flex; flex-direction: column; gap: 10px; }

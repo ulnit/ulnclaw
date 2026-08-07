@@ -16,6 +16,14 @@ const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
 const LOGS_REFRESH_MS = 10_000;
 const LOGS_LINES = 150;
 
+function escapeHtmlDoctor(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 export class DoctorWidget {
   private busy = false;
   private logsTimer: number | null = null;
@@ -62,6 +70,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="kanbanPanel.title">Kanban diagnostics</h3>
         <div id="kanban-rows"></div>
       </section>
+      <section id="doctor-channels" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="channelsPanel.title">Messaging channels</h3>
+        <div id="channels-rows"></div>
+      </section>
       <section id="doctor-egress" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="egressPanel.title">Egress proxy</h3>
         <pre id="egress-body" class="logs-body"></pre>
@@ -106,6 +118,7 @@ export class DoctorWidget {
     this.loadKanban().catch(() => undefined);
     this.loadMetrics().catch(() => undefined);
     this.loadEgress().catch(() => undefined);
+    this.loadChannels().catch(() => undefined);
     this.loadLogs().catch(() => undefined);
     if (this.logsTimer === null) {
       this.logsTimer = window.setInterval(() => {
@@ -585,6 +598,53 @@ export class DoctorWidget {
           rows.appendChild(row);
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** Messaging-platform enabled posture (hermes ChannelsPage parity). */
+  private async loadChannels(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-channels") as HTMLElement;
+    const rows = this.root.querySelector("#channels-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const channels = await client.channels();
+      const enabled = channels.filter((channel) => channel.enabled);
+      const disabled = channels.filter((channel) => !channel.enabled);
+      rows.innerHTML = "";
+
+      const enabledRow = document.createElement("div");
+      enabledRow.className = "monitoring-row";
+      const enabledLabel = document.createElement("span");
+      enabledLabel.className = "monitoring-label";
+      enabledLabel.textContent = t.channelsPanel.enabled;
+      const enabledValue = document.createElement("span");
+      enabledValue.className = "monitoring-value";
+      enabledValue.innerHTML = enabled.length
+        ? enabled
+            .map((channel) => `<span class="models-view-badge ok">${escapeHtmlDoctor(channel.name)}</span>`)
+            .join(" ")
+        : escapeHtmlDoctor(t.channelsPanel.noneEnabled);
+      enabledRow.append(enabledLabel, enabledValue);
+      rows.appendChild(enabledRow);
+
+      const disabledRow = document.createElement("div");
+      disabledRow.className = "monitoring-row";
+      const disabledLabel = document.createElement("span");
+      disabledLabel.className = "monitoring-label";
+      disabledLabel.textContent = t.channelsPanel.disabled;
+      const disabledValue = document.createElement("span");
+      disabledValue.className = "monitoring-value channels-disabled";
+      disabledValue.textContent = disabled.map((channel) => channel.name).join(", ");
+      disabledRow.append(disabledLabel, disabledValue);
+      rows.appendChild(disabledRow);
+
       section.hidden = false;
     } catch {
       section.hidden = true;

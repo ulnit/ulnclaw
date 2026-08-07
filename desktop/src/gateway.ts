@@ -908,6 +908,14 @@ export class GatewayClient {
     return response.text();
   }
 
+  /** GET /api/channels — messaging-platform enabled posture. */
+  async channels(): Promise<{ name: string; enabled: boolean }[]> {
+    const response = await fetch(this.endpoint("/api/channels"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`channels HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.channels || []) as { name: string; enabled: boolean }[];
+  }
+
   /** GET /api/egress/status — egress-proxy status text (tokens redacted). */
   async egressStatus(): Promise<string> {
     const response = await fetch(this.endpoint("/api/egress/status"), { headers: this.headers() });
