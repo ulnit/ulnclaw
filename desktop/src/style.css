@@ -1045,6 +1045,15 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   padding: 4px 8px;
   font-size: 0.9em;
 }
+.insights-controls input[type="search"] {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border, #2a3442);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.9em;
+  min-width: 200px;
+}
 .insights-tables {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

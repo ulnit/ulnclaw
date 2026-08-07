@@ -880,8 +880,10 @@ export class GatewayClient {
   }
 
   /** GET /api/insights — usage analytics over the session store. */
-  async insights(days = 30): Promise<InsightsReport> {
-    const response = await fetch(this.endpoint(`/api/insights?days=${days}`), {
+  async insights(days = 30, source?: string): Promise<InsightsReport> {
+    const params = new URLSearchParams({ days: String(days) });
+    if (source && source.trim()) params.set("source", source.trim());
+    const response = await fetch(this.endpoint(`/api/insights?${params.toString()}`), {
       headers: this.headers(),
     });
     if (!response.ok) throw new Error(`insights HTTP ${response.status}`);

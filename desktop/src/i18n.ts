@@ -115,7 +115,7 @@ export interface Translations {
     colInput: string; colOutput: string; colTotal: string; colStarted: string;
   };
   insights: {
-    title: string; days7: string; days30: string; days90: string;
+    title: string; days7: string; days30: string; days90: string; sourcePlaceholder: string;
     sessions: string; messages: string; toolCalls: string; tokens: string;
     estCost: string; avgSession: string; activeDays: string;
     topModels: string; topTools: string; topSessions: string;
@@ -368,7 +368,7 @@ const en: Translations = {
   },
   insights: {
     title: "Insights",
-    days7: "Last 7 days", days30: "Last 30 days", days90: "Last 90 days",
+    days7: "Last 7 days", days30: "Last 30 days", days90: "Last 90 days", sourcePlaceholder: "Filter by source (cli, gateway, …)",
     sessions: "Sessions", messages: "Messages", toolCalls: "Tool calls", tokens: "Tokens",
     estCost: "Est. cost", avgSession: "Avg session", activeDays: "active days:",
     topModels: "Top models", topTools: "Top tools", topSessions: "Top sessions",
@@ -708,7 +708,7 @@ const zh: Translations = {
   },
   insights: {
     title: "洞察",
-    days7: "最近 7 天", days30: "最近 30 天", days90: "最近 90 天",
+    days7: "最近 7 天", days30: "最近 30 天", days90: "最近 90 天", sourcePlaceholder: "按来源过滤（cli、gateway…）",
     sessions: "会话数", messages: "消息数", toolCalls: "工具调用", tokens: "令牌数",
     estCost: "估算费用", avgSession: "平均会话时长", activeDays: "活跃天数:",
     topModels: "热门模型", topTools: "热门工具", topSessions: "热门会话",
@@ -1048,7 +1048,7 @@ const zhHant: Translations = {
   },
   insights: {
     title: "洞察",
-    days7: "最近 7 天", days30: "最近 30 天", days90: "最近 90 天",
+    days7: "最近 7 天", days30: "最近 30 天", days90: "最近 90 天", sourcePlaceholder: "按來源過濾（cli、gateway…）",
     sessions: "會話數", messages: "訊息數", toolCalls: "工具呼叫", tokens: "權杖數",
     estCost: "估算費用", avgSession: "平均會話時長", activeDays: "活躍天數:",
     topModels: "熱門模型", topTools: "熱門工具", topSessions: "熱門會話",
@@ -1388,7 +1388,7 @@ const ja: Translations = {
   },
   insights: {
     title: "インサイト",
-    days7: "過去 7 日間", days30: "過去 30 日間", days90: "過去 90 日間",
+    days7: "過去 7 日間", days30: "過去 30 日間", days90: "過去 90 日間", sourcePlaceholder: "ソースで絞り込み（cli、gateway…）",
     sessions: "セッション", messages: "メッセージ", toolCalls: "ツール呼び出し", tokens: "トークン",
     estCost: "推定コスト", avgSession: "平均セッション時間", activeDays: "アクティブ日数:",
     topModels: "上位モデル", topTools: "上位ツール", topSessions: "上位セッション",
@@ -1728,7 +1728,7 @@ const ar: Translations = {
   },
   insights: {
     title: "الرؤى",
-    days7: "آخر 7 أيام", days30: "آخر 30 يومًا", days90: "آخر 90 يومًا",
+    days7: "آخر 7 أيام", days30: "آخر 30 يومًا", days90: "آخر 90 يومًا", sourcePlaceholder: "تصفية حسب المصدر (cli، gateway…)",
     sessions: "الجلسات", messages: "الرسائل", toolCalls: "استدعاءات الأدوات", tokens: "الرموز",
     estCost: "التكلفة التقديرية", avgSession: "متوسط مدة الجلسة", activeDays: "أيام النشاط:",
     topModels: "أكثر النماذج استخدامًا", topTools: "أكثر الأدوات استخدامًا", topSessions: "أكثر الجلسات نشاطًا",

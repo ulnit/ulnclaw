@@ -54,6 +54,7 @@ export class UsageWidget {
           <option value="30" selected data-i18n="insights.days30">Last 30 days</option>
           <option value="90" data-i18n="insights.days90">Last 90 days</option>
         </select>
+        <input id="insights-source" type="search" data-i18n-ph="insights.sourcePlaceholder" />
         <span id="insights-status" class="config-note"></span>
       </div>
       <div id="insights-body"></div>
@@ -64,6 +65,13 @@ export class UsageWidget {
     });
     (this.root.querySelector("#insights-days") as HTMLSelectElement).addEventListener("change", () => {
       this.refreshInsights().catch(() => undefined);
+    });
+    let sourceDebounce: number | null = null;
+    this.root.querySelector("#insights-source")!.addEventListener("input", () => {
+      if (sourceDebounce !== null) window.clearTimeout(sourceDebounce);
+      sourceDebounce = window.setTimeout(() => {
+        this.refreshInsights().catch(() => undefined);
+      }, 400);
     });
   }
 
@@ -102,8 +110,9 @@ export class UsageWidget {
     const status = this.root.querySelector("#insights-status") as HTMLElement;
     if (!client) return;
     const days = Number((this.root.querySelector("#insights-days") as HTMLSelectElement).value) || 30;
+    const source = (this.root.querySelector("#insights-source") as HTMLInputElement).value;
     try {
-      const report = await client.insights(days);
+      const report = await client.insights(days, source);
       this.renderInsights(report);
       status.textContent = "";
     } catch (error) {
