@@ -48,6 +48,18 @@ impl McpClient {
         for (key, value) in &config.env {
             cmd.env(key, value);
         }
+        // Parent-death watchdog (hermes `mcp_stdio_watchdog.py`, P235):
+        // if ulnclaw dies hard (kill -9 / crash), the kernel kills the
+        // stdio MCP child instead of leaving it orphaned and racing the
+        // next startup for the same upstream session. Linux-only —
+        // macOS/Windows keep hermes' graceful-exit reaping.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                Ok(())
+            });
+        }
         let mut child = cmd
             .spawn()
             .map_err(|e| AgentError::Tool(format!("spawn MCP server '{}': {}", config.name, e)))?;
