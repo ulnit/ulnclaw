@@ -294,7 +294,7 @@ async fn main() -> Result<()> {
 
 ### Documentation
 
-- [Hermes Parity Matrix](docs/en/hermes-parity.md) — tool/feature mapping vs hermes-agent v2026.8.3
+- [Hermes Parity Matrix](docs/en/hermes-parity.md) — tool/feature mapping vs hermes-agent v2026.8.3, incl. the HTTP route parity appendix (every hermes route covered or resolved by design; P339)
 - [Architecture Guide](docs/en/architecture.md) · [API Reference](docs/en/api-reference.md)
 - [Integration Guide](docs/en/integration.md) · [Development Guide](docs/en/development.md)
 - [Tool System](docs/en/tools.md) · [Provider System](docs/en/providers.md)
@@ -492,7 +492,7 @@ async fn main() -> Result<()> {
 
 ### 文档
 
-- [Hermes 对标矩阵](docs/zh/hermes-parity.md) —— 与 hermes-agent v2026.8.3 的工具/功能逐项对应
+- [Hermes 对标矩阵](docs/zh/hermes-parity.md) —— 与 hermes-agent v2026.8.3 的工具/功能逐项对应，含 HTTP 路由对标附录（每条 hermes 路由均已覆盖或设计性决议；P339）
 - [架构指南](docs/zh/architecture.md) · [API 参考](docs/zh/api-reference.md)
 - [集成指南](docs/zh/integration.md) · [开发指南](docs/zh/development.md)
 - [工具系统](docs/zh/tools.md) · [Provider 系统](docs/zh/providers.md)

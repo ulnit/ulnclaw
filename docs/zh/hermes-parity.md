@@ -505,6 +505,71 @@
 - OAuth/同步：流程与提供方无关（任意 RFC 8628 端点），不绑定 Nous 门户；
   同步只搬运技能包（无组织提案/审批工作流、无订阅门控）。
 
+## HTTP 路由对标附录（P339）
+
+对 hermes `web_server.py`（v2026.8.3，112 条路由）与 ulnclaw 网关路由表
+（P338 时点 166 条）做逐路由审计：每条 hermes 路由要么已被覆盖（可能路径
+不同），要么属设计性决议不迁移——不存在无声缺漏。
+
+### 以 ulnclaw 路径覆盖
+
+| hermes 路由 | ulnclaw 等价物 |
+|---|---|
+| `/api/files`、`/api/files/read` | `/api/fs/list`、`/api/fs/read-text`（另含 `write-text`、`read-data-url`） |
+| `/api/files/download` | `/api/fs/download`（P335，`?token=` 查询鉴权） |
+| `/api/files/mkdir` | `/api/fs/mkdir`（P335） |
+| `/api/files/upload`、`/api/files/upload-stream`、`/api/chat/image-upload` | `/api/uploads`（内容寻址媒体缓存） |
+| `/api/hermes/update/check` | `/api/update/check`（P324） |
+| `/api/hermes/update` | `ulnclaw update` CLI（终端进度显示；网关从不自更新） |
+| `/api/ops/doctor` | `/api/doctor` |
+| `/api/ops/backup` | `/api/backups`（另含 `/api/backups/:id/restore`、`/api/backups/prune`） |
+| `/api/portal` | `/api/oauth/status`（P334，精简只读状态） |
+| `/api/providers/validate` | `/api/providers/custom-endpoints/validate`（P333） |
+| `/api/status`、`/api/system/stats` | `/api/health`、`/api/system`（P334） |
+| `/api/analytics/usage` | `/api/usage` + `/api/analytics/models` + `/api/insights` |
+| `/api/learning/node` | `/api/learning/node`（GET/PUT/DELETE） |
+| `/api/media` | `/api/media`（P338） |
+| `/api/messaging/platforms` | `/api/messaging/platforms`（另含 `PUT :id`、`POST :id/test`；P337） |
+| `/api/webhooks`、`/api/webhooks/{name}`、`/api/webhooks/enable`、`/api/webhooks/{name}/enabled` | 配置驱动：webhook 平台在 `[messaging.*]` 配置中声明；入站走开放的 `/webhooks/*` 路由 |
+| `/api/model/auxiliary` | 配置驱动：config.toml 的 `[auxiliary.<task>]` 覆盖（无仪表盘面） |
+
+### 设计性决议（不迁移）
+
+- **网关生命周期**（`/api/gateway/start|stop|restart|drain`）——Tauri 外壳
+  监管 gateway 子进程（`ULNCLAW_DESKTOP=1`），CLI 或服务管理器监管独立
+  gateway；让网关按仪表盘请求自我重启正是单实例守卫（P155）要防的故障
+  模式。接管走 `ulnclaw gateway --replace`。
+- **仪表盘动作**（`/api/actions/{name}/status`）——hermes 用它轮询仪表盘
+  驱动的自更新/重启动作；ulnclaw 的更新在 CLI 侧带终端进度执行，不存在
+  需要轮询的长时仪表盘动作。
+- **记忆 provider**（`/api/memory/provider`、
+  `/api/memory/providers/{name}/config|setup`）——ulnclaw 的记忆是文件式
+  MEMORY.md/USER.md 双件 + `memory` 工具，`/api/memory` 提供清单与定向
+  重置；可插拔第三方记忆后端不在移植范围。
+- **引导向导**（`/api/messaging/telegram/onboarding/*`、
+  `/api/messaging/whatsapp/onboarding/*`）——配置向导在 CLI 侧
+  （`ulnclaw setup`、`ulnclaw whatsapp-cloud`；P267/P271）；WhatsApp 走
+  自管 Baileys 桥，其配对是桥自身启动流程，`ulnclaw whatsapp status`
+  负责检视（P272）。
+- **插件市场**（`/api/dashboard/plugins*`、
+  `/api/dashboard/agent-plugins*`、`/api/dashboard/plugin-providers`、
+  `/dashboard-plugins/*`）——ulnclaw 插件是本地的：清单 + 启用/禁用走
+  `/api/plugins`；市场/安装管线与逐插件静态资源托管不在移植范围。
+- **Provider OAuth**（`/api/providers/oauth*`）——provider 凭证是
+  `.env`/config 中的 API key，加上 `/api/oauth/status` 呈现的服务无关
+  `[oauth]` 设备流程；市场式 OAuth 握手不在移植范围。
+- **模型集成**（`/api/model/moa`）——不迁移 Mixture-of-Agents 集成路由；
+  单网关模型 + 会话级模型锁定的设计已取代它。
+- **TTS**（`/api/audio/speak`、`/api/audio/elevenlabs/voices`）——语音转
+  文字已移植（`/api/audio/transcribe`）；文字转语音合成不在移植范围。
+- **运维杂项**（`/api/ops/checkpoints*`、`/api/ops/config-migrate`、
+  `/api/ops/debug-share`、`/api/ops/import*`、
+  `/api/ops/backup/download`）——检查点由 `/api/backups` + 会话分叉取代；
+  配置迁移是 hermes 一次性升级路径；调试包留在本地（`ulnclaw doctor`）；
+  会话导入由导出格式覆盖；备份下载由恢复端点取代。
+- **策展器**（`/api/curator/run`、`/api/curator/paused`）——学习策展为
+  手工操作：经 `/api/learning/node` 的节点编辑/归档与桌面 Learning 视图。
+
 ## 完成状态
 
 agent 核心已与 hermes-agent v2026.8.3 对齐：全部核心工具、完整 `sessions`

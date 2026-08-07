@@ -591,6 +591,83 @@ performance and a single static binary.
   than bound to the Nous Portal; sync moves skill bundles only (no org
   proposal/approval workflow, no subscription gating).
 
+## HTTP route parity appendix (P339)
+
+Route-level audit of hermes `web_server.py` (v2026.8.3, 112 routes) against
+the ulnclaw gateway router (166 routes as of P338). Every hermes route is
+either covered — possibly under a different path — or resolved by design;
+nothing is silently missing.
+
+### Covered under ulnclaw paths
+
+| hermes route | ulnclaw equivalent |
+|---|---|
+| `/api/files`, `/api/files/read` | `/api/fs/list`, `/api/fs/read-text` (+ `write-text`, `read-data-url`) |
+| `/api/files/download` | `/api/fs/download` (P335, `?token=` query auth) |
+| `/api/files/mkdir` | `/api/fs/mkdir` (P335) |
+| `/api/files/upload`, `/api/files/upload-stream`, `/api/chat/image-upload` | `/api/uploads` (content-addressed media cache) |
+| `/api/hermes/update/check` | `/api/update/check` (P324) |
+| `/api/hermes/update` | `ulnclaw update` CLI (terminal progress; the gateway never self-mutates) |
+| `/api/ops/doctor` | `/api/doctor` |
+| `/api/ops/backup` | `/api/backups` (+ `/api/backups/:id/restore`, `/api/backups/prune`) |
+| `/api/portal` | `/api/oauth/status` (P334, lean posture read) |
+| `/api/providers/validate` | `/api/providers/custom-endpoints/validate` (P333) |
+| `/api/status`, `/api/system/stats` | `/api/health`, `/api/system` (P334) |
+| `/api/analytics/usage` | `/api/usage` + `/api/analytics/models` + `/api/insights` |
+| `/api/learning/node` | `/api/learning/node` (GET/PUT/DELETE) |
+| `/api/media` | `/api/media` (P338) |
+| `/api/messaging/platforms` | `/api/messaging/platforms` (+ `PUT :id`, `POST :id/test`; P337) |
+| `/api/webhooks`, `/api/webhooks/{name}`, `/api/webhooks/enable`, `/api/webhooks/{name}/enabled` | config-driven: webhook platforms are declared in `[messaging.*]` config; ingress rides the open `/webhooks/*` routes |
+| `/api/model/auxiliary` | config-driven: `[auxiliary.<task>]` overrides in config.toml (no dashboard surface) |
+
+### Resolved by design (won't port)
+
+- **Gateway lifecycle** (`/api/gateway/start|stop|restart|drain`) — the
+  Tauri shell supervises the gateway child (`ULNCLAW_DESKTOP=1`), and the
+  CLI or a service manager supervises standalone gateways; a gateway
+  restarting itself on a dashboard request is exactly the failure mode the
+  single-instance guard (P155) prevents. Handover is
+  `ulnclaw gateway --replace`.
+- **Dashboard actions** (`/api/actions/{name}/status`) — hermes polls this
+  for dashboard-driven self-update/restart actions; ulnclaw runs updates
+  from the CLI with terminal progress, so there is no long-running
+  dashboard action to poll.
+- **Memory providers** (`/api/memory/provider`,
+  `/api/memory/providers/{name}/config|setup`) — ulnclaw memory is the
+  file-based MEMORY.md/USER.md pair with the `memory` tool, census and
+  targeted reset over `/api/memory`; pluggable third-party memory backends
+  are out of scope.
+- **Onboarding wizards** (`/api/messaging/telegram/onboarding/*`,
+  `/api/messaging/whatsapp/onboarding/*`) — setup is CLI-side
+  (`ulnclaw setup`, `ulnclaw whatsapp-cloud`; P267/P271); WhatsApp runs
+  through a self-managed Baileys bridge whose pairing is its own startup
+  flow, inspected by `ulnclaw whatsapp status` (P272).
+- **Plugin hub** (`/api/dashboard/plugins*`,
+  `/api/dashboard/agent-plugins*`, `/api/dashboard/plugin-providers`,
+  `/dashboard-plugins/*`) — ulnclaw plugins are local: inventory +
+  enable/disable over `/api/plugins`; a marketplace/install pipeline and
+  per-plugin static asset hosting are not part of the port.
+- **Provider OAuth** (`/api/providers/oauth*`) — provider credentials are
+  API keys in `.env`/config plus the service-agnostic `[oauth]` device
+  flow surfaced by `/api/oauth/status`; marketplace OAuth handshakes are
+  out of scope.
+- **Model ensembles** (`/api/model/moa`) — Mixture-of-Agents ensemble
+  routing is not ported; the single-gateway-model plus per-session model
+  lock design supersedes it.
+- **TTS** (`/api/audio/speak`, `/api/audio/elevenlabs/voices`) —
+  speech-to-text is ported (`/api/audio/transcribe`); text-to-speech
+  synthesis is out of scope.
+- **Ops extras** (`/api/ops/checkpoints*`, `/api/ops/config-migrate`,
+  `/api/ops/debug-share`, `/api/ops/import*`,
+  `/api/ops/backup/download`) — checkpoints are superseded by
+  `/api/backups` plus session fork; config migration is a one-time hermes
+  upgrade path; debug bundles stay local (`ulnclaw doctor`); session
+  import is covered by the export formats; backup download is superseded
+  by the restore endpoint.
+- **Curator** (`/api/curator/run`, `/api/curator/paused`) — learning
+  curation is manual: node edit/archive over `/api/learning/node` and the
+  desktop Learning view.
+
 ## Completion status
 
 The agent core is at parity with hermes-agent v2026.8.3: every core tool,
