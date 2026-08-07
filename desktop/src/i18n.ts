@@ -584,7 +584,7 @@ const en: Translations = {
     noResults: "No matching languages", description: "Choose the display language for the desktop shell.",
   },
   sessionPicker: {
-    title: "Sessions", searchPlaceholder: "Search sessions…",
+    title: "Sessions", searchPlaceholder: "Search sessions and messages…",
     noResults: "No matching sessions", messages: "{count} messages",
   },
   intro: {
@@ -927,7 +927,7 @@ const zh: Translations = {
     noResults: "未找到匹配语言", description: "选择桌面外壳的显示语言。",
   },
   sessionPicker: {
-    title: "会话", searchPlaceholder: "搜索会话…",
+    title: "会话", searchPlaceholder: "搜索会话与消息…",
     noResults: "没有匹配的会话", messages: "{count} 条消息",
   },
   intro: {
@@ -1270,7 +1270,7 @@ const zhHant: Translations = {
     noResults: "未找到符合的語言", description: "選擇桌面外殼的顯示語言。",
   },
   sessionPicker: {
-    title: "工作階段", searchPlaceholder: "搜尋工作階段…",
+    title: "工作階段", searchPlaceholder: "搜尋工作階段與訊息…",
     noResults: "沒有符合的工作階段", messages: "{count} 則訊息",
   },
   intro: {
@@ -1613,7 +1613,7 @@ const ja: Translations = {
     noResults: "一致する言語がありません", description: "デスクトップシェルの表示言語を選択します。",
   },
   sessionPicker: {
-    title: "セッション", searchPlaceholder: "セッションを検索…",
+    title: "セッション", searchPlaceholder: "セッションとメッセージを検索…",
     noResults: "一致するセッションがありません", messages: "{count} メッセージ",
   },
   intro: {
@@ -1956,7 +1956,7 @@ const ar: Translations = {
     noResults: "لا لغات مطابقة", description: "اختر لغة العرض لواجهة سطح المكتب.",
   },
   sessionPicker: {
-    title: "الجلسات", searchPlaceholder: "البحث في الجلسات…",
+    title: "الجلسات", searchPlaceholder: "البحث في الجلسات والرسائل…",
     noResults: "لا جلسات مطابقة", messages: "{count} رسائل",
   },
   intro: {

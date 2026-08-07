@@ -1207,6 +1207,7 @@ async function start(): Promise<void> {
       const session = state.sessions.find((row) => row.id === id);
       if (session) await openSession(session);
     },
+    search: async (query) => (state.client ? state.client.searchSessions(query, 20) : []),
   });
 
   state.palette = new CommandPalette({

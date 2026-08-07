@@ -5,15 +5,23 @@
 // the /resume + /sessions + /switch slash commands open it so the
 // command feels first-class instead of falling through to the headless
 // slash worker; the ulnclaw composer intercepts those same commands.
+// P311: queries of 2+ characters additionally fan out to the gateway's
+// full-text transcript search (GET /api/sessions/search, FTS5 with LIKE
+// fallback) and append snippet rows for sessions whose message bodies
+// match — the same store search the Sessions view uses.
 
-import type { SessionRow } from "./gateway";
+import type { SessionRow, SessionSearchHit } from "./gateway";
 import { fmt, t } from "./i18n";
 
 export interface SessionPickerHooks {
   sessions(): SessionRow[];
   currentSessionId(): string | null;
   openSession(id: string): void | Promise<void>;
+  search?(query: string): Promise<SessionSearchHit[]>;
 }
+
+const SEARCH_DEBOUNCE_MS = 250;
+const SNIPPET_MAX = 140;
 
 function normalize(query: string): string {
   return query.trim().toLowerCase();
@@ -23,6 +31,10 @@ export class SessionPickerDialog {
   private dialog: HTMLDialogElement;
   private search: HTMLInputElement;
   private list: HTMLDivElement;
+  private searchTimer: number | null = null;
+  private searchSeq = 0;
+  private hits: SessionSearchHit[] = [];
+  private hitsQuery = "";
 
   constructor(private hooks: SessionPickerHooks) {
     this.dialog = document.createElement("dialog");
@@ -33,7 +45,7 @@ export class SessionPickerDialog {
     this.search = document.createElement("input");
     this.search.type = "text";
     this.search.placeholder = t.sessionPicker.searchPlaceholder;
-    this.search.addEventListener("input", () => this.renderList());
+    this.search.addEventListener("input", () => this.onInput());
     this.search.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -48,9 +60,40 @@ export class SessionPickerDialog {
 
   open(): void {
     this.search.value = "";
+    this.hits = [];
+    this.hitsQuery = "";
     this.renderList();
     this.dialog.showModal();
     this.search.focus();
+  }
+
+  private onInput(): void {
+    this.renderList();
+    if (this.searchTimer !== null) window.clearTimeout(this.searchTimer);
+    const query = this.search.value.trim();
+    if (!this.hooks.search || query.length < 2) {
+      this.hits = [];
+      this.hitsQuery = "";
+      return;
+    }
+    this.searchTimer = window.setTimeout(() => {
+      void this.runSearch(query);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  private async runSearch(query: string): Promise<void> {
+    const search = this.hooks.search;
+    if (!search) return;
+    const seq = ++this.searchSeq;
+    try {
+      const hits = await search(query);
+      if (seq !== this.searchSeq || normalize(this.search.value) !== normalize(query)) return;
+      this.hits = hits;
+      this.hitsQuery = normalize(query);
+      this.renderList();
+    } catch {
+      // Full-text search is best-effort; local title filtering still works.
+    }
   }
 
   private renderList(): void {
@@ -64,7 +107,11 @@ export class SessionPickerDialog {
         const title = session.title || session.id.slice(0, 8);
         return `${title} ${session.id}`.toLowerCase().includes(q);
       });
-    if (!rows.length) {
+    const seen = new Set(rows.map((session) => session.id));
+    const hits = q.length >= 2 && this.hitsQuery === q
+      ? this.hits.filter((hit) => !seen.has(hit.session_id))
+      : [];
+    if (!rows.length && !hits.length) {
       const empty = document.createElement("div");
       empty.className = "session-picker-empty";
       empty.textContent = t.sessionPicker.noResults;
@@ -93,15 +140,44 @@ export class SessionPickerDialog {
       if (session.project) bits.push(session.project);
       const meta = document.createElement("span");
       meta.className = "session-picker-meta";
-      meta.textContent = bits.join(" · ");
+      meta.textContent = bits.join(" \u00b7 ");
       main.appendChild(meta);
       const check = document.createElement("span");
       check.className = "session-picker-check";
-      check.textContent = session.id === activeId ? "✓" : "";
+      check.textContent = session.id === activeId ? "\u2713" : "";
       row.append(icon, main, check);
       row.onclick = () => {
         this.dialog.close();
         void this.hooks.openSession(session.id);
+      };
+      this.list.appendChild(row);
+    }
+    for (const hit of hits) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "session-picker-row";
+      const icon = document.createElement("span");
+      icon.className = "session-picker-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = "\u{1F50D}";
+      const main = document.createElement("span");
+      main.className = "session-picker-main";
+      const title = document.createElement("span");
+      title.className = "session-picker-row-title";
+      title.textContent = hit.title || hit.session_id.slice(0, 8);
+      main.appendChild(title);
+      const meta = document.createElement("span");
+      meta.className = "session-picker-meta";
+      const snippet = hit.snippet.replace(/\s+/g, " ").trim();
+      meta.textContent = snippet.length > SNIPPET_MAX ? `${snippet.slice(0, SNIPPET_MAX)}\u2026` : snippet;
+      main.appendChild(meta);
+      const check = document.createElement("span");
+      check.className = "session-picker-check";
+      check.textContent = hit.session_id === activeId ? "\u2713" : "";
+      row.append(icon, main, check);
+      row.onclick = () => {
+        this.dialog.close();
+        void this.hooks.openSession(hit.session_id);
       };
       this.list.appendChild(row);
     }
