@@ -1614,6 +1614,10 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/curator/unpin", post(curator_unpin))
         .route("/api/curator/archive", post(curator_archive))
         .route("/api/curator/restore", post(curator_restore))
+        .route("/api/checkpoints/status", get(checkpoints_status))
+        .route("/api/checkpoints", get(checkpoints_list))
+        .route("/api/checkpoints/restore", post(checkpoints_restore))
+        .route("/api/checkpoints/prune", post(checkpoints_prune))
         .route("/api/webhooks/subscriptions", get(webhook_subscriptions_list).post(webhook_subscriptions_create))
         .route("/api/webhooks/subscriptions/:name", delete(webhook_subscriptions_delete))
         .route("/api/webhooks/subscriptions/:name/test", post(webhook_subscriptions_test))
@@ -4568,6 +4572,99 @@ async fn curator_restore(
         )
             .into_response(),
     }
+}
+
+// ── Checkpoints (hermes checkpoints CLI parity) ────────────────────────────
+
+/// `GET /api/checkpoints/status` — shared checkpoint store status
+/// (projects, sizes; `ulnclaw checkpoint status`).
+async fn checkpoints_status(State(state): State<Arc<GatewayState>>) -> Response {
+    let home = state.agent.context().home.clone();
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let manager =
+        crate::checkpoint::CheckpointManager::new(home.join("checkpoints"), &config.checkpoints);
+    let status = manager.status().await;
+    Json(json!({"object": "ulnclaw.checkpoint_status", "status": status})).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct CheckpointsListQuery {
+    #[serde(default)]
+    dir: Option<String>,
+}
+
+/// `GET /api/checkpoints?dir=` — checkpoint list for a working
+/// directory (`ulnclaw checkpoint list --dir`).
+async fn checkpoints_list(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<CheckpointsListQuery>,
+) -> Response {
+    let Some(dir) = query.dir.map(|d| d.trim().to_string()).filter(|d| !d.is_empty()) else {
+        return bad_request("dir is required", Some("invalid_request"));
+    };
+    let home = state.agent.context().home.clone();
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let manager =
+        crate::checkpoint::CheckpointManager::new(home.join("checkpoints"), &config.checkpoints);
+    let checkpoints = manager.list_checkpoints(&dir).await;
+    Json(json!({
+        "object": "ulnclaw.checkpoint_list",
+        "dir": dir,
+        "checkpoints": checkpoints,
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct CheckpointRestoreBody {
+    dir: String,
+    hash: String,
+    #[serde(default)]
+    file: Option<String>,
+}
+
+/// `POST /api/checkpoints/restore` — restore a directory (or a single
+/// file) to a checkpoint (`ulnclaw checkpoint restore <hash>`).
+async fn checkpoints_restore(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CheckpointRestoreBody>,
+) -> Response {
+    if body.dir.trim().is_empty() || body.hash.trim().is_empty() {
+        return bad_request("dir and hash are required", Some("invalid_request"));
+    }
+    let home = state.agent.context().home.clone();
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let manager =
+        crate::checkpoint::CheckpointManager::new(home.join("checkpoints"), &config.checkpoints);
+    match manager.restore(&body.dir, &body.hash, body.file.as_deref()).await {
+        Ok(result) => Json(result).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CheckpointPruneBody {
+    #[serde(default)]
+    days: Option<u64>,
+}
+
+/// `POST /api/checkpoints/prune` — drop orphan/stale checkpoints and
+/// reclaim store space (`ulnclaw checkpoint prune`).
+async fn checkpoints_prune(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CheckpointPruneBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let days = body.days.unwrap_or(config.checkpoints.retention_days);
+    let manager =
+        crate::checkpoint::CheckpointManager::new(home.join("checkpoints"), &config.checkpoints);
+    let stats = manager.prune(days, true).await;
+    Json(json!({"object": "ulnclaw.checkpoint_prune", "stats": stats, "days": days})).into_response()
 }
 
 // ── Learning graph (hermes web_server /api/learning/* parity) ─────────────
@@ -9747,6 +9844,63 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(status, StatusCode::OK);
         assert!(body["archived"].as_array().unwrap().is_empty());
         assert!(skill_dir.join("SKILL.md").exists());
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_endpoints_status_list_restore_prune() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/checkpoints/status", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Empty store status.
+        let (status, body) =
+            get_json(app.clone(), "/api/checkpoints/status", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"]["project_count"], 0);
+
+        // dir is required for listing.
+        let (status, _) = get_json(app.clone(), "/api/checkpoints", Some("sekret")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Unknown dir lists empty.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/checkpoints?dir=/nonexistent-ulnclaw-dir",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["checkpoints"].as_array().unwrap().is_empty());
+
+        // Restoring an unknown checkpoint errors cleanly.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/checkpoints/restore",
+            r#"{"dir": "/nonexistent-ulnclaw-dir", "hash": "deadbeef"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().is_some());
+
+        // Prune over an empty store reports zeros.
+        let (status, body) =
+            post_json(app.clone(), "/api/checkpoints/prune", r#"{"days": 7}"#, "sekret").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["stats"]["scanned"], 0);
+        assert_eq!(body["days"], 7);
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

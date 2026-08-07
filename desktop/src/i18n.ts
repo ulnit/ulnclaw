@@ -214,6 +214,7 @@ export interface Translations {
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
+  checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   hatch: {
     title: string; styleLabel: string; draftsLabel: string; designing: string;
     drawing: string; pickBase: string; cancelHatch: string; startOver: string;
@@ -529,6 +530,13 @@ const en: Translations = {
     restored: "Snapshot {id} restored. Restart the gateway to pick up restored state.",
     restoreFailed: "Restore failed: {error}", prune: "Prune\u2026",
     prunePrompt: "Keep how many newest snapshots?", pruned: "Pruned {count} snapshot(s).",
+    pruneFailed: "Prune failed: {error}",
+  },
+  checkpointsPanel: {
+    title: "Checkpoints", size: "Store size",
+    noProjects: "No checkpointed projects yet (checkpoints are opt-in: `[checkpoints] enabled = true`).",
+    prune: "Prune\u2026", prunePrompt: "Retention window in days:",
+    pruned: "Pruned: {orphan} orphan, {stale} stale; freed {bytes}.",
     pruneFailed: "Prune failed: {error}",
   },
   hatch: {
@@ -898,6 +906,13 @@ const zh: Translations = {
     prunePrompt: "保留多少个最新快照？", pruned: "已清理 {count} 个快照。",
     pruneFailed: "清理失败：{error}",
   },
+  checkpointsPanel: {
+    title: "检查点", size: "存储大小",
+    noProjects: "尚无有检查点的项目（检查点为可选功能：`[checkpoints] enabled = true`）。",
+    prune: "清理\u2026", prunePrompt: "保留窗口（天）：",
+    pruned: "已清理：{orphan} 个孤儿、{stale} 个过期；释放 {bytes}。",
+    pruneFailed: "清理失败：{error}",
+  },
   hatch: {
     title: "\u{1F95A} 孵化宠物", styleLabel: "风格 ", draftsLabel: "草稿数 ",
     designing: "设计基础外观中…", drawing: "绘制动画行中…",
@@ -1263,6 +1278,13 @@ const zhHant: Translations = {
     restored: "已還原快照 {id}。請重啟閘道以載入還原的狀態。",
     restoreFailed: "還原失敗：{error}", prune: "清理\u2026",
     prunePrompt: "保留多少個最新快照？", pruned: "已清理 {count} 個快照。",
+    pruneFailed: "清理失敗：{error}",
+  },
+  checkpointsPanel: {
+    title: "檢查點", size: "儲存大小",
+    noProjects: "尚無有檢查點的專案（檢查點為選填功能：`[checkpoints] enabled = true`）。",
+    prune: "清理\u2026", prunePrompt: "保留窗口（天）：",
+    pruned: "已清理：{orphan} 個孤兒、{stale} 個過期；釋放 {bytes}。",
     pruneFailed: "清理失敗：{error}",
   },
   hatch: {
@@ -1632,6 +1654,13 @@ const ja: Translations = {
     prunePrompt: "最新の何件を保持しますか？", pruned: "{count} 件のスナップショットを削除しました。",
     pruneFailed: "枝切りに失敗しました: {error}",
   },
+  checkpointsPanel: {
+    title: "チェックポイント", size: "ストアサイズ",
+    noProjects: "チェックポイント付きプロジェクトはまだありません（オプトイン: `[checkpoints] enabled = true`）。",
+    prune: "枝切り\u2026", prunePrompt: "保持期間（日数）:",
+    pruned: "枝切り完了: 孤立 {orphan}、期限切れ {stale}; {bytes} 解放。",
+    pruneFailed: "枝切りに失敗しました: {error}",
+  },
   hatch: {
     title: "\u{1F95A} ペットをふ化する", styleLabel: "スタイル ", draftsLabel: "草稿数 ",
     designing: "ベースの外見を設計中…", drawing: "アニメーション行を描画中…",
@@ -1997,6 +2026,13 @@ const ar: Translations = {
     restored: "تمت استعادة اللقطة {id}. أعد تشغيل البوابة لتحميل الحالة المستعادة.",
     restoreFailed: "فشل الاستعادة: {error}", prune: "تشذيب\u2026",
     prunePrompt: "كم لقطة أحدث تريد الإبقاء عليها؟", pruned: "تم تشذيب {count} لقطة.",
+    pruneFailed: "فشل التشذيب: {error}",
+  },
+  checkpointsPanel: {
+    title: "نقاط التفتيش", size: "حجم المخزن",
+    noProjects: "لا مشاريع ذات نقاط تفتيش بعد (الميزة اختيارية: `[checkpoints] enabled = true`).",
+    prune: "تشذيب\u2026", prunePrompt: "نافذة الاحتفاظ بالأيام:",
+    pruned: "تم التشذيب: {orphan} يتيمة، {stale} قديمة؛ حُرر {bytes}.",
     pruneFailed: "فشل التشذيب: {error}",
   },
   hatch: {

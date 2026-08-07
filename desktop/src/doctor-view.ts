@@ -70,6 +70,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="backupsPanel.title">State snapshots</h3>
         <div id="backups-rows"></div>
       </section>
+      <section id="doctor-checkpoints" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="checkpointsPanel.title">Checkpoints</h3>
+        <div id="checkpoints-rows"></div>
+      </section>
       <section id="doctor-kanban" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="kanbanPanel.title">Kanban diagnostics</h3>
         <div id="kanban-rows"></div>
@@ -124,6 +128,7 @@ export class DoctorWidget {
     this.loadSystem().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
     this.loadBackups().catch(() => undefined);
+    this.loadCheckpoints().catch(() => undefined);
     this.loadKanban().catch(() => undefined);
     this.loadMetrics().catch(() => undefined);
     this.loadEgress().catch(() => undefined);
@@ -488,6 +493,95 @@ export class DoctorWidget {
       section.hidden = false;
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** Checkpoint store census (P317): sizes + per-project rows with a
+   * prune action, over /api/checkpoints (hermes `checkpoint` parity). */
+  private async loadCheckpoints(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-checkpoints") as HTMLElement;
+    const rows = this.root.querySelector("#checkpoints-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const status = await client.checkpointsStatus();
+      rows.innerHTML = "";
+      const sizeRow = document.createElement("div");
+      sizeRow.className = "monitoring-row";
+      const sizeLabel = document.createElement("span");
+      sizeLabel.className = "monitoring-label";
+      sizeLabel.textContent = t.checkpointsPanel.size;
+      const sizeValue = document.createElement("span");
+      sizeValue.className = "monitoring-value";
+      sizeValue.textContent = `${this.fmtBytes(status.store_size_bytes)} / ${this.fmtBytes(status.total_size_bytes)}`;
+      sizeRow.append(sizeLabel, sizeValue);
+      rows.appendChild(sizeRow);
+
+      if (!status.projects.length) {
+        const empty = document.createElement("div");
+        empty.className = "monitoring-row config-note";
+        empty.textContent = t.checkpointsPanel.noProjects;
+        rows.appendChild(empty);
+      }
+      for (const project of status.projects) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const label = document.createElement("span");
+        label.className = "monitoring-label";
+        label.textContent = project.workdir || project.hash.slice(0, 12);
+        label.title = project.workdir;
+        const value = document.createElement("span");
+        value.className = "monitoring-value";
+        value.textContent = `${project.commits} commits${project.exists ? "" : " \u00b7 missing dir"}`;
+        row.append(label, value);
+        rows.appendChild(row);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "monitoring-row";
+      const prune = document.createElement("button");
+      prune.className = "ghost";
+      prune.textContent = t.checkpointsPanel.prune;
+      prune.onclick = () => this.pruneCheckpoints();
+      const statusEl = document.createElement("span");
+      statusEl.className = "config-note";
+      statusEl.id = "checkpoints-status-note";
+      actions.append(prune, statusEl);
+      rows.appendChild(actions);
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async pruneCheckpoints(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const raw = window.prompt(t.checkpointsPanel.prunePrompt, "7");
+    if (raw === null) return;
+    const days = Number.parseInt(raw, 10);
+    if (!Number.isFinite(days) || days < 0) return;
+    const note = this.root.querySelector("#checkpoints-status-note");
+    try {
+      const stats = await client.checkpointsPrune(days);
+      await this.loadCheckpoints();
+      const el = this.root.querySelector("#checkpoints-status-note");
+      if (el) {
+        el.textContent = t.checkpointsPanel.pruned
+          .replace("{orphan}", String(stats.deleted_orphan))
+          .replace("{stale}", String(stats.deleted_stale))
+          .replace("{bytes}", this.fmtBytes(stats.bytes_freed));
+      }
+    } catch (error) {
+      if (note) {
+        note.textContent = t.checkpointsPanel.pruneFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
   }
 

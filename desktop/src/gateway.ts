@@ -453,6 +453,32 @@ export interface CuratorStatus {
   usage: CuratorUsageRow[];
 }
 
+/** GET /api/checkpoints/status payload (P317). */
+export interface CheckpointProject {
+  hash: string;
+  workdir: string;
+  exists: boolean;
+  created_at: number;
+  last_touch: number;
+  commits: number;
+}
+
+export interface CheckpointStoreStatus {
+  base: string;
+  store_size_bytes: number;
+  total_size_bytes: number;
+  project_count: number;
+  projects: CheckpointProject[];
+}
+
+export interface CheckpointPruneStats {
+  scanned: number;
+  deleted_orphan: number;
+  deleted_stale: number;
+  errors: number;
+  bytes_freed: number;
+}
+
 export interface McpServerRow {
   name: string;
   kind: "stdio" | "http" | "sse";
@@ -1247,6 +1273,28 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`search HTTP ${response.status}`);
     const value = await response.json();
     return (value.results || []) as SessionSearchHit[];
+  }
+
+  /** GET /api/checkpoints/status — checkpoint store census (P317). */
+  async checkpointsStatus(): Promise<CheckpointStoreStatus> {
+    const response = await fetch(this.endpoint("/api/checkpoints/status"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `checkpoints HTTP ${response.status}`);
+    return value.status as CheckpointStoreStatus;
+  }
+
+  /** POST /api/checkpoints/prune — drop orphan/stale checkpoints. */
+  async checkpointsPrune(days?: number): Promise<CheckpointPruneStats> {
+    const response = await fetch(this.endpoint("/api/checkpoints/prune"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify(days != null ? { days } : {}),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `checkpoint prune HTTP ${response.status}`);
+    return value.stats as CheckpointPruneStats;
   }
 
   /** GET /api/curator — curation overview (status/archived/usage; P316). */
