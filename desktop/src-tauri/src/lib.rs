@@ -54,6 +54,105 @@ fn persist_window_state(state: &WindowState) {
     }
 }
 
+/// P555: single-instance pidfile (`~/.ulnclaw/desktop.pid`) so a second
+/// shell launch can't double-launch the gateway child. Mirrors the
+/// gateway.pid guard: the record carries the `/proc/<pid>/stat` start
+/// time as a PID-reuse token.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct DesktopPidRecord {
+    pid: u32,
+    #[serde(default)]
+    started_at: Option<u64>,
+}
+
+fn desktop_pidfile_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .map(|home| home.join(".ulnclaw").join("desktop.pid"))
+}
+
+/// Field 22 (`starttime`) of `/proc/<pid>/stat`, anchored on the last
+/// `)` because comm may contain spaces (same math as gateway_pidfile).
+fn desktop_process_start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let close = stat.rfind(')')?;
+    let rest = stat.get(close + 2..)?;
+    rest.split_whitespace().nth(19)?.parse().ok()
+}
+
+/// True iff `pid` is a live process — `/proc` state check, zombies dead.
+/// Platforms without `/proc` degrade to "not alive", disabling the guard.
+fn desktop_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => {
+            let close = match stat.rfind(')') {
+                Some(close) => close,
+                None => return true,
+            };
+            match stat.get(close + 2..).and_then(|rest| rest.chars().next()) {
+                Some(state) => !matches!(state, 'Z' | 'X' | 'x'),
+                None => true,
+            }
+        }
+        Err(_) => false,
+    }
+}
+
+/// P555: claim the single-instance slot. Returns false when another
+/// shell recorded in the pidfile is still alive (start token matches).
+fn acquire_single_instance() -> bool {
+    let Some(path) = desktop_pidfile_path() else {
+        return true;
+    };
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        if let Ok(record) = serde_json::from_str::<DesktopPidRecord>(data.trim()) {
+            if record.pid != 0 && desktop_pid_alive(record.pid) {
+                let pid_reused = match (record.started_at, desktop_process_start_time(record.pid)) {
+                    (Some(recorded), Some(current)) => recorded != current,
+                    _ => false,
+                };
+                if !pid_reused {
+                    eprintln!(
+                        "ulnclaw desktop: already running (pid {}); refusing a second instance.",
+                        record.pid
+                    );
+                    return false;
+                }
+            }
+        }
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let pid = std::process::id();
+    let record = DesktopPidRecord {
+        pid,
+        started_at: desktop_process_start_time(pid),
+    };
+    if let Ok(json) = serde_json::to_string(&record) {
+        let _ = std::fs::write(&path, json + "\n");
+    }
+    true
+}
+
+/// P555: drop the pidfile on exit — but only when it still names this
+/// process, never a record a newer instance wrote over ours.
+fn release_single_instance() {
+    let Some(path) = desktop_pidfile_path() else {
+        return;
+    };
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        if let Ok(record) = serde_json::from_str::<DesktopPidRecord>(data.trim()) {
+            if record.pid == std::process::id() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
 /// Locate the `ulnclaw` binary: PATH first, then common install spots.
 #[tauri::command]
 fn find_ulnclaw_binary() -> Option<String> {
@@ -298,7 +397,11 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // P555: a second launch while the first is alive exits immediately.
+    if !acquire_single_instance() {
+        return;
+    }
+    let app = tauri::Builder::default()
         .manage(GatewayProcess(Mutex::new(None)))
         .manage(WindowGeometry(Mutex::new(None)))
         .setup(|app| {
@@ -386,6 +489,12 @@ pub fn run() {
             spawn_gateway,
             stop_gateway
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running ulnclaw desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building ulnclaw desktop");
+    app.run(|_handle, event| {
+        // P555: release the single-instance slot on real exit.
+        if let tauri::RunEvent::Exit = event {
+            release_single_instance();
+        }
+    });
 }
