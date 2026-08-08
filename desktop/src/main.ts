@@ -615,6 +615,21 @@ function renderDayJump(days: { key: string; timestamp: number }[]): void {
   el.dayJump.hidden = false;
 }
 
+/** P402: Alt+↑/Alt+↓ jumps between transcript day dividers. */
+function jumpDayDivider(direction: -1 | 1): void {
+  const dividers = [...el.messages.querySelectorAll<HTMLElement>(".day-divider")];
+  if (dividers.length === 0) return;
+  const containerTop = el.messages.getBoundingClientRect().top;
+  const position = (node: HTMLElement) =>
+    node.getBoundingClientRect().top - containerTop + el.messages.scrollTop;
+  const top = el.messages.scrollTop;
+  const target =
+    direction === 1
+      ? dividers.find((divider) => position(divider) > top + 8)
+      : [...dividers].reverse().find((divider) => position(divider) < top - 8);
+  target?.scrollIntoView({ block: "start" });
+}
+
 /** P388: sidebar collapse toggling, persisted across launches. */
 const SIDEBAR_COLLAPSED_KEY = "ulnclaw.sidebarCollapsed";
 
@@ -2400,6 +2415,20 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     state.sessionFilterText = savedFilter;
     el.sessionFilter.value = savedFilter;
   }
+  // P402: Alt+↑/Alt+↓ jumps between day dividers in the chat view.
+  window.addEventListener("keydown", (event) => {
+    if (
+      state.view === "chat" &&
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      (event.key === "ArrowUp" || event.key === "ArrowDown")
+    ) {
+      event.preventDefault();
+      jumpDayDivider(event.key === "ArrowDown" ? 1 : -1);
+    }
+  });
   // P398: reopen the last active view.
   const savedView = localStorage.getItem(ACTIVE_VIEW_KEY);
   if (
@@ -2577,6 +2606,7 @@ function shortcutRows(): [string, string][] {
     ["F1", t.chrome.scShortcuts],
     ["↑ / ↓", t.chrome.scRecall],
     ["↑ / ↓ + Enter", t.chrome.scSessionNav],
+    ["Alt+↑ / Alt+↓", t.chrome.scDayJump],
   ];
 }
 
