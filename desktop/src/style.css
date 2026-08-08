@@ -1329,6 +1329,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 #plugins-view-filter { min-width: 200px; }
 #jobs-filter { min-width: 200px; }
 #runs-filter { min-width: 200px; }
+/* P543: inline chat-title rename. */
+.chat-title-inline { font: inherit; color: inherit; background: var(--bg-soft, transparent); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; max-width: 46%; }
 #models-view-filter { min-width: 200px; }
 #webhooks-filter { min-width: 200px; }
 #projects-filter { min-width: 200px; }

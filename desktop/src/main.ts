@@ -461,6 +461,67 @@ function renderSessions(): void {
   }
 }
 
+/** P543: double-click the chat title to rename inline — Enter saves,
+ * Esc cancels, blur commits. The prompt-based flow stays on the ✎
+ * button; a single click still opens the session-info popover. */
+function beginInlineRename(): void {
+  if (!state.current || !state.client) return;
+  const header = el.chatTitle.parentElement;
+  if (!header || header.querySelector("#chat-title-inline")) return;
+  const session = state.current;
+  const current = session.title || session.id.slice(0, 8);
+  const input = document.createElement("input");
+  input.id = "chat-title-inline";
+  input.type = "text";
+  input.className = "chat-title-inline";
+  input.maxLength = 100;
+  input.value = current;
+  el.chatTitle.hidden = true;
+  header.insertBefore(input, el.chatTitle.nextSibling);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit: boolean): void => {
+    if (done) return;
+    done = true;
+    const value = input.value.trim();
+    input.remove();
+    el.chatTitle.hidden = false;
+    if (commit && value && value !== current) {
+      void applyInlineRename(session, value);
+    }
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+/** P543: persist the inline-rename result (shared success/failure
+ * toasts with the prompt flow). */
+async function applyInlineRename(session: SessionRow, title: string): Promise<void> {
+  if (!state.client) return;
+  try {
+    await state.client.renameSession(session.id, title);
+    session.title = title;
+    if (state.current?.id === session.id) {
+      state.current.title = title;
+      el.chatTitle.textContent = title;
+      refreshWindowTitle();
+    }
+    renderSessions();
+    notifySuccess(t.session.renamed);
+  } catch (error) {
+    notifyError(fmt(t.session.renameFailed, { error }));
+  }
+}
+
 async function renameSession(session: SessionRow): Promise<void> {
   if (!state.client) return;
   const current = session.title || session.id.slice(0, 8);
@@ -2649,7 +2710,24 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     el.settings.showModal();
   };
   el.notifyBell.onclick = () => openNotifyHistory();
-  el.chatTitle.addEventListener("click", () => openSessionInfo());
+  // P360 + P543: a click opens the session-info popover; a double-click
+  // starts an inline rename instead. The debounce keeps the popover
+  // closed while the second click of the pair lands.
+  let titleClickTimer: number | null = null;
+  el.chatTitle.addEventListener("click", () => {
+    if (titleClickTimer !== null) return;
+    titleClickTimer = window.setTimeout(() => {
+      titleClickTimer = null;
+      openSessionInfo();
+    }, 260);
+  });
+  el.chatTitle.addEventListener("dblclick", () => {
+    if (titleClickTimer !== null) {
+      window.clearTimeout(titleClickTimer);
+      titleClickTimer = null;
+    }
+    beginInlineRename();
+  });
   el.sessionInfoCopy.onclick = () => {
     const id = state.current?.id;
     if (!id) return;
