@@ -45,6 +45,7 @@ export class KanbanWidget {
         <span id="kanban-dispatch-status" class="config-note"></span>
         <span class="spacer"></span>
         <input id="kanban-filter" type="search" data-i18n-ph="kanban.filterPlaceholder" />
+        <button id="kanban-new" class="primary" data-i18n="kanban.newTask">New task</button>
         <button id="kanban-dispatch" class="ghost" data-i18n="kanban.dispatch">Dispatch</button>
         <button id="kanban-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
@@ -92,6 +93,16 @@ export class KanbanWidget {
     });
     (this.root.querySelector("#kanban-dispatch") as HTMLButtonElement).onclick = () =>
       void this.dispatch();
+    // P574: quick task creation from the toolbar (palette quick-add parity).
+    (this.root.querySelector("#kanban-new") as HTMLButtonElement).onclick = () => {
+      const client = this.client();
+      if (!client) return;
+      const title = window.prompt(t.kanban.newTaskPrompt);
+      if (!title || !title.trim()) return;
+      void client.kanbanCreateTask(title.trim()).then((task) => {
+        if (task) void this.refresh();
+      });
+    };
 
     const dialog = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
     dialog.addEventListener("close", () => {

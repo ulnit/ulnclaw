@@ -103,7 +103,7 @@ export interface Translations {
     claim: string; metaAssignee: string; metaPriority: string; metaCreated: string;
     metaStarted: string; metaCompleted: string; metaParents: string; metaChildren: string;
     attachmentsTitle: string;
-    dispatch: string; dispatchResult: string; dispatchFailed: string;
+    dispatch: string; dispatchResult: string; dispatchFailed: string; newTask: string; newTaskPrompt: string;
     filterPlaceholder: string; filterNoMatch: string;
   };
   projects: {
@@ -447,7 +447,7 @@ const en: Translations = {
     claim: "Claim", metaAssignee: "Assignee", metaPriority: "Priority", metaCreated: "Created",
     metaStarted: "Started", metaCompleted: "Completed", metaParents: "Parents", metaChildren: "Children",
     attachmentsTitle: "Attachments",
-    dispatch: "Dispatch", dispatchResult: "Dispatched: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", dispatchFailed: "Dispatch failed: {error}",
+    dispatch: "Dispatch", newTask: "New task", newTaskPrompt: "Task title:", dispatchResult: "Dispatched: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", dispatchFailed: "Dispatch failed: {error}",
     filterPlaceholder: "Filter tasks…", filterNoMatch: "No tasks match the filter.",
   },
   projects: {
@@ -947,7 +947,7 @@ const zh: Translations = {
     claim: "认领", metaAssignee: "负责人", metaPriority: "优先级", metaCreated: "创建于",
     metaStarted: "开始于", metaCompleted: "完成于", metaParents: "父任务", metaChildren: "子任务",
     attachmentsTitle: "附件",
-    dispatch: "派发", dispatchResult: "派发完成：生成 {spawned} · 提升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派发失败:{error}",
+    dispatch: "派发", newTask: "新建任务", newTaskPrompt: "任务标题：", dispatchResult: "派发完成：生成 {spawned} · 提升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派发失败:{error}",
     filterPlaceholder: "筛选任务…", filterNoMatch: "没有匹配筛选条件的任务。",
   },
   projects: {
@@ -1447,7 +1447,7 @@ const zhHant: Translations = {
     claim: "認領", metaAssignee: "負責人", metaPriority: "優先級", metaCreated: "建立於",
     metaStarted: "開始於", metaCompleted: "完成於", metaParents: "父工作", metaChildren: "子工作",
     attachmentsTitle: "附件",
-    dispatch: "派發", dispatchResult: "派發完成：產生 {spawned} · 晉升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派發失敗:{error}",
+    dispatch: "派發", newTask: "新建工作", newTaskPrompt: "工作標題：", dispatchResult: "派發完成：產生 {spawned} · 晉升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派發失敗:{error}",
     filterPlaceholder: "篩選任務…", filterNoMatch: "沒有匹配篩選條件的任務。",
   },
   projects: {
@@ -1947,7 +1947,7 @@ const ja: Translations = {
     claim: "クレーム", metaAssignee: "担当者", metaPriority: "優先度", metaCreated: "作成",
     metaStarted: "開始", metaCompleted: "完了", metaParents: "親タスク", metaChildren: "子タスク",
     attachmentsTitle: "添付",
-    dispatch: "ディスパッチ", dispatchResult: "ディスパッチ完了: 起動 {spawned} · 昇格 {promoted} · 回収 {reclaimed}", dispatchFailed: "ディスパッチに失敗しました: {error}",
+    dispatch: "ディスパッチ", newTask: "新規タスク", newTaskPrompt: "タスクのタイトル：", dispatchResult: "ディスパッチ完了: 起動 {spawned} · 昇格 {promoted} · 回収 {reclaimed}", dispatchFailed: "ディスパッチに失敗しました: {error}",
     filterPlaceholder: "タスクを絞り込み…", filterNoMatch: "条件に一致するタスクがありません。",
   },
   projects: {
@@ -2447,7 +2447,7 @@ const ar: Translations = {
     claim: "استلام", metaAssignee: "المسند إليه", metaPriority: "الأولوية", metaCreated: "أُنشئت",
     metaStarted: "بدأت", metaCompleted: "اكتملت", metaParents: "المهام الأم", metaChildren: "المهام الفرعية",
     attachmentsTitle: "المرفقات",
-    dispatch: "توزيع", dispatchResult: "تم التوزيع: {spawned} انطلاق · {promoted} ترقية · {reclaimed} استرداد", dispatchFailed: "فشل التوزيع: {error}",
+    dispatch: "توزيع", newTask: "مهمة جديدة", newTaskPrompt: "عنوان المهمة:", dispatchResult: "تم التوزيع: {spawned} انطلاق · {promoted} ترقية · {reclaimed} استرداد", dispatchFailed: "فشل التوزيع: {error}",
     filterPlaceholder: "تصفية المهام…", filterNoMatch: "لا توجد مهام تطابق التصفية.",
   },
   projects: {
