@@ -1256,6 +1256,24 @@ impl SqliteSessionStore {
         .map_err(|e| AgentError::session(e.to_string()))
     }
 
+    /// P553: ids of sessions forked from `parent_id`, oldest first —
+    /// the gateway enriches single-session fetches with this lineage.
+    pub fn child_session_ids(&self, parent_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = match conn.prepare(
+            "SELECT id FROM sessions WHERE parent_session_id = ?1 ORDER BY started_at",
+        ) {
+            Ok(s) => s,
+            Err(e) => return Err(AgentError::session(e.to_string())),
+        };
+        let rows = match stmt.query_map(params![parent_id], |row| row.get::<_, String>(0)) {
+            Ok(r) => r,
+            Err(e) => return Err(AgentError::session(e.to_string())),
+        };
+        rows.collect::<std::result::Result<Vec<String>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))
+    }
+
     /// Recent sessions, newest first.
     pub fn list_session_rows(&self, limit: usize) -> Result<Vec<SessionRow>> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;

@@ -7582,8 +7582,20 @@ async fn create_session(
 async fn get_session(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
     match state.store.get_session_row(&id) {
         Ok(Some(row)) => {
+            // P553: lineage + token convenience fields on single-session
+            // fetches (the list endpoint keeps its leaner shape).
+            let child_ids = state.store.child_session_ids(&id).unwrap_or_default();
+            let total_tokens = row.input_tokens + row.output_tokens;
             let mut rows = enrich_sessions_with_projects(vec![row]);
-            Json(rows.pop().unwrap_or(Value::Null)).into_response()
+            let mut value = rows.pop().unwrap_or(Value::Null);
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "child_session_ids".to_string(),
+                    Value::Array(child_ids.into_iter().map(Value::String).collect()),
+                );
+                object.insert("total_tokens".to_string(), json!(total_tokens));
+            }
+            Json(value).into_response()
         }
         Ok(None) => not_found(&format!("session {} not found", id)),
         Err(e) => server_error(&e.to_string()),
@@ -15908,6 +15920,33 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (_, row) = get_json(app, &format!("/api/sessions/{id}"), Some(token)).await;
         assert_eq!(row["source"], "gateway");
         assert!(row["cwd"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_get_session_includes_lineage_and_token_totals() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/sessions", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let parent = body["id"].as_str().unwrap().to_string();
+
+        // A fresh session has no children and zero tokens.
+        let (_, row) = get_json(app.clone(), &format!("/api/sessions/{parent}"), Some(token)).await;
+        assert_eq!(row["child_session_ids"], json!([]));
+        assert_eq!(row["total_tokens"], 0);
+
+        // Forking adds the child to the parent's lineage (P553).
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/sessions/{parent}/fork"), Some(token), json!({}),
+        ).await;
+        assert!(status.is_success(), "{status} {body}");
+        let child = body["session"]["id"].as_str().expect("fork id").to_string();
+        let (_, row) = get_json(app, &format!("/api/sessions/{parent}"), Some(token)).await;
+        assert_eq!(row["child_session_ids"], json!([child]));
     }
 
     #[tokio::test]
