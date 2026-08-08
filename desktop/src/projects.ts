@@ -5,6 +5,7 @@
 
 import type { DiscoveredRepo, GatewayClient, Project, SessionRow } from "./gateway";
 import { fmt, t } from "./i18n";
+import { notify } from "./notifications";
 
 export class ProjectsWidget {
   private projects: Project[] = [];
@@ -337,6 +338,15 @@ export class ProjectsWidget {
     const sessionCwd = project.primary_path ?? project.folders[0]?.path;
     if (sessionCwd && this.newSessionInProject) {
       mk(t.projects.newSessionHere, () => this.newSessionInProject!(sessionCwd, project.name));
+    }
+    if (sessionCwd) {
+      // P588: copy the project's working folder to the clipboard.
+      mk(t.projects.copyPath, () => {
+        void navigator.clipboard.writeText(sessionCwd).then(
+          () => notify({ kind: "success", message: t.projects.pathCopied.replace("{path}", sessionCwd) }),
+          () => notify({ kind: "error", message: t.webhooks.copyFailed }),
+        );
+      });
     }
     mk(t.projects.addFolder, () => {
       if (!client) return;

@@ -114,7 +114,7 @@ export interface Translations {
     boardSlugPrompt: string; folderPathPrompt: string; scanRootsPrompt: string;
     newProject: string; discoveredRepos: string; nameLabel: string; foldersLabel: string;
     boardLabel: string; setActive: string; create: string; use: string; empty: string;
-    reposEmpty: string; deleteConfirm: string; newSessionHere: string; sessionCount: string; boardBadge: string; scanRecorded: string;
+    reposEmpty: string; deleteConfirm: string; newSessionHere: string; copyPath: string; pathCopied: string; sessionCount: string; boardBadge: string; scanRecorded: string;
     filterPlaceholder: string; filterNoMatch: string;
     createFailed: string; activePrefix: string;
     rename: string; renamePrompt: string; editAbout: string; aboutPrompt: string;
@@ -473,7 +473,7 @@ const en: Translations = {
     empty: "No projects yet — create one, or scan the filesystem for git repos.",
     reposEmpty: "Discovery cache is empty — run “Scan repos”.",
     filterPlaceholder: "Filter projects & repos…", filterNoMatch: "No projects or repos match the filter.",
-    deleteConfirm: "Delete project “{name}”? This only removes the registry entry.", newSessionHere: "New session here", sessionCount: "{count} sessions",
+    deleteConfirm: "Delete project “{name}”? This only removes the registry entry.", newSessionHere: "New session here", copyPath: "Copy path", pathCopied: "Copied {path}", sessionCount: "{count} sessions",
     boardBadge: "board: {slug}",
     scanRecorded: "Recorded {count} repo(s) into the discovery cache.",
     createFailed: "Project creation failed (gateway unreachable or invalid input).",
@@ -978,7 +978,7 @@ const zh: Translations = {
     empty: "还没有项目 —— 创建一个，或扫描文件系统查找 git 仓库。",
     reposEmpty: "发现缓存为空 —— 运行“扫描仓库”。",
     filterPlaceholder: "筛选项目与仓库…", filterNoMatch: "没有符合筛选的项目或仓库。",
-    deleteConfirm: "删除项目「{name}」？这只会移除登记簿条目。", newSessionHere: "在此新建会话", sessionCount: "{count} 个会话",
+    deleteConfirm: "删除项目「{name}」？这只会移除登记簿条目。", newSessionHere: "在此新建会话", copyPath: "复制路径", pathCopied: "已复制 {path}", sessionCount: "{count} 个会话",
     boardBadge: "看板：{slug}",
     scanRecorded: "已记录 {count} 个仓库到发现缓存。",
     createFailed: "项目创建失败（网关不可达或输入无效）。",
@@ -1483,7 +1483,7 @@ const zhHant: Translations = {
     empty: "還沒有專案 —— 建立一個，或掃描檔案系統尋找 git 儲存庫。",
     reposEmpty: "發現快取為空 —— 執行「掃描儲存庫」。",
     filterPlaceholder: "篩選專案與儲存庫…", filterNoMatch: "沒有符合篩選的專案或儲存庫。",
-    deleteConfirm: "刪除專案「{name}」？這只會移除登記簿條目。", newSessionHere: "在此新建工作階段", sessionCount: "{count} 個工作階段",
+    deleteConfirm: "刪除專案「{name}」？這只會移除登記簿條目。", newSessionHere: "在此新建工作階段", copyPath: "複製路徑", pathCopied: "已複製 {path}", sessionCount: "{count} 個工作階段",
     boardBadge: "看板：{slug}",
     scanRecorded: "已記錄 {count} 個儲存庫至發現快取。",
     createFailed: "專案建立失敗（閘道不可達或輸入無效）。",
@@ -1988,7 +1988,7 @@ const ja: Translations = {
     empty: "まだプロジェクトがありません — 作成するか、ファイルシステムから git リポジトリをスキャンしてください。",
     reposEmpty: "発見キャッシュが空です — 「リポジトリをスキャン」を実行してください。",
     filterPlaceholder: "プロジェクトとリポジトリを絞り込み…", filterNoMatch: "フィルターに一致するプロジェクトやリポジトリはありません。",
-    deleteConfirm: "プロジェクト「{name}」を削除しますか？レジストリエントリのみ削除されます。", newSessionHere: "ここで新しいセッション", sessionCount: "{count} セッション",
+    deleteConfirm: "プロジェクト「{name}」を削除しますか？レジストリエントリのみ削除されます。", newSessionHere: "ここで新しいセッション", copyPath: "パスをコピー", pathCopied: "{path} をコピーしました", sessionCount: "{count} セッション",
     boardBadge: "ボード：{slug}",
     scanRecorded: "{count} 件のリポジトリを発見キャッシュに記録しました。",
     createFailed: "プロジェクトの作成に失敗（ゲートウェイ到達不能または入力が無効）。",
@@ -2493,7 +2493,7 @@ const ar: Translations = {
     empty: "لا مشاريع بعد — أنشئ واحدًا أو افحص نظام الملفات بحثًا عن مستودعات git.",
     reposEmpty: "ذاكرة الاكتشاف فارغة — شغّل «فحص المستودعات».",
     filterPlaceholder: "تصفية المشاريع والمستودعات…", filterNoMatch: "لا توجد مشاريع أو مستودعات تطابق المرشح.",
-    deleteConfirm: "حذف المشروع «{name}»؟ سيُزال قيد السجل فقط.", newSessionHere: "جلسة جديدة هنا", sessionCount: "{count} جلسات",
+    deleteConfirm: "حذف المشروع «{name}»؟ سيُزال قيد السجل فقط.", newSessionHere: "جلسة جديدة هنا", copyPath: "نسخ المسار", pathCopied: "تم نسخ {path}", sessionCount: "{count} جلسات",
     boardBadge: "اللوحة: {slug}",
     scanRecorded: "سُجّلت {count} مستودعات في ذاكرة الاكتشاف.",
     createFailed: "فشل إنشاء المشروع (البوابة غير متاحة أو الإدخال غير صالح).",
