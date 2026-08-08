@@ -65,6 +65,8 @@ const state = {
   current: null as SessionRow | null,
   /** P368: session id -> total tokens from /api/usage (sidebar badges). */
   sessionTokens: new Map<string, number>(),
+  /** P372: sidebar session-filter text (title or id substring). */
+  sessionFilterText: "",
   busy: false,
   managedPid: null as number | null,
   skills: [] as SkillRow[],
@@ -98,6 +100,7 @@ const el = {
   dot: document.getElementById("gateway-dot")!,
   statusbar: document.getElementById("statusbar")!,
   sessionList: document.getElementById("session-list")!,
+  sessionFilter: document.getElementById("session-filter") as HTMLInputElement,
   newSession: document.getElementById("new-session") as HTMLButtonElement,
   messages: document.getElementById("messages")!,
   scrollBottom: document.getElementById("scroll-bottom") as HTMLButtonElement,
@@ -166,7 +169,18 @@ function sessionWhen(epochSeconds: number): string {
 
 function renderSessions(): void {
   el.sessionList.innerHTML = "";
-  const sorted = [...state.sessions].sort((a, b) => b.last_activity_at - a.last_activity_at);
+  // P372: optional sidebar filter (title or id substring, case-insensitive).
+  const filter = state.sessionFilterText.trim().toLowerCase();
+  const sorted = [...state.sessions]
+    .sort((a, b) => b.last_activity_at - a.last_activity_at)
+    .filter((session) => {
+      if (!filter) return true;
+      const title = session.title || session.id.slice(0, 8);
+      return (
+        title.toLowerCase().includes(filter) ||
+        session.id.toLowerCase().includes(filter)
+      );
+    });
   for (const session of sorted.slice(0, 100)) {
     const item = document.createElement("div");
     item.className = "session-item" + (state.current?.id === session.id ? " active" : "");
@@ -1520,6 +1534,12 @@ async function start(): Promise<void> {
     renderSessions();
     el.input.focus();
   };
+
+  // P372: live sidebar session filter.
+  el.sessionFilter.addEventListener("input", () => {
+    state.sessionFilterText = el.sessionFilter.value;
+    renderSessions();
+  });
   el.send.onclick = () => void sendTurn();
   el.mic.onclick = () => void toggleMic();
   el.attachFile.onclick = () => void openFsPicker();

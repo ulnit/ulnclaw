@@ -33,6 +33,13 @@ body { background: var(--bg); color: var(--text); }
 .dot.up { background: var(--ok); }
 .dot.down { background: var(--bad); }
 
+/* P372: sidebar session filter box. */
+.session-filter {
+  width: 100%; box-sizing: border-box; margin: 8px 0 2px; padding: 6px 10px;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13px;
+}
+.session-filter:focus { outline: none; border-color: var(--accent); }
 #session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .session-item {
   text-align: left; background: var(--panel-2); color: var(--text);
