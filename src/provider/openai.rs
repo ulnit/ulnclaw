@@ -25,6 +25,10 @@ pub struct OpenAiProvider {
     max_tokens: Option<u32>,
     temperature: Option<f32>,
     max_retries: usize,
+    /// Pinned reasoning effort sent as `reasoning_effort` on every
+    /// request (hermes `--reasoning` / `agent.reasoning_effort`);
+    /// None = the endpoint's own default.
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiProvider {
@@ -117,6 +121,7 @@ pub struct OpenAiProviderBuilder {
     max_tokens: Option<u32>,
     temperature: Option<f32>,
     max_retries: usize,
+    reasoning_effort: Option<String>,
 }
 
 impl Default for OpenAiProviderBuilder {
@@ -129,6 +134,7 @@ impl Default for OpenAiProviderBuilder {
             max_tokens: None,
             temperature: None,
             max_retries: 2,
+            reasoning_effort: None,
         }
     }
 }
@@ -171,6 +177,14 @@ impl OpenAiProviderBuilder {
         self
     }
 
+    /// Pin the reasoning effort (none|minimal|low|medium|high|xhigh|
+    /// max|ultra) sent on every request; None keeps the endpoint
+    /// default (hermes `agent.reasoning_effort`).
+    pub fn reasoning_effort(mut self, effort: &str) -> Self {
+        self.reasoning_effort = Some(effort.to_string());
+        self
+    }
+
     pub fn build(self) -> Result<OpenAiProvider> {
         let endpoint = self
             .endpoint
@@ -194,6 +208,7 @@ impl OpenAiProviderBuilder {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             max_retries: self.max_retries,
+            reasoning_effort: self.reasoning_effort,
         })
     }
 }
@@ -210,6 +225,8 @@ struct ApiRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<Vec<String>>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -480,6 +497,7 @@ impl Provider for OpenAiProvider {
             tools: api_tools,
             max_tokens: request.max_tokens.or(self.max_tokens),
             temperature: request.temperature.or(self.temperature),
+            reasoning_effort: self.reasoning_effort.clone(),
             stop: request.stop,
             stream: false,
             stream_options: None,
@@ -548,6 +566,7 @@ impl Provider for OpenAiProvider {
             tools: api_tools,
             max_tokens: request.max_tokens.or(self.max_tokens),
             temperature: request.temperature.or(self.temperature),
+            reasoning_effort: self.reasoning_effort.clone(),
             stop: request.stop,
             stream: true,
             stream_options: Some(serde_json::json!({"include_usage": true})),

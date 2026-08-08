@@ -176,6 +176,11 @@ pub struct CreateTaskBody {
     /// requires `model`.
     #[serde(default)]
     pub provider: Option<String>,
+    /// Per-task reasoning-effort pin (hermes reasoning_effort):
+    /// none|minimal|low|medium|high|xhigh|max|ultra; empty/absent =
+    /// inherit the worker profile's setting.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     /// Link to a first-class Project id or slug (hermes create
     /// --project): anchors the worktree under the project's primary
     /// repo with a deterministic branch.
@@ -310,6 +315,7 @@ pub async fn create_task(Json(body): Json<CreateTaskBody>) -> Response {
         tenant: None,
         model: body.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
         provider: body.provider.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        reasoning_effort: body.reasoning_effort.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
         project_id: body.project.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
         created_by: "gateway".to_string(),
         skills: body.skills.filter(|s| !s.is_empty()),

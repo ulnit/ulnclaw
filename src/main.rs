@@ -44,6 +44,12 @@ struct Cli {
     /// configured one.
     #[arg(long, global = true)]
     provider: Option<String>,
+    /// Reasoning effort for this invocation (hermes --reasoning):
+    /// none, minimal, low, medium, high, xhigh, max, or ultra.
+    /// Overrides agent.reasoning_effort from config.toml for this run
+    /// only; kanban workers pin it per task.
+    #[arg(long, global = true, value_name = "LEVEL")]
+    reasoning: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -924,6 +930,12 @@ enum KanbanAction {
         /// Goal-loop turn budget (hermes create --goal-max-turns)
         #[arg(long)]
         goal_max_turns: Option<i64>,
+        /// Per-task reasoning effort pin: none, minimal, low, medium,
+        /// high, xhigh, max, or ultra (hermes reasoning_effort). The
+        /// dispatched worker runs at this depth regardless of the
+        /// profile's agent.reasoning_effort.
+        #[arg(long)]
+        reasoning: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -1157,6 +1169,14 @@ enum KanbanAction {
         /// model (hermes set-model --provider)
         #[arg(long)]
         provider: Option<String>,
+    },
+    /// Set a per-task reasoning-effort pin; omit the level to clear it
+    /// (hermes `set_reasoning_effort`). `none` is a real value (thinking
+    /// off), not a clear.
+    SetReasoning {
+        id: String,
+        /// none | minimal | low | medium | high | xhigh | max | ultra
+        effort: Option<String>,
     },
     /// Attach a local file to a task (hermes `kanban attach`)
     Attach { id: String, path: PathBuf },
@@ -2133,6 +2153,19 @@ fn load_config(cli: &Cli) -> UlncLawConfig {
     if let Some(provider) = cli.provider.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         config.model.provider = provider.to_string();
     }
+    // CLI --reasoning wins over config AND profile (hermes --reasoning
+    // semantics): kanban workers pinned via task overrides ride this
+    // same flag. A typo'd level is a hard error, not a silent fallback.
+    if cli.reasoning.is_some() {
+        match ulnclaw::kanban::normalize_reasoning_effort(cli.reasoning.as_deref()) {
+            Ok(Some(level)) => config.agent.reasoning_effort = level,
+            Ok(None) => config.agent.reasoning_effort = String::new(),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+        }
+    }
     // Resolve the active theme once per process (hermes init_skin_from_config).
     ulnclaw::skin::init_skin_from_config(&config);
     config
@@ -2183,6 +2216,12 @@ fn build_provider(
         .max_retries(config.model.max_retries);
     if let Some(ref key) = api_key {
         builder = builder.api_key(key);
+    }
+    // Pinned reasoning effort (hermes agent.reasoning_effort): empty =
+    // endpoint default.
+    let effort = config.agent.reasoning_effort.trim();
+    if !effort.is_empty() {
+        builder = builder.reasoning_effort(effort);
     }
     let provider = builder.build().map_err(|e| e.to_string())?;
     Ok(Arc::new(provider))
@@ -6944,6 +6983,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             skills,
             max_runtime,
             idempotency_key,
+            reasoning,
             triage,
             max_retries,
             workspace,
@@ -7014,6 +7054,7 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
                     tenant,
                     model,
                     provider,
+                    reasoning_effort: reasoning,
                     project_id: project,
                     created_by: KanbanStore::claimer_id(),
                     skills: if skills.is_empty() { None } else { Some(skills) },
@@ -7807,6 +7848,16 @@ async fn kanban_cmd(action: KanbanAction) -> Result<(), String> {
             match &task.model {
                 Some(model) => println!("{} model pinned to {model}", task.id),
                 None => println!("{} model override cleared", task.id),
+            }
+        }
+        KanbanAction::SetReasoning { id, effort } => {
+            let resolved = resolve(&id)?;
+            let task = store
+                .set_reasoning_effort(&resolved, effort.as_deref())
+                .map_err(|e| e.to_string())?;
+            match &task.reasoning_effort {
+                Some(level) => println!("{} reasoning pinned to {level}", task.id),
+                None => println!("{} reasoning override cleared", task.id),
             }
         }
         KanbanAction::Attach { id, path } => {

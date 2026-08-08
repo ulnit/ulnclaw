@@ -262,6 +262,13 @@ pub struct AgentSettings {
     /// (hermes `agent.environment_probe`, default true).
     #[serde(default = "default_true")]
     pub environment_probe: bool,
+    /// Reasoning effort for model calls (hermes `agent.reasoning_effort`):
+    /// none | minimal | low | medium | high | xhigh | max | ultra.
+    /// Empty string = the provider endpoint's own default. The CLI
+    /// `--reasoning` flag overrides this for one invocation; kanban
+    /// workers pin it per task via the `reasoning_effort` column.
+    #[serde(default)]
+    pub reasoning_effort: String,
 }
 
 fn default_max_iterations() -> usize {
@@ -287,6 +294,7 @@ impl Default for AgentSettings {
             context_budget_tokens: default_context_budget(),
             verbose: false,
             environment_probe: true,
+            reasoning_effort: String::new(),
         }
     }
 }

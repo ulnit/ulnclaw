@@ -172,6 +172,38 @@ pub const SCRATCH_TIP_MESSAGE: &str = "scratch workspaces are ephemeral \u{2014}
 /// The default board seeded on first open (hermes `default`).
 pub const DEFAULT_BOARD: &str = "default";
 
+/// Valid per-task reasoning effort levels (hermes
+/// `VALID_REASONING_EFFORTS`); `"none"` (thinking off) is additionally
+/// accepted by [`normalize_reasoning_effort`].
+pub const VALID_REASONING_EFFORTS: &[&str] = &[
+    "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+];
+
+/// Normalize a per-task reasoning effort into a storable level (hermes
+/// `normalize_reasoning_effort`): accepts any [`VALID_REASONING_EFFORTS`]
+/// level plus `"none"` (thinking disabled), case-insensitively. Empty /
+/// None means "inherit the worker profile's own reasoning effort" and
+/// yields `Ok(None)`. Anything else is rejected rather than silently
+/// dropped — a typo'd level must not quietly hand the task back to the
+/// profile default.
+pub fn normalize_reasoning_effort(effort: Option<&str>) -> Result<Option<String>> {
+    let value = effort.unwrap_or("").trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value == "none" || VALID_REASONING_EFFORTS.contains(&value.as_str()) {
+        return Ok(Some(value));
+    }
+    let allowed = std::iter::once("none")
+        .chain(VALID_REASONING_EFFORTS.iter().copied())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AgentError::session(format!(
+        "reasoning_effort must be one of {allowed}, got '{effort}'",
+        effort = effort.unwrap_or("")
+    )))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Task {
     pub id: String,
@@ -191,6 +223,12 @@ pub struct Task {
     /// `provider_override`); NULL = the worker profile's provider.
     /// Only honored alongside `model`.
     pub provider: Option<String>,
+    /// Per-task reasoning effort for the worker (hermes
+    /// `reasoning_effort`): none|minimal|low|medium|high|xhigh|max|
+    /// ultra. When set, the dispatcher passes `--reasoning <level>`
+    /// so the worker runs at that depth regardless of the profile's
+    /// `agent.reasoning_effort`. NULL = profile setting.
+    pub reasoning_effort: Option<String>,
     pub result: Option<String>,
     pub claim_lock: Option<String>,
     pub claim_expires: Option<i64>,
@@ -523,9 +561,13 @@ pub fn default_spawn(home: &Path, task: &Task) -> std::result::Result<Option<i64
 }
 
 /// Extra CLI flags a spawned worker carries for `task` (hermes
-/// `_default_spawn` model/provider pinning): `--profile <assignee>`
-/// plus `--model` / `--provider` when the card pins an override. The
-/// provider flag only rides along with a model (hermes contract).
+/// `_default_spawn` model/provider/reasoning pinning): `--profile
+/// <assignee>`, `--model` / `--provider` when the card pins a model
+/// override (the provider flag only rides along with a model — hermes
+/// contract), and `--reasoning <level>` when the card pins a thinking
+/// depth. The reasoning flag is independent of the model override — a
+/// task can run the profile's own model at a different depth — so it
+/// is its own branch, not a nested one (hermes `_default_spawn`).
 pub fn worker_spawn_flags(task: &Task) -> Vec<String> {
     let mut flags = Vec::new();
     if let Some(assignee) = task.assignee.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
@@ -541,6 +583,15 @@ pub fn worker_spawn_flags(task: &Task) -> Vec<String> {
             flags.push("--provider".to_string());
             flags.push(provider.to_string());
         }
+    }
+    if let Some(effort) = task
+        .reasoning_effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+    {
+        flags.push("--reasoning".to_string());
+        flags.push(effort.to_string());
     }
     flags
 }
@@ -1903,6 +1954,10 @@ pub struct NewTask {
     /// Provider the per-task model override belongs to (hermes
     /// `provider_override`); requires `model`.
     pub provider: Option<String>,
+    /// Per-task reasoning effort pin (hermes `reasoning_effort`):
+    /// none|minimal|low|medium|high|xhigh|max|ultra. Independent of
+    /// the model override; validated at create time.
+    pub reasoning_effort: Option<String>,
     /// Dedup key: creating with the key of an existing non-archived task
     /// returns that task instead of a duplicate (hermes idempotency_key).
     pub idempotency_key: Option<String>,
@@ -1996,6 +2051,7 @@ impl KanbanStore {
                 branch_name     TEXT,
                 project_id      TEXT,
                 session_id      TEXT,
+                reasoning_effort TEXT,
                 block_kind      TEXT,
                 block_recurrences INTEGER NOT NULL DEFAULT 0,
                 goal_mode       INTEGER NOT NULL DEFAULT 0,
@@ -2196,6 +2252,14 @@ impl KanbanStore {
         if !columns.contains("provider") {
             conn.execute_batch("ALTER TABLE tasks ADD COLUMN provider TEXT;")
                 .map_err(db_error("migrate provider"))?;
+        }
+        // Pre-P611 stores lack the per-task reasoning-effort column
+        // (hermes reasoning_effort). NULL = inherit the worker
+        // profile's own agent.reasoning_effort, which is what existing
+        // rows were getting.
+        if !columns.contains("reasoning_effort") {
+            conn.execute_batch("ALTER TABLE tasks ADD COLUMN reasoning_effort TEXT;")
+                .map_err(db_error("migrate reasoning_effort"))?;
         }
         // Pre-P160 stores lack the project-link column (hermes
         // tasks.project_id).
@@ -2655,6 +2719,10 @@ impl KanbanStore {
                 "kanban: a provider override requires a model override (--model)",
             ));
         }
+        // Per-task reasoning effort pin (hermes create_task): validated
+        // up front — a typo'd level must fail creation, not silently
+        // fall back to the profile default.
+        let reasoning_effort = normalize_reasoning_effort(task.reasoning_effort.as_deref())?;
         if let Some(turns) = task.goal_max_turns {
             if turns < 1 {
                 return Err(AgentError::session(
@@ -2777,9 +2845,9 @@ impl KanbanStore {
              created_by, created_at, tenant, model, provider, skills, max_runtime_seconds, \
              idempotency_key, max_retries, workspace_kind, workspace_path, branch_name, \
              project_id, session_id, goal_mode, goal_max_turns, workflow_template_id, \
-             current_step_key) \
+             current_step_key, reasoning_effort) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
             params![
                 id,
                 board,
@@ -2806,6 +2874,7 @@ impl KanbanStore {
                 task.goal_max_turns,
                 task.workflow_template_id,
                 task.current_step_key,
+                reasoning_effort,
             ],
         )
         .map_err(db_error("create task"))?;
@@ -3263,6 +3332,7 @@ impl KanbanStore {
             goal_max_turns: row.get("goal_max_turns")?,
             workflow_template_id: row.get("workflow_template_id")?,
             current_step_key: row.get("current_step_key")?,
+            reasoning_effort: row.get("reasoning_effort")?,
         })
     }
 
@@ -3271,7 +3341,7 @@ impl KanbanStore {
         claim_lock, claim_expires, last_heartbeat_at, worker_pid, skills, \
         max_runtime_seconds, idempotency_key, consecutive_failures, \
         last_failure_error, max_retries, workspace_kind, workspace_path, branch_name, project_id, \
-        session_id, current_run_id, block_kind, block_recurrences,         goal_mode, goal_max_turns, workflow_template_id, current_step_key";
+        session_id, current_run_id, block_kind, block_recurrences,         goal_mode, goal_max_turns, workflow_template_id, current_step_key, reasoning_effort";
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let conn = self.conn.lock().unwrap();
@@ -4476,6 +4546,49 @@ impl KanbanStore {
             id,
             "model_set",
             serde_json::json!({ "model": model, "provider": provider }),
+        )?;
+        self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
+    }
+
+    /// Set (or clear) the per-task reasoning effort (hermes
+    /// `set_reasoning_effort`). `None` / empty clears the override —
+    /// the worker falls back to its profile's own `agent.reasoning_effort`.
+    /// `"none"` is a real value, not a clear: it pins thinking OFF for
+    /// this task. Deliberately independent of [`Self::set_model`]: a
+    /// task may run the profile's own model at a different depth, and
+    /// clearing a model override must not silently reset the depth the
+    /// operator chose. Takes effect on the NEXT dispatch, so it is
+    /// settable on a running task.
+    pub fn set_reasoning_effort(&self, id: &str, effort: Option<&str>) -> Result<Task> {
+        let effort = normalize_reasoning_effort(effort)?;
+        let conn = self.conn.lock().unwrap();
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM tasks WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .ok();
+        let Some(status) = status else {
+            drop(conn);
+            return Err(AgentError::session(format!("kanban: task {id} not found")));
+        };
+        if status == "archived" {
+            drop(conn);
+            return Err(AgentError::session(format!(
+                "cannot set reasoning effort on archived task {id}"
+            )));
+        }
+        conn.execute(
+            "UPDATE tasks SET reasoning_effort = ?2 WHERE id = ?1",
+            params![id, effort],
+        )
+        .map_err(db_error("set-reasoning"))?;
+        drop(conn);
+        self.append_event(
+            id,
+            "reasoning_effort_set",
+            serde_json::json!({ "reasoning_effort": effort }),
         )?;
         self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
     }
@@ -8394,6 +8507,7 @@ mod tests {
             tenant: None,
             model: None,
             provider: None,
+            reasoning_effort: None,
             result: None,
             claim_lock: None,
             claim_expires: None,
@@ -8704,6 +8818,113 @@ mod tests {
         // Plain task: no flags at all.
         let plain = make_task(&store, "plain");
         assert!(worker_spawn_flags(&plain).is_empty());
+    }
+
+    #[test]
+    fn normalize_reasoning_effort_levels() {
+        // Valid levels normalize to lowercase; empty/None clear.
+        assert_eq!(normalize_reasoning_effort(None).unwrap(), None);
+        assert_eq!(normalize_reasoning_effort(Some("  ")).unwrap(), None);
+        assert_eq!(
+            normalize_reasoning_effort(Some("HiGh")).unwrap().as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            normalize_reasoning_effort(Some("none")).unwrap().as_deref(),
+            Some("none")
+        );
+        assert_eq!(
+            normalize_reasoning_effort(Some("ultra")).unwrap().as_deref(),
+            Some("ultra")
+        );
+        // A typo'd level is rejected, listing the allowed set.
+        let err = normalize_reasoning_effort(Some("extreme")).unwrap_err();
+        assert!(err.to_string().contains("reasoning_effort must be one of"));
+        assert!(err.to_string().contains("none, minimal"));
+    }
+
+    #[test]
+    fn create_task_pins_reasoning_effort() {
+        let (_dir, store) = temp_store();
+        let task = store
+            .create_task(&NewTask {
+                title: "deep thought".into(),
+                created_by: "tester".into(),
+                reasoning_effort: Some("XHIGH".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.reasoning_effort.as_deref(), Some("xhigh"));
+        // Invalid level fails creation instead of silently clearing.
+        let err = store
+            .create_task(&NewTask {
+                title: "bad level".into(),
+                created_by: "tester".into(),
+                reasoning_effort: Some("extreme".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("reasoning_effort must be one of"));
+    }
+
+    #[test]
+    fn set_reasoning_effort_roundtrip_and_rules() {
+        let (_dir, store) = temp_store();
+        let task = make_task(&store, "thinky");
+        let pinned = store
+            .set_reasoning_effort(&task.id, Some("low"))
+            .unwrap();
+        assert_eq!(pinned.reasoning_effort.as_deref(), Some("low"));
+        // `none` is a real pin (thinking off), not a clear.
+        let off = store.set_reasoning_effort(&task.id, Some("none")).unwrap();
+        assert_eq!(off.reasoning_effort.as_deref(), Some("none"));
+        // Empty clears the override.
+        let cleared = store.set_reasoning_effort(&task.id, Some("  ")).unwrap();
+        assert!(cleared.reasoning_effort.is_none());
+        // Event trail records the pin.
+        let events = store.events(&task.id).unwrap();
+        assert!(events.iter().any(|e| e.kind == "reasoning_effort_set"));
+        // Archived tasks refuse the pin (hermes contract).
+        store.archive_task(&task.id).unwrap();
+        let err = store
+            .set_reasoning_effort(&task.id, Some("high"))
+            .unwrap_err();
+        assert!(err.to_string().contains("archived"));
+        // Unknown task id is reported.
+        let err = store
+            .set_reasoning_effort("t_missing", Some("high"))
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn worker_spawn_flags_pin_reasoning_independently() {
+        let (_dir, store) = temp_store();
+        // Reasoning rides along WITHOUT a model override (hermes
+        // `_default_spawn` keeps the branches independent).
+        let task = store
+            .create_task(&NewTask {
+                title: "depth only".into(),
+                created_by: "tester".into(),
+                reasoning_effort: Some("max".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(worker_spawn_flags(&task), vec!["--reasoning", "max"]);
+        // And alongside a pinned model.
+        let both = store
+            .create_task(&NewTask {
+                title: "model and depth".into(),
+                created_by: "tester".into(),
+                model: Some("gpt-5.2".into()),
+                reasoning_effort: Some("minimal".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            worker_spawn_flags(&both),
+            vec!["--model", "gpt-5.2", "--reasoning", "minimal"]
+        );
     }
 
     #[test]
