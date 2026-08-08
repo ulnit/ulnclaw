@@ -23,6 +23,7 @@ export class FileTreePanel {
   private tab: "files" | "changes" = "files";
   private diffMode: "working" | "staged" | "all" = "working";
   private reviewNote: { text: string; error: boolean } | null = null;
+  private lastStatus: { staged: string[]; unstaged: string[]; untracked: string[] } | null = null;
 
   constructor(
     private client: () => GatewayClient | null,
@@ -229,6 +230,7 @@ export class FileTreePanel {
     try {
       const diff = await client.fsGitDiff(this.rootPath, this.diffMode);
       status.remove();
+      this.renderFileGroups();
       if (diff.empty && diff.untracked.length === 0) {
         const empty = document.createElement("p");
         empty.className = "config-note";
@@ -269,6 +271,114 @@ export class FileTreePanel {
   }
 
   /**
+   * Per-file change groups (P600) — staged / modified / untracked rows
+   * with per-row stage/unstage/revert actions over the same
+   * `/api/git/*` endpoints (hermes per-file review parity).
+   */
+  private renderFileGroups(): void {
+    const client = this.client();
+    const status = this.lastStatus;
+    if (!client || !this.rootPath || !status) return;
+    const groups: { title: string; files: string[]; kind: "staged" | "unstaged" | "untracked" }[] = [
+      { title: t.gitReview.groupStaged, files: status.staged, kind: "staged" },
+      { title: t.gitReview.groupModified, files: status.unstaged, kind: "unstaged" },
+      { title: t.gitReview.groupUntracked, files: status.untracked, kind: "untracked" },
+    ];
+    const act = async (
+      fn: (path: string) => Promise<unknown>,
+      file: string,
+      noteText: string,
+    ): Promise<void> => {
+      try {
+        await fn(file);
+        this.reviewNote = { text: noteText, error: false };
+        await this.renderChanges();
+      } catch (error) {
+        this.reviewNote = {
+          text: t.gitReview.failed.replace(
+            "{error}",
+            error instanceof Error ? error.message : String(error),
+          ),
+          error: true,
+        };
+        await this.renderChanges();
+      }
+    };
+    for (const group of groups) {
+      if (group.files.length === 0) continue;
+      const details = document.createElement("details");
+      details.className = "file-tree-group";
+      details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = `${group.title.replace("{count}", String(group.files.length))}`;
+      details.appendChild(summary);
+      for (const file of group.files) {
+        const row = document.createElement("div");
+        row.className = "file-tree-group-row";
+        const label = document.createElement("span");
+        label.className = "file-tree-group-file";
+        label.textContent = file;
+        label.title = file;
+        row.appendChild(label);
+        if (group.kind === "staged") {
+          const unstage = document.createElement("button");
+          unstage.className = "ghost";
+          unstage.textContent = "\u2212";
+          unstage.title = t.gitReview.unstageAll;
+          unstage.addEventListener("click", () =>
+            void act(
+              (path) => client.gitUnstage(this.rootPath!, [path]),
+              file,
+              t.gitReview.unstagedNote,
+            ),
+          );
+          row.appendChild(unstage);
+        } else if (group.kind === "unstaged") {
+          const stage = document.createElement("button");
+          stage.className = "ghost";
+          stage.textContent = "\uff0b";
+          stage.title = t.gitReview.stageAll;
+          stage.addEventListener("click", () =>
+            void act(
+              (path) => client.gitStage(this.rootPath!, [path]),
+              file,
+              t.gitReview.stagedNote,
+            ),
+          );
+          const revert = document.createElement("button");
+          revert.className = "ghost";
+          revert.textContent = "\u21ba";
+          revert.title = t.gitReview.revert;
+          revert.addEventListener("click", () => {
+            if (!window.confirm(t.gitReview.revertConfirm.replace("{count}", "1"))) return;
+            void act(
+              (path) => client.gitRevert(this.rootPath!, [path]),
+              file,
+              t.gitReview.reverted.replace("{count}", "1"),
+            );
+          });
+          row.append(stage, revert);
+        } else {
+          const stage = document.createElement("button");
+          stage.className = "ghost";
+          stage.textContent = "\uff0b";
+          stage.title = t.gitReview.stageAll;
+          stage.addEventListener("click", () =>
+            void act(
+              (path) => client.gitStage(this.rootPath!, [path]),
+              file,
+              t.gitReview.stagedNote,
+            ),
+          );
+          row.appendChild(stage);
+        }
+        details.appendChild(row);
+      }
+      this.body.appendChild(details);
+    }
+  }
+
+  /**
    * Git review action bar (P598) — branch/ahead-behind/counts plus
    * stage/unstage/revert/commit/push over the `/api/git/*` endpoints
    * (hermes right-sidebar review actions parity). Hidden when the root
@@ -286,6 +396,11 @@ export class FileTreePanel {
     } catch {
       return;
     }
+    this.lastStatus = {
+      staged: summary.staged,
+      unstaged: summary.unstaged,
+      untracked: summary.untracked,
+    };
     const review = document.createElement("div");
     review.className = "file-tree-review";
 

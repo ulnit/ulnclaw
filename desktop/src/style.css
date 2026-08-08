@@ -1497,6 +1497,13 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .file-tree-review-feedback { font-size: 0.78em; opacity: 0.8; word-break: break-all; }
 .file-tree-review-feedback.error { color: var(--bad, #f85149); }
 
+/* File-tree per-file change groups (P600) */
+.file-tree-group { border: 1px solid var(--hover); border-radius: 8px; margin-bottom: 6px; background: var(--panel-2); }
+.file-tree-group summary { cursor: pointer; padding: 4px 8px; font-size: 0.8em; opacity: 0.85; }
+.file-tree-group-row { display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-top: 1px solid var(--hover); }
+.file-tree-group-file { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); font-size: 0.78em; }
+.file-tree-group-row button { font-size: 10px; padding: 0 6px; }
+
 /* Kanban detail enrichments */
 .kanban-detail-meta { font-size: 0.8em; opacity: 0.7; margin: 4px 0 8px; }
 .kanban-detail-attachments { margin-top: 8px; }
