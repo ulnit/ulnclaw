@@ -982,6 +982,13 @@ async function sendTurn(): Promise<void> {
     void runUnarchiveSession();
     return;
   }
+  // P485: /fork branches the current session and jumps into the fork.
+  if (/^\/fork\b/i.test(text)) {
+    el.input.value = "";
+    refreshCharCount();
+    void runForkSession();
+    return;
+  }
   // P484: /export [md|html|json] downloads the current session transcript.
   const exportMatch = /^\/export(?:\s+(md|html|json))?\s*$/i.exec(text);
   if (exportMatch) {
@@ -1433,6 +1440,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/archive", t.slash.archive],
     ["/unarchive", t.slash.unarchive],
     ["/export", t.slash.exportSession],
+    ["/fork", t.slash.forkSession],
   ];
 }
 
