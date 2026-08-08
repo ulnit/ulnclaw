@@ -7321,6 +7321,11 @@ struct SessionsQuery {
     /// P509: `?preview=true` attaches a `last_message` snippet to each
     /// row for UI list rendering.
     preview: Option<bool>,
+    /// P521: `?source=<source>` narrows rows to a single source.
+    source: Option<String>,
+    /// P521: `?end_reason=<reason>` narrows rows to a single end
+    /// reason; `end_reason=none` selects sessions that never ended.
+    end_reason: Option<String>,
 }
 
 /// Attach the owning project slug (longest-prefix folder match on the
@@ -7363,8 +7368,28 @@ async fn list_sessions(
     Query(query): Query<SessionsQuery>,
 ) -> Response {
     let limit = query.limit.unwrap_or(50).min(500);
-    match state.store.list_session_rows(limit) {
+    // P521: filters apply after the fetch, so widen the window to the
+    // cap whenever one is active.
+    let filtered = query.source.is_some() || query.end_reason.is_some();
+    let fetch = if filtered { 500 } else { limit };
+    match state.store.list_session_rows(fetch) {
         Ok(rows) => {
+            let rows: Vec<crate::session::sqlite::SessionRow> = rows
+                .into_iter()
+                .filter(|row| {
+                    query
+                        .source
+                        .as_deref()
+                        .map(|source| row.source == source)
+                        .unwrap_or(true)
+                })
+                .filter(|row| match query.end_reason.as_deref() {
+                    None => true,
+                    Some("none") | Some("") => row.end_reason.is_none(),
+                    Some(reason) => row.end_reason.as_deref() == Some(reason),
+                })
+                .take(limit)
+                .collect();
             let mut data = enrich_sessions_with_projects(rows);
             if query.preview.unwrap_or(false) {
                 let ids: Vec<String> = data
@@ -11266,6 +11291,63 @@ mod tests {
         let (status, body) = get_json(app, &format!("/api/sessions/{}", id), Some(token)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["archived"], true);
+    }
+
+    #[tokio::test]
+    async fn test_sessions_list_source_and_end_reason_filters() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+        let cli = state
+            .store
+            .create_session("cli", Some("test-model"), None)
+            .unwrap();
+        let cron = state
+            .store
+            .create_session("cron", Some("test-model"), None)
+            .unwrap();
+        state.store.end_session(&cron, "complete").unwrap();
+
+        let ids = |body: &Value| -> Vec<String> {
+            body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        // ?source= narrows to one source.
+        let (status, body) =
+            get_json(app.clone(), "/api/sessions?limit=10&source=cli", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let listed = ids(&body);
+        assert!(listed.contains(&cli));
+        assert!(!listed.contains(&cron));
+
+        // ?end_reason= matches ended sessions; `none` selects open ones.
+        let (status, body) =
+            get_json(app.clone(), "/api/sessions?limit=10&end_reason=complete", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let listed = ids(&body);
+        assert_eq!(listed, vec![cron.clone()]);
+
+        let (status, body) =
+            get_json(app.clone(), "/api/sessions?limit=10&end_reason=none", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let listed = ids(&body);
+        assert!(listed.contains(&cli));
+        assert!(!listed.contains(&cron));
+
+        // Filters compose.
+        let (status, body) = get_json(
+            app,
+            "/api/sessions?limit=10&source=cron&end_reason=none",
+            Some(token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(ids(&body).is_empty());
     }
 
     #[tokio::test]
