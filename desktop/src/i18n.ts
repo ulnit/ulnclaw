@@ -68,6 +68,7 @@ export interface Translations {
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string;
+    scrollBottom: string; dotAuthOn: string; dotAuthOff: string; dotRuns: string;
     shortcuts: string; shortcutsTitle: string; shortcutsClose: string;
     scModelPicker: string; scNewSession: string; scCycle: string; scSessionPicker: string;
     scSettings: string; scSidebar: string; scPalette: string; scFind: string; scFocus: string; scShortcuts: string;
@@ -82,7 +83,6 @@ export interface Translations {
     infoStarted: string; infoActivity: string; infoMessages: string;
     infoCopyId: string; infoCopied: string; infoCopyFailed: string;
     copyTitle: string; copyFailed: string;
-    scrollBottom: string;
     whenNow: string;
   };
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
@@ -342,6 +342,7 @@ const en: Translations = {
     replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save", restartGateway: "Restart gateway", restartDone: "Gateway restarted.", restartFailed: "Gateway restart timed out.", restartUnavailable: "The gateway is not managed here — restart it where it runs.",
     settingsTheme: "Theme", settingsFont: "Font",
     statusUp: "up {duration}", statusSessions: "{count} sessions", statusRuns: "{count} runs", statusPlugins: "{count} plugins",
+    scrollBottom: "Scroll to bottom", dotAuthOn: "auth required", dotAuthOff: "open access", dotRuns: "{count} runs",
     shortcuts: "Keyboard shortcuts", shortcutsTitle: "Keyboard shortcuts", shortcutsClose: "Close",
     scModelPicker: "Open the model picker", scNewSession: "New session", scCycle: "Cycle sessions",
     scSessionPicker: "Open the session picker", scSettings: "Open settings", scSidebar: "Toggle sidebar",
@@ -368,7 +369,6 @@ const en: Translations = {
     infoStarted: "Started", infoActivity: "Last activity", infoMessages: "Messages",
     infoCopyId: "Copy ID", infoCopied: "Session ID copied", infoCopyFailed: "Copy failed",
     copyTitle: "Copy message", copyFailed: "Copy failed",
-    scrollBottom: "Scroll to bottom",
     whenNow: "now",
   },
   tools: { running: "running…", done: "done", thinking: "thinking", arguments: "arguments", result: "result", fallbackName: "tool" },
@@ -796,6 +796,7 @@ const zh: Translations = {
     replayOnboarding: "重放引导", cancel: "取消", save: "保存", restartGateway: "重启网关", restartDone: "网关已重启。", restartFailed: "网关重启超时。", restartUnavailable: "此环境不管理网关——请在网关运行处重启。",
     settingsTheme: "主题", settingsFont: "字体",
     statusUp: "运行 {duration}", statusSessions: "{count} 会话", statusRuns: "{count} 运行", statusPlugins: "{count} 插件",
+    scrollBottom: "滚动到底部", dotAuthOn: "需鉴权", dotAuthOff: "开放访问", dotRuns: "{count} 运行",
     shortcuts: "键盘快捷键", shortcutsTitle: "键盘快捷键", shortcutsClose: "关闭",
     scModelPicker: "打开模型挑选器", scNewSession: "新建会话", scCycle: "循环切换会话",
     scSessionPicker: "打开会话挑选器", scSettings: "打开设置", scSidebar: "切换侧栏",
@@ -822,7 +823,6 @@ const zh: Translations = {
     infoStarted: "开始时间", infoActivity: "最后活动", infoMessages: "消息数",
     infoCopyId: "复制 ID", infoCopied: "已复制会话 ID", infoCopyFailed: "复制失败",
     copyTitle: "复制消息", copyFailed: "复制失败",
-    scrollBottom: "滚动到底部",
     whenNow: "刚刚",
   },
   tools: { running: "运行中…", done: "完成", thinking: "思考中", arguments: "参数", result: "结果", fallbackName: "工具" },
@@ -1250,6 +1250,7 @@ const zhHant: Translations = {
     replayOnboarding: "重播引導", cancel: "取消", save: "儲存", restartGateway: "重啟閘道", restartDone: "閘道已重啟。", restartFailed: "閘道重啟逾時。", restartUnavailable: "此環境不管理閘道——請在閘道執行處重啟。",
     settingsTheme: "主題", settingsFont: "字型",
     statusUp: "執行 {duration}", statusSessions: "{count} 工作階段", statusRuns: "{count} 執行", statusPlugins: "{count} 外掛",
+    scrollBottom: "捲動到底部", dotAuthOn: "需鑑權", dotAuthOff: "開放存取", dotRuns: "{count} 執行",
     shortcuts: "鍵盤快捷鍵", shortcutsTitle: "鍵盤快捷鍵", shortcutsClose: "關閉",
     scModelPicker: "開啟模型挑選器", scNewSession: "新增工作階段", scCycle: "循環切換工作階段",
     scSessionPicker: "開啟工作階段挑選器", scSettings: "開啟設定", scSidebar: "切換側欄",
@@ -1276,7 +1277,6 @@ const zhHant: Translations = {
     infoStarted: "開始時間", infoActivity: "最後活動", infoMessages: "訊息數",
     infoCopyId: "複製 ID", infoCopied: "已複製工作階段 ID", infoCopyFailed: "複製失敗",
     copyTitle: "複製訊息", copyFailed: "複製失敗",
-    scrollBottom: "捲動到底部",
     whenNow: "剛剛",
   },
   tools: { running: "執行中…", done: "完成", thinking: "思考中", arguments: "參數", result: "結果", fallbackName: "工具" },
@@ -1704,6 +1704,7 @@ const ja: Translations = {
     replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存", restartGateway: "ゲートウェイを再起動", restartDone: "ゲートウェイを再起動しました。", restartFailed: "ゲートウェイの再起動がタイムアウトしました。", restartUnavailable: "この環境はゲートウェイを管理していません — 実行場所で再起動してください。",
     settingsTheme: "テーマ", settingsFont: "フォント",
     statusUp: "稼働 {duration}", statusSessions: "{count} セッション", statusRuns: "{count} 実行", statusPlugins: "{count} プラグイン",
+    scrollBottom: "一番下へスクロール", dotAuthOn: "認証必須", dotAuthOff: "オープンアクセス", dotRuns: "{count} 実行",
     shortcuts: "キーボードショートカット", shortcutsTitle: "キーボードショートカット", shortcutsClose: "閉じる",
     scModelPicker: "モデルピッカーを開く", scNewSession: "新規セッション", scCycle: "セッションを切り替え",
     scSessionPicker: "セッションピッカーを開く", scSettings: "設定を開く", scSidebar: "サイドバーを切り替え",
@@ -1730,7 +1731,6 @@ const ja: Translations = {
     infoStarted: "開始", infoActivity: "最終アクティビティ", infoMessages: "メッセージ数",
     infoCopyId: "ID をコピー", infoCopied: "セッション ID をコピーしました", infoCopyFailed: "コピーに失敗しました",
     copyTitle: "メッセージをコピー", copyFailed: "コピーに失敗しました",
-    scrollBottom: "一番下へスクロール",
     whenNow: "たった今",
   },
   tools: { running: "実行中…", done: "完了", thinking: "思考中", arguments: "引数", result: "結果", fallbackName: "ツール" },
@@ -2158,6 +2158,7 @@ const ar: Translations = {
     replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ", restartGateway: "إعادة تشغيل البوابة", restartDone: "تمت إعادة تشغيل البوابة.", restartFailed: "انتهت مهلة إعادة تشغيل البوابة.", restartUnavailable: "البوابة غير مُدارة هنا — أعد تشغيلها حيث تعمل.",
     settingsTheme: "السمة", settingsFont: "الخط",
     statusUp: "يعمل منذ {duration}", statusSessions: "{count} جلسة", statusRuns: "{count} تشغيل", statusPlugins: "{count} إضافة",
+    scrollBottom: "التمرير إلى الأسفل", dotAuthOn: "المصادقة مطلوبة", dotAuthOff: "وصول مفتوح", dotRuns: "{count} تشغيل",
     shortcuts: "اختصارات لوحة المفاتيح", shortcutsTitle: "اختصارات لوحة المفاتيح", shortcutsClose: "إغلاق",
     scModelPicker: "فتح منتقي النماذج", scNewSession: "جلسة جديدة", scCycle: "التنقل بين الجلسات",
     scSessionPicker: "فتح منتقي الجلسات", scSettings: "فتح الإعدادات", scSidebar: "تبديل الشريط الجانبي",
@@ -2184,7 +2185,6 @@ const ar: Translations = {
     infoStarted: "بدأت", infoActivity: "آخر نشاط", infoMessages: "الرسائل",
     infoCopyId: "نسخ المعرف", infoCopied: "تم نسخ معرف الجلسة", infoCopyFailed: "فشل النسخ",
     copyTitle: "نسخ الرسالة", copyFailed: "فشل النسخ",
-    scrollBottom: "التمرير إلى الأسفل",
     whenNow: "الآن",
   },
   tools: { running: "قيد التشغيل…", done: "تم", thinking: "يفكر", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },

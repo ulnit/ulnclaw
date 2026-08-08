@@ -336,6 +336,18 @@ export interface InsightsReport {
   activity: { peak_hour: number | null; peak_weekday: number | null };
 }
 
+/** GET /health/detailed payload (open probe; P365). */
+export interface HealthDetailed {
+  status: string;
+  service: string;
+  version: string;
+  model: string;
+  provider: string;
+  auth_required: boolean;
+  sessions_total_at_least: number;
+  runs_tracked: number;
+}
+
 export interface SystemInfo {
   service: string;
   version: string;
@@ -1358,6 +1370,17 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`egress HTTP ${response.status}`);
     const value = await response.json();
     return typeof value.text === "string" ? value.text : "";
+  }
+
+  /** GET /health/detailed — open detailed health probe (P365). */
+  async healthDetailed(): Promise<HealthDetailed | null> {
+    try {
+      const response = await fetch(this.endpoint("/health/detailed"), { headers: this.headers() });
+      if (!response.ok) return null;
+      return (await response.json()) as HealthDetailed;
+    } catch {
+      return null;
+    }
   }
 
   /** GET /api/system — gateway/system facts for the Doctor panel. */
