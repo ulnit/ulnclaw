@@ -58,7 +58,7 @@ pub fn title_language(config: &UlncLawConfig) -> Option<String> {
 }
 
 /// Char-safe prefix truncation (Python `s[:n]` on code points).
-fn truncate_chars(text: &str, max_chars: usize) -> String {
+pub fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 

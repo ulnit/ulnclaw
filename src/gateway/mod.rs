@@ -7676,6 +7676,9 @@ async fn get_session(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
             let child_ids = state.store.child_session_ids(&id).unwrap_or_default();
             let total_tokens = row.input_tokens + row.output_tokens;
             let role_counts = state.store.message_role_counts(&id).unwrap_or_default();
+            // P564: content snippets for at-a-glance context.
+            let first_user = state.store.get_first_user_text(&id).unwrap_or_default();
+            let last_message = state.store.get_last_message_text(&id).unwrap_or_default();
             let mut rows = enrich_sessions_with_projects(vec![row]);
             let mut value = rows.pop().unwrap_or(Value::Null);
             if let Some(object) = value.as_object_mut() {
@@ -7691,6 +7694,14 @@ async fn get_session(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
                             .into_iter()
                             .map(|(role, count)| (role, json!(count))),
                     )),
+                );
+                object.insert(
+                    "first_user_message".to_string(),
+                    Value::String(crate::title_generator::truncate_chars(&first_user, 280)),
+                );
+                object.insert(
+                    "last_message".to_string(),
+                    Value::String(crate::title_generator::truncate_chars(&last_message, 280)),
                 );
             }
             Json(value).into_response()
@@ -16061,6 +16072,9 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (_, row) = get_json(app, &format!("/api/sessions/{parent}"), Some(token)).await;
         assert_eq!(row["child_session_ids"], json!([child]));
         assert_eq!(row["message_counts"], json!({"user": 1}));
+        // Content snippets for at-a-glance context (P564).
+        assert_eq!(row["first_user_message"], "hello");
+        assert_eq!(row["last_message"], "hello");
     }
 
     #[tokio::test]

@@ -1707,6 +1707,22 @@ impl SqliteSessionStore {
             .map_err(|e| AgentError::session(e.to_string()))
     }
 
+    /// P564: text of the session's most recent message with content
+    /// (any role; empty string when the session has none).
+    pub fn get_last_message_text(&self, session_id: &str) -> Result<String> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.query_row(
+            "SELECT content FROM messages
+             WHERE session_id = ?1 AND content IS NOT NULL
+             ORDER BY timestamp DESC, id DESC LIMIT 1",
+            params![session_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map(|v| v.unwrap_or_default())
+        .map_err(|e| AgentError::session(e.to_string()))
+    }
+
     /// Next free title in a lineage: `"my session"` → `"my session #2"`
     /// when the base is taken (hermes `get_next_title_in_lineage`).
     pub fn get_next_title_in_lineage(&self, base_title: &str) -> Result<String> {

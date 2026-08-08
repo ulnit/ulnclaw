@@ -3474,6 +3474,15 @@ function formatDurationCompact(totalSecs: number): string {
   return `${Math.floor(hours / 24)}d${hours % 24}h`;
 }
 
+/** P564: HTML escape for the popover's message-snippet values. */
+function escapeHtmlInfo(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 /** P360: session info popover — clicking the chat title shows the
  * current session's metadata (id, source, model, project, activity,
  * message census) with a copy-id action. */
@@ -3529,6 +3538,15 @@ async function openSessionInfo(): Promise<void> {
   }
   if (detail.child_session_ids?.length) {
     rows.push([t.session.infoChildren, detail.child_session_ids.join(", ")]);
+  }
+  // P564: first/last message snippets for at-a-glance context.
+  const firstUser = (detail.first_user_message || "").trim();
+  if (firstUser) {
+    rows.push([t.session.infoFirstUser, `\u201C${escapeHtmlInfo(firstUser)}\u201D`]);
+  }
+  const lastMessage = (detail.last_message || "").trim();
+  if (lastMessage && lastMessage !== firstUser) {
+    rows.push([t.session.infoLastMessage, `\u201C${escapeHtmlInfo(lastMessage)}\u201D`]);
   }
   el.sessionInfoRows.innerHTML = rows
     .map(([label, value]) => `<div class="notify-history-row"><span class="monitoring-label">${label}</span><span>${value}</span></div>`)

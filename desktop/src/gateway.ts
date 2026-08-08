@@ -30,6 +30,8 @@ export interface SessionRow {
   project?: string | null;
   /** P509/P510: last-message snippet when listed with `?preview=true`. */
   last_message?: string | null;
+  /** P564: first-user-message snippet (single-session fetches only). */
+  first_user_message?: string | null;
   /** P519: sessions-table archived flag (TUI F8 flow). */
   archived?: boolean;
   /** P553/P554: fork lineage + token sum (single-session fetches only). */
