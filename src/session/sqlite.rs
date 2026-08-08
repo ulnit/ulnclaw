@@ -1350,6 +1350,18 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Clear a previously recorded end (unarchive — desktop P414): drops
+    /// `ended_at`/`end_reason` so the session reads as open again.
+    pub fn clear_session_end(&self, session_id: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?1",
+            params![session_id],
+        )
+        .map_err(|e| AgentError::session(e.to_string()))?;
+        Ok(())
+    }
+
     /// Set (or clear, with an empty string) a session title. Titles must not
     /// contain newlines or NUL bytes.
     /// Set or change a session's title (hermes `set_session_title`).

@@ -83,7 +83,7 @@ export interface Translations {
     infoStarted: string; infoActivity: string; infoMessages: string;
     infoCopyId: string; infoCopied: string; infoCopyFailed: string;
     copyTitle: string; copyFailed: string;
-    dayToday: string; tokensTitle: string; filterPlaceholder: string; filterNoMatch: string; dayJumpTitle: string; showAll: string; showLess: string; groupYesterday: string; groupWeek: string; groupOlder: string; sortByActivity: string; sortByTitle: string;
+    dayToday: string; tokensTitle: string; filterPlaceholder: string; filterNoMatch: string; dayJumpTitle: string; showAll: string; showLess: string; groupYesterday: string; groupWeek: string; groupOlder: string; sortByActivity: string; sortByTitle: string; showArchived: string; hideArchived: string;
     whenNow: string;
   };
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
@@ -295,7 +295,7 @@ export interface Translations {
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string; restartGateway: string;
-    updateCheck: string; shortcuts: string; notifications: string; kanbanDispatch: string; kanbanDispatched: string; kanbanDispatchFailed: string; kanbanQuickAdd: string; kanbanQuickAddPrompt: string; kanbanQuickAdded: string; kanbanQuickAddFailed: string; kanbanBoardSwitch: string; kanbanBoardSwitched: string; kanbanBoardsFailed: string; kanbanBoardsEmpty: string; toggleSidebar: string; themePicker: string; themePickerTitle: string; themeFailed: string; fontPicker: string; fontPickerTitle: string; fontFailed: string; copySessionId: string;
+    updateCheck: string; shortcuts: string; notifications: string; kanbanDispatch: string; kanbanDispatched: string; kanbanDispatchFailed: string; kanbanQuickAdd: string; kanbanQuickAddPrompt: string; kanbanQuickAdded: string; kanbanQuickAddFailed: string; kanbanBoardSwitch: string; kanbanBoardSwitched: string; kanbanBoardsFailed: string; kanbanBoardsEmpty: string; toggleSidebar: string; themePicker: string; themePickerTitle: string; themeFailed: string; fontPicker: string; fontPickerTitle: string; fontFailed: string; copySessionId: string; archiveSession: string; unarchiveSession: string; sessionArchived: string; sessionUnarchived: string; sessionArchiveFailed: string;
     hintFreshChat: string; hintArtifacts: string; hintLearning: string; switchTo: string;
   };
   artifacts: {
@@ -370,7 +370,7 @@ const en: Translations = {
     infoStarted: "Started", infoActivity: "Last activity", infoMessages: "Messages",
     infoCopyId: "Copy ID", infoCopied: "Session ID copied", infoCopyFailed: "Copy failed",
     copyTitle: "Copy message", copyFailed: "Copy failed",
-    whenNow: "now", dayToday: "Today", tokensTitle: "Total tokens: {tokens}", filterPlaceholder: "Filter sessions…", filterNoMatch: "No sessions match the filter", dayJumpTitle: "Jump to date", showAll: "Show all {count} sessions", showLess: "Show fewer", groupYesterday: "Yesterday", groupWeek: "Past 7 days", groupOlder: "Older", sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity",
+    whenNow: "now", dayToday: "Today", tokensTitle: "Total tokens: {tokens}", filterPlaceholder: "Filter sessions…", filterNoMatch: "No sessions match the filter", dayJumpTitle: "Jump to date", showAll: "Show all {count} sessions", showLess: "Show fewer", groupYesterday: "Yesterday", groupWeek: "Past 7 days", groupOlder: "Older", sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity", showArchived: "Show archived sessions", hideArchived: "Hide archived sessions",
   },
   tools: { running: "running…", done: "done", thinking: "thinking", arguments: "arguments", result: "result", fallbackName: "tool" },
   slash: {
@@ -723,7 +723,7 @@ const en: Translations = {
     exportMd: "Export session (Markdown)", exportHtml: "Export session (HTML)",
     browseArtifacts: "Browse artifacts…", learningGraph: "Learning graph…",
     openSettings: "Open gateway settings…", refreshSessions: "Refresh session list", restartGateway: "Restart gateway",
-    updateCheck: "Check for updates", shortcuts: "Keyboard shortcuts", notifications: "Notification history", kanbanDispatch: "Dispatch kanban tasks", kanbanDispatched: "Kanban dispatch: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", kanbanDispatchFailed: "Kanban dispatch failed: {error}", kanbanQuickAdd: "New kanban task…", kanbanQuickAddPrompt: "Task title:", kanbanQuickAdded: "Kanban task created: {id} — {title}", kanbanQuickAddFailed: "Kanban task creation failed: {error}", kanbanBoardSwitch: "Switch kanban board…", kanbanBoardSwitched: "Kanban board switched: {board}", kanbanBoardsFailed: "Kanban boards load failed: {error}", kanbanBoardsEmpty: "No kanban boards available", toggleSidebar: "Toggle sidebar", themePicker: "Switch theme…", themePickerTitle: "Dashboard theme", themeFailed: "Theme load failed: {error}", fontPicker: "Switch font…", fontPickerTitle: "Dashboard font", fontFailed: "Font load failed: {error}", copySessionId: "Copy session ID",
+    updateCheck: "Check for updates", shortcuts: "Keyboard shortcuts", notifications: "Notification history", kanbanDispatch: "Dispatch kanban tasks", kanbanDispatched: "Kanban dispatch: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", kanbanDispatchFailed: "Kanban dispatch failed: {error}", kanbanQuickAdd: "New kanban task…", kanbanQuickAddPrompt: "Task title:", kanbanQuickAdded: "Kanban task created: {id} — {title}", kanbanQuickAddFailed: "Kanban task creation failed: {error}", kanbanBoardSwitch: "Switch kanban board…", kanbanBoardSwitched: "Kanban board switched: {board}", kanbanBoardsFailed: "Kanban boards load failed: {error}", kanbanBoardsEmpty: "No kanban boards available", toggleSidebar: "Toggle sidebar", themePicker: "Switch theme…", themePickerTitle: "Dashboard theme", themeFailed: "Theme load failed: {error}", fontPicker: "Switch font…", fontPickerTitle: "Dashboard font", fontFailed: "Font load failed: {error}", copySessionId: "Copy session ID", archiveSession: "Archive current session", unarchiveSession: "Restore current session (unarchive)", sessionArchived: "Session archived: {label}", sessionUnarchived: "Session restored: {label}", sessionArchiveFailed: "Session archive failed: {error}",
         hintFreshChat: "start a fresh chat", hintArtifacts: "links, files, images",
     hintLearning: "learned skills + memory", switchTo: "Switch to: {title}",
   },
@@ -824,7 +824,7 @@ const zh: Translations = {
     infoStarted: "开始时间", infoActivity: "最后活动", infoMessages: "消息数",
     infoCopyId: "复制 ID", infoCopied: "已复制会话 ID", infoCopyFailed: "复制失败",
     copyTitle: "复制消息", copyFailed: "复制失败",
-    whenNow: "刚刚", dayToday: "今天", tokensTitle: "总 token 数：{tokens}", filterPlaceholder: "筛选会话…", filterNoMatch: "没有匹配过滤的会话", dayJumpTitle: "跳转到日期", showAll: "显示全部 {count} 个会话", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序",
+    whenNow: "刚刚", dayToday: "今天", tokensTitle: "总 token 数：{tokens}", filterPlaceholder: "筛选会话…", filterNoMatch: "没有匹配过滤的会话", dayJumpTitle: "跳转到日期", showAll: "显示全部 {count} 个会话", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序", showArchived: "显示已归档会话", hideArchived: "隐藏已归档会话",
   },
   tools: { running: "运行中…", done: "完成", thinking: "思考中", arguments: "参数", result: "结果", fallbackName: "工具" },
   slash: {
@@ -1177,7 +1177,7 @@ const zh: Translations = {
     exportMd: "导出会话（Markdown）", exportHtml: "导出会话（HTML）",
     browseArtifacts: "浏览工件…", learningGraph: "学习图谱…",
     openSettings: "打开网关设置…", refreshSessions: "刷新会话列表", restartGateway: "重启网关",
-    updateCheck: "检查更新", shortcuts: "键盘快捷键", notifications: "通知历史", kanbanDispatch: "派发看板任务", kanbanDispatched: "看板派发：{spawned} 派生 · {promoted} 晋升 · {reclaimed} 回收", kanbanDispatchFailed: "看板派发失败：{error}", kanbanQuickAdd: "新建看板任务…", kanbanQuickAddPrompt: "任务标题：", kanbanQuickAdded: "已创建看板任务：{id} —— {title}", kanbanQuickAddFailed: "看板任务创建失败：{error}", kanbanBoardSwitch: "切换看板…", kanbanBoardSwitched: "已切换看板：{board}", kanbanBoardsFailed: "看板列表加载失败：{error}", kanbanBoardsEmpty: "暂无可用看板", toggleSidebar: "切换侧栏", themePicker: "切换主题…", themePickerTitle: "仪表盘主题", themeFailed: "主题加载失败：{error}", fontPicker: "切换字体…", fontPickerTitle: "仪表盘字体", fontFailed: "字体加载失败：{error}", copySessionId: "复制会话 ID",
+    updateCheck: "检查更新", shortcuts: "键盘快捷键", notifications: "通知历史", kanbanDispatch: "派发看板任务", kanbanDispatched: "看板派发：{spawned} 派生 · {promoted} 晋升 · {reclaimed} 回收", kanbanDispatchFailed: "看板派发失败：{error}", kanbanQuickAdd: "新建看板任务…", kanbanQuickAddPrompt: "任务标题：", kanbanQuickAdded: "已创建看板任务：{id} —— {title}", kanbanQuickAddFailed: "看板任务创建失败：{error}", kanbanBoardSwitch: "切换看板…", kanbanBoardSwitched: "已切换看板：{board}", kanbanBoardsFailed: "看板列表加载失败：{error}", kanbanBoardsEmpty: "暂无可用看板", toggleSidebar: "切换侧栏", themePicker: "切换主题…", themePickerTitle: "仪表盘主题", themeFailed: "主题加载失败：{error}", fontPicker: "切换字体…", fontPickerTitle: "仪表盘字体", fontFailed: "字体加载失败：{error}", copySessionId: "复制会话 ID", archiveSession: "归档当前会话", unarchiveSession: "恢复当前会话（取消归档）", sessionArchived: "已归档会话：{label}", sessionUnarchived: "已恢复会话：{label}", sessionArchiveFailed: "会话归档失败：{error}",
         hintFreshChat: "开始全新聊天", hintArtifacts: "链接、文件、图片",
     hintLearning: "已学技能 + 记忆", switchTo: "切换到：{title}",
   },
@@ -1278,7 +1278,7 @@ const zhHant: Translations = {
     infoStarted: "開始時間", infoActivity: "最後活動", infoMessages: "訊息數",
     infoCopyId: "複製 ID", infoCopied: "已複製工作階段 ID", infoCopyFailed: "複製失敗",
     copyTitle: "複製訊息", copyFailed: "複製失敗",
-    whenNow: "剛剛", dayToday: "今天", tokensTitle: "總 token 數：{tokens}", filterPlaceholder: "篩選工作階段…", filterNoMatch: "沒有符合篩選的工作階段", dayJumpTitle: "跳轉到日期", showAll: "顯示全部 {count} 個工作階段", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序",
+    whenNow: "剛剛", dayToday: "今天", tokensTitle: "總 token 數：{tokens}", filterPlaceholder: "篩選工作階段…", filterNoMatch: "沒有符合篩選的工作階段", dayJumpTitle: "跳轉到日期", showAll: "顯示全部 {count} 個工作階段", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序", showArchived: "顯示已歸檔工作階段", hideArchived: "隱藏已歸檔工作階段",
   },
   tools: { running: "執行中…", done: "完成", thinking: "思考中", arguments: "參數", result: "結果", fallbackName: "工具" },
   slash: {
@@ -1631,7 +1631,7 @@ const zhHant: Translations = {
     exportMd: "匯出工作階段（Markdown）", exportHtml: "匯出工作階段（HTML）",
     browseArtifacts: "瀏覽工件…", learningGraph: "學習圖譜…",
     openSettings: "開啟閘道設定…", refreshSessions: "重新整理工作階段清單", restartGateway: "重啟閘道",
-    updateCheck: "檢查更新", shortcuts: "鍵盤快捷鍵", notifications: "通知歷史", kanbanDispatch: "派發看板任務", kanbanDispatched: "看板派發：{spawned} 派生 · {promoted} 晉升 · {reclaimed} 回收", kanbanDispatchFailed: "看板派發失敗：{error}", kanbanQuickAdd: "新增看板任務…", kanbanQuickAddPrompt: "任務標題：", kanbanQuickAdded: "已建立看板任務：{id} —— {title}", kanbanQuickAddFailed: "看板任務建立失敗：{error}", kanbanBoardSwitch: "切換看板…", kanbanBoardSwitched: "已切換看板：{board}", kanbanBoardsFailed: "看板清單載入失敗：{error}", kanbanBoardsEmpty: "暫無可用看板", toggleSidebar: "切換側欄", themePicker: "切換主題…", themePickerTitle: "儀表盤主題", themeFailed: "主題載入失敗：{error}", fontPicker: "切換字體…", fontPickerTitle: "儀表盤字體", fontFailed: "字體載入失敗：{error}", copySessionId: "複製工作階段 ID",
+    updateCheck: "檢查更新", shortcuts: "鍵盤快捷鍵", notifications: "通知歷史", kanbanDispatch: "派發看板任務", kanbanDispatched: "看板派發：{spawned} 派生 · {promoted} 晉升 · {reclaimed} 回收", kanbanDispatchFailed: "看板派發失敗：{error}", kanbanQuickAdd: "新增看板任務…", kanbanQuickAddPrompt: "任務標題：", kanbanQuickAdded: "已建立看板任務：{id} —— {title}", kanbanQuickAddFailed: "看板任務建立失敗：{error}", kanbanBoardSwitch: "切換看板…", kanbanBoardSwitched: "已切換看板：{board}", kanbanBoardsFailed: "看板清單載入失敗：{error}", kanbanBoardsEmpty: "暫無可用看板", toggleSidebar: "切換側欄", themePicker: "切換主題…", themePickerTitle: "儀表盤主題", themeFailed: "主題載入失敗：{error}", fontPicker: "切換字體…", fontPickerTitle: "儀表盤字體", fontFailed: "字體載入失敗：{error}", copySessionId: "複製工作階段 ID", archiveSession: "歸檔目前工作階段", unarchiveSession: "還原目前工作階段（取消歸檔）", sessionArchived: "已歸檔工作階段：{label}", sessionUnarchived: "已還原工作階段：{label}", sessionArchiveFailed: "工作階段歸檔失敗：{error}",
         hintFreshChat: "開始全新聊天", hintArtifacts: "連結、檔案、圖片",
     hintLearning: "已學技能 + 記憶", switchTo: "切換至：{title}",
   },
@@ -1732,7 +1732,7 @@ const ja: Translations = {
     infoStarted: "開始", infoActivity: "最終アクティビティ", infoMessages: "メッセージ数",
     infoCopyId: "ID をコピー", infoCopied: "セッション ID をコピーしました", infoCopyFailed: "コピーに失敗しました",
     copyTitle: "メッセージをコピー", copyFailed: "コピーに失敗しました",
-    whenNow: "たった今", dayToday: "今日", tokensTitle: "総トークン数：{tokens}", filterPlaceholder: "セッションを絞り込み…", filterNoMatch: "フィルターに一致するセッションはありません", dayJumpTitle: "日付へジャンプ", showAll: "{count} 件のセッションをすべて表示", showLess: "折りたたむ", groupYesterday: "昨日", groupWeek: "過去 7 日間", groupOlder: "それ以前", sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に", sortByTitle: "タイトル順 — クリックでアクティビティ順に",
+    whenNow: "たった今", dayToday: "今日", tokensTitle: "総トークン数：{tokens}", filterPlaceholder: "セッションを絞り込み…", filterNoMatch: "フィルターに一致するセッションはありません", dayJumpTitle: "日付へジャンプ", showAll: "{count} 件のセッションをすべて表示", showLess: "折りたたむ", groupYesterday: "昨日", groupWeek: "過去 7 日間", groupOlder: "それ以前", sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に", sortByTitle: "タイトル順 — クリックでアクティビティ順に", showArchived: "アーカイブ済みセッションを表示", hideArchived: "アーカイブ済みセッションを非表示",
   },
   tools: { running: "実行中…", done: "完了", thinking: "思考中", arguments: "引数", result: "結果", fallbackName: "ツール" },
   slash: {
@@ -2085,7 +2085,7 @@ const ja: Translations = {
     exportMd: "セッションをエクスポート（Markdown）", exportHtml: "セッションをエクスポート（HTML）",
     browseArtifacts: "成果物を閲覧…", learningGraph: "学習グラフ…",
     openSettings: "ゲートウェイ設定を開く…", refreshSessions: "セッション一覧を更新", restartGateway: "ゲートウェイを再起動",
-    updateCheck: "更新を確認", shortcuts: "キーボードショートカット", notifications: "通知履歴", kanbanDispatch: "カンバンタスクをディスパッチ", kanbanDispatched: "ディスパッチ結果：{spawned} 起動 · {promoted} 昇格 · {reclaimed} 回収", kanbanDispatchFailed: "ディスパッチに失敗：{error}", kanbanQuickAdd: "新しいカンバンタスク…", kanbanQuickAddPrompt: "タスクタイトル：", kanbanQuickAdded: "カンバンタスクを作成しました：{id} — {title}", kanbanQuickAddFailed: "カンバンタスクの作成に失敗：{error}", kanbanBoardSwitch: "カンバンボードを切り替え…", kanbanBoardSwitched: "カンバンボードを切り替えました：{board}", kanbanBoardsFailed: "カンバンボードの読み込みに失敗：{error}", kanbanBoardsEmpty: "利用可能なカンバンボードがありません", toggleSidebar: "サイドバーを表示/非表示", themePicker: "テーマを切り替え…", themePickerTitle: "ダッシュボードテーマ", themeFailed: "テーマの読み込みに失敗：{error}", fontPicker: "フォントを切り替え…", fontPickerTitle: "ダッシュボードフォント", fontFailed: "フォントの読み込みに失敗：{error}", copySessionId: "セッション ID をコピー",
+    updateCheck: "更新を確認", shortcuts: "キーボードショートカット", notifications: "通知履歴", kanbanDispatch: "カンバンタスクをディスパッチ", kanbanDispatched: "ディスパッチ結果：{spawned} 起動 · {promoted} 昇格 · {reclaimed} 回収", kanbanDispatchFailed: "ディスパッチに失敗：{error}", kanbanQuickAdd: "新しいカンバンタスク…", kanbanQuickAddPrompt: "タスクタイトル：", kanbanQuickAdded: "カンバンタスクを作成しました：{id} — {title}", kanbanQuickAddFailed: "カンバンタスクの作成に失敗：{error}", kanbanBoardSwitch: "カンバンボードを切り替え…", kanbanBoardSwitched: "カンバンボードを切り替えました：{board}", kanbanBoardsFailed: "カンバンボードの読み込みに失敗：{error}", kanbanBoardsEmpty: "利用可能なカンバンボードがありません", toggleSidebar: "サイドバーを表示/非表示", themePicker: "テーマを切り替え…", themePickerTitle: "ダッシュボードテーマ", themeFailed: "テーマの読み込みに失敗：{error}", fontPicker: "フォントを切り替え…", fontPickerTitle: "ダッシュボードフォント", fontFailed: "フォントの読み込みに失敗：{error}", copySessionId: "セッション ID をコピー", archiveSession: "現在のセッションをアーカイブ", unarchiveSession: "現在のセッションを復元（アーカイブ解除）", sessionArchived: "セッションをアーカイブしました：{label}", sessionUnarchived: "セッションを復元しました：{label}", sessionArchiveFailed: "セッションのアーカイブに失敗：{error}",
         hintFreshChat: "新しいチャットを開始", hintArtifacts: "リンク、ファイル、画像",
     hintLearning: "学習済みスキル + メモリ", switchTo: "切り替え先：{title}",
   },
@@ -2186,7 +2186,7 @@ const ar: Translations = {
     infoStarted: "بدأت", infoActivity: "آخر نشاط", infoMessages: "الرسائل",
     infoCopyId: "نسخ المعرف", infoCopied: "تم نسخ معرف الجلسة", infoCopyFailed: "فشل النسخ",
     copyTitle: "نسخ الرسالة", copyFailed: "فشل النسخ",
-    whenNow: "الآن", dayToday: "اليوم", tokensTitle: "إجمالي الرموز: {tokens}", filterPlaceholder: "تصفية الجلسات…", filterNoMatch: "لا توجد جلسات مطابقة للتصفية", dayJumpTitle: "الانتقال إلى التاريخ", showAll: "عرض كل الجلسات ({count})", showLess: "عرض أقل", groupYesterday: "أمس", groupWeek: "آخر 7 أيام", groupOlder: "أقدم", sortByActivity: "مرتبة حسب آخر نشاط — انقر للفرز حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للفرز حسب آخر نشاط",
+    whenNow: "الآن", dayToday: "اليوم", tokensTitle: "إجمالي الرموز: {tokens}", filterPlaceholder: "تصفية الجلسات…", filterNoMatch: "لا توجد جلسات مطابقة للتصفية", dayJumpTitle: "الانتقال إلى التاريخ", showAll: "عرض كل الجلسات ({count})", showLess: "عرض أقل", groupYesterday: "أمس", groupWeek: "آخر 7 أيام", groupOlder: "أقدم", sortByActivity: "مرتبة حسب آخر نشاط — انقر للفرز حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للفرز حسب آخر نشاط", showArchived: "إظهار الجلسات المؤرشفة", hideArchived: "إخفاء الجلسات المؤرشفة",
   },
   tools: { running: "قيد التشغيل…", done: "تم", thinking: "يفكر", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },
   slash: {
@@ -2539,7 +2539,7 @@ const ar: Translations = {
     exportMd: "تصدير الجلسة (Markdown)", exportHtml: "تصدير الجلسة (HTML)",
     browseArtifacts: "تصفح المخرجات…", learningGraph: "رسم التعلم…",
     openSettings: "فتح إعدادات البوابة…", refreshSessions: "تحديث قائمة الجلسات", restartGateway: "إعادة تشغيل البوابة",
-    updateCheck: "فحص التحديثات", shortcuts: "اختصارات لوحة المفاتيح", notifications: "سجل الإشعارات", kanbanDispatch: "توزيع مهام كانبان", kanbanDispatched: "توزيع كانبان: {spawned} إطلاق · {promoted} ترقية · {reclaimed} استرداد", kanbanDispatchFailed: "فشل التوزيع: {error}", kanbanQuickAdd: "مهمة كانبان جديدة…", kanbanQuickAddPrompt: "عنوان المهمة:", kanbanQuickAdded: "تم إنشاء مهمة كانبان: {id} — {title}", kanbanQuickAddFailed: "فشل إنشاء مهمة كانبان: {error}", kanbanBoardSwitch: "تبديل لوحة كانبان…", kanbanBoardSwitched: "تم تبديل لوحة كانبان: {board}", kanbanBoardsFailed: "فشل تحميل لوحات كانبان: {error}", kanbanBoardsEmpty: "لا توجد لوحات كانبان متاحة", toggleSidebar: "تبديل الشريط الجانبي", themePicker: "تبديل السمة…", themePickerTitle: "سمة لوحة التحكم", themeFailed: "فشل تحميل السمة: {error}", fontPicker: "تبديل الخط…", fontPickerTitle: "خط لوحة التحكم", fontFailed: "فشل تحميل الخط: {error}", copySessionId: "نسخ معرف الجلسة",
+    updateCheck: "فحص التحديثات", shortcuts: "اختصارات لوحة المفاتيح", notifications: "سجل الإشعارات", kanbanDispatch: "توزيع مهام كانبان", kanbanDispatched: "توزيع كانبان: {spawned} إطلاق · {promoted} ترقية · {reclaimed} استرداد", kanbanDispatchFailed: "فشل التوزيع: {error}", kanbanQuickAdd: "مهمة كانبان جديدة…", kanbanQuickAddPrompt: "عنوان المهمة:", kanbanQuickAdded: "تم إنشاء مهمة كانبان: {id} — {title}", kanbanQuickAddFailed: "فشل إنشاء مهمة كانبان: {error}", kanbanBoardSwitch: "تبديل لوحة كانبان…", kanbanBoardSwitched: "تم تبديل لوحة كانبان: {board}", kanbanBoardsFailed: "فشل تحميل لوحات كانبان: {error}", kanbanBoardsEmpty: "لا توجد لوحات كانبان متاحة", toggleSidebar: "تبديل الشريط الجانبي", themePicker: "تبديل السمة…", themePickerTitle: "سمة لوحة التحكم", themeFailed: "فشل تحميل السمة: {error}", fontPicker: "تبديل الخط…", fontPickerTitle: "خط لوحة التحكم", fontFailed: "فشل تحميل الخط: {error}", copySessionId: "نسخ معرف الجلسة", archiveSession: "أرشفة الجلسة الحالية", unarchiveSession: "استعادة الجلسة الحالية (إلغاء الأرشفة)", sessionArchived: "تمت أرشفة الجلسة: {label}", sessionUnarchived: "تمت استعادة الجلسة: {label}", sessionArchiveFailed: "فشل أرشفة الجلسة: {error}",
         hintFreshChat: "بدء دردشة جديدة", hintArtifacts: "روابط وملفات وصور",
     hintLearning: "مهارات متعلَّمة + ذاكرة", switchTo: "التبديل إلى: {title}",
   },

@@ -8572,6 +8572,7 @@ async fn session_chat_stream(
 /// `PATCH /api/sessions/:id` — update client-safe session metadata
 /// (hermes `_handle_patch_session`). Only `title` and `end_reason` are
 /// accepted; unknown fields are rejected.
+/// `end_reason: null` clears a recorded end (unarchive; P414).
 async fn patch_session(
     State(state): State<Arc<GatewayState>>,
     Path(id): Path<String>,
@@ -8610,12 +8611,19 @@ async fn patch_session(
             return bad_request(&e.to_string(), Some("invalid_title"));
         }
     }
-    if let Some(reason) = obj.get("end_reason").and_then(|v| v.as_str()) {
-        if !reason.is_empty() {
+    match obj.get("end_reason") {
+        // `end_reason: null` clears the recorded end (unarchive; P414).
+        Some(Value::Null) => {
+            if let Err(e) = state.store.clear_session_end(&id) {
+                return server_error(&e.to_string());
+            }
+        }
+        Some(Value::String(reason)) if !reason.is_empty() => {
             if let Err(e) = state.store.end_session(&id, reason) {
                 return server_error(&e.to_string());
             }
         }
+        _ => {}
     }
     match state.store.get_session_row(&id) {
         Ok(Some(row)) => Json(json!({"object": "ulnclaw.session", "session": row})).into_response(),
@@ -15257,6 +15265,41 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_session_patch_end_reason_null_unarchives() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let id = state.store.create_session("gateway", None, None).unwrap();
+
+        // Archive the session (desktop P414 archive action).
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"end_reason": "archived"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["session"]["end_reason"], "archived");
+        assert!(body["session"]["ended_at"].as_f64().is_some());
+
+        // end_reason: null clears the recorded end (unarchive).
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"end_reason": null}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["session"]["end_reason"].is_null());
+        assert!(body["session"]["ended_at"].is_null());
+
+        // Empty-string end_reason stays a no-op (no archive).
+        let (status, body) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"end_reason": ""}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["session"]["end_reason"].is_null());
     }
 
     #[tokio::test]

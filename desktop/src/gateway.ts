@@ -1308,6 +1308,16 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`rename session: HTTP ${response.status}`);
   }
 
+  /** P414: archive/unarchive — PATCH end_reason (`null` clears it). */
+  async setSessionEndReason(sessionId: string, reason: string | null): Promise<void> {
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}`), {
+      method: "PATCH",
+      headers: this.headers(),
+      body: JSON.stringify({ end_reason: reason }),
+    });
+    if (!response.ok) throw new Error(`patch session: HTTP ${response.status}`);
+  }
+
   /** Delete a session and its transcript. */
   async deleteSession(sessionId: string): Promise<void> {
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}`), {

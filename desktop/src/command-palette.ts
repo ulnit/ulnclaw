@@ -42,6 +42,8 @@ export interface CommandPaletteHooks {
   themePicker(): void | Promise<void>;
   fontPicker(): void | Promise<void>;
   copySessionId(): void | Promise<void>;
+  archiveSession(): void | Promise<void>;
+  unarchiveSession(): void | Promise<void>;
 }
 
 /** Subsequence fuzzy score (higher = better, null = no match). */
@@ -159,6 +161,8 @@ export class CommandPalette {
       { id: "kanban-dispatch", label: t.palette.kanbanDispatch, group: t.palette.gatewayGroup, run: () => hooks.kanbanDispatch() },
       { id: "kanban-quick-add", label: t.palette.kanbanQuickAdd, group: t.palette.gatewayGroup, run: () => hooks.kanbanQuickAdd() },
       { id: "kanban-board-switch", label: t.palette.kanbanBoardSwitch, group: t.palette.gatewayGroup, run: () => hooks.kanbanBoardSwitcher() },
+      { id: "session-archive", label: t.palette.archiveSession, group: t.palette.gatewayGroup, run: () => hooks.archiveSession() },
+      { id: "session-unarchive", label: t.palette.unarchiveSession, group: t.palette.gatewayGroup, run: () => hooks.unarchiveSession() },
       { id: "toggle-sidebar", label: t.palette.toggleSidebar, group: t.palette.gatewayGroup, hint: "Ctrl/Cmd+B", run: () => hooks.toggleSidebar() },
       { id: "theme-picker", label: t.palette.themePicker, group: t.palette.gatewayGroup, run: () => hooks.themePicker() },
       { id: "font-picker", label: t.palette.fontPicker, group: t.palette.gatewayGroup, run: () => hooks.fontPicker() },

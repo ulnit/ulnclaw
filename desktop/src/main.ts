@@ -80,6 +80,8 @@ const state = {
   sessionSortMode: (localStorage.getItem("ulnclaw.sessionSort") === "title"
     ? "title"
     : "activity") as "activity" | "title",
+  /** P414: hide archived sessions from the sidebar (persisted, on by default). */
+  hideArchived: localStorage.getItem("ulnclaw.hideArchived") !== "0",
   /** P394: keyboard navigation over the visible sidebar rows. */
   sessionListVisible: [] as SessionRow[],
   sessionCursor: 0,
@@ -118,6 +120,7 @@ const el = {
   sessionList: document.getElementById("session-list")!,
   sessionFilter: document.getElementById("session-filter") as HTMLInputElement,
   sessionSort: document.getElementById("session-sort") as HTMLButtonElement,
+  sessionArchivedToggle: document.getElementById("session-archived") as HTMLButtonElement,
   newSession: document.getElementById("new-session") as HTMLButtonElement,
   messages: document.getElementById("messages")!,
   scrollBottom: document.getElementById("scroll-bottom") as HTMLButtonElement,
@@ -208,6 +211,7 @@ const END_BADGES: Record<string, string> = {
   compression: "⧉",
   branched: "⑂",
   ended: "■",
+  archived: "🗄",
 };
 
 /** P392: sidebar session rows group by relative age. */
@@ -242,6 +246,14 @@ function refreshSortButton(): void {
     state.sessionSortMode === "title" ? t.session.sortByTitle : t.session.sortByActivity;
 }
 
+/** P414: reflect the hide-archived posture on the toolbar toggle. */
+function refreshArchivedButton(): void {
+  el.sessionArchivedToggle.classList.toggle("toolbar-on", state.hideArchived);
+  el.sessionArchivedToggle.title = state.hideArchived
+    ? t.session.showArchived
+    : t.session.hideArchived;
+}
+
 function renderSessions(): void {
   el.sessionList.innerHTML = "";
   // P372: optional sidebar filter (title or id substring, case-insensitive).
@@ -253,6 +265,8 @@ function renderSessions(): void {
         ? (a.title || a.id.slice(0, 8)).localeCompare(b.title || b.id.slice(0, 8))
         : b.last_activity_at - a.last_activity_at,
     )
+    // P414: archived sessions stay out of the sidebar unless toggled in.
+    .filter((session) => !state.hideArchived || session.end_reason !== "archived")
     .filter((session) => {
       if (!filter) return true;
       const title = session.title || session.id.slice(0, 8);
@@ -683,6 +697,9 @@ const SESSION_FILTER_KEY = "ulnclaw.sessionFilter";
 
 /** P407: session sort order persists across restarts. */
 const SESSION_SORT_KEY = "ulnclaw.sessionSort";
+
+/** P414: the hide-archived sidebar toggle persists across restarts. */
+const HIDE_ARCHIVED_KEY = "ulnclaw.hideArchived";
 
 /** P398: the active view persists across restarts. */
 const ACTIVE_VIEW_KEY = "ulnclaw.activeView";
@@ -1941,6 +1958,19 @@ async function start(): Promise<void> {
   };
   refreshSortButton();
 
+  // P414: hide/show archived sessions in the sidebar, persisted.
+  el.sessionArchivedToggle.onclick = () => {
+    state.hideArchived = !state.hideArchived;
+    try {
+      localStorage.setItem(HIDE_ARCHIVED_KEY, state.hideArchived ? "1" : "0");
+    } catch {
+      /* storage unavailable */
+    }
+    refreshArchivedButton();
+    renderSessions();
+  };
+  refreshArchivedButton();
+
   // P394: keyboard navigation over the sidebar session list.
   el.sessionList.addEventListener("keydown", (event) => {
     const count = state.sessionListVisible.length;
@@ -2439,6 +2469,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     themePicker: () => openThemePicker(),
     fontPicker: () => openFontPicker(),
     copySessionId: () => runCopySessionId(),
+    archiveSession: () => runArchiveSession(),
+    unarchiveSession: () => runUnarchiveSession(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
@@ -2883,8 +2915,36 @@ async function runCopySessionId(): Promise<void> {
   }
 }
 
+/** P414: palette action — archive the current session
+ * (PATCH end_reason=archived; the row stays browseable). */
+async function runArchiveSession(): Promise<void> {
+  if (!state.client || !state.current) return;
+  const label = state.current.title || state.current.id.slice(0, 8);
+  try {
+    await state.client.setSessionEndReason(state.current.id, "archived");
+    notifySuccess(fmt(t.palette.sessionArchived, { label }));
+    await refreshSessions();
+  } catch (error) {
+    notifyError(fmt(t.palette.sessionArchiveFailed, { error: String(error) }));
+  }
+}
+
+/** P414: palette action — unarchive the current session
+ * (PATCH end_reason=null clears the recorded end). */
+async function runUnarchiveSession(): Promise<void> {
+  if (!state.client || !state.current) return;
+  const label = state.current.title || state.current.id.slice(0, 8);
+  try {
+    await state.client.setSessionEndReason(state.current.id, null);
+    notifySuccess(fmt(t.palette.sessionUnarchived, { label }));
+    await refreshSessions();
+  } catch (error) {
+    notifyError(fmt(t.palette.sessionArchiveFailed, { error: String(error) }));
+  }
+}
+
 /** P362: command-palette update check — probe /api/update/check and
- * surface the verdict as a toast. */
+* surface the verdict as a toast. */
 async function runUpdateCheck(): Promise<void> {
   if (!state.client) return;
   try {
