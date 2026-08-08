@@ -35,6 +35,9 @@ export class SessionsViewWidget {
   private renameTarget: string | null = null;
   // P442: target of the delete dialog while it is open.
   private deleteTarget: string | null = null;
+  // P443: keyboard navigation state for the list.
+  private visible: SessionRow[] = [];
+  private kbIndex = 0;
 
   constructor(
     private root: HTMLElement,
@@ -74,7 +77,7 @@ export class SessionsViewWidget {
           </select>
           <button id="sessions-view-reason-pill" class="sessions-view-reason-pill" hidden></button>
           <input id="sessions-view-search" type="search" data-i18n-ph="sessionsView.searchPlaceholder" />
-          <div id="sessions-view-list" class="sessions-view-list"></div>
+          <div id="sessions-view-list" class="sessions-view-list" tabindex="0"></div>
         </div>
         <div id="sessions-view-transcript" class="sessions-view-transcript">
           <p class="empty" data-i18n="sessionsView.select"></p>
@@ -195,6 +198,30 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-delete-cancel")!.addEventListener("click", () => {
       (this.root.querySelector("#sessions-delete-dialog") as HTMLDialogElement).close();
+    });
+    // P443: ↑/↓ + Enter keyboard navigation over the visible rows.
+    (this.root.querySelector("#sessions-view-list") as HTMLElement).addEventListener("keydown", (event) => {
+      if (this.visible.length === 0) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        this.kbIndex = Math.min(this.kbIndex + 1, this.visible.length - 1);
+        this.renderList();
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        this.kbIndex = Math.max(this.kbIndex - 1, 0);
+        this.renderList();
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const session = this.visible[this.kbIndex];
+        if (session) {
+          this.selected = session.id;
+          this.renderList();
+          this.loadTranscript(session.id).catch(() => undefined);
+        }
+      } else {
+        return;
+      }
+      this.root.querySelector(".sessions-view-row.kb-focus")?.scrollIntoView({ block: "nearest" });
     });
     this.root.querySelector("#sessions-view-prune")!.addEventListener("click", () => {
       this.openPruneDialog("prune");
@@ -426,6 +453,7 @@ export class SessionsViewWidget {
       ended: this.all.filter((s) => s.end_reason && s.end_reason !== "archived").length,
       archived: this.all.filter((s) => s.end_reason === "archived").length,
     });
+    this.visible = [];
     // P438: show/clear the end-reason drill-down pill.
     const reasonPill = this.root.querySelector("#sessions-view-reason-pill") as HTMLButtonElement;
     if (this.endReasonFilter) {
@@ -449,12 +477,15 @@ export class SessionsViewWidget {
       list.innerHTML = `<p class="empty">${escapeHtml(filter ? t.sessionsView.noMatch : t.sessionsView.empty)}</p>`;
       return;
     }
+    this.visible = rows;
+    if (this.kbIndex >= rows.length) this.kbIndex = Math.max(0, rows.length - 1);
     list.innerHTML = rows
-      .map((session) => {
+      .map((session, index) => {
         const title = session.title || session.id.slice(0, 8);
         const active = session.id === this.selected ? " active" : "";
+        const kb = index === this.kbIndex ? " kb-focus" : "";
         return `
-          <div class="sessions-view-row${active}" data-id="${escapeHtml(session.id)}">
+          <div class="sessions-view-row${active}${kb}" data-id="${escapeHtml(session.id)}">
             <div class="sessions-view-row-title">${escapeHtml(title)}</div>
             <div class="sessions-view-row-meta">
               ${session.model ? `<span class="sessions-view-model">${escapeHtml(session.model)}</span>` : ""}

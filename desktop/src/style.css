@@ -1227,6 +1227,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   font-size: 12px;
   cursor: pointer;
 }
+/* P443: keyboard-navigation focus ring on sessions-view rows. */
+.sessions-view-row.kb-focus { outline: 1px solid var(--accent); outline-offset: -1px; }
 /* P441: live approval-waiting badge on the Runs tab. */
 .tab-badge {
   display: inline-block;
