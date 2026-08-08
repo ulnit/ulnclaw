@@ -194,6 +194,9 @@ pub struct BrowseRow {
     /// P542: recorded end reason (complete/branched/archived/…) for
     /// the TUI details pane; `None` while the session is open.
     pub end_reason: Option<String>,
+    /// P546: stored token totals (input + output) for the TUI details
+    /// pane — mirrors the desktop sidebar/usage badges.
+    pub total_tokens: i64,
 }
 
 /// Maximum session title length in characters (hermes `MAX_TITLE_LENGTH`).
@@ -1545,7 +1548,8 @@ impl SqliteSessionStore {
                     s.archived,
                     s.message_count,
                     s.model,
-                    s.end_reason
+                    s.end_reason,
+                    COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)
              FROM sessions s WHERE 1=1",
         );
         if !include_archived {
@@ -1579,6 +1583,7 @@ impl SqliteSessionStore {
                     message_count: row.get(7)?,
                     model: row.get(8)?,
                     end_reason: row.get(9)?,
+                    total_tokens: row.get(10)?,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;

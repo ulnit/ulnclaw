@@ -9739,6 +9739,13 @@ fn browse_details_pane_lines(
         &format!("messages: {}", row.message_count),
         width,
     ));
+    // P546: stored token totals, when the session has usage recorded.
+    if row.total_tokens > 0 {
+        lines.extend(ulnclaw::tui_text::wrap_display_text(
+            &format!("tokens: {}", row.total_tokens),
+            width,
+        ));
+    }
     if let Some(slug) = project {
         lines.extend(ulnclaw::tui_text::wrap_display_text(
             &format!("project: {slug}"),
