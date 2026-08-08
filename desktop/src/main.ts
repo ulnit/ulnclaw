@@ -2512,6 +2512,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     fontPicker: () => openFontPicker(),
     copySessionId: () => runCopySessionId(),
     copyLastReply: () => runCopyLastReply(),
+    forkSession: () => runForkSession(),
     archiveSession: () => runArchiveSession(),
     unarchiveSession: () => runUnarchiveSession(),
   });
@@ -2973,6 +2974,21 @@ async function runCopyLastReply(): Promise<void> {
     notifySuccess(t.palette.lastReplyCopied);
   } catch {
     notifyError(t.session.copyFailed);
+  }
+}
+
+/** P420: palette action — fork the current session
+ * (POST /api/sessions/:id/fork) and jump into the branch. */
+async function runForkSession(): Promise<void> {
+  if (!state.client || !state.current) return;
+  const label = state.current.title || state.current.id.slice(0, 8);
+  try {
+    const forked = await state.client.forkSession(state.current.id);
+    notifySuccess(fmt(t.palette.sessionForked, { label }));
+    await refreshSessions();
+    await openSession(forked);
+  } catch (error) {
+    notifyError(fmt(t.palette.forkFailed, { error: String(error) }));
   }
 }
 
