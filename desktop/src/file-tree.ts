@@ -42,6 +42,13 @@ export class FileTreePanel {
     mkdir.addEventListener("click", () => {
       void this.createFolder();
     });
+    const gitRoot = document.createElement("button");
+    gitRoot.className = "ghost";
+    gitRoot.textContent = "\u2387";
+    gitRoot.title = t.fileTree.gitRoot;
+    gitRoot.addEventListener("click", () => {
+      void this.jumpToGitRoot();
+    });
     const close = document.createElement("button");
     close.className = "ghost";
     close.textContent = "\u2715";
@@ -49,7 +56,7 @@ export class FileTreePanel {
     close.addEventListener("click", () => {
       this.aside.hidden = true;
     });
-    header.append(this.rootLabel, mkdir, refresh, close);
+    header.append(this.rootLabel, mkdir, gitRoot, refresh, close);
 
     this.body = document.createElement("div");
     this.body.className = "file-tree-body";
@@ -120,6 +127,20 @@ export class FileTreePanel {
           error instanceof Error ? error.message : String(error),
         ),
       );
+    }
+  }
+
+  /** P593: re-root the tree at the nearest enclosing git checkout. */
+  private async jumpToGitRoot(): Promise<void> {
+    const client = this.client();
+    if (!client || !this.rootPath) return;
+    try {
+      const { root } = await client.fsGitRoot(this.rootPath);
+      if (root && root !== this.rootPath) {
+        await this.loadRoot(root);
+      }
+    } catch {
+      // Keep the current root when the lookup fails.
     }
   }
 
