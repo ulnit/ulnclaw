@@ -497,6 +497,9 @@ const localDeletes = new Set<string>();
 // P494: debounce timer for list refreshes driven by session.message.
 let sessionMessageListTimer: number | null = null;
 
+// P495: debounce timer for the chat view's live catch-up.
+let chatCatchupTimer: number | null = null;
+
 async function deleteSession(session: SessionRow): Promise<void> {
   if (!state.client) return;
   const label = session.title || session.id.slice(0, 8);
@@ -1979,6 +1982,16 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
           void refreshSessions();
           void state.sessionsBrowser?.refresh();
         }, 2000);
+      }
+      // P495: the chat view catches up when the open session grows
+      // elsewhere and no turn is streaming here.
+      if (state.current && envelope.session_id === state.current.id && !state.busy) {
+        if (chatCatchupTimer === null) {
+          chatCatchupTimer = window.setTimeout(() => {
+            chatCatchupTimer = null;
+            if (state.current && !state.busy) void openSession(state.current);
+          }, 1500);
+        }
       }
       break;
     }
