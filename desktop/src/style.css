@@ -1459,6 +1459,28 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 }
 .pairing-view-row button { font-size: 12px; padding: 2px 12px; margin-left: auto; }
 
+/* Profiles view */
+.profiles-view-editor {
+  border: 1px solid var(--border, var(--hover));
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: var(--panel-2);
+}
+.profiles-view-editor h3 { margin: 0 0 10px; font-size: 14px; }
+.profiles-view-editor label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; font-size: 12px; color: var(--dim); }
+.profiles-view-editor input { background: var(--panel); color: var(--text); border: 1px solid var(--hover); border-radius: 8px; padding: 6px 10px; font: inherit; }
+.profiles-view-editor input:disabled { opacity: 0.6; }
+.profiles-view-editor menu { display: flex; justify-content: flex-end; gap: 8px; margin: 6px 0 0; }
+.profiles-view-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border, var(--hover)); border-radius: 10px; padding: 8px 14px; margin-bottom: 8px; background: var(--panel-2); }
+.profiles-view-row-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.profiles-view-model { font-size: 0.82em; opacity: 0.75; font-family: var(--mono, monospace); }
+.profiles-view-chip { font-size: 0.75em; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--hover); }
+.profiles-view-chip.enabled { color: var(--good, #3fb950); }
+.profiles-view-chip.disabled { color: var(--bad, #f85149); }
+.profiles-view-row-actions { margin-left: auto; display: flex; gap: 4px; }
+.profiles-view-row-actions button { font-size: 12px; padding: 2px 10px; }
+
 /* Kanban detail enrichments */
 .kanban-detail-meta { font-size: 0.8em; opacity: 0.7; margin: 4px 0 8px; }
 .kanban-detail-attachments { margin-top: 8px; }

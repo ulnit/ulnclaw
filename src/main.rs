@@ -238,6 +238,12 @@ enum Commands {
         #[command(subcommand)]
         action: PairingAction,
     },
+    /// Manage named profiles — `[profiles.*]` overrides in config.toml
+    /// (hermes profile management, lean port)
+    Profiles {
+        #[command(subcommand)]
+        action: Option<ProfilesAction>,
+    },
     /// OAuth device-flow login: login/status/refresh/logout (hermes portal auth)
     Auth {
         #[command(subcommand)]
@@ -1914,6 +1920,40 @@ enum PairingAction {
 }
 
 #[derive(Subcommand)]
+enum ProfilesAction {
+    /// List configured profiles (default)
+    List,
+    /// Show one profile's override as TOML
+    Show { name: String },
+    /// Create or replace a profile override
+    Set {
+        name: String,
+        /// Model provider (openai, anthropic, …) — set together with --model
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model name — set together with --provider
+        #[arg(long)]
+        model: Option<String>,
+        /// Custom base URL for the provider
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Sampling temperature
+        #[arg(long)]
+        temperature: Option<f32>,
+        /// Comma-separated toolsets to enable (empty string clears the override)
+        #[arg(long)]
+        enable: Option<String>,
+        /// Comma-separated toolsets to disable (empty string clears the override)
+        #[arg(long)]
+        disable: Option<String>,
+    },
+    /// Rename a profile
+    Rename { name: String, new_name: String },
+    /// Delete a profile
+    Delete { name: String },
+}
+
+#[derive(Subcommand)]
 enum HooksAction {
     /// List configured shell hooks and their consent state
     List,
@@ -2655,6 +2695,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Plugins { action } => plugins_cmd(&config, action.unwrap_or(PluginsAction::List)).await,
         Commands::Hooks { action } => hooks_cmd(&config, action).await,
         Commands::Pairing { action } => pairing_cmd(action).await,
+        Commands::Profiles { action } => profiles_cmd(action.unwrap_or(ProfilesAction::List)),
         Commands::Auth { action } => auth_cmd(&config, action.unwrap_or(AuthAction::Status)).await,
         Commands::Sync { action } => sync_cmd(&config, action.unwrap_or(SyncAction::Status)).await,
         Commands::Proxy { action } => proxy_cmd(&config, action).await,
@@ -5381,6 +5422,101 @@ async fn pairing_cmd(action: PairingAction) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// `ulnclaw profiles` — manage `[profiles.*]` config overrides
+/// (hermes profile management, lean port; same storage as the gateway
+/// `/api/profiles*` endpoints and the desktop Profiles view).
+fn profiles_cmd(action: ProfilesAction) -> Result<(), String> {
+    use ulnclaw::profiles_cmd as profiles;
+    match action {
+        ProfilesAction::List => {
+            let rows = profiles::list_profiles()?;
+            let path = ulnclaw::config_cmd::config_path();
+            if rows.is_empty() {
+                println!("No profiles configured ({}).", path.display());
+                println!("Create one: ulnclaw profiles set <name> --provider openai --model gpt-4.1");
+                return Ok(());
+            }
+            println!("Profiles in {}:", path.display());
+            for (name, profile) in &rows {
+                let model = match &profile.model {
+                    Some(model) => format!("{}:{}", model.provider, model.model),
+                    None => "(default model)".to_string(),
+                };
+                println!("  {name:<24} {model}");
+                if let Some(toolsets) = &profile.enabled_toolsets {
+                    println!("    enabled:  {}", toolsets.join(", "));
+                }
+                if let Some(toolsets) = &profile.disabled_toolsets {
+                    println!("    disabled: {}", toolsets.join(", "));
+                }
+            }
+            Ok(())
+        }
+        ProfilesAction::Show { name } => {
+            let rows = profiles::list_profiles()?;
+            let Some((_, profile)) = rows.iter().find(|(row_name, _)| row_name == &name) else {
+                return Err(format!("no profile named '{name}'"));
+            };
+            let spec = profiles::ProfileSpec {
+                provider: profile.model.as_ref().map(|model| model.provider.clone()),
+                model: profile.model.as_ref().map(|model| model.model.clone()),
+                base_url: profile.model.as_ref().and_then(|model| model.base_url.clone()),
+                temperature: profile.model.as_ref().and_then(|model| model.temperature),
+                enabled_toolsets: profile.enabled_toolsets.clone(),
+                disabled_toolsets: profile.disabled_toolsets.clone(),
+            };
+            let mut wrapper = toml::Table::new();
+            wrapper.insert(name.clone(), toml::Value::Table(profiles::build_profile_table(&spec)));
+            let mut root = toml::Table::new();
+            root.insert("profiles".to_string(), toml::Value::Table(wrapper));
+            let rendered = toml::to_string_pretty(&root).map_err(|e| e.to_string())?;
+            println!("{rendered}");
+            Ok(())
+        }
+        ProfilesAction::Set {
+            name,
+            provider,
+            model,
+            base_url,
+            temperature,
+            enable,
+            disable,
+        } => {
+            let parse = |raw: Option<String>| -> Option<Vec<String>> {
+                raw.map(|raw| {
+                    raw.split(',')
+                        .map(|entry| entry.trim().to_string())
+                        .filter(|entry| !entry.is_empty())
+                        .collect()
+                })
+            };
+            let spec = profiles::ProfileSpec {
+                provider,
+                model,
+                base_url,
+                temperature,
+                enabled_toolsets: parse(enable),
+                disabled_toolsets: parse(disable),
+            };
+            let created = profiles::save_profile(&name, &spec)?;
+            let verb = if created { "Created" } else { "Updated" };
+            println!("✓ {verb} profile '{name}' in {}.", ulnclaw::config_cmd::config_path().display());
+            println!("  Restart the gateway (or start a new CLI process) to apply.");
+            Ok(())
+        }
+        ProfilesAction::Rename { name, new_name } => {
+            profiles::rename_profile(&name, &new_name)?;
+            println!("✓ Renamed profile '{name}' → '{new_name}'.");
+            Ok(())
+        }
+        ProfilesAction::Delete { name } => {
+            profiles::delete_profile(&name)?;
+            println!("✓ Deleted profile '{name}'.");
+            Ok(())
+        }
+    }
 }
 
 async fn hooks_cmd(config: &UlncLawConfig, action: HooksAction) -> Result<(), String> {

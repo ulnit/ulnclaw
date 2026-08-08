@@ -56,7 +56,7 @@ export function fmt(template: string, vars: Record<string, unknown>): string {
 
 export interface Translations {
   chrome: {
-    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string; pluginsTab: string; pairingTab: string;
+    chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string; pluginsTab: string; pairingTab: string; profilesTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
     selectOrStart: string; inputPlaceholder: string; send: string; charCountTitle: string;
     micTitle: string; micRecording: string; micFailed: string;
@@ -216,6 +216,16 @@ export interface Translations {
     emptyPlatform: string; approvedNote: string; approveFailed: string; revokedNote: string;
     revokeFailed: string; clearedNote: string;
   };
+  profilesView: {
+    count: string; empty: string; new: string; loadFailed: string; restartNote: string;
+    modelNone: string; enabled: string; disabled: string; edit: string; rename: string; del: string;
+    confirmDelete: string; deleteFailed: string; deletedNote: string;
+    dialogNewTitle: string; dialogEditTitle: string; dialogRenameTitle: string;
+    nameLabel: string; namePlaceholder: string; providerLabel: string; modelLabel: string;
+    baseUrlLabel: string; temperatureLabel: string; enabledLabel: string; disabledLabel: string;
+    save: string; cancel: string; invalidName: string; saveFailed: string; savedNote: string;
+    renameFailed: string; renamedNote: string; multiplex: string; multiplexOn: string; multiplexOff: string;
+  };
   config: {
     loading: string; notConnected: string; loadFailed: string; save: string;
     reload: string; saving: string; saved: string; saveFailed: string;
@@ -374,7 +384,7 @@ export interface Translations {
 
 const en: Translations = {
   chrome: {
-    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks", runsTab: "Runs", skillsTab: "Skills", sessionsTab: "Sessions", modelsTab: "Models", pluginsTab: "Plugins", pairingTab: "Pairing",
+    chatTab: "Chat", kanbanTab: "Kanban", projectsTab: "Projects", jobsTab: "Jobs", usageTab: "Usage", configTab: "Config", doctorTab: "Doctor", webhooksTab: "Webhooks", runsTab: "Runs", skillsTab: "Skills", sessionsTab: "Sessions", modelsTab: "Models", pluginsTab: "Plugins", pairingTab: "Pairing", profilesTab: "Profiles",
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
@@ -614,6 +624,23 @@ const en: Translations = {
     emptyPlatform: "No pending or approved pairings.", approvedNote: "Approved {code}.",
     approveFailed: "Approve failed: {error}", revokedNote: "Revoked {user}.",
     revokeFailed: "Revoke failed: {error}", clearedNote: "Cleared {count} pending code(s).",
+  },
+  profilesView: {
+    count: "{count} profile(s)", empty: "No profiles yet — create one to override the model or toolsets for specific workflows.",
+    new: "New profile", loadFailed: "Failed to load profiles: {error}",
+    restartNote: "Changes are written to config.toml — restart the gateway (or start a new CLI process) to apply.",
+    modelNone: "inherits the default model", enabled: "enabled", disabled: "disabled",
+    edit: "Edit", rename: "Rename", del: "Delete",
+    confirmDelete: "Delete profile '{name}'? This removes [profiles.{name}] from config.toml.",
+    deleteFailed: "Delete failed: {error}", deletedNote: "Deleted profile {name}.",
+    dialogNewTitle: "New profile", dialogEditTitle: "Edit profile {name}", dialogRenameTitle: "Rename profile {name}",
+    nameLabel: "Name", namePlaceholder: "letters, digits, '-' or '_'",
+    providerLabel: "Provider", modelLabel: "Model", baseUrlLabel: "Base URL (optional)", temperatureLabel: "Temperature (optional)",
+    enabledLabel: "Enabled toolsets (comma-separated, blank = no override)", disabledLabel: "Disabled toolsets (comma-separated, blank = no override)",
+    save: "Save", cancel: "Cancel", invalidName: "Name must start with a letter/digit and use only letters, digits, '-' or '_'.",
+    saveFailed: "Save failed: {error}", savedNote: "Saved profile {name}.",
+    renameFailed: "Rename failed: {error}", renamedNote: "Renamed profile to {name}.",
+    multiplex: "gateway /p/<profile> multiplexing: {state}", multiplexOn: "on", multiplexOff: "off",
   },
   config: {
     loading: "Loading config…", notConnected: "Gateway not connected.",
@@ -884,7 +911,7 @@ const en: Translations = {
 
 const zh: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks", runsTab: "运行", skillsTab: "技能", sessionsTab: "会话记录", modelsTab: "模型", pluginsTab: "插件", pairingTab: "配对",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "项目", jobsTab: "任务", usageTab: "用量", configTab: "配置", doctorTab: "诊断", webhooksTab: "Webhooks", runsTab: "运行", skillsTab: "技能", sessionsTab: "会话记录", modelsTab: "模型", pluginsTab: "插件", pairingTab: "配对", profilesTab: "配置档案",
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
@@ -1124,6 +1151,23 @@ const zh: Translations = {
     emptyPlatform: "无待批或已批准的配对。", approvedNote: "已批准 {code}。",
     approveFailed: "批准失败:{error}", revokedNote: "已吊销 {user}。",
     revokeFailed: "吊销失败:{error}", clearedNote: "已清除 {count} 个待批配对码。",
+  },
+  profilesView: {
+    count: "{count} 个配置档案", empty: "暂无配置档案——创建一个，为特定工作流覆盖模型或工具集。",
+    new: "新建档案", loadFailed: "加载配置档案失败:{error}",
+    restartNote: "更改已写入 config.toml——重启网关（或启动新的 CLI 进程）后生效。",
+    modelNone: "继承默认模型", enabled: "启用", disabled: "禁用",
+    edit: "编辑", rename: "重命名", del: "删除",
+    confirmDelete: "删除配置档案 '{name}'？这将从 config.toml 移除 [profiles.{name}]。",
+    deleteFailed: "删除失败:{error}", deletedNote: "已删除配置档案 {name}。",
+    dialogNewTitle: "新建配置档案", dialogEditTitle: "编辑配置档案 {name}", dialogRenameTitle: "重命名配置档案 {name}",
+    nameLabel: "名称", namePlaceholder: "字母、数字、'-' 或 '_'",
+    providerLabel: "Provider", modelLabel: "模型", baseUrlLabel: "Base URL（可选）", temperatureLabel: "Temperature（可选）",
+    enabledLabel: "启用的工具集（逗号分隔，留空 = 不覆盖）", disabledLabel: "禁用的工具集（逗号分隔，留空 = 不覆盖）",
+    save: "保存", cancel: "取消", invalidName: "名称须以字母/数字开头，仅含字母、数字、'-' 或 '_'。",
+    saveFailed: "保存失败:{error}", savedNote: "已保存配置档案 {name}。",
+    renameFailed: "重命名失败:{error}", renamedNote: "已重命名配置档案为 {name}。",
+    multiplex: "网关 /p/<profile> 多路复用:{state}", multiplexOn: "开", multiplexOff: "关",
   },
   config: {
     loading: "加载配置…", notConnected: "未连接网关。",
@@ -1394,7 +1438,7 @@ const zh: Translations = {
 
 const zhHant: Translations = {
   chrome: {
-    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks", runsTab: "執行", skillsTab: "技能", sessionsTab: "會話記錄", modelsTab: "模型", pluginsTab: "外掛", pairingTab: "配對",
+    chatTab: "聊天", kanbanTab: "看板", projectsTab: "專案", jobsTab: "工作", usageTab: "用量", configTab: "設定", doctorTab: "診斷", webhooksTab: "Webhooks", runsTab: "執行", skillsTab: "技能", sessionsTab: "會話記錄", modelsTab: "模型", pluginsTab: "外掛", pairingTab: "配對", profilesTab: "配置檔",
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
@@ -1634,6 +1678,23 @@ const zhHant: Translations = {
     emptyPlatform: "無待批或已核准的配對。", approvedNote: "已核准 {code}。",
     approveFailed: "核准失敗:{error}", revokedNote: "已撤銷 {user}。",
     revokeFailed: "撤銷失敗:{error}", clearedNote: "已清除 {count} 個待批配對碼。",
+  },
+  profilesView: {
+    count: "{count} 個配置檔", empty: "尚無配置檔——建立一個，為特定工作流覆蓋模型或工具集。",
+    new: "新建配置檔", loadFailed: "載入配置檔失敗:{error}",
+    restartNote: "變更已寫入 config.toml——重啟閘道（或啟動新的 CLI 行程）後生效。",
+    modelNone: "繼承預設模型", enabled: "啟用", disabled: "停用",
+    edit: "編輯", rename: "重新命名", del: "刪除",
+    confirmDelete: "刪除配置檔 '{name}'？這將從 config.toml 移除 [profiles.{name}]。",
+    deleteFailed: "刪除失敗:{error}", deletedNote: "已刪除配置檔 {name}。",
+    dialogNewTitle: "新建配置檔", dialogEditTitle: "編輯配置檔 {name}", dialogRenameTitle: "重新命名配置檔 {name}",
+    nameLabel: "名稱", namePlaceholder: "字母、數字、'-' 或 '_'",
+    providerLabel: "Provider", modelLabel: "模型", baseUrlLabel: "Base URL（選填）", temperatureLabel: "Temperature（選填）",
+    enabledLabel: "啟用的工具集（逗號分隔，留空 = 不覆蓋）", disabledLabel: "停用的工具集（逗號分隔，留空 = 不覆蓋）",
+    save: "儲存", cancel: "取消", invalidName: "名稱須以字母/數字開頭，僅含字母、數字、'-' 或 '_'。",
+    saveFailed: "儲存失敗:{error}", savedNote: "已儲存配置檔 {name}。",
+    renameFailed: "重新命名失敗:{error}", renamedNote: "已重新命名配置檔為 {name}。",
+    multiplex: "閘道 /p/<profile> 多工複用:{state}", multiplexOn: "開", multiplexOff: "關",
   },
   config: {
     loading: "載入設定…", notConnected: "未連線閘道。",
@@ -1904,7 +1965,7 @@ const zhHant: Translations = {
 
 const ja: Translations = {
   chrome: {
-    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook", runsTab: "実行", skillsTab: "スキル", sessionsTab: "履歴", modelsTab: "モデル", pluginsTab: "プラグイン", pairingTab: "ペアリング",
+    chatTab: "チャット", kanbanTab: "カンバン", projectsTab: "プロジェクト", jobsTab: "ジョブ", usageTab: "使用量", configTab: "設定", doctorTab: "ドクター", webhooksTab: "Webhook", runsTab: "実行", skillsTab: "スキル", sessionsTab: "履歴", modelsTab: "モデル", pluginsTab: "プラグイン", pairingTab: "ペアリング", profilesTab: "プロファイル",
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
@@ -2144,6 +2205,23 @@ const ja: Translations = {
     emptyPlatform: "保留中・承認済みのペアリングはありません。", approvedNote: "{code} を承認しました。",
     approveFailed: "承認に失敗しました: {error}", revokedNote: "{user} を取り消しました。",
     revokeFailed: "取り消しに失敗しました: {error}", clearedNote: "{count} 件の保留コードをクリアしました。",
+  },
+  profilesView: {
+    count: "{count} 件のプロファイル", empty: "プロファイルはまだありません — 作成すると、特定のワークフロー用にモデルやツールセットを上書きできます。",
+    new: "新規プロファイル", loadFailed: "プロファイルの読み込みに失敗:{error}",
+    restartNote: "変更は config.toml に書き込まれました — ゲートウェイを再起動（または新しい CLI プロセスを起動）すると適用されます。",
+    modelNone: "デフォルトモデルを継承", enabled: "有効", disabled: "無効",
+    edit: "編集", rename: "名前変更", del: "削除",
+    confirmDelete: "プロファイル '{name}' を削除しますか？config.toml から [profiles.{name}] が削除されます。",
+    deleteFailed: "削除に失敗:{error}", deletedNote: "プロファイル {name} を削除しました。",
+    dialogNewTitle: "新規プロファイル", dialogEditTitle: "プロファイル {name} を編集", dialogRenameTitle: "プロファイル {name} の名前を変更",
+    nameLabel: "名前", namePlaceholder: "英数字、'-'、'_'",
+    providerLabel: "プロバイダー", modelLabel: "モデル", baseUrlLabel: "Base URL（任意）", temperatureLabel: "Temperature（任意）",
+    enabledLabel: "有効なツールセット（カンマ区切り、空欄 = 上書きなし）", disabledLabel: "無効なツールセット（カンマ区切り、空欄 = 上書きなし）",
+    save: "保存", cancel: "キャンセル", invalidName: "名前は英数字で始まり、英数字・'-'・'_' のみ使用できます。",
+    saveFailed: "保存に失敗:{error}", savedNote: "プロファイル {name} を保存しました。",
+    renameFailed: "名前変更に失敗:{error}", renamedNote: "プロファイル名を {name} に変更しました。",
+    multiplex: "ゲートウェイ /p/<profile> マルチプレクス:{state}", multiplexOn: "オン", multiplexOff: "オフ",
   },
   config: {
     loading: "設定を読み込み中…", notConnected: "ゲートウェイに未接続です。",
@@ -2414,7 +2492,7 @@ const ja: Translations = {
 
 const ar: Translations = {
   chrome: {
-    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس", runsTab: "التشغيلات", skillsTab: "المهارات", sessionsTab: "السجلات", modelsTab: "النماذج", pluginsTab: "الإضافات", pairingTab: "الاقتران",
+    chatTab: "الدردشة", kanbanTab: "كانبان", projectsTab: "المشاريع", jobsTab: "المهام", usageTab: "الاستخدام", configTab: "الإعدادات", doctorTab: "التشخيص", webhooksTab: "ويب هوكس", runsTab: "التشغيلات", skillsTab: "المهارات", sessionsTab: "السجلات", modelsTab: "النماذج", pluginsTab: "الإضافات", pairingTab: "الاقتران", profilesTab: "ملفات التعريف",
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
@@ -2654,6 +2732,23 @@ const ar: Translations = {
     emptyPlatform: "لا توجد اقترانات معلقة أو معتمدة.", approvedNote: "تم اعتماد {code}.",
     approveFailed: "فشل الاعتماد: {error}", revokedNote: "تم إلغاء {user}.",
     revokeFailed: "فشل الإلغاء: {error}", clearedNote: "تم مسح {count} رمز اقتران معلق.",
+  },
+  profilesView: {
+    count: "{count} ملف تعريف", empty: "لا توجد ملفات تعريف بعد — أنشئ واحدًا لتجاوز النموذج أو مجموعات الأدوات لسير عمل معين.",
+    new: "ملف تعريف جديد", loadFailed: "فشل تحميل ملفات التعريف: {error}",
+    restartNote: "تُكتب التغييرات إلى config.toml — أعد تشغيل البوابة (أو ابدأ عملية CLI جديدة) لتطبيقها.",
+    modelNone: "يرث النموذج الافتراضي", enabled: "مفعّل", disabled: "معطّل",
+    edit: "تعديل", rename: "إعادة تسمية", del: "حذف",
+    confirmDelete: "حذف ملف التعريف '{name}'؟ سيؤدي هذا إلى إزالة [profiles.{name}] من config.toml.",
+    deleteFailed: "فشل الحذف: {error}", deletedNote: "تم حذف ملف التعريف {name}.",
+    dialogNewTitle: "ملف تعريف جديد", dialogEditTitle: "تعديل ملف التعريف {name}", dialogRenameTitle: "إعادة تسمية ملف التعريف {name}",
+    nameLabel: "الاسم", namePlaceholder: "أحرف وأرقام و '-' أو '_'",
+    providerLabel: "المزوّد", modelLabel: "النموذج", baseUrlLabel: "عنوان الأساس (اختياري)", temperatureLabel: "درجة الحرارة (اختياري)",
+    enabledLabel: "مجموعات الأدوات المفعّلة (مفصولة بفواصل، فارغ = بدون تجاوز)", disabledLabel: "مجموعات الأدوات المعطّلة (مفصولة بفواصل، فارغ = بدون تجاوز)",
+    save: "حفظ", cancel: "إلغاء", invalidName: "يجب أن يبدأ الاسم بحرف/رقم ويحتوي فقط على أحرف وأرقام و '-' أو '_'.",
+    saveFailed: "فشل الحفظ: {error}", savedNote: "تم حفظ ملف التعريف {name}.",
+    renameFailed: "فشل إعادة التسمية: {error}", renamedNote: "تمت إعادة تسمية ملف التعريف إلى {name}.",
+    multiplex: "تعدد إرسال /p/<profile> في البوابة: {state}", multiplexOn: "مفعّل", multiplexOff: "معطّل",
   },
   config: {
     loading: "جارٍ تحميل الإعدادات…", notConnected: "البوابة غير متصلة.",

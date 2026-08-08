@@ -152,6 +152,7 @@ pub mod media_cache;
 pub mod messaging;
 pub mod oauth;
 pub mod pairing;
+pub mod profiles_cmd;
 pub mod pets;
 pub mod pets_atlas;
 pub mod pets_generate;

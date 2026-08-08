@@ -834,6 +834,14 @@ export interface CredentialPoolProvider {
   entries: CredentialPoolEntry[];
 }
 
+/** One `[profiles.<name>]` override (P597). */
+export interface ProfileRow {
+  name: string;
+  model: { provider: string; model: string; base_url?: string | null; temperature?: number | null } | null;
+  enabled_toolsets: string[] | null;
+  disabled_toolsets: string[] | null;
+}
+
 /** Per-model usage row from GET /api/analytics/models (P328). */
 export interface ModelUsageRow {
   model: string;
@@ -2456,6 +2464,61 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `credentials HTTP ${response.status}`);
     return value as { ok: boolean; provider: string; count: number };
+  }
+
+  /** GET /api/profiles — `[profiles.*]` overrides from config.toml (P597). */
+  async profilesList(): Promise<{
+    profiles: ProfileRow[];
+    multiplex_profiles: boolean;
+    path: string;
+    note: string;
+  }> {
+    const response = await fetch(this.endpoint("/api/profiles"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `profiles HTTP ${response.status}`);
+    return value as { profiles: ProfileRow[]; multiplex_profiles: boolean; path: string; note: string };
+  }
+
+  /** POST /api/profiles — create or replace one override (P597). */
+  async profileSave(body: {
+    name: string;
+    provider?: string;
+    model?: string;
+    base_url?: string;
+    temperature?: number;
+    enabled_toolsets?: string[];
+    disabled_toolsets?: string[];
+  }): Promise<{ ok: boolean; created: boolean; profile: ProfileRow; note: string }> {
+    const response = await fetch(this.endpoint("/api/profiles"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `profiles HTTP ${response.status}`);
+    return value as { ok: boolean; created: boolean; profile: ProfileRow; note: string };
+  }
+
+  /** DELETE /api/profiles/:name — drop one override (P597). */
+  async profileDelete(name: string): Promise<{ ok: boolean; name: string }> {
+    const uri = `/api/profiles/${encodeURIComponent(name)}`;
+    const response = await fetch(this.endpoint(uri), { method: "DELETE", headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `profiles HTTP ${response.status}`);
+    return value as { ok: boolean; name: string };
+  }
+
+  /** POST /api/profiles/:name/rename — move one override (P597). */
+  async profileRename(name: string, newName: string): Promise<{ ok: boolean; name: string }> {
+    const uri = `/api/profiles/${encodeURIComponent(name)}/rename`;
+    const response = await fetch(this.endpoint(uri), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ new_name: newName }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `profiles HTTP ${response.status}`);
+    return value as { ok: boolean; name: string };
   }
 
   /** GET /api/analytics/models — per-model usage aggregation (P328). */

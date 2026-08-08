@@ -18,6 +18,7 @@ import { SessionsViewWidget } from "./sessions-view";
 import { ModelsViewWidget } from "./models-view";
 import { PluginsViewWidget } from "./plugins-view";
 import { PairingViewWidget } from "./pairing-view";
+import { ProfilesViewWidget } from "./profiles-view";
 import { HatchOverlay } from "./hatch";
 import { PetOverlay } from "./pet";
 import { ModelPickerOverlay } from "./model-picker";
@@ -120,6 +121,7 @@ const state = {
   modelsView: null as ModelsViewWidget | null,
   pluginsView: null as PluginsViewWidget | null,
   pairingView: null as PairingViewWidget | null,
+  profilesView: null as ProfilesViewWidget | null,
   pet: null as PetOverlay | null,
   hatch: null as HatchOverlay | null,
   picker: null as ModelPickerOverlay | null,
@@ -130,7 +132,7 @@ const state = {
   fileTree: null as FileTreePanel | null,
   onboarding: null as OnboardingOverlay | null,
   sessionPicker: null as SessionPickerDialog | null,
-  view: "chat" as "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing",
+  view: "chat" as "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing" | "profiles",
 };
 
 /** P594: attach a file-tree file to the composer (data-URL round-trip like the fs picker). */
@@ -2159,7 +2161,7 @@ function attachmentNote(): string {
 // ---------------------------------------------------------------------------
 
 let desktopEventsController: AbortController | null = null;
-let activeSwitchView: ((view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing") => void) | null = null;
+let activeSwitchView: ((view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing" | "profiles") => void) | null = null;
 
 interface DesktopEnvelope {
   session_id: string;
@@ -2220,7 +2222,7 @@ function systemNotify(title: string, body: string, tag: string): void {
 
 function handleDesktopEvent(envelope: DesktopEnvelope): void {
   const payload = envelope.payload ?? {};
-  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing") =>
+  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing" | "profiles") =>
     activeSwitchView?.(view);
   switch (envelope.event) {
     case "preview.open": {
@@ -2970,6 +2972,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   const modelsMain = document.getElementById("models")!;
   const pluginsMain = document.getElementById("plugins")!;
   const pairingMain = document.getElementById("pairing")!;
+  const profilesMain = document.getElementById("profiles")!;
   const tabChat = document.getElementById("tab-chat") as HTMLButtonElement;
   const tabKanban = document.getElementById("tab-kanban") as HTMLButtonElement;
   const tabProjects = document.getElementById("tab-projects") as HTMLButtonElement;
@@ -2984,6 +2987,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   const tabModels = document.getElementById("tab-models") as HTMLButtonElement;
   const tabPlugins = document.getElementById("tab-plugins") as HTMLButtonElement;
   const tabPairing = document.getElementById("tab-pairing") as HTMLButtonElement;
+  const tabProfiles = document.getElementById("tab-profiles") as HTMLButtonElement;
   state.kanban = new KanbanWidget(kanbanMain, () => state.client);
   state.kanban.mount();
   state.projects = new ProjectsWidget(
@@ -3065,7 +3069,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   state.pluginsView.mount();
   state.pairingView = new PairingViewWidget(pairingMain, () => state.client);
   state.pairingView.mount();
-  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing") => {
+  state.profilesView = new ProfilesViewWidget(profilesMain, () => state.client);
+  state.profilesView.mount();
+  const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing" | "profiles") => {
     if (view !== "chat") state.findBar?.close();
     state.view = view;
     try {
@@ -3087,6 +3093,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     modelsMain.hidden = view !== "models";
     pluginsMain.hidden = view !== "plugins";
     pairingMain.hidden = view !== "pairing";
+    profilesMain.hidden = view !== "profiles";
     tabChat.classList.toggle("active", view === "chat");
     tabKanban.classList.toggle("active", view === "kanban");
     tabProjects.classList.toggle("active", view === "projects");
@@ -3101,6 +3108,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     tabModels.classList.toggle("active", view === "models");
     tabPlugins.classList.toggle("active", view === "plugins");
     tabPairing.classList.toggle("active", view === "pairing");
+    tabProfiles.classList.toggle("active", view === "profiles");
     if (view === "kanban") {
       state.kanban!.start();
     } else {
@@ -3166,6 +3174,11 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     } else {
       state.pairingView!.stop();
     }
+    if (view === "profiles") {
+      state.profilesView!.start();
+    } else {
+      state.profilesView!.stop();
+    }
   };
   tabChat.onclick = () => switchView("chat");
   tabKanban.onclick = () => switchView("kanban");
@@ -3181,6 +3194,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   tabModels.onclick = () => switchView("models");
   tabPlugins.onclick = () => switchView("plugins");
   tabPairing.onclick = () => switchView("pairing");
+  tabProfiles.onclick = () => switchView("profiles");
 
   // Desktop bridge events (P231) — see startDesktopEvents.
   activeSwitchView = switchView;
@@ -3475,6 +3489,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       case "pairing":
         void state.pairingView?.refresh();
         break;
+      case "profiles":
+        void state.profilesView?.refresh();
+        break;
     }
   };
   window.addEventListener("keydown", (event) => {
@@ -3491,7 +3508,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     savedView === "jobs" || savedView === "usage" || savedView === "config" ||
     savedView === "doctor" || savedView === "webhooks" || savedView === "runs" ||
     savedView === "skills" || savedView === "sessions" || savedView === "models" ||
-    savedView === "plugins" || savedView === "pairing"
+    savedView === "plugins" || savedView === "pairing" ||
+    savedView === "profiles"
   ) {
     switchView(savedView);
   }

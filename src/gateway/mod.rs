@@ -2755,6 +2755,135 @@ async fn credentials_pool_remove(
     .into_response()
 }
 
+/// JSON shape for one `[profiles.<name>]` override.
+fn profile_override_json(name: &str, profile: &crate::config::ProfileOverride) -> Value {
+    json!({
+        "name": name,
+        "model": profile.model.as_ref().map(|model| json!({
+            "provider": model.provider,
+            "model": model.model,
+            "base_url": model.base_url,
+            "temperature": model.temperature,
+        })),
+        "enabled_toolsets": profile.enabled_toolsets,
+        "disabled_toolsets": profile.disabled_toolsets,
+    })
+}
+
+/// `GET /api/profiles` — the `[profiles.*]` overrides from config.toml
+/// plus the gateway's multiplex posture (hermes desktop profiles parity,
+/// lean port over ulnclaw's config-override profiles; shared logic with
+/// the `ulnclaw profiles` CLI via `profiles_cmd`).
+async fn profiles_list() -> Response {
+    // Read from disk (not the in-memory gateway config) so the UI sees
+    // what is stored; changes apply on gateway restart anyway.
+    let path = crate::config_cmd::config_path();
+    let config = crate::config::UlncLawConfig::load(Some(&path)).unwrap_or_default();
+    let profiles: Vec<Value> = crate::profiles_cmd::list_profiles()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, profile)| profile_override_json(&name, &profile))
+        .collect();
+    Json(json!({
+        "profiles": profiles,
+        "multiplex_profiles": config.gateway.multiplex_profiles,
+        "path": path.display().to_string(),
+        "note": "edits apply to new CLI/gateway processes; restart the gateway to apply here",
+    }))
+    .into_response()
+}
+
+/// Body for `POST /api/profiles` (create or replace one override).
+#[derive(Debug, Deserialize)]
+struct ProfileSaveBody {
+    name: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    temperature: Option<f32>,
+    /// Present = set (empty array clears); absent = leave key alone.
+    #[serde(default)]
+    enabled_toolsets: Option<Vec<String>>,
+    #[serde(default)]
+    disabled_toolsets: Option<Vec<String>>,
+}
+
+/// `POST /api/profiles` — create or replace `[profiles.<name>]` in
+/// config.toml. Provider/model travel together; empty toolset arrays
+/// clear the override.
+async fn profiles_save(Json(body): Json<ProfileSaveBody>) -> Response {
+    let name = body.name.trim().to_string();
+    let spec = crate::profiles_cmd::ProfileSpec {
+        provider: body.provider.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        model: body.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        base_url: body.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        temperature: body.temperature,
+        enabled_toolsets: body.enabled_toolsets.clone(),
+        disabled_toolsets: body.disabled_toolsets.clone(),
+    };
+    match crate::profiles_cmd::save_profile(&name, &spec) {
+        Ok(created) => {
+            let saved = crate::profiles_cmd::list_profiles()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|(profile_name, _)| profile_name == &name)
+                .map(|(name, profile)| profile_override_json(&name, &profile))
+                .unwrap_or(Value::Null);
+            Json(json!({
+                "ok": true,
+                "created": created,
+                "profile": saved,
+                "note": "restart the gateway (or start a new CLI process) to apply",
+            }))
+            .into_response()
+        }
+        Err(e) => bad_request(&e, None),
+    }
+}
+
+/// `DELETE /api/profiles/:name` — drop `[profiles.<name>]` from
+/// config.toml.
+async fn profiles_delete(Path(name): Path<String>) -> Response {
+    let exists = crate::profiles_cmd::list_profiles()
+        .unwrap_or_default()
+        .iter()
+        .any(|(profile_name, _)| profile_name == &name);
+    if !exists {
+        return not_found(&format!("no profile named '{name}'"));
+    }
+    match crate::profiles_cmd::delete_profile(&name) {
+        Ok(()) => Json(json!({ "ok": true, "name": name })).into_response(),
+        Err(e) => bad_request(&e, None),
+    }
+}
+
+/// Body for `POST /api/profiles/:name/rename`.
+#[derive(Debug, Deserialize)]
+struct ProfileRenameBody {
+    new_name: String,
+}
+
+/// `POST /api/profiles/:name/rename` — move `[profiles.<name>]` to a
+/// new key.
+async fn profiles_rename(Path(name): Path<String>, Json(body): Json<ProfileRenameBody>) -> Response {
+    let new_name = body.new_name.trim().to_string();
+    let exists = crate::profiles_cmd::list_profiles()
+        .unwrap_or_default()
+        .iter()
+        .any(|(profile_name, _)| profile_name == &name);
+    if !exists {
+        return not_found(&format!("no profile named '{name}'"));
+    }
+    match crate::profiles_cmd::rename_profile(&name, &new_name) {
+        Ok(()) => Json(json!({ "ok": true, "name": new_name })).into_response(),
+        Err(e) => bad_request(&e, None),
+    }
+}
+
 /// `GET /api/memory` — persistent-memory status (hermes `/api/memory`
 /// parity): builtin provider posture plus the per-file census (sizes,
 /// bullet-entry counts) and configured char limits.
@@ -4894,6 +5023,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         )
         .route("/api/credentials/pool", get(credentials_pool_list).post(credentials_pool_add))
         .route("/api/credentials/pool/:provider/:index", delete(credentials_pool_remove))
+        .route("/api/profiles", get(profiles_list).post(profiles_save))
+        .route("/api/profiles/:name", delete(profiles_delete))
+        .route("/api/profiles/:name/rename", post(profiles_rename))
         .route("/api/memory", get(memory_status_api))
         .route("/api/memory/reset", post(memory_reset_api))
         .route("/api/update/check", get(update_check_api))
@@ -14809,6 +14941,105 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
 
         std::env::set_current_dir(saved_cwd).unwrap();
         match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_profiles_endpoints_list_save_rename_delete() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Empty config lists no profiles.
+        let (status, body) = get_json(app.clone(), "/api/profiles", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["profiles"].as_array().unwrap().len(), 0);
+        assert_eq!(body["multiplex_profiles"], false);
+
+        // Name validation.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/profiles", Some(token),
+            json!({"name": "bad name!"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Provider without model is rejected.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/profiles", Some(token),
+            json!({"name": "work", "provider": "openai"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Create a profile with a model override + toolsets.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/profiles", Some(token),
+            json!({
+                "name": "work",
+                "provider": "openai",
+                "model": "gpt-test",
+                "enabled_toolsets": ["terminal", "web"],
+            }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["created"], true);
+        assert_eq!(body["profile"]["name"], "work");
+        assert_eq!(body["profile"]["model"]["model"], "gpt-test");
+
+        // It landed in config.toml and lists back.
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(on_disk.contains("[profiles.work]"), "{on_disk}");
+        let (status, body) = get_json(app.clone(), "/api/profiles", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let profiles = body["profiles"].as_array().unwrap().clone();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0]["enabled_toolsets"][1], "web");
+
+        // Replace (same name) reports created=false.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/profiles", Some(token),
+            json!({"name": "work", "provider": "anthropic", "model": "claude-test"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["created"], false);
+
+        // Rename: identical name, unknown source, then a real rename.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/profiles/work/rename", Some(token),
+            json!({"new_name": "work"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/profiles/nope/rename", Some(token),
+            json!({"new_name": "office"}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/profiles/work/rename", Some(token),
+            json!({"new_name": "office"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["name"], "office");
+
+        // Delete: missing name 404s, existing name deletes.
+        let (status, _) = request_json(
+            app.clone(), "DELETE", "/api/profiles/work", None, token,
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = request_json(
+            app.clone(), "DELETE", "/api/profiles/office", None, token,
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = get_json(app.clone(), "/api/profiles", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["profiles"].as_array().unwrap().len(), 0);
+
+        match prev {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
