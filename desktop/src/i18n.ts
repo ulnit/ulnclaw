@@ -82,6 +82,7 @@ export interface Translations {
     infoStarted: string; infoActivity: string; infoMessages: string;
     infoCopyId: string; infoCopied: string; infoCopyFailed: string;
     copyTitle: string; copyFailed: string;
+    scrollBottom: string;
   };
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
   slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; skillFallback: string; resume: string };
@@ -366,6 +367,7 @@ const en: Translations = {
     infoStarted: "Started", infoActivity: "Last activity", infoMessages: "Messages",
     infoCopyId: "Copy ID", infoCopied: "Session ID copied", infoCopyFailed: "Copy failed",
     copyTitle: "Copy message", copyFailed: "Copy failed",
+    scrollBottom: "Scroll to bottom",
   },
   tools: { running: "running…", done: "done", thinking: "thinking", arguments: "arguments", result: "result", fallbackName: "tool" },
   slash: {
@@ -818,6 +820,7 @@ const zh: Translations = {
     infoStarted: "开始时间", infoActivity: "最后活动", infoMessages: "消息数",
     infoCopyId: "复制 ID", infoCopied: "已复制会话 ID", infoCopyFailed: "复制失败",
     copyTitle: "复制消息", copyFailed: "复制失败",
+    scrollBottom: "滚动到底部",
   },
   tools: { running: "运行中…", done: "完成", thinking: "思考中", arguments: "参数", result: "结果", fallbackName: "工具" },
   slash: {
@@ -1270,6 +1273,7 @@ const zhHant: Translations = {
     infoStarted: "開始時間", infoActivity: "最後活動", infoMessages: "訊息數",
     infoCopyId: "複製 ID", infoCopied: "已複製工作階段 ID", infoCopyFailed: "複製失敗",
     copyTitle: "複製訊息", copyFailed: "複製失敗",
+    scrollBottom: "捲動到底部",
   },
   tools: { running: "執行中…", done: "完成", thinking: "思考中", arguments: "參數", result: "結果", fallbackName: "工具" },
   slash: {
@@ -1722,6 +1726,7 @@ const ja: Translations = {
     infoStarted: "開始", infoActivity: "最終アクティビティ", infoMessages: "メッセージ数",
     infoCopyId: "ID をコピー", infoCopied: "セッション ID をコピーしました", infoCopyFailed: "コピーに失敗しました",
     copyTitle: "メッセージをコピー", copyFailed: "コピーに失敗しました",
+    scrollBottom: "一番下へスクロール",
   },
   tools: { running: "実行中…", done: "完了", thinking: "思考中", arguments: "引数", result: "結果", fallbackName: "ツール" },
   slash: {
@@ -2174,6 +2179,7 @@ const ar: Translations = {
     infoStarted: "بدأت", infoActivity: "آخر نشاط", infoMessages: "الرسائل",
     infoCopyId: "نسخ المعرف", infoCopied: "تم نسخ معرف الجلسة", infoCopyFailed: "فشل النسخ",
     copyTitle: "نسخ الرسالة", copyFailed: "فشل النسخ",
+    scrollBottom: "التمرير إلى الأسفل",
   },
   tools: { running: "قيد التشغيل…", done: "تم", thinking: "يفكر", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },
   slash: {

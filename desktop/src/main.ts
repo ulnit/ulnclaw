@@ -98,6 +98,7 @@ const el = {
   sessionList: document.getElementById("session-list")!,
   newSession: document.getElementById("new-session") as HTMLButtonElement,
   messages: document.getElementById("messages")!,
+  scrollBottom: document.getElementById("scroll-bottom") as HTMLButtonElement,
   chatTitle: document.getElementById("chat-title")!,
   sessionInfoDialog: document.getElementById("session-info-dialog") as HTMLDialogElement,
   sessionInfoRows: document.getElementById("session-info-rows")!,
@@ -256,6 +257,24 @@ async function deleteSession(session: SessionRow): Promise<void> {
   }
 }
 
+/** P363: smart auto-scroll — stick to the bottom only while the user
+ * is near it; otherwise a floating ⭳ button jumps back down. */
+const SCROLL_STICK_PX = 120;
+
+function chatNearBottom(): boolean {
+  const box = el.messages;
+  return box.scrollHeight - box.scrollTop - box.clientHeight < SCROLL_STICK_PX;
+}
+
+function maybeScrollToBottom(): void {
+  if (chatNearBottom()) {
+    el.messages.scrollTop = el.messages.scrollHeight;
+    el.scrollBottom.hidden = true;
+  } else {
+    el.scrollBottom.hidden = false;
+  }
+}
+
 function addMessage(role: string, content: string): HTMLElement {
   const row = document.createElement("div");
   row.className = `message ${role}`;
@@ -295,7 +314,7 @@ function addMessage(role: string, content: string): HTMLElement {
     row.appendChild(actions);
   }
   el.messages.appendChild(row);
-  el.messages.scrollTop = el.messages.scrollHeight;
+  maybeScrollToBottom();
   return bubble;
 }
 
@@ -484,7 +503,7 @@ async function sendTurn(): Promise<void> {
       message,
       (chunk) => {
         bubble.textContent = (bubble.textContent || "") + chunk;
-        el.messages.scrollTop = el.messages.scrollHeight;
+        maybeScrollToBottom();
       },
       (tool, status) => {
         lastToolLine = `⚙ ${tool} — ${status}`;
@@ -548,7 +567,7 @@ async function sendTurn(): Promise<void> {
             }
           }
         }
-        el.messages.scrollTop = el.messages.scrollHeight;
+        maybeScrollToBottom();
       },
     );
     bubble.classList.remove("streaming");
@@ -1819,6 +1838,13 @@ async function start(): Promise<void> {
 
   installHotkeys();
   installDragDrop();
+  el.messages.addEventListener("scroll", () => {
+    if (chatNearBottom()) el.scrollBottom.hidden = true;
+  });
+  el.scrollBottom.addEventListener("click", () => {
+    el.messages.scrollTop = el.messages.scrollHeight;
+    el.scrollBottom.hidden = true;
+  });
 
   await pollHealth();
   el.statusbar.addEventListener("click", () => switchView("doctor"));
