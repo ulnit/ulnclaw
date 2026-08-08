@@ -982,6 +982,17 @@ async function sendTurn(): Promise<void> {
     void runUnarchiveSession();
     return;
   }
+  // P484: /export [md|html|json] downloads the current session transcript.
+  const exportMatch = /^\/export(?:\s+(md|html|json))?\s*$/i.exec(text);
+  if (exportMatch) {
+    el.input.value = "";
+    refreshCharCount();
+    if (state.current) {
+      const format = (exportMatch[1] || "md").toLowerCase() as "md" | "html" | "json";
+      void exportSession(state.current, format);
+    }
+    return;
+  }
   if ((!text && state.pendingUploads.length === 0) || state.busy || !state.client) return;
   if (!state.current) {
     try {
@@ -1421,6 +1432,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/plugins", t.slash.plugins],
     ["/archive", t.slash.archive],
     ["/unarchive", t.slash.unarchive],
+    ["/export", t.slash.exportSession],
   ];
 }
 
