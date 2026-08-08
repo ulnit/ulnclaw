@@ -3535,6 +3535,94 @@ async fn retitle_skills(
     .into_response()
 }
 
+/// P559 body: `POST /api/sessions/:id/retitle`.
+#[derive(Debug, Deserialize)]
+struct RetitleBody {
+    /// Write the new title; false (default) only proposes it.
+    #[serde(default)]
+    apply: bool,
+}
+
+/// `POST /api/sessions/:id/retitle` — regenerate one session's title
+/// through the LLM titler from its first exchange (the single-session
+/// sibling of P530's retitle-skills). Dry-run by default; `apply: true`
+/// writes with the same unique-title dedupe as the live auto-titler.
+async fn retitle_session(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Json(body): Json<RetitleBody>,
+) -> Response {
+    let row = match state.store.get_session_row(&id) {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(&format!("session {} not found", id)),
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let user_text = state.store.get_first_user_text(&id).unwrap_or_default();
+    if user_text.trim().is_empty() {
+        return bad_request(
+            "session has no user message to title from",
+            Some("empty_session"),
+        );
+    }
+    let first_reply = state
+        .store
+        .get_first_assistant_text(&id)
+        .unwrap_or_default();
+    let provider = state.agent.provider();
+    let context = state.agent.context();
+    let Some(new_title) = crate::title_generator::generate_title_forced(
+        &context.config,
+        provider.clone(),
+        &user_text,
+        &first_reply,
+    )
+    .await
+    else {
+        return server_error("title generation failed (provider unreachable?)");
+    };
+    let old_title = row.title.clone().unwrap_or_default();
+    if !crate::session::retitle::is_titlelike(&new_title) {
+        return Json(json!({
+            "id": id,
+            "old_title": old_title,
+            "new_title": new_title,
+            "status": "rejected",
+        }))
+        .into_response();
+    }
+    let mut status = "proposed";
+    let mut final_title = new_title.clone();
+    if body.apply {
+        if new_title == old_title {
+            status = "unchanged";
+        } else {
+            match state.store.set_session_title(&id, &new_title) {
+                Ok(()) => status = "applied",
+                Err(_) => {
+                    // Unique-title collision: dedupe (base #2, #3, …).
+                    if let Ok(deduped) = state.store.get_next_title_in_lineage(&new_title) {
+                        if state.store.set_session_title(&id, &deduped).is_ok() {
+                            status = "applied";
+                            final_title = deduped;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if status == "applied" {
+        // P445 semantics: renamed sessions notify the desktop shell.
+        crate::desktop_bridge::publish(&id, "session.updated", &json!({"session_id": id}));
+    }
+    Json(json!({
+        "id": id,
+        "old_title": old_title,
+        "new_title": final_title,
+        "status": status,
+    }))
+    .into_response()
+}
+
 /// Query parameters for `GET /api/insights`.
 #[derive(Debug, Deserialize)]
 struct InsightsQuery {
@@ -4879,6 +4967,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/chat/stream", post(session_chat_stream))
         .route("/api/sessions/:id/model", post(lock_session_model))
         .route("/api/sessions/:id/recap", get(session_recap))
+        .route("/api/sessions/:id/retitle", post(retitle_session))
         .route("/api/uploads", post(upload_media))
         .route("/api/audio/transcribe", post(audio_transcribe))
         .route("/api/audio/speak", post(audio_speak))
@@ -15947,6 +16036,29 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let child = body["session"]["id"].as_str().expect("fork id").to_string();
         let (_, row) = get_json(app, &format!("/api/sessions/{parent}"), Some(token)).await;
         assert_eq!(row["child_session_ids"], json!([child]));
+    }
+
+    #[tokio::test]
+    async fn test_retitle_session_endpoint_validates_targets() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Unknown session → 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/sessions/nope/retitle", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // A session without any user message cannot be retitled.
+        let sid = state
+            .store
+            .create_session("cli", Some("test-model"), None)
+            .expect("session created");
+        let (status, body) = send_json(
+            app, "POST", &format!("/api/sessions/{sid}/retitle"), Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }
 
     #[tokio::test]

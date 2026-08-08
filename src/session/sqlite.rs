@@ -1666,6 +1666,22 @@ impl SqliteSessionStore {
         .map_err(|e| AgentError::session(e.to_string()))
     }
 
+    /// P559: first user message text of a session (empty string when the
+    /// session has none) — the single-session retitler's raw material.
+    pub fn get_first_user_text(&self, session_id: &str) -> Result<String> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.query_row(
+            "SELECT content FROM messages
+             WHERE session_id = ?1 AND role = 'user' AND content IS NOT NULL
+             ORDER BY timestamp, id LIMIT 1",
+            params![session_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map(|v| v.unwrap_or_default())
+        .map_err(|e| AgentError::session(e.to_string()))
+    }
+
     /// Next free title in a lineage: `"my session"` → `"my session #2"`
     /// when the base is taken (hermes `get_next_title_in_lineage`).
     pub fn get_next_title_in_lineage(&self, base_title: &str) -> Result<String> {
