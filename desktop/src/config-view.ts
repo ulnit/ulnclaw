@@ -5,7 +5,7 @@
 // secret values round-trip untouched: the server skips the "[redacted]"
 // placeholder on PUT.
 
-import type { GatewayClient } from "./gateway";
+import type { GatewayClient, ProviderOAuthRow } from "./gateway";
 import { t } from "./i18n";
 
 const REDACTED = "[redacted]";
@@ -37,6 +37,8 @@ export class ConfigWidget {
   private envKeys: string[] = [];
   private configPath = "";
   private busy = false;
+  /** Pending provider-OAuth device-flow poll timer (P350). */
+  private oauthPollTimer: number | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -861,8 +863,140 @@ export class ConfigWidget {
         row.appendChild(link);
       }
       rows.appendChild(row);
+      await this.renderProviderOAuth(rows);
     } catch {
       block.hidden = true;
+    }
+  }
+
+  /** P350: provider OAuth handshake rows (start/poll/disconnect) over
+   * /api/providers/oauth* — the desktop twin of hermes' provider OAuth
+   * settings page (lean: single device-code provider). */
+  private async renderProviderOAuth(rows: HTMLElement): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (this.oauthPollTimer !== null) {
+      window.clearTimeout(this.oauthPollTimer);
+      this.oauthPollTimer = null;
+    }
+    let providers: ProviderOAuthRow[] = [];
+    try {
+      ({ providers } = await client.providersOAuth());
+    } catch {
+      return;
+    }
+    for (const provider of providers) {
+      const row = document.createElement("div");
+      row.className = "config-env-row";
+      const chip = document.createElement("span");
+      chip.className = "config-env-chip";
+      chip.textContent = provider.name;
+      row.appendChild(chip);
+      const meta = document.createElement("span");
+      meta.className = "jobs-counts";
+      const bits = [provider.flow];
+      if (provider.status.logged_in) {
+        bits.push(provider.status.token_preview);
+        if (provider.status.expires_at > 0) {
+          bits.push(new Date(provider.status.expires_at * 1000).toLocaleString());
+        }
+      } else if (!provider.configured) {
+        bits.push(t.config.oauthProviderNotConfigured);
+      }
+      meta.textContent = bits.join(" \u00b7 ");
+      row.appendChild(meta);
+      if (provider.status.logged_in) {
+        const disconnect = document.createElement("button");
+        disconnect.className = "ghost";
+        disconnect.textContent = t.config.oauthProviderDisconnect;
+        disconnect.onclick = async () => {
+          if (!window.confirm(t.config.oauthProviderDisconnectConfirm)) return;
+          disconnect.disabled = true;
+          try {
+            await client.providersOAuthDisconnect(provider.id);
+            this.status(t.config.oauthProviderDisconnected);
+            await this.refresh();
+          } catch (error) {
+            this.status(
+              t.config.oauthProviderFailed.replace(
+                "{error}",
+                error instanceof Error ? error.message : String(error),
+              ),
+              true,
+            );
+            disconnect.disabled = false;
+          }
+        };
+        row.appendChild(disconnect);
+      } else if (provider.configured) {
+        const connect = document.createElement("button");
+        connect.className = "ghost";
+        connect.textContent = t.config.oauthProviderConnect;
+        connect.onclick = () => {
+          connect.disabled = true;
+          void this.startProviderOAuth(client, provider, row);
+        };
+        row.appendChild(connect);
+      }
+      rows.appendChild(row);
+    }
+  }
+
+  /** P350: run one device-flow session — start, show the user code,
+   * poll until complete/error, then refresh the posture. */
+  private async startProviderOAuth(
+    client: GatewayClient,
+    provider: ProviderOAuthRow,
+    row: HTMLElement,
+  ): Promise<void> {
+    const pending = document.createElement("span");
+    pending.className = "jobs-counts";
+    try {
+      const start = await client.providersOAuthStart(provider.id);
+      pending.textContent = t.config.oauthProviderPending.replace("{code}", start.user_code || "\u2014");
+      row.appendChild(pending);
+      if (start.verification_uri) {
+        const link = document.createElement("a");
+        link.href = start.verification_uri;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.textContent = t.config.oauthProviderOpen;
+        row.appendChild(link);
+      }
+      const pollIntervalMs = Math.max(start.interval || 5, 3) * 1000;
+      const poll = async (): Promise<void> => {
+        try {
+          const result = await client.providersOAuthPoll(provider.id, start.session_id);
+          if (result.status === "complete") {
+            this.status(t.config.oauthProviderComplete);
+            await this.refresh();
+            return;
+          }
+          if (result.status === "error") {
+            this.status(
+              t.config.oauthProviderFailed.replace("{error}", result.error || "unknown"),
+              true,
+            );
+            await this.refresh();
+            return;
+          }
+        } catch {
+          // Session cancelled or gateway restarted — stop polling quietly.
+          await this.refresh();
+          return;
+        }
+        this.oauthPollTimer = window.setTimeout(() => void poll(), pollIntervalMs);
+      };
+      this.oauthPollTimer = window.setTimeout(() => void poll(), pollIntervalMs);
+    } catch (error) {
+      this.status(
+        t.config.oauthProviderFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+      await this.refresh();
     }
   }
 

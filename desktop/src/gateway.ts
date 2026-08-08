@@ -635,6 +635,44 @@ export interface OAuthStatus {
   token_preview: string;
 }
 
+/** One OAuth-capable provider row from GET /api/providers/oauth (P350). */
+export interface ProviderOAuthRow {
+  id: string;
+  name: string;
+  flow: "device_code" | "pkce" | "external" | string;
+  cli_command: string;
+  docs_url: string;
+  configured: boolean;
+  disconnectable: boolean;
+  status: {
+    logged_in: boolean;
+    expired: boolean;
+    source: string;
+    source_label: string;
+    token_preview: string;
+    expires_at: number;
+    has_refresh_token: boolean;
+  };
+}
+
+/** POST /api/providers/oauth/:id/start response (P350). */
+export interface ProviderOAuthStart {
+  session_id: string;
+  status: string;
+  verification_uri: string;
+  user_code: string;
+  expires_in: number;
+  interval: number;
+}
+
+/** GET /api/providers/oauth/:id/poll/:session response (P350). */
+export interface ProviderOAuthPoll {
+  session_id: string;
+  status: "pending" | "complete" | "error" | string;
+  logged_in: boolean;
+  error: string | null;
+}
+
 /** Custom provider endpoint row from GET /api/providers/custom-endpoints (P333). */
 export interface CustomEndpoint {
   id: string;
@@ -1844,6 +1882,65 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `oauth HTTP ${response.status}`);
     return value as OAuthStatus;
+  }
+
+  /** GET /api/providers/oauth — OAuth-capable provider catalog (P350). */
+  async providersOAuth(): Promise<{ providers: ProviderOAuthRow[] }> {
+    const response = await fetch(this.endpoint("/api/providers/oauth"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `providers oauth HTTP ${response.status}`);
+    return value as { providers: ProviderOAuthRow[] };
+  }
+
+  /** POST /api/providers/oauth/:id/start — begin a device-flow session (P350). */
+  async providersOAuthStart(providerId: string): Promise<ProviderOAuthStart> {
+    const response = await fetch(
+      this.endpoint(`/api/providers/oauth/${encodeURIComponent(providerId)}/start`),
+      { method: "POST", headers: { ...this.headers(), "content-type": "application/json" }, body: "{}" },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message =
+        typeof value.error === "string"
+          ? value.error
+          : value.error?.message || `oauth start HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return value as ProviderOAuthStart;
+  }
+
+  /** GET /api/providers/oauth/:id/poll/:session — session posture (P350). */
+  async providersOAuthPoll(
+    providerId: string,
+    sessionId: string,
+  ): Promise<ProviderOAuthPoll> {
+    const response = await fetch(
+      this.endpoint(
+        `/api/providers/oauth/${encodeURIComponent(providerId)}/poll/${encodeURIComponent(sessionId)}`,
+      ),
+      { headers: this.headers() },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message =
+        typeof value.error === "string"
+          ? value.error
+          : value.error?.message || `oauth poll HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return value as ProviderOAuthPoll;
+  }
+
+  /** DELETE /api/providers/oauth/:id — disconnect (clear tokens) (P350). */
+  async providersOAuthDisconnect(providerId: string): Promise<void> {
+    const response = await fetch(
+      this.endpoint(`/api/providers/oauth/${encodeURIComponent(providerId)}`),
+      { method: "DELETE", headers: this.headers() },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `oauth disconnect HTTP ${response.status}`);
   }
 
   /** GET /api/providers/custom-endpoints — custom provider rows (P333). */

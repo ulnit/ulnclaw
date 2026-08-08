@@ -374,6 +374,9 @@ pub struct GatewayState {
     pub metrics: Arc<GatewayMetrics>,
     /// Gateway start instant (uptime gauge).
     pub started_at: std::time::Instant,
+    /// In-flight provider OAuth device-flow sessions (P350), keyed by
+    /// session id; a background poller updates each entry.
+    pub oauth_sessions: Arc<Mutex<HashMap<String, OAuthPendingSession>>>,
 }
 
 impl GatewayState {
@@ -402,8 +405,27 @@ impl GatewayState {
             skills_dir: OnceLock::new(),
             metrics: Arc::new(GatewayMetrics::default()),
             started_at: std::time::Instant::now(),
+            oauth_sessions: Arc::new(Mutex::new(HashMap::new())),
         }))
     }
+}
+
+/// One in-flight provider OAuth device-flow session (P350).
+#[derive(Debug, Clone)]
+pub struct OAuthPendingSession {
+    pub provider: String,
+    pub verification_uri: String,
+    pub user_code: String,
+    pub started_at: u64,
+    pub status: OAuthSessionStatus,
+}
+
+/// Device-flow session lifecycle (P350).
+#[derive(Debug, Clone)]
+pub enum OAuthSessionStatus {
+    Pending,
+    Complete,
+    Failed(String),
 }
 
 /// `GET /metrics` — Prometheus text-format counters and gauges.
@@ -1396,6 +1418,211 @@ async fn oauth_status(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             String::new()
         },
     }))
+}
+
+// ── Provider OAuth handshake (hermes /api/providers/oauth* parity; P350) ───
+
+/// The one OAuth-capable provider in the lean ulnclaw catalog: the
+/// service-agnostic `[oauth]` device flow (hermes enumerates many
+/// vendor-specific handshakes; ulnclaw keeps the standard one).
+const OAUTH_PROVIDER_ID: &str = "ulnclaw";
+
+fn oauth_config_ready(config: &crate::config::UlncLawConfig) -> bool {
+    !config.oauth.device_authorization_url.trim().is_empty()
+        && !config.oauth.token_url.trim().is_empty()
+}
+
+/// `GET /api/providers/oauth` — enumerate OAuth-capable providers with
+/// current status (hermes `list_oauth_providers` shape, lean).
+async fn list_provider_oauth(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let home = state.agent.context().home.clone();
+    let config = state.agent.context().config.clone();
+    let tokens = crate::oauth::load_tokens(&home);
+    Json(json!({
+        "providers": [{
+            "id": OAUTH_PROVIDER_ID,
+            "name": "ulnclaw OAuth (device flow)",
+            "flow": "device_code",
+            "cli_command": "ulnclaw auth login",
+            "docs_url": config.oauth.portal_url,
+            "configured": oauth_config_ready(&config),
+            "disconnectable": tokens.logged_in(),
+            "status": {
+                "logged_in": tokens.logged_in(),
+                "expired": tokens.expired(),
+                "source": "oauth_tokens.json",
+                "source_label": crate::oauth::tokens_path(&home).display().to_string(),
+                "token_preview": if tokens.logged_in() {
+                    crate::status::redact_key(&tokens.access_token)
+                } else {
+                    String::new()
+                },
+                "expires_at": tokens.expires_at,
+                "has_refresh_token": !tokens.refresh_token.is_empty(),
+            },
+        }],
+    }))
+}
+
+/// `POST /api/providers/oauth/:provider_id/start` — kick off the device
+/// flow: hand back the user-facing codes and poll for the token in the
+/// background (hermes `start_oauth` session semantics).
+async fn provider_oauth_start(
+    State(state): State<Arc<GatewayState>>,
+    Path(provider_id): Path<String>,
+) -> Response {
+    if provider_id != OAUTH_PROVIDER_ID {
+        return bad_request(
+            &format!(
+                "Unknown provider: {provider_id}. Available: {OAUTH_PROVIDER_ID}"
+            ),
+            Some("invalid_request"),
+        );
+    }
+    let config = state.agent.context().config.clone();
+    if !oauth_config_ready(&config) {
+        return bad_request(
+            "oauth device flow not configured ([oauth] device_authorization_url + token_url)",
+            Some("invalid_request"),
+        );
+    }
+    let auth = match crate::oauth::device_authorize(&config.oauth).await {
+        Ok(auth) => auth,
+        Err(e) => return bad_request(&e.to_string(), Some("device_authorize_failed")),
+    };
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let verification_uri = auth
+        .get("verification_uri_complete")
+        .or_else(|| auth.get("verification_uri"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let user_code = auth
+        .get("user_code")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let expires_in = auth.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(600);
+    let interval = auth.get("interval").and_then(|v| v.as_u64()).unwrap_or(5);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    state.oauth_sessions.lock().await.insert(
+        session_id.clone(),
+        OAuthPendingSession {
+            provider: OAUTH_PROVIDER_ID.into(),
+            verification_uri: verification_uri.clone(),
+            user_code: user_code.clone(),
+            started_at: now,
+            status: OAuthSessionStatus::Pending,
+        },
+    );
+    let sessions = state.oauth_sessions.clone();
+    let home = state.agent.context().home.clone();
+    let oauth_config = config.oauth.clone();
+    let sid = session_id.clone();
+    tokio::spawn(async move {
+        let result = crate::oauth::poll_for_token(&oauth_config, &auth).await;
+        let mut guard = sessions.lock().await;
+        let Some(session) = guard.get_mut(&sid) else {
+            return; // cancelled while polling
+        };
+        match result {
+            Ok(tokens) => {
+                let _ = crate::oauth::save_tokens(&home, &tokens);
+                session.status = OAuthSessionStatus::Complete;
+            }
+            Err(e) => session.status = OAuthSessionStatus::Failed(e.to_string()),
+        }
+    });
+    Json(json!({
+        "session_id": session_id,
+        "status": "pending",
+        "verification_uri": verification_uri,
+        "user_code": user_code,
+        "expires_in": expires_in,
+        "interval": interval,
+    }))
+    .into_response()
+}
+
+/// `GET /api/providers/oauth/:provider_id/poll/:session_id` — current
+/// device-flow session posture (the background poller does the work).
+async fn provider_oauth_poll(
+    State(state): State<Arc<GatewayState>>,
+    Path((provider_id, session_id)): Path<(String, String)>,
+) -> Response {
+    if provider_id != OAUTH_PROVIDER_ID {
+        return bad_request(
+            &format!("Unknown provider: {provider_id}. Available: {OAUTH_PROVIDER_ID}"),
+            Some("invalid_request"),
+        );
+    }
+    let Some(session) = state.oauth_sessions.lock().await.get(&session_id).cloned() else {
+        return bad_request(
+            "unknown or cancelled oauth session",
+            Some("unknown_session"),
+        );
+    };
+    let (status, error) = match &session.status {
+        OAuthSessionStatus::Pending => ("pending", None),
+        OAuthSessionStatus::Complete => ("complete", None),
+        OAuthSessionStatus::Failed(message) => ("error", Some(message.clone())),
+    };
+    let logged_in = matches!(session.status, OAuthSessionStatus::Complete);
+    Json(json!({
+        "session_id": session_id,
+        "status": status,
+        "logged_in": logged_in,
+        "error": error,
+    }))
+    .into_response()
+}
+
+/// `POST /api/providers/oauth/:provider_id/submit` — redirect-flow code
+/// submission (hermes anthropic path). The lean catalog only carries the
+/// device flow, which completes via polling.
+async fn provider_oauth_submit(Path(provider_id): Path<String>) -> Response {
+    if provider_id != OAUTH_PROVIDER_ID {
+        return bad_request(
+            &format!("Unknown provider: {provider_id}. Available: {OAUTH_PROVIDER_ID}"),
+            Some("invalid_request"),
+        );
+    }
+    bad_request(
+        "device_code providers complete via /poll, not /submit",
+        Some("invalid_request"),
+    )
+}
+
+/// `DELETE /api/providers/oauth/sessions/:session_id` — cancel a pending
+/// session (stops tracking; the provider-side code simply expires).
+async fn provider_oauth_session_cancel(
+    State(state): State<Arc<GatewayState>>,
+    Path(session_id): Path<String>,
+) -> Json<Value> {
+    let removed = state.oauth_sessions.lock().await.remove(&session_id).is_some();
+    Json(json!({ "ok": true, "cancelled": removed }))
+}
+
+/// `DELETE /api/providers/oauth/:provider_id` — disconnect: clear the
+/// stored device-flow tokens (hermes `disconnect_oauth_provider`, lean).
+async fn provider_oauth_disconnect(
+    State(state): State<Arc<GatewayState>>,
+    Path(provider_id): Path<String>,
+) -> Response {
+    if provider_id != OAUTH_PROVIDER_ID {
+        return bad_request(
+            &format!("Unknown provider: {provider_id}. Available: {OAUTH_PROVIDER_ID}"),
+            Some("invalid_request"),
+        );
+    }
+    let home = state.agent.context().home.clone();
+    if let Err(e) = crate::oauth::clear_tokens(&home) {
+        return server_error(&e.to_string());
+    }
+    Json(json!({ "ok": true, "provider": provider_id })).into_response()
 }
 
 /// Built-in dashboard themes (hermes `_BUILTIN_DASHBOARD_THEMES`). The
@@ -3952,6 +4179,27 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/providers/custom-endpoints/validate", post(custom_endpoints_validate))
         .route("/api/providers/custom-endpoints/:id/activate", post(custom_endpoint_activate))
         .route("/api/providers/custom-endpoints/:id", delete(custom_endpoint_delete))
+        .route("/api/providers/oauth", get(list_provider_oauth))
+        .route(
+            "/api/providers/oauth/sessions/:session_id",
+            delete(provider_oauth_session_cancel),
+        )
+        .route(
+            "/api/providers/oauth/:provider_id/start",
+            post(provider_oauth_start),
+        )
+        .route(
+            "/api/providers/oauth/:provider_id/submit",
+            post(provider_oauth_submit),
+        )
+        .route(
+            "/api/providers/oauth/:provider_id/poll/:session_id",
+            get(provider_oauth_poll),
+        )
+        .route(
+            "/api/providers/oauth/:provider_id",
+            delete(provider_oauth_disconnect),
+        )
         .route("/api/credentials/pool", get(credentials_pool_list).post(credentials_pool_add))
         .route("/api/credentials/pool/:provider/:index", delete(credentials_pool_remove))
         .route("/api/memory", get(memory_status_api))
@@ -14030,6 +14278,122 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (status, _) =
             post_json(app.clone(), "/api/sessions/import", r#"{"sessions":[]}"#, "wrong").await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_provider_oauth_handshake_surface() {
+        // Disconnect writes/deletes oauth_tokens.json under the home.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Catalog lists the lean device-flow provider, logged out.
+        let (status, body) = get_json(app.clone(), "/api/providers/oauth", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let provider = &body["providers"][0];
+        assert_eq!(provider["id"], "ulnclaw");
+        assert_eq!(provider["flow"], "device_code");
+        assert_eq!(provider["status"]["logged_in"], false);
+        assert_eq!(provider["configured"], false);
+
+        // Unknown provider start -> 400 naming it.
+        let (status, body) = send_json(
+            app.clone(),
+            "POST",
+            "/api/providers/oauth/ghost/start",
+            Some("sekret"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"].as_str().unwrap().contains("Unknown provider"));
+
+        // Unconfigured device flow -> 400 naming the config keys.
+        let (status, body) = send_json(
+            app.clone(),
+            "POST",
+            "/api/providers/oauth/ulnclaw/start",
+            Some("sekret"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("device_authorization_url"));
+
+        // Submit is not part of the device flow.
+        let (status, body) = send_json(
+            app.clone(),
+            "POST",
+            "/api/providers/oauth/ulnclaw/submit",
+            Some("sekret"),
+            json!({"session_id": "s", "code": "c"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"].as_str().unwrap().contains("/poll"));
+
+        // Polling an unknown session -> 400.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/providers/oauth/ulnclaw/poll/ghost",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown or cancelled"));
+
+        // Cancelling an unknown session is idempotent.
+        let (status, body) = send_json(
+            app.clone(),
+            "DELETE",
+            "/api/providers/oauth/sessions/ghost",
+            Some("sekret"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["cancelled"], false);
+
+        // Disconnect clears stored tokens.
+        let home = dir.path().to_path_buf();
+        std::fs::write(home.join("oauth_tokens.json"), r#"{"access_token":"abc"}"#).unwrap();
+        let (status, body) = send_json(
+            app.clone(),
+            "DELETE",
+            "/api/providers/oauth/ulnclaw",
+            Some("sekret"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert!(!home.join("oauth_tokens.json").exists());
+
+        // Disconnecting an unknown provider -> 400.
+        let (status, _) = send_json(
+            app.clone(),
+            "DELETE",
+            "/api/providers/oauth/ghost",
+            Some("sekret"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
