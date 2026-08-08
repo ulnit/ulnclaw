@@ -9942,6 +9942,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /memory          memory store status (files, entries, sizes)
   /sessions [N]    list the N most recent sessions (default 10)
   /stop            request a stop for this session's running run
+  /retry           truncate the transcript to the last user turn and re-run it
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -10461,6 +10462,36 @@ async fn resolve_gateway_slash(
             } else {
                 "no running run found for this session.".to_string()
             }))
+        }
+        "/retry" => {
+            // Hermes /retry parity: find the last real user turn, drop
+            // everything from there on, and re-run it. Slash rows and
+            // tool results are bookkeeping, not retryable user turns.
+            let history = state.store.load_messages(session_id).unwrap_or_default();
+            let last_user = history.iter().enumerate().rev().find(|(_, m)| {
+                m.role == Role::User
+                    && m.tool_call_id.is_none()
+                    && m
+                        .content
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(|text| !text.starts_with('/'))
+                        .unwrap_or(false)
+            });
+            let Some((index, message)) = last_user else {
+                return Some(GatewaySlash::Direct(
+                    "no previous message to retry.".to_string(),
+                ));
+            };
+            let text = message.content.clone().unwrap_or_default();
+            let truncated: Vec<Message> = history.into_iter().take(index).collect();
+            if let Err(e) = state.store.replace_messages(session_id, &truncated) {
+                return Some(GatewaySlash::Direct(format!(
+                    "retry failed to truncate: {e}"
+                )));
+            }
+            Some(GatewaySlash::AgentTurn(text))
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');
@@ -13699,6 +13730,45 @@ mod tests {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_retry_truncates_and_reruns() {
+        // P616: /retry drops everything from the last real user turn on
+        // and re-runs it; slash rows are not retryable user turns.
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-retry", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "first question").await;
+        assert_eq!(reply["response"], "Hello");
+        // A slash exchange after the user turn must not be what /retry
+        // re-sends.
+        let reply = post_chat(app.clone(), &sid, "/title Retry Wave").await;
+        assert_eq!(reply["response"], "title set: Retry Wave");
+
+        let reply = post_chat(app.clone(), &sid, "/retry").await;
+        assert_eq!(reply["response"], "Hello");
+
+        let messages = state.store.load_messages(&sid).expect("messages load");
+        let texts: Vec<String> = messages
+            .iter()
+            .filter_map(|m| m.content.clone())
+            .collect();
+        // The slash row and the first answer were truncated; the retried
+        // question + its fresh answer are the only turns left.
+        assert_eq!(texts, vec!["first question", "Hello"], "{texts:?}");
+
+        // No user turn at all: /retry says so.
+        let sid2 = state
+            .store
+            .create_session("slash-retry-empty", Some("fake-stream"), None)
+            .expect("session created");
+        let reply = post_chat(app.clone(), &sid2, "/retry").await;
+        assert_eq!(reply["response"], "no previous message to retry.");
     }
 
     #[tokio::test]

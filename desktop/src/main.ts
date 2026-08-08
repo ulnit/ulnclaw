@@ -1891,6 +1891,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/memory", t.slash.memory],
     ["/sessions", t.slash.sessions],
     ["/stop", t.slash.stop],
+    ["/retry", t.slash.retry],
   ];
 }
 
