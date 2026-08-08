@@ -1033,7 +1033,9 @@ export class GatewayClient {
     const response = await fetch(this.endpoint("/api/sessions"), { headers: this.headers() });
     if (!response.ok) throw new Error(`sessions: HTTP ${response.status}`);
     const value = await response.json();
-    return (value.sessions || value || []) as SessionRow[];
+    // P421: /api/sessions answers {"object":"list","data":[…]} (hermes
+    // parity) — unwrap it; keep the legacy array/.sessions fallbacks.
+    return (value.data || value.sessions || value || []) as SessionRow[];
   }
 
   async createSession(): Promise<SessionRow> {
@@ -1043,7 +1045,19 @@ export class GatewayClient {
       body: JSON.stringify({ source: "desktop" }),
     });
     if (!response.ok) throw new Error(`create session: HTTP ${response.status}`);
-    return response.json();
+    const value = await response.json();
+    // P421: POST answers only {id, source} — synthesize the full row
+    // shape so sidebar sorting/grouping has a real last_activity_at.
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      id: String(value.id ?? ""),
+      source: String(value.source ?? "desktop"),
+      title: null,
+      model: null,
+      started_at: now,
+      last_activity_at: now,
+      message_count: 0,
+    };
   }
 
   async learningGraph(): Promise<LearningGraphPayload> {

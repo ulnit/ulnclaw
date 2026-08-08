@@ -103,6 +103,9 @@ pub struct SessionRow {
     pub cwd: Option<String>,
     pub parent_session_id: Option<String>,
     pub started_at: f64,
+    /// Last activity (falls back to started_at when never touched). The
+    /// desktop sidebar sorts + groups on this field (P421 fix).
+    pub last_activity_at: f64,
     pub ended_at: Option<f64>,
     pub end_reason: Option<String>,
     pub message_count: i64,
@@ -1159,6 +1162,7 @@ impl SqliteSessionStore {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
         conn.query_row(
             "SELECT id, source, model, title, cwd, parent_session_id, started_at,
+                    COALESCE(last_activity_at, started_at),
                     ended_at, end_reason, message_count, input_tokens, output_tokens
              FROM sessions WHERE id = ?1",
             params![session_id],
@@ -1171,11 +1175,12 @@ impl SqliteSessionStore {
                     cwd: row.get(4)?,
                     parent_session_id: row.get(5)?,
                     started_at: row.get(6)?,
-                    ended_at: row.get(7)?,
-                    end_reason: row.get(8)?,
-                    message_count: row.get(9)?,
-                    input_tokens: row.get(10)?,
-                    output_tokens: row.get(11)?,
+                    last_activity_at: row.get(7)?,
+                    ended_at: row.get(8)?,
+                    end_reason: row.get(9)?,
+                    message_count: row.get(10)?,
+                    input_tokens: row.get(11)?,
+                    output_tokens: row.get(12)?,
                 })
             },
         )
@@ -1189,6 +1194,7 @@ impl SqliteSessionStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, source, model, title, cwd, parent_session_id, started_at,
+                        COALESCE(last_activity_at, started_at),
                         ended_at, end_reason, message_count, input_tokens, output_tokens
                  FROM sessions ORDER BY started_at DESC LIMIT ?1",
             )
@@ -1203,11 +1209,12 @@ impl SqliteSessionStore {
                     cwd: row.get(4)?,
                     parent_session_id: row.get(5)?,
                     started_at: row.get(6)?,
-                    ended_at: row.get(7)?,
-                    end_reason: row.get(8)?,
-                    message_count: row.get(9)?,
-                    input_tokens: row.get(10)?,
-                    output_tokens: row.get(11)?,
+                    last_activity_at: row.get(7)?,
+                    ended_at: row.get(8)?,
+                    end_reason: row.get(9)?,
+                    message_count: row.get(10)?,
+                    input_tokens: row.get(11)?,
+                    output_tokens: row.get(12)?,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;

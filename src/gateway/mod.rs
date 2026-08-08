@@ -16258,6 +16258,55 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
     }
 
     #[tokio::test]
+    async fn test_sessions_list_carries_last_activity_at() {
+        let state = test_state();
+        let token = "sekret";
+        let id = state.store.create_session("gateway", None, None).unwrap();
+        let app = router(state.clone());
+
+        // Fresh session: last_activity_at mirrors started_at.
+        let (status, body) = get_json(app.clone(), "/api/sessions", Some(token)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let row = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .cloned()
+            .expect("session row present");
+        let started = row["started_at"].as_f64().expect("started_at numeric");
+        let activity = row["last_activity_at"]
+            .as_f64()
+            .expect("last_activity_at numeric (desktop sidebar sorts on it)");
+        assert!((activity - started).abs() < 1.0, "{row}");
+
+        // Appending a message bumps last_activity_at (P421 fix).
+        state
+            .store
+            .append_message(
+                &id,
+                &crate::provider::Message {
+                    role: crate::provider::Role::User,
+                    content: Some("hello".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        let (_, body) = get_json(app, "/api/sessions", Some(token)).await;
+        let row = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .cloned()
+            .unwrap();
+        assert!(row["last_activity_at"].as_f64().unwrap() >= started, "{row}");
+        assert_eq!(row["message_count"], 1);
+    }
+
+    #[tokio::test]
     async fn test_projects_repos_and_scan_endpoints() {
         let _guard = crate::models_dev::test_env_lock();
         let tmp = tempfile::tempdir().unwrap();

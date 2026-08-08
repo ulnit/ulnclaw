@@ -252,6 +252,7 @@ mod tests {
             cwd: Some("/tmp/work".into()),
             parent_session_id: None,
             started_at: 1_750_000_000.0,
+            last_activity_at: 1_750_000_300.0,
             ended_at: Some(1_750_000_300.0),
             end_reason: Some("completed".into()),
             message_count: 3,
