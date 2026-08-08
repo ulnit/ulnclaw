@@ -8278,6 +8278,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /usage           this session's token usage
   /kanban <title>  add a task to the current kanban board
   /insights [N] [--days N] [--source S]   usage analytics across sessions
+  /compress        compress this session's context now (summary of older turns)
   /<bundle>        invoke a skill bundle (ulnclaw bundles)";
 
 async fn resolve_gateway_slash(
@@ -8421,6 +8422,64 @@ async fn resolve_gateway_slash(
                 Err(e) => format!("insights failed: {e}"),
             };
             Some(GatewaySlash::Direct(result))
+        }
+        "/compress" => {
+            let history: Vec<Message> = state
+                .store
+                .load_messages(session_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.role != Role::System)
+                .collect();
+            let compressor = crate::context::ContextCompressor::new(
+                state.agent.context_budget_tokens(),
+            )
+            .with_timezone(state.agent.context().config.timezone.clone());
+            let before_messages = history.len();
+            if before_messages <= compressor.keep_recent + 2 {
+                return Some(GatewaySlash::Direct(format!(
+                    "nothing to compress — only {before_messages} message(s); needs more than {}.",
+                    compressor.keep_recent + 2
+                )));
+            }
+            let before_tokens = crate::context::ContextCompressor::estimate_tokens(&history);
+            // Same auxiliary routing as the agent loop's auto-compression.
+            let provider = state.agent.provider();
+            let compressed = match crate::provider::auxiliary::resolve_aux_task(
+                &state.agent.context().config,
+                crate::provider::auxiliary::TASK_COMPRESSION,
+                provider.clone(),
+            ) {
+                Ok(aux) => {
+                    compressor
+                        .compress_with_model(history.clone(), aux.provider.as_ref(), &aux.model)
+                        .await
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "auxiliary compression routing failed: {}; using main provider",
+                        e
+                    );
+                    compressor
+                        .compress_with_provider(history.clone(), provider.as_ref())
+                        .await
+                }
+            };
+            let Some(compressed) = compressed else {
+                return Some(GatewaySlash::Direct(
+                    "compression failed or found nothing to summarize.".to_string(),
+                ));
+            };
+            let after_messages = compressed.len();
+            let after_tokens = crate::context::ContextCompressor::estimate_tokens(&compressed);
+            if let Err(e) = state.store.replace_messages(session_id, &compressed) {
+                return Some(GatewaySlash::Direct(format!(
+                    "compression failed to persist: {e}"
+                )));
+            }
+            Some(GatewaySlash::Direct(format!(
+                "compressed session context: {before_messages} → {after_messages} messages, ~{before_tokens} → ~{after_tokens} tokens."
+            )))
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');
@@ -15655,6 +15714,100 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         }
         assert!(saw_updated, "session.updated not published");
         assert!(saw_deleted, "session.deleted not published");
+    }
+
+    #[tokio::test]
+    async fn test_compress_slash_short_session_and_failed_provider() {
+        use crate::provider::{Message, Role};
+        let (state, _temp) = jobs_state();
+        let session_id = state.store.create_session("gateway", None, None).unwrap();
+
+        // Too short to compress.
+        for i in 0..3 {
+            state
+                .store
+                .append_message(
+                    &session_id,
+                    &Message {
+                        role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                        content: Some(format!("message {i}")),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                )
+                .unwrap();
+        }
+        match resolve_gateway_slash(&state, &session_id, "/compress").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.starts_with("nothing to compress"), "got: {text}")
+            }
+            _ => panic!("expected GatewaySlash::Direct"),
+        }
+
+        // Long enough, but the provider is unreachable — compression
+        // reports failure instead of corrupting the transcript.
+        for i in 3..24 {
+            state
+                .store
+                .append_message(
+                    &session_id,
+                    &Message {
+                        role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                        content: Some(format!("message {i} with some padding content")),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                )
+                .unwrap();
+        }
+        match resolve_gateway_slash(&state, &session_id, "/compress").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.starts_with("compression failed"), "got: {text}")
+            }
+            _ => panic!("expected GatewaySlash::Direct"),
+        }
+        // Transcript untouched.
+        assert_eq!(state.store.load_messages(&session_id).unwrap().len(), 24);
+    }
+
+    #[test]
+    fn test_replace_messages_roundtrip() {
+        use crate::provider::{Message, Role};
+        let (state, _temp) = jobs_state();
+        let session_id = state.store.create_session("gateway", None, None).unwrap();
+        for i in 0..5 {
+            state
+                .store
+                .append_message(
+                    &session_id,
+                    &Message {
+                        role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                        content: Some(format!("old {i}")),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                )
+                .unwrap();
+        }
+        let replacement: Vec<Message> = (0..2)
+            .map(|i| Message {
+                role: if i == 0 { Role::User } else { Role::Assistant },
+                content: Some(format!("new {i}")),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            })
+            .collect();
+        state.store.replace_messages(&session_id, &replacement).unwrap();
+        let loaded = state.store.load_messages(&session_id).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].content.as_deref(), Some("new 0"));
+        assert_eq!(loaded[1].content.as_deref(), Some("new 1"));
+        let row = state.store.get_session_row(&session_id).unwrap().unwrap();
+        assert_eq!(row.message_count, 2);
     }
 
     #[tokio::test]

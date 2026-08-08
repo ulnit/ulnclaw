@@ -532,6 +532,40 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Replace a session's whole transcript (P457: `/compress` manual
+    /// compression). Deletes the session's rows and re-appends the given
+    /// messages; timestamps re-anchor at now, order is preserved.
+    pub fn replace_messages(&self, session_id: &str, messages: &[Message]) -> Result<()> {
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| AgentError::session(e.to_string()))?;
+            if self.has_fts {
+                conn.execute(
+                    "DELETE FROM messages_fts WHERE rowid IN
+                     (SELECT rowid FROM messages WHERE session_id = ?1)",
+                    params![session_id],
+                )
+                .map_err(|e| AgentError::session(format!("replace messages fts: {}", e)))?;
+            }
+            conn.execute(
+                "DELETE FROM messages WHERE session_id = ?1",
+                params![session_id],
+            )
+            .map_err(|e| AgentError::session(format!("replace messages delete: {}", e)))?;
+            conn.execute(
+                "UPDATE sessions SET message_count = 0 WHERE id = ?1",
+                params![session_id],
+            )
+            .ok();
+        }
+        for message in messages {
+            self.append_message(session_id, message)?;
+        }
+        Ok(())
+    }
+
     /// Row id of the most recent active message with `role` (hermes
     /// `latest_message_row_id`). `offset` steps to earlier turns (1 = the
     /// one before the latest). `require_text` skips empty-content rows so a

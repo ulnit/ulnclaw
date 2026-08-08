@@ -394,6 +394,16 @@ impl Agent {
         self
     }
 
+    /// P457: provider accessor for gateway-side manual compression.
+    pub fn provider(&self) -> Arc<dyn Provider> {
+        self.provider.clone()
+    }
+
+    /// P457: configured context budget in tokens.
+    pub fn context_budget_tokens(&self) -> usize {
+        self.config.context_budget_tokens
+    }
+
     pub fn tool_context(&self) -> Arc<ToolContext> {
         self.context.clone()
     }

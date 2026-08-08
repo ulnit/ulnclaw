@@ -1368,6 +1368,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/new", t.slash.newSession],
     ["/clear", t.slash.clear],
     ["/insights", t.slash.insights],
+    ["/compress", t.slash.compress],
     ["/doctor", t.slash.doctor],
     ["/runs", t.slash.runs],
     ["/projects", t.slash.projects],
