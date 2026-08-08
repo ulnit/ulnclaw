@@ -4,6 +4,7 @@
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
 import type { DashboardTheme, FsEntry, GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
+import type { KanbanBoard } from "./gateway";
 import { KanbanWidget } from "./kanban";
 import { ProjectsWidget } from "./projects";
 import { JobsWidget } from "./jobs";
@@ -2429,6 +2430,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     updateCheck: () => runUpdateCheck(),
     kanbanDispatch: () => runKanbanDispatch(),
     kanbanQuickAdd: () => runKanbanQuickAdd(),
+    kanbanBoardSwitcher: () => openKanbanBoardPicker(() => switchView("kanban")),
     toggleSidebar: () => toggleSidebar(),
     themePicker: () => openThemePicker(),
     fontPicker: () => openFontPicker(),
@@ -2806,6 +2808,64 @@ async function runKanbanQuickAdd(): Promise<void> {
   } catch (error) {
     notifyError(fmt(t.palette.kanbanQuickAddFailed, { error: String(error) }));
   }
+}
+
+/** P411: palette board switcher — pick the active kanban board from
+ * anywhere (mirrors the board select in the kanban view header). */
+async function openKanbanBoardPicker(navigateToKanban: () => void): Promise<void> {
+  if (!state.client) return;
+  let boards: KanbanBoard[];
+  try {
+    boards = await state.client.kanbanBoards();
+  } catch (error) {
+    notifyError(fmt(t.palette.kanbanBoardsFailed, { error: String(error) }));
+    return;
+  }
+  if (!boards.length) {
+    notifyError(t.palette.kanbanBoardsEmpty);
+    return;
+  }
+  const dialog = document.createElement("dialog");
+  dialog.className = "theme-picker-dialog";
+  const heading = document.createElement("div");
+  heading.className = "theme-picker-title";
+  heading.textContent = t.palette.kanbanBoardSwitch;
+  const list = document.createElement("div");
+  list.className = "theme-picker-list";
+  for (const board of boards) {
+    const row = document.createElement("button");
+    row.className = "theme-picker-item" + (board.current ? " active" : "");
+    row.textContent = `${board.name} (${board.open_tasks}/${board.total_tasks})`;
+    row.title = board.slug;
+    row.onclick = () => {
+      dialog.close();
+      const done = board.current
+        ? Promise.resolve(true)
+        : state.client!
+            .kanbanSwitchBoard(board.slug)
+            .then((ok) => {
+              if (ok) notifySuccess(fmt(t.palette.kanbanBoardSwitched, { board: board.name }));
+              return ok;
+            })
+            .catch((error) => {
+              notifyError(fmt(t.palette.kanbanBoardsFailed, { error: String(error) }));
+              return false;
+            });
+      void done.then((ok) => {
+        if (!ok) return;
+        void state.kanban?.refresh();
+        navigateToKanban();
+      });
+    };
+    list.appendChild(row);
+  }
+  dialog.append(heading, list);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }
 
 /** P405: palette action — copy the current session's ID. */
