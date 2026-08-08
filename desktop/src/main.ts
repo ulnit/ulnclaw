@@ -2909,6 +2909,13 @@ function openSessionInfo(): void {
     [t.session.infoActivity, formatWhen(session.last_activity_at)],
     [t.session.infoMessages, String(session.message_count ?? "—")],
   ];
+  // P460: show the end reason when the session is ended/archived.
+  if (session.end_reason) {
+    rows.push([
+      t.session.infoEndReason,
+      `${END_BADGES[session.end_reason] ?? "■"} ${session.end_reason}`,
+    ]);
+  }
   el.sessionInfoRows.innerHTML = rows
     .map(([label, value]) => `<div class="notify-history-row"><span class="monitoring-label">${label}</span><span>${value}</span></div>`)
     .join("");
