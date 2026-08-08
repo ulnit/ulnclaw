@@ -3505,6 +3505,13 @@ async function openSessionInfo(): Promise<void> {
   if (typeof detail.total_tokens === "number") {
     rows.push([t.session.infoTokens, formatTokens(detail.total_tokens)]);
   }
+  // P561: per-role message census from the enriched payload.
+  if (detail.message_counts && Object.keys(detail.message_counts).length) {
+    const census = Object.entries(detail.message_counts)
+      .map(([role, count]) => `${role}: ${count}`)
+      .join(" \u00b7 ");
+    rows.push([t.session.infoCensus, census]);
+  }
   if (detail.child_session_ids?.length) {
     rows.push([t.session.infoChildren, detail.child_session_ids.join(", ")]);
   }

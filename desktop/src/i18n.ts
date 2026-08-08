@@ -81,7 +81,7 @@ export interface Translations {
     reachable: string; unreachable: string; removeAttachment: string; uploadFailed: string; projectBadge: string; endReasonTitle: string;
     speakTitle: string; speakFailed: string;
     infoTitle: string; infoId: string; infoSource: string; infoModel: string; infoProject: string;
-    infoStarted: string; infoActivity: string; infoMessages: string; infoEndReason: string; infoTokens: string; infoChildren: string;
+    infoStarted: string; infoActivity: string; infoMessages: string; infoEndReason: string; infoTokens: string; infoChildren: string; infoCensus: string;
     infoCopyId: string; infoCopied: string; infoCopyFailed: string;
     copyTitle: string; copyFailed: string;
     dayToday: string; tokensTitle: string; unreadTitle: string; filterPlaceholder: string; filterNoMatch: string; dayJumpTitle: string; showAll: string; showLess: string; groupYesterday: string; groupWeek: string; groupOlder: string; sortByActivity: string; sortByTitle: string; showArchived: string; hideArchived: string; pinnedGroup: string;
@@ -407,7 +407,7 @@ const en: Translations = {
     uploadFailed: "Clipboard upload failed: {error}", speakTitle: "Read aloud (TTS)", speakFailed: "Speech synthesis failed: {error}",
     projectBadge: "Project: {project}", endReasonTitle: "End reason: {reason}",
     infoTitle: "Session info", infoId: "ID", infoSource: "Source", infoModel: "Model", infoProject: "Project",
-    infoStarted: "Started", infoActivity: "Last activity", infoMessages: "Messages", infoEndReason: "End reason", infoTokens: "Total tokens", infoChildren: "Forked children",
+    infoStarted: "Started", infoActivity: "Last activity", infoMessages: "Messages", infoEndReason: "End reason", infoTokens: "Total tokens", infoChildren: "Forked children", infoCensus: "Message census",
     infoCopyId: "Copy ID", infoCopied: "Session ID copied", infoCopyFailed: "Copy failed",
     copyTitle: "Copy message", copyFailed: "Copy failed",
     whenNow: "now", dayToday: "Today", tokensTitle: "Total tokens: {tokens}", unreadTitle: "Unread sessions: {count}", filterPlaceholder: "Filter sessions…", filterNoMatch: "No sessions match the filter", dayJumpTitle: "Jump to date", showAll: "Show all {count} sessions", showLess: "Show fewer", groupYesterday: "Yesterday", groupWeek: "Past 7 days", groupOlder: "Older", sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity", showArchived: "Show archived sessions", hideArchived: "Hide archived sessions", pinnedGroup: "Pinned",
@@ -907,7 +907,7 @@ const zh: Translations = {
     uploadFailed: "剪贴板上传失败：{error}", speakTitle: "朗读（TTS）", speakFailed: "语音合成失败：{error}",
     projectBadge: "项目：{project}", endReasonTitle: "结束原因：{reason}",
     infoTitle: "会话信息", infoId: "标识", infoSource: "来源", infoModel: "模型", infoProject: "项目",
-    infoStarted: "开始时间", infoActivity: "最后活动", infoMessages: "消息数", infoEndReason: "结束原因", infoTokens: "总 token 数", infoChildren: "分叉子会话",
+    infoStarted: "开始时间", infoActivity: "最后活动", infoMessages: "消息数", infoEndReason: "结束原因", infoTokens: "总 token 数", infoChildren: "分叉子会话", infoCensus: "消息分布",
     infoCopyId: "复制 ID", infoCopied: "已复制会话 ID", infoCopyFailed: "复制失败",
     copyTitle: "复制消息", copyFailed: "复制失败",
     whenNow: "刚刚", dayToday: "今天", tokensTitle: "总 token 数：{tokens}", unreadTitle: "未读会话：{count}", filterPlaceholder: "筛选会话…", filterNoMatch: "没有匹配过滤的会话", dayJumpTitle: "跳转到日期", showAll: "显示全部 {count} 个会话", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序", showArchived: "显示已归档会话", hideArchived: "隐藏已归档会话", pinnedGroup: "已置顶",
@@ -1407,7 +1407,7 @@ const zhHant: Translations = {
     uploadFailed: "剪貼簿上傳失敗：{error}", speakTitle: "朗讀（TTS）", speakFailed: "語音合成失敗：{error}",
     projectBadge: "專案：{project}", endReasonTitle: "結束原因：{reason}",
     infoTitle: "工作階段資訊", infoId: "識別碼", infoSource: "來源", infoModel: "模型", infoProject: "專案",
-    infoStarted: "開始時間", infoActivity: "最後活動", infoMessages: "訊息數", infoEndReason: "結束原因", infoTokens: "總 token 數", infoChildren: "分叉子會話",
+    infoStarted: "開始時間", infoActivity: "最後活動", infoMessages: "訊息數", infoEndReason: "結束原因", infoTokens: "總 token 數", infoChildren: "分叉子會話", infoCensus: "訊息分佈",
     infoCopyId: "複製 ID", infoCopied: "已複製工作階段 ID", infoCopyFailed: "複製失敗",
     copyTitle: "複製訊息", copyFailed: "複製失敗",
     whenNow: "剛剛", dayToday: "今天", tokensTitle: "總 token 數：{tokens}", unreadTitle: "未讀工作階段：{count}", filterPlaceholder: "篩選工作階段…", filterNoMatch: "沒有符合篩選的工作階段", dayJumpTitle: "跳轉到日期", showAll: "顯示全部 {count} 個工作階段", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序", showArchived: "顯示已歸檔工作階段", hideArchived: "隱藏已歸檔工作階段", pinnedGroup: "已置頂",
@@ -1907,7 +1907,7 @@ const ja: Translations = {
     uploadFailed: "クリップボードのアップロードに失敗：{error}", speakTitle: "読み上げ（TTS）", speakFailed: "音声合成に失敗しました：{error}",
     projectBadge: "プロジェクト：{project}", endReasonTitle: "終了理由：{reason}",
     infoTitle: "セッション情報", infoId: "ID", infoSource: "ソース", infoModel: "モデル", infoProject: "プロジェクト",
-    infoStarted: "開始", infoActivity: "最終アクティビティ", infoMessages: "メッセージ数", infoEndReason: "終了理由", infoTokens: "合計トークン", infoChildren: "フォークされた子セッション",
+    infoStarted: "開始", infoActivity: "最終アクティビティ", infoMessages: "メッセージ数", infoEndReason: "終了理由", infoTokens: "合計トークン", infoChildren: "フォークされた子セッション", infoCensus: "メッセージ内訳",
     infoCopyId: "ID をコピー", infoCopied: "セッション ID をコピーしました", infoCopyFailed: "コピーに失敗しました",
     copyTitle: "メッセージをコピー", copyFailed: "コピーに失敗しました",
     whenNow: "たった今", dayToday: "今日", tokensTitle: "総トークン数：{tokens}", unreadTitle: "未読セッション：{count}", filterPlaceholder: "セッションを絞り込み…", filterNoMatch: "フィルターに一致するセッションはありません", dayJumpTitle: "日付へジャンプ", showAll: "{count} 件のセッションをすべて表示", showLess: "折りたたむ", groupYesterday: "昨日", groupWeek: "過去 7 日間", groupOlder: "それ以前", sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に", sortByTitle: "タイトル順 — クリックでアクティビティ順に", showArchived: "アーカイブ済みセッションを表示", hideArchived: "アーカイブ済みセッションを非表示", pinnedGroup: "ピン留め",
@@ -2407,7 +2407,7 @@ const ar: Translations = {
     uploadFailed: "فشل رفع الحافظة: {error}", speakTitle: "قراءة بصوت عالٍ (TTS)", speakFailed: "فشل تركيب الكلام: {error}",
     projectBadge: "المشروع: {project}", endReasonTitle: "سبب الانتهاء: {reason}",
     infoTitle: "معلومات الجلسة", infoId: "المعرف", infoSource: "المصدر", infoModel: "النموذج", infoProject: "المشروع",
-    infoStarted: "بدأت", infoActivity: "آخر نشاط", infoMessages: "الرسائل", infoEndReason: "سبب الانتهاء", infoTokens: "إجمالي الرموز", infoChildren: "الجلسات المتفرعة",
+    infoStarted: "بدأت", infoActivity: "آخر نشاط", infoMessages: "الرسائل", infoEndReason: "سبب الانتهاء", infoTokens: "إجمالي الرموز", infoChildren: "الجلسات المتفرعة", infoCensus: "إحصاء الرسائل",
     infoCopyId: "نسخ المعرف", infoCopied: "تم نسخ معرف الجلسة", infoCopyFailed: "فشل النسخ",
     copyTitle: "نسخ الرسالة", copyFailed: "فشل النسخ",
     whenNow: "الآن", dayToday: "اليوم", tokensTitle: "إجمالي الرموز: {tokens}", unreadTitle: "جلسات غير مقروءة: {count}", filterPlaceholder: "تصفية الجلسات…", filterNoMatch: "لا توجد جلسات مطابقة للتصفية", dayJumpTitle: "الانتقال إلى التاريخ", showAll: "عرض كل الجلسات ({count})", showLess: "عرض أقل", groupYesterday: "أمس", groupWeek: "آخر 7 أيام", groupOlder: "أقدم", sortByActivity: "مرتبة حسب آخر نشاط — انقر للفرز حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للفرز حسب آخر نشاط", showArchived: "إظهار الجلسات المؤرشفة", hideArchived: "إخفاء الجلسات المؤرشفة", pinnedGroup: "مثبتة",

@@ -1682,6 +1682,26 @@ impl SqliteSessionStore {
         .map_err(|e| AgentError::session(e.to_string()))
     }
 
+    /// P561: per-role message counts for a session (GROUP BY role) —
+    /// the gateway enriches single-session fetches with this census.
+    pub fn message_role_counts(&self, session_id: &str) -> Result<Vec<(String, i64)>> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let mut stmt = match conn.prepare(
+            "SELECT role, COUNT(*) FROM messages WHERE session_id = ?1 GROUP BY role ORDER BY role",
+        ) {
+            Ok(s) => s,
+            Err(e) => return Err(AgentError::session(e.to_string())),
+        };
+        let rows = match stmt.query_map(params![session_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        }) {
+            Ok(r) => r,
+            Err(e) => return Err(AgentError::session(e.to_string())),
+        };
+        rows.collect::<std::result::Result<Vec<(String, i64)>, _>>()
+            .map_err(|e| AgentError::session(e.to_string()))
+    }
+
     /// Next free title in a lineage: `"my session"` → `"my session #2"`
     /// when the base is taken (hermes `get_next_title_in_lineage`).
     pub fn get_next_title_in_lineage(&self, base_title: &str) -> Result<String> {

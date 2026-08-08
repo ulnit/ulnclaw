@@ -35,6 +35,8 @@ export interface SessionRow {
   /** P553/P554: fork lineage + token sum (single-session fetches only). */
   child_session_ids?: string[];
   total_tokens?: number;
+  /** P561: per-role message census (single-session fetches only). */
+  message_counts?: Record<string, number>;
 }
 
 /** P559/P560: single-session retitler result. */

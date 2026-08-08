@@ -7675,6 +7675,7 @@ async fn get_session(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
             // fetches (the list endpoint keeps its leaner shape).
             let child_ids = state.store.child_session_ids(&id).unwrap_or_default();
             let total_tokens = row.input_tokens + row.output_tokens;
+            let role_counts = state.store.message_role_counts(&id).unwrap_or_default();
             let mut rows = enrich_sessions_with_projects(vec![row]);
             let mut value = rows.pop().unwrap_or(Value::Null);
             if let Some(object) = value.as_object_mut() {
@@ -7683,6 +7684,14 @@ async fn get_session(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
                     Value::Array(child_ids.into_iter().map(Value::String).collect()),
                 );
                 object.insert("total_tokens".to_string(), json!(total_tokens));
+                object.insert(
+                    "message_counts".to_string(),
+                    Value::Object(serde_json::Map::from_iter(
+                        role_counts
+                            .into_iter()
+                            .map(|(role, count)| (role, json!(count))),
+                    )),
+                );
             }
             Json(value).into_response()
         }
@@ -16034,8 +16043,24 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         ).await;
         assert!(status.is_success(), "{status} {body}");
         let child = body["session"]["id"].as_str().expect("fork id").to_string();
+
+        // Message census counts each role separately (P561).
+        state
+            .store
+            .append_message(
+                &parent,
+                &Message {
+                    role: Role::User,
+                    content: Some("hello".to_string()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .expect("user message");
         let (_, row) = get_json(app, &format!("/api/sessions/{parent}"), Some(token)).await;
         assert_eq!(row["child_session_ids"], json!([child]));
+        assert_eq!(row["message_counts"], json!({"user": 1}));
     }
 
     #[tokio::test]
