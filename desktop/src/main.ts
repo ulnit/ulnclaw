@@ -618,6 +618,9 @@ const DRAFTS_KEY = "ulnclaw.drafts";
 /** P396: ↑/↓ prompt-recall history persists across restarts. */
 const COMPOSER_HISTORY_KEY = "ulnclaw.composerHistory";
 
+/** P397: sidebar session filter persists across restarts. */
+const SESSION_FILTER_KEY = "ulnclaw.sessionFilter";
+
 function persistComposerHistory(): void {
   try {
     localStorage.setItem(COMPOSER_HISTORY_KEY, JSON.stringify(state.composerHistory));
@@ -1830,6 +1833,11 @@ async function start(): Promise<void> {
   // P372: live sidebar session filter.
   el.sessionFilter.addEventListener("input", () => {
     state.sessionFilterText = el.sessionFilter.value;
+    try {
+      localStorage.setItem(SESSION_FILTER_KEY, el.sessionFilter.value);
+    } catch {
+      /* storage unavailable — filter stays session-scoped */
+    }
     renderSessions();
   });
 
@@ -2362,6 +2370,12 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   loadPersistedDrafts();
   // P396: restore persisted prompt-recall history.
   loadPersistedComposerHistory();
+  // P397: restore the persisted sidebar session filter.
+  const savedFilter = localStorage.getItem(SESSION_FILTER_KEY);
+  if (savedFilter) {
+    state.sessionFilterText = savedFilter;
+    el.sessionFilter.value = savedFilter;
+  }
   el.statusbar.addEventListener("click", (event) => {
     const seg = (event.target as HTMLElement).closest<HTMLElement>(".statusbar-seg");
     const target = seg?.dataset.target;
