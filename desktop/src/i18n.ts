@@ -90,7 +90,7 @@ export interface Translations {
   slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; insights: string; compress: string; skillFallback: string; resume: string; doctor: string; runs: string; projects: string; config: string; webhooks: string; models: string; plugins: string; archive: string; unarchive: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
     failureTitle: string; retry: string; openSettings: string; dismiss: string };
-    bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string; runCompleted: string; runFailed: string; runOpenRuns: string; approvalNeeded: string; approvalReview: string };
+    bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string; runCompleted: string; runFailed: string; runOpenRuns: string; approvalNeeded: string; approvalReview: string; sessionCreated: string; sessionDeleted: string };
   kanban: {
     todo: string; doing: string; done: string; blocked: string;
     addTask: string; addComment: string; comment: string; unblock: string;
@@ -409,6 +409,7 @@ const en: Translations = {
     stillRunning: " (still running)", terminalEmpty: "terminal pane is empty",
     runCompleted: "Run completed", runFailed: "Run failed", runOpenRuns: "Open runs",
     approvalNeeded: "Run needs approval", approvalReview: "Review",
+    sessionCreated: "New session from another client", sessionDeleted: "Session deleted by another client",
   },
   kanban: {
     todo: "To do", doing: "Doing", done: "Done", blocked: "Blocked",
@@ -885,6 +886,7 @@ const zh: Translations = {
     stillRunning: "（仍在运行）", terminalEmpty: "终端面板为空",
     runCompleted: "运行完成", runFailed: "运行失败", runOpenRuns: "查看运行",
     approvalNeeded: "运行等待审批", approvalReview: "去审批",
+    sessionCreated: "其他客户端新建了会话", sessionDeleted: "其他客户端删除了会话",
   },
   kanban: {
     todo: "待办", doing: "进行中", done: "已完成", blocked: "受阻",
@@ -1361,6 +1363,7 @@ const zhHant: Translations = {
     stillRunning: "（仍在執行）", terminalEmpty: "終端面板為空",
     runCompleted: "執行完成", runFailed: "執行失敗", runOpenRuns: "檢視執行",
     approvalNeeded: "執行等待審批", approvalReview: "去審批",
+    sessionCreated: "其他用戶端建立了工作階段", sessionDeleted: "其他用戶端刪除了工作階段",
   },
   kanban: {
     todo: "待辦", doing: "進行中", done: "已完成", blocked: "受阻",
@@ -1837,6 +1840,7 @@ const ja: Translations = {
     stillRunning: "（まだ実行中）", terminalEmpty: "ターミナルペインは空です",
     runCompleted: "実行完了", runFailed: "実行失敗", runOpenRuns: "実行を開く",
     approvalNeeded: "実行が承認待ちです", approvalReview: "確認する",
+    sessionCreated: "他のクライアントがセッションを作成しました", sessionDeleted: "他のクライアントがセッションを削除しました",
   },
   kanban: {
     todo: "未着手", doing: "進行中", done: "完了", blocked: "ブロック中",
@@ -2313,6 +2317,7 @@ const ar: Translations = {
     stillRunning: " (لا يزال يعمل)", terminalEmpty: "لوحة الطرفي فارغة",
     runCompleted: "اكتمل التشغيل", runFailed: "فشل التشغيل", runOpenRuns: "عرض التشغيلات",
     approvalNeeded: "التشغيل بحاجة إلى موافقة", approvalReview: "مراجعة",
+    sessionCreated: "جلسة جديدة من عميل آخر", sessionDeleted: "حذف عميل آخر جلسة",
   },
   kanban: {
     todo: "قيد الانتظار", doing: "قيد التنفيذ", done: "منجز", blocked: "محجوب",

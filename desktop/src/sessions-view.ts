@@ -50,6 +50,8 @@ export class SessionsViewWidget {
   private renameTarget: string | null = null;
   // P442: target of the delete dialog while it is open.
   private deleteTarget: string | null = null;
+  // P473: ids this UI deleted (suppresses cross-client toasts).
+  private localDeletes = new Set<string>();
   // P443: keyboard navigation state for the list.
   private visible: SessionRow[] = [];
   private kbIndex = 0;
@@ -479,6 +481,15 @@ export class SessionsViewWidget {
       select.appendChild(option);
     }
     select.value = this.modelFilter ?? "";
+  }
+
+  /** P473: true (and consumes) when this id was deleted from this UI. */
+  takeLocalDelete(sessionId: string): boolean {
+    if (this.localDeletes.has(sessionId)) {
+      this.localDeletes.delete(sessionId);
+      return true;
+    }
+    return false;
   }
 
   /** P448: select a session from outside (command-palette bridge). */
@@ -1057,6 +1068,7 @@ export class SessionsViewWidget {
     if (!client || !sessionId) return;
     try {
       await client.deleteSession(sessionId);
+      this.localDeletes.add(sessionId);
       (this.root.querySelector("#sessions-delete-dialog") as HTMLDialogElement).close();
       this.status(t.sessionsView.deleted.replace("{id}", sessionId.slice(0, 12)), false);
       this.selected = null;

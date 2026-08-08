@@ -491,12 +491,16 @@ function openExportPicker(): void {
   dialog.showModal();
 }
 
+// P473: ids this shell deleted itself (suppresses cross-client toasts).
+const localDeletes = new Set<string>();
+
 async function deleteSession(session: SessionRow): Promise<void> {
   if (!state.client) return;
   const label = session.title || session.id.slice(0, 8);
   if (!window.confirm(fmt(t.session.deleteConfirm, { label }))) return;
   try {
     await state.client.deleteSession(session.id);
+    localDeletes.add(session.id);
     state.sessions = state.sessions.filter((row) => row.id !== session.id);
     if (state.current?.id === session.id) {
       state.current = null;
@@ -1921,6 +1925,20 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       // browser if it is mounted.
       void refreshSessions();
       void state.sessionsBrowser?.refresh();
+      // P473: toast cross-client lifecycle events; suppress our own actions
+      // (desktop-created sessions carry source "desktop"; deletes are
+      // tracked in the local registries).
+      const eventSessionId = String(payload.session_id ?? "");
+      if (envelope.event === "session.created" && String(payload.source ?? "") !== "desktop") {
+        notify({ kind: "success", title: t.bridge.sessionCreated, message: eventSessionId.slice(0, 12) });
+      } else if (envelope.event === "session.deleted" && eventSessionId) {
+        const local =
+          localDeletes.delete(eventSessionId) ||
+          (state.sessionsBrowser?.takeLocalDelete(eventSessionId) ?? false);
+        if (!local) {
+          notify({ kind: "warning", title: t.bridge.sessionDeleted, message: eventSessionId.slice(0, 12) });
+        }
+      }
       break;
     }
     case "terminal.read": {
