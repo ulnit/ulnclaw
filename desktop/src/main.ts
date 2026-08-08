@@ -3176,6 +3176,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       const session = state.sessions.find((row) => row.id === id);
       if (session) await openSession(session);
     },
+    isPinned: (id) => pinnedSessions.has(id),
+    togglePin: (session) => togglePinSession(session),
     search: async (query) => (state.client ? state.client.searchSessions(query, 20) : []),
   });
 

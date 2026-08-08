@@ -18,6 +18,9 @@ export interface SessionPickerHooks {
   currentSessionId(): string | null;
   openSession(id: string): void | Promise<void>;
   search?(query: string): Promise<SessionSearchHit[]>;
+  /** P550: sidebar pin-state parity — pinned rows float to the top. */
+  isPinned?(id: string): boolean;
+  togglePin?(session: SessionRow): void;
 }
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -127,7 +130,13 @@ export class SessionPickerDialog {
     this.kbIndex = -1;
     const q = normalize(this.search.value);
     const rows = [...this.hooks.sessions()]
-      .sort((a, b) => b.last_activity_at - a.last_activity_at)
+      .sort((a, b) => {
+        // P550: pinned sessions float to the top (sidebar parity, P548).
+        const pinA = this.hooks.isPinned?.(a.id) ? 1 : 0;
+        const pinB = this.hooks.isPinned?.(b.id) ? 1 : 0;
+        if (pinA !== pinB) return pinB - pinA;
+        return b.last_activity_at - a.last_activity_at;
+      })
       .filter((session) => this.matchesStatus(session))
       .slice(0, 200)
       .filter((session) => {
@@ -177,7 +186,20 @@ export class SessionPickerDialog {
       const check = document.createElement("span");
       check.className = "session-picker-check";
       check.textContent = session.id === activeId ? "\u2713" : "";
-      row.append(icon, main, check);
+      // P550: per-row pin toggle (📌 pinned / 📍 unpinned), mirroring the
+      // sidebar hover action.
+      const pin = document.createElement("span");
+      const rowPinned = this.hooks.isPinned?.(session.id) ?? false;
+      pin.className = "session-picker-pin" + (rowPinned ? " pinned" : "");
+      pin.title = rowPinned ? t.palette.unpinSession : t.palette.pinSession;
+      pin.textContent = rowPinned ? "\u{1F4CC}" : "\u{1F4CD}";
+      pin.onclick = (event) => {
+        event.stopPropagation();
+        if (!this.hooks.togglePin) return;
+        this.hooks.togglePin(session);
+        this.renderList();
+      };
+      row.append(icon, main, pin, check);
       row.onclick = () => {
         this.dialog.close();
         void this.hooks.openSession(session.id);
