@@ -1282,6 +1282,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/kanban", t.slash.kanban],
     ["/new", t.slash.newSession],
     ["/clear", t.slash.clear],
+    ["/insights", t.slash.insights],
   ];
 }
 
