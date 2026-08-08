@@ -261,6 +261,23 @@ export class SessionsViewWidget {
         this.jumpDayDivider(event.key === "ArrowDown" ? 1 : -1);
       }
     });
+    // P483: type-to-focus — printable keys while the list has focus jump
+    // into the filter box (chat type-to-focus parity).
+    (this.root.querySelector("#sessions-view-list") as HTMLElement).addEventListener("keydown", (event) => {
+      if (
+        event.key.length === 1 &&
+        event.key !== "Enter" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        const filterInput = this.root.querySelector("#sessions-view-filter") as HTMLInputElement;
+        filterInput.focus();
+        filterInput.value += event.key;
+        filterInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
     // P450: the count header toggles activity ↔ title sorting.
     const countHeader = this.root.querySelector("#sessions-view-count") as HTMLElement;
     countHeader.classList.add("clickable");
