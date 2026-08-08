@@ -1191,6 +1191,9 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 }
 .sessions-view-row-action:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
 .sessions-view-row:hover { background: rgba(255, 255, 255, 0.04); }
+/* P496: unread markers. */
+.sessions-view-row.unread .sessions-view-row-title::before { content: "● "; color: var(--accent); font-size: 0.85em; }
+.session-item.unread .session-main .title::before { content: "● "; color: var(--accent); font-size: 0.85em; }
 .sessions-view-row.active {
   background: rgba(255, 255, 255, 0.06);
   border-color: var(--accent);

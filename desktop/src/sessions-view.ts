@@ -89,6 +89,9 @@ export class SessionsViewWidget {
     private client: () => GatewayClient | null,
     // P422: bridge back into the chat view (resume the selected session).
     private openInChat: ((session: SessionRow) => void) | null = null,
+    // P496: unread tracking hooks (read-state lives in the shell).
+    private isUnread: ((sessionId: string) => boolean) | null = null,
+    private onRead: ((sessionId: string) => void) | null = null,
   ) {}
 
   mount(): void {
@@ -386,6 +389,7 @@ export class SessionsViewWidget {
         const session = this.visible[this.kbIndex];
         if (session) {
           this.selected = session.id;
+          this.onRead?.(session.id);
           this.renderList();
           this.loadTranscript(session.id).catch(() => undefined);
         }
@@ -517,6 +521,7 @@ export class SessionsViewWidget {
         const saved = localStorage.getItem(SELECTED_KEY);
         if (saved && !this.selected && this.all.some((session) => session.id === saved)) {
           this.selected = saved;
+          this.onRead?.(saved);
           this.loadTranscript(saved).catch(() => undefined);
         }
       }
@@ -678,9 +683,15 @@ export class SessionsViewWidget {
     select.value = this.sourceFilter ?? "";
   }
 
+  /** P496: the currently selected session id (shell unread tracking). */
+  selectedId(): string | null {
+    return this.selected;
+  }
+
   /** P448: select a session from outside (command-palette bridge). */
   openSession(sessionId: string): void {
     this.selected = sessionId;
+    this.onRead?.(sessionId);
     this.kbIndex = Math.max(0, this.visible.findIndex((session) => session.id === sessionId));
     this.renderList();
     this.loadTranscript(sessionId).catch(() => undefined);
@@ -931,6 +942,7 @@ export class SessionsViewWidget {
         const title = session.title || session.id.slice(0, 8);
         const active = session.id === this.selected ? " active" : "";
         const kb = index === this.kbIndex ? " kb-focus" : "";
+        const unread = this.isUnread?.(session.id) ? " unread" : "";
         let header = "";
         if (showGroups) {
           const group = this.dateGroup(session.last_activity_at || session.started_at);
@@ -940,7 +952,7 @@ export class SessionsViewWidget {
           }
         }
         return header + `
-          <div class="sessions-view-row${active}${kb}" data-id="${escapeHtml(session.id)}">
+          <div class="sessions-view-row${active}${kb}${unread}" data-id="${escapeHtml(session.id)}">
             <span class="sessions-view-row-actions">
               <button class="sessions-view-row-action" data-action="rename" title="${escapeHtml(t.sessionsView.renameTitle)}">✎</button>
               <button class="sessions-view-row-action" data-action="fork" title="${escapeHtml(t.sessionsView.forkTitle)}">⑂</button>
@@ -961,6 +973,7 @@ export class SessionsViewWidget {
     for (const row of Array.from(list.querySelectorAll<HTMLElement>(".sessions-view-row"))) {
       row.addEventListener("click", () => {
         this.selected = row.dataset.id || null;
+        this.onRead?.(row.dataset.id || "");
         this.renderList();
         this.loadTranscript(row.dataset.id || "").catch(() => undefined);
       });

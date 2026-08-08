@@ -500,6 +500,9 @@ let sessionMessageListTimer: number | null = null;
 // P495: debounce timer for the chat view's live catch-up.
 let chatCatchupTimer: number | null = null;
 
+// P496: sessions that grew while not open (cleared on open/select).
+const unreadSessions = new Set<string>();
+
 async function deleteSession(session: SessionRow): Promise<void> {
   if (!state.client) return;
   const label = session.title || session.id.slice(0, 8);
@@ -664,6 +667,8 @@ function refreshWindowTitle(): void {
 }
 
 async function openSession(session: SessionRow): Promise<void> {
+  // P496: opening a session reads it.
+  if (unreadSessions.delete(session.id)) renderSessions();
   // P393: stash the outgoing session's draft, restore the target's.
   if (state.current && state.current.id !== session.id) {
     state.drafts.set(state.current.id, el.input.value);
@@ -1974,6 +1979,19 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       // P493: a message was appended anywhere — the sessions browser
       // catches up when the affected session is open (debounced there).
       state.sessionsBrowser?.notifyMessageAppended(envelope.session_id);
+      // P496: sessions that grow while not open become unread.
+      const browserReading =
+        state.view === "sessions" &&
+        state.sessionsBrowser?.selectedId() === envelope.session_id;
+      if (
+        envelope.session_id &&
+        state.current?.id !== envelope.session_id &&
+        !browserReading &&
+        !unreadSessions.has(envelope.session_id)
+      ) {
+        unreadSessions.add(envelope.session_id);
+        renderSessions();
+      }
       // P494: message counts + activity follow along in the sidebar and
       // the sessions-browser list (debounced to coalesce bursts).
       if (sessionMessageListTimer === null) {
@@ -2630,6 +2648,11 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     (session) => {
       void openSession(session);
       switchView("chat");
+    },
+    // P496: unread tracking hooks.
+    (sessionId) => unreadSessions.has(sessionId),
+    (sessionId) => {
+      if (unreadSessions.delete(sessionId)) renderSessions();
     },
   );
   state.sessionsBrowser.mount();
