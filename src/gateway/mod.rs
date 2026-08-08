@@ -8222,6 +8222,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /recap           recap this session
   /title [text]    show or set the session title
   /usage           this session's token usage
+  /kanban <title>  add a task to the current kanban board
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /<bundle>        invoke a skill bundle (ulnclaw bundles)";
 
@@ -8292,6 +8293,53 @@ async fn resolve_gateway_slash(
                 "messages: {}  tokens: {} in / {} out",
                 row.message_count, row.input_tokens, row.output_tokens
             )))
+        }
+        "/kanban" => {
+            // P369: quick-action composer command — add a card to the
+            // current board without leaving the conversation (hermes
+            // kanban quick-add parity).
+            if rest.is_empty() {
+                return Some(GatewaySlash::Direct(
+                    "usage: /kanban <task title>".to_string(),
+                ));
+            }
+            let store = match crate::kanban::KanbanStore::open_default() {
+                Ok(store) => store,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!("kanban failed: {e}")))
+                }
+            };
+            match store.create_task(&crate::kanban::NewTask {
+                title: rest.to_string(),
+                body: String::new(),
+                assignee: None,
+                priority: 0,
+                tenant: None,
+                model: None,
+                created_by: "slash".to_string(),
+                skills: None,
+                max_runtime_seconds: None,
+                provider: None,
+                project_id: None,
+                idempotency_key: None,
+                triage: false,
+                max_retries: None,
+                initial_status: None,
+                workflow_template_id: None,
+                current_step_key: None,
+                goal_mode: false,
+                goal_max_turns: None,
+                workspace_kind: Some("scratch".to_string()),
+                workspace_path: None,
+                branch_name: None,
+                session_id: Some(session_id.to_string()),
+            }) {
+                Ok(task) => Some(GatewaySlash::Direct(format!(
+                    "kanban task added: {} — {}",
+                    task.id, task.title
+                ))),
+                Err(e) => Some(GatewaySlash::Direct(format!("kanban failed: {e}"))),
+            }
         }
         "/insights" => {
             let mut days: u32 = 30;
@@ -15164,6 +15212,51 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(data[0]["content"], "yesterday");
         assert_eq!(data[0]["timestamp"].as_f64(), Some(1_770_000_000.0));
         assert_eq!(data[1]["timestamp"].as_f64(), Some(1_770_090_000.0));
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_kanban_quick_add() {
+        // P369: /kanban <title> adds a card to the current board.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = test_state();
+
+        // Bare /kanban prints the usage line.
+        match resolve_gateway_slash(&state, "sess-1", "/kanban").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.starts_with("usage: /kanban"), "{text}")
+            }
+            _ => panic!("expected usage reply"),
+        }
+
+        // /kanban <title> creates the card and reports its id.
+        match resolve_gateway_slash(&state, "sess-1", "/kanban Fix the flux capacitor").await {
+            Some(GatewaySlash::Direct(reply)) => {
+                assert!(reply.starts_with("kanban task added: "), "{reply}");
+                let id = reply
+                    .trim_start_matches("kanban task added: ")
+                    .split(" \u{2014} ")
+                    .next()
+                    .unwrap()
+                    .to_string();
+                let store = crate::kanban::KanbanStore::open_default().expect("kanban store");
+                let task = store
+                    .get_task(&id)
+                    .expect("task lookup")
+                    .expect("task exists");
+                assert_eq!(task.title, "Fix the flux capacitor");
+                assert_eq!(task.created_by, "slash");
+            }
+            _ => panic!("expected direct reply"),
+        }
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

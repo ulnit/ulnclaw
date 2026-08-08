@@ -832,6 +832,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/recap", t.slash.recap],
     ["/title", t.slash.title],
     ["/usage", t.slash.usage],
+    ["/kanban", t.slash.kanban],
   ];
 }
 
