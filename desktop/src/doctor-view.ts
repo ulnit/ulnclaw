@@ -816,7 +816,11 @@ export class DoctorWidget {
         restore.className = "ghost";
         restore.textContent = t.backupsPanel.restore;
         restore.onclick = () => this.restoreBackup(snapshot.id);
-        row.append(label, value, restore);
+        const download = document.createElement("button");
+        download.className = "ghost";
+        download.textContent = t.backupsPanel.download;
+        download.onclick = () => window.open(client.backupDownloadUrl(snapshot.id), "_blank");
+        row.append(label, value, download, restore);
         rows.appendChild(row);
       }
       const actions = document.createElement("div");

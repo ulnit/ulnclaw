@@ -6083,6 +6083,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/backups", get(list_backups).post(create_backup))
         .route("/api/backups/prune", post(prune_backups))
         .route("/api/backups/:id/restore", post(restore_backup))
+        .route("/api/backups/:id/download", get(download_backup))
         .route("/api/curator", get(curator_status))
         .route("/api/curator/run", post(curator_run))
         .route("/api/curator/paused", put(curator_set_paused))
@@ -9374,6 +9375,47 @@ async fn restore_backup(State(state): State<Arc<GatewayState>>, Path(id): Path<S
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": format!("restore task failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/backups/:id/download` — zip a quick snapshot on demand and
+/// serve it as an attachment (hermes `/api/ops/backup/download` parity).
+async fn download_backup(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
+    let home = state.agent.context().home.clone();
+    let snapshot_id = id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::backup::export_quick_snapshot_zip(&home, &snapshot_id)
+    })
+    .await;
+    match result {
+        Ok(Ok(bytes)) => {
+            let headers = [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "application/zip".to_string(),
+                ),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"ulnclaw-snapshot-{id}.zip\""),
+                ),
+            ];
+            (headers, bytes).into_response()
+        }
+        Ok(Err(e)) if e.contains("not found") || e.contains("invalid") || e.contains("empty") => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("export task failed: {e}") })),
         )
             .into_response(),
     }
@@ -15235,6 +15277,39 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["restored"], true);
+
+        // Download: auth gate, attachment headers, zip magic bytes.
+        let request = axum::http::Request::builder()
+            .uri(format!("/api/backups/{first}/download"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let request = axum::http::Request::builder()
+            .uri(format!("/api/backups/{first}/download"))
+            .header("authorization", "Bearer sekret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(disposition.contains("ulnclaw-snapshot-"), "{disposition}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(bytes.len() > 4 && &bytes[..2] == b"PK", "zip magic");
+        // Path traversal ids are rejected.
+        let (status, _) = get_json(
+            app.clone(),
+            "/api/backups/..%2F..%2Fetc/download",
+            Some("sekret"),
+        )
+        .await;
+        assert!(status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST);
 
         // Unknown snapshot → 404.
         let (status, _) =

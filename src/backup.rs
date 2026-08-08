@@ -579,6 +579,54 @@ fn quick_snapshot_root(home: &Path) -> PathBuf {
     home.join(QUICK_SNAPSHOTS_DIR)
 }
 
+/// Zip a quick snapshot directory into memory for download (hermes
+/// `/api/ops/backup/download` parity). The id must be a plain snapshot
+/// directory name; anything with path components is rejected.
+pub fn export_quick_snapshot_zip(home: &Path, id: &str) -> Result<Vec<u8>, String> {
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id == "." || id == ".." {
+        return Err("invalid snapshot id".to_string());
+    }
+    let root = quick_snapshot_root(home).join(id);
+    if !root.is_dir() {
+        return Err(format!("snapshot '{id}' not found"));
+    }
+    let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else { continue };
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                let rel = path.strip_prefix(&root).unwrap_or(Path::new("")).to_path_buf();
+                files.push((path, rel));
+            }
+        }
+    }
+    files.sort_by(|a, b| a.1.cmp(&b.1));
+    if files.is_empty() {
+        return Err(format!("snapshot '{id}' is empty"));
+    }
+    let mut buffer = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .compression_level(Some(6));
+        for (abs, rel) in &files {
+            let arcname = rel.to_string_lossy().replace('\\', "/");
+            zip.start_file(arcname, options)
+                .map_err(|e| format!("zip start_file: {e}"))?;
+            let mut file = File::open(abs).map_err(|e| format!("open {}: {e}", abs.display()))?;
+            std::io::copy(&mut file, &mut zip).map_err(|e| format!("zip write: {e}"))?;
+        }
+        zip.finish().map_err(|e| format!("zip finish: {e}"))?;
+    }
+    Ok(buffer)
+}
+
 /// One quick-snapshot listing entry.
 #[derive(Debug, Clone)]
 pub struct SnapshotInfo {

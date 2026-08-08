@@ -316,7 +316,7 @@ export interface Translations {
   egressPanel: { title: string; };
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; test: string; stateConnected: string; stateNotConfigured: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
-  backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
+  backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
   opsPanel: { title: string; securityAudit: string; promptSize: string; dump: string; running: string; auditClean: string; failed: string; };
   updatePanel: { title: string; check: string; apply: string; checking: string; applying: string; upToDate: string; behind: string; behindShallow: string; checkFailed: string; applyConfirm: string; applyDone: string; applyFailed: string; };
@@ -785,7 +785,7 @@ const en: Translations = {
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
     labelPrompt: "Optional label for the snapshot:", created: "Snapshot {id} created.",
-    createFailed: "Snapshot failed: {error}", restore: "Restore",
+    createFailed: "Snapshot failed: {error}", restore: "Restore", download: "Download",
     restoreConfirm: "Restore snapshot {id}? Current state files are overwritten.",
     restored: "Snapshot {id} restored. Restart the gateway to pick up restored state.",
     restoreFailed: "Restore failed: {error}", prune: "Prune\u2026",
@@ -1328,7 +1328,7 @@ const zh: Translations = {
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
     labelPrompt: "快照标签（可选）：", created: "已创建快照 {id}。",
-    createFailed: "创建快照失败：{error}", restore: "恢复",
+    createFailed: "创建快照失败：{error}", restore: "恢复", download: "下载",
     restoreConfirm: "恢复快照 {id}？当前状态文件将被覆盖。",
     restored: "已恢复快照 {id}。请重启网关以加载恢复的状态。",
     restoreFailed: "恢复失败：{error}", prune: "清理\u2026",
@@ -1871,7 +1871,7 @@ const zhHant: Translations = {
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
     labelPrompt: "快照標籤（選填）：", created: "已建立快照 {id}。",
-    createFailed: "建立快照失敗：{error}", restore: "還原",
+    createFailed: "建立快照失敗：{error}", restore: "還原", download: "下載",
     restoreConfirm: "還原快照 {id}？目前狀態檔案將被覆寫。",
     restored: "已還原快照 {id}。請重啟閘道以載入還原的狀態。",
     restoreFailed: "還原失敗：{error}", prune: "清理\u2026",
@@ -2414,7 +2414,7 @@ const ja: Translations = {
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
     labelPrompt: "スナップショットのラベル（任意）:", created: "スナップショット {id} を作成しました。",
-    createFailed: "スナップショットに失敗しました: {error}", restore: "復元",
+    createFailed: "スナップショットに失敗しました: {error}", restore: "復元", download: "ダウンロード",
     restoreConfirm: "スナップショット {id} を復元しますか？現在の状態ファイルは上書きされます。",
     restored: "スナップショット {id} を復元しました。復元した状態の反映にはゲートウェイを再起動してください。",
     restoreFailed: "復元に失敗しました: {error}", prune: "枝切り\u2026",
@@ -2957,7 +2957,7 @@ const ar: Translations = {
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",
     labelPrompt: "تسمية اللقطة (اختياري):", created: "تم إنشاء اللقطة {id}.",
-    createFailed: "فشل إنشاء اللقطة: {error}", restore: "استعادة",
+    createFailed: "فشل إنشاء اللقطة: {error}", restore: "استعادة", download: "تنزيل",
     restoreConfirm: "استعادة اللقطة {id}؟ ستُستبدل ملفات الحالة الحالية.",
     restored: "تمت استعادة اللقطة {id}. أعد تشغيل البوابة لتحميل الحالة المستعادة.",
     restoreFailed: "فشل الاستعادة: {error}", prune: "تشذيب\u2026",

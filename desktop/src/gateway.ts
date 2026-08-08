@@ -3159,6 +3159,16 @@ export class GatewayClient {
     if (!response.ok) throw new Error(value.error || `restore HTTP ${response.status}`);
   }
 
+  /** Build a snapshot download URL (?token= auth; P610). */
+  backupDownloadUrl(id: string): string {
+    const params = new URLSearchParams();
+    if (this.settings.key) params.set("token", this.settings.key);
+    const query = params.toString();
+    return this.endpoint(
+      `/api/backups/${encodeURIComponent(id)}/download${query ? `?${query}` : ""}`,
+    );
+  }
+
   /** POST /api/backups/prune — keep only the newest `keep` snapshots. */
   async backupPrune(keep: number): Promise<number> {
     const response = await fetch(this.endpoint("/api/backups/prune"), {
