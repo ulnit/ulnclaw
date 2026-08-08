@@ -32,6 +32,8 @@ const SEARCH_KEY = "ulnclaw.sessions.search";
 const SORT_KEY = "ulnclaw.sessions.sort";
 // P453: persistence key for the project drill-down.
 const PROJECT_FILTER_KEY = "ulnclaw.sessions.projectFilter";
+// P469: persisted model quick-filter selection.
+const MODEL_FILTER_KEY = "ulnclaw.sessions.modelFilter";
 // P463: transcript tail window before the load-full banner appears.
 const TRANSCRIPT_LIMIT = 400;
 // P465: messages rendered per batch once the full transcript is loaded.
@@ -61,6 +63,8 @@ export class SessionsViewWidget {
   private transcriptTotal = 0;
   // P453: project drill-down set from the row chips.
   private projectFilter: string | null = localStorage.getItem(PROJECT_FILTER_KEY);
+  // P469: model quick-filter selection.
+  private modelFilter: string | null = localStorage.getItem(MODEL_FILTER_KEY);
   // P450: activity-first or title-first list sorting.
   private sortMode: "activity" | "title" =
     localStorage.getItem(SORT_KEY) === "title" ? "title" : "activity";
@@ -101,6 +105,7 @@ export class SessionsViewWidget {
             <option value="ended" data-i18n="sessionsView.statusEnded">Ended</option>
             <option value="archived" data-i18n="sessionsView.statusArchived">Archived</option>
           </select>
+          <select id="sessions-view-model-filter" data-i18n-title="sessionsView.modelFilterTitle"></select>
           <button id="sessions-view-reason-pill" class="sessions-view-reason-pill" hidden></button>
           <button id="sessions-view-project-pill" class="sessions-view-reason-pill" hidden></button>
           <input id="sessions-view-search" type="search" data-i18n-ph="sessionsView.searchPlaceholder" />
@@ -158,6 +163,12 @@ export class SessionsViewWidget {
     this.root.querySelector("#sessions-view-status-filter")!.addEventListener("change", () => {
       this.renderList();
     });
+    // P469: model quick-filter.
+    this.root.querySelector("#sessions-view-model-filter")!.addEventListener("change", () => {
+      const select = this.root.querySelector("#sessions-view-model-filter") as HTMLSelectElement;
+      this.modelFilter = select.value || null;
+      this.renderList();
+    });
     // P436: option labels are driven by updateStatusOptions (live counts);
     // strip data-i18n so applyStatic doesn't fight the count suffixes.
     const statusSelect = this.root.querySelector("#sessions-view-status-filter") as HTMLSelectElement;
@@ -169,7 +180,10 @@ export class SessionsViewWidget {
     }
     this.endReasonFilter = localStorage.getItem(REASON_FILTER_KEY);
     this.updateStatusOptions();
-    onLocaleChange(() => this.updateStatusOptions());
+    onLocaleChange(() => {
+      this.updateStatusOptions();
+      this.updateModelOptions();
+    });
     this.root.querySelector("#sessions-view-reason-pill")!.addEventListener("click", () => {
       this.endReasonFilter = null;
       this.renderList();
@@ -387,6 +401,29 @@ export class SessionsViewWidget {
       this.sortMode === "title" ? t.sessionsView.sortByTitle : t.sessionsView.sortByActivity;
   }
 
+  /** P469: rebuild the model filter options from the loaded sessions,
+   * keeping the selection when the model still exists. */
+  private updateModelOptions(): void {
+    const select = this.root.querySelector("#sessions-view-model-filter") as HTMLSelectElement;
+    if (!select) return;
+    const models = [...new Set(
+      this.all.map((session) => session.model).filter((model): model is string => !!model),
+    )].sort();
+    if (this.modelFilter && !models.includes(this.modelFilter)) this.modelFilter = null;
+    select.innerHTML = "";
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = t.sessionsView.modelAll;
+    select.appendChild(all);
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      select.appendChild(option);
+    }
+    select.value = this.modelFilter ?? "";
+  }
+
   /** P448: select a session from outside (command-palette bridge). */
   openSession(sessionId: string): void {
     this.selected = sessionId;
@@ -579,6 +616,10 @@ export class SessionsViewWidget {
       ended: this.all.filter((s) => s.end_reason && s.end_reason !== "archived").length,
       archived: this.all.filter((s) => s.end_reason === "archived").length,
     });
+    // P469: model quick-filter options + persistence.
+    this.updateModelOptions();
+    if (this.modelFilter) localStorage.setItem(MODEL_FILTER_KEY, this.modelFilter);
+    else localStorage.removeItem(MODEL_FILTER_KEY);
     this.visible = [];
     // P438: show/clear the end-reason drill-down pill.
     const reasonPill = this.root.querySelector("#sessions-view-reason-pill") as HTMLButtonElement;
@@ -601,6 +642,7 @@ export class SessionsViewWidget {
       localStorage.removeItem(PROJECT_FILTER_KEY);
     }
     const rows = this.all.filter((session) => {
+      if (this.modelFilter && session.model !== this.modelFilter) return false;
       if (this.projectFilter && session.project !== this.projectFilter) return false;
       if (this.endReasonFilter && session.end_reason !== this.endReasonFilter) return false;
       if (status === "open" && session.end_reason) return false;

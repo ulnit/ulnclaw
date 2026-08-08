@@ -149,6 +149,7 @@ export interface Translations {
     reasonFilter: string;
     sortByActivity: string; sortByTitle: string;
     projectFilter: string;
+    modelFilterTitle: string; modelAll: string;
     copyMessageTitle: string; copied: string; copyFailed: string;
     loadFull: string;
     showEarlier: string;
@@ -496,6 +497,7 @@ const en: Translations = {
     reasonFilter: "End reason: {reason} — click to clear",
     sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity",
     projectFilter: "Project: {project} — click to clear",
+    modelFilterTitle: "Filter by model", modelAll: "All models",
     copyMessageTitle: "Copy message", copied: "Message copied.", copyFailed: "Copy failed.",
     loadFull: "Showing the last {count} messages — click to load the full transcript",
     showEarlier: "Show earlier messages ({count} more)",
@@ -971,6 +973,7 @@ const zh: Translations = {
     reasonFilter: "结束原因：{reason}——点击清除",
     sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序",
     projectFilter: "项目：{project}——点击清除",
+    modelFilterTitle: "按模型筛选", modelAll: "全部模型",
     copyMessageTitle: "复制消息", copied: "消息已复制。", copyFailed: "复制失败。",
     loadFull: "当前仅显示最近 {count} 条消息——点击加载完整转录",
     showEarlier: "显示更早的消息（还有 {count} 条）",
@@ -1446,6 +1449,7 @@ const zhHant: Translations = {
     reasonFilter: "結束原因：{reason}——點選清除",
     sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序",
     projectFilter: "專案：{project}——點選清除",
+    modelFilterTitle: "依模型篩選", modelAll: "全部模型",
     copyMessageTitle: "複製訊息", copied: "訊息已複製。", copyFailed: "複製失敗。",
     loadFull: "目前僅顯示最近 {count} 則訊息——點選載入完整轉錄",
     showEarlier: "顯示更早的訊息（還有 {count} 則）",
@@ -1921,6 +1925,7 @@ const ja: Translations = {
     reasonFilter: "終了理由：{reason} — クリックで解除",
     sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に切り替え", sortByTitle: "タイトル順 — クリックでアクティビティ順に切り替え",
     projectFilter: "プロジェクト：{project} — クリックで解除",
+    modelFilterTitle: "モデルで絞り込み", modelAll: "すべてのモデル",
     copyMessageTitle: "メッセージをコピー", copied: "メッセージをコピーしました。", copyFailed: "コピーに失敗しました。",
     loadFull: "直近 {count} メッセージのみ表示中 — クリックで全文を読み込む",
     showEarlier: "以前のメッセージを表示（あと {count} 件）",
@@ -2396,6 +2401,7 @@ const ar: Translations = {
     reasonFilter: "سبب الانتهاء: {reason} — انقر للإزالة",
     sortByActivity: "مرتبة حسب النشاط الأخير — انقر للترتيب حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للترتيب حسب النشاط الأخير",
     projectFilter: "المشروع: {project} — انقر للإزالة",
+    modelFilterTitle: "تصفية حسب النموذج", modelAll: "جميع النماذج",
     copyMessageTitle: "نسخ الرسالة", copied: "تم نسخ الرسالة.", copyFailed: "فشل النسخ.",
     loadFull: "يتم عرض آخر {count} رسالة فقط — انقر لتحميل النسخة الكاملة",
     showEarlier: "عرض الرسائل السابقة ({count} إضافية)",
