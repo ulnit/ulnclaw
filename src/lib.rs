@@ -110,6 +110,7 @@ pub mod acp_adapter;
 pub mod batch_runner;
 pub mod config;
 pub mod config_cmd;
+pub mod migrate;
 pub mod context;
 pub mod cron;
 pub mod desktop;

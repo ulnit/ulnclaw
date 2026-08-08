@@ -611,6 +611,17 @@ enum Commands {
     },
     /// Safe non-LLM command console — REPL over the CLI commands (hermes console)
     Console,
+    /// Migrate config for retired models / deprecated settings (hermes migrate)
+    Migrate {
+        /// Migration to run: xai
+        migration: Option<String>,
+        /// Rewrite config.toml in place (default: dry run)
+        #[arg(long)]
+        apply: bool,
+        /// Skip the automatic config backup on --apply
+        #[arg(long)]
+        no_backup: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2659,6 +2670,9 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
             let fut: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>> =
                 Box::pin(console_cmd(&config));
             fut.await
+        }
+        Commands::Migrate { migration, apply, no_backup } => {
+            migrate_cmd(migration.as_deref(), apply, no_backup, cli.config.clone())
         }
         Commands::Weixin { action } => weixin_cmd(action).await,
         Commands::Qq { action } => qq_cmd(action).await,
@@ -10523,6 +10537,80 @@ async fn moa_cmd(
         }
     }
     Ok(())
+}
+
+/// `ulnclaw migrate [xai] [--apply] [--no-backup]` — hermes migrate
+/// parity: diagnose (and optionally rewrite) config references to
+/// retired models.
+fn migrate_cmd(
+    migration: Option<&str>,
+    apply: bool,
+    no_backup: bool,
+    config_override: Option<String>,
+) -> Result<(), String> {
+    match migration {
+        None => {
+            println!("usage: ulnclaw migrate <migration> [--apply] [--no-backup]");
+            println!();
+            println!("Available migrations:");
+            println!(
+                "  xai    Replace xAI models retired {} (dry-run by default)",
+                ulnclaw::migrate::XAI_RETIREMENT_DATE
+            );
+            Ok(())
+        }
+        Some("xai") => {
+            let path = config_override
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(ulnclaw::config_cmd::config_path);
+            let (issues, applied) =
+                ulnclaw::migrate::run_xai_migration(&path, apply, !no_backup)?;
+            println!(
+                "\u{25C6} xAI Model Retirement Migration ({})",
+                ulnclaw::migrate::XAI_RETIREMENT_DATE
+            );
+            println!();
+            if issues.is_empty() {
+                println!("  \u{2713} No retired xAI models in config \u{2014} nothing to migrate.");
+                return Ok(());
+            }
+            println!("  Found {} retired xAI model reference(s):", issues.len());
+            println!();
+            for issue in &issues {
+                print!(
+                    "    \u{26A0} {} = \"{}\" \u{2192} \"{}\"",
+                    issue.path, issue.current, issue.replacement
+                );
+                if let Some(effort) = issue.reasoning_effort {
+                    print!(
+                        "  (set reasoning_effort = \"{effort}\" to keep non-reasoning behavior)"
+                    );
+                }
+                println!();
+            }
+            println!();
+            println!(
+                "    \u{2192} Migration guide: {}",
+                ulnclaw::migrate::XAI_MIGRATION_GUIDE_URL
+            );
+            println!();
+            if apply {
+                println!(
+                    "  \u{2713} Rewrote {applied} reference(s) in {}{}",
+                    path.display(),
+                    if no_backup { "" } else { " (backup: .toml.bak)" }
+                );
+            } else {
+                println!("  Dry-run mode \u{2014} no changes written.");
+                println!(
+                    "  Re-run with `ulnclaw migrate xai --apply` to rewrite {} in-place.",
+                    path.display()
+                );
+            }
+            Ok(())
+        }
+        Some(other) => Err(format!("Unknown migration: {other} (available: xai)")),
+    }
 }
 
 fn tools_cmd(
