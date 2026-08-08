@@ -112,6 +112,7 @@ const el = {
   contextMeter: document.getElementById("context-meter")!,
   contextMeterFill: document.getElementById("context-meter-fill")!,
   contextMeterText: document.getElementById("context-meter-text")!,
+  dayJump: document.getElementById("day-jump") as HTMLSelectElement,
   input: document.getElementById("input") as HTMLTextAreaElement,
   send: document.getElementById("send") as HTMLButtonElement,
   mic: document.getElementById("mic") as HTMLButtonElement,
@@ -406,22 +407,25 @@ function dayKey(timestamp: number): string {
   return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 }
 
-function addDayDivider(timestamp: number): void {
+function sameCalendarDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function dayLabel(timestamp: number, options: Intl.DateTimeFormatOptions): string {
   const date = new Date(timestamp * 1000);
-  const now = new Date();
-  const isToday =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  const label = isToday
-    ? t.session.dayToday
-    : date.toLocaleDateString(LOCALE_DATE_TAGS[currentLocale()] ?? "en-US", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      });
+  if (sameCalendarDay(date, new Date())) return t.session.dayToday;
+  return date.toLocaleDateString(LOCALE_DATE_TAGS[currentLocale()] ?? "en-US", options);
+}
+
+function addDayDivider(timestamp: number): void {
+  const label = dayLabel(timestamp, { year: "numeric", month: "long", day: "numeric" });
   const divider = document.createElement("div");
   divider.className = "day-divider";
+  divider.dataset.day = dayKey(timestamp);
   const text = document.createElement("span");
   text.className = "day-divider-label";
   text.textContent = label;
@@ -434,17 +438,20 @@ async function openSession(session: SessionRow): Promise<void> {
   el.chatTitle.textContent = session.title || session.id.slice(0, 8);
   refreshModelBadge();
   el.messages.innerHTML = "";
+  el.dayJump.hidden = true;
   renderSessions();
   try {
     const messages = await state.client!.messages(session.id, { timestamps: true });
     let rendered = 0;
     let lastDay = "";
+    const days: { key: string; timestamp: number }[] = [];
     for (const message of messages) {
       if (message.role === "system" || !message.content) continue;
       if (typeof message.timestamp === "number" && message.timestamp > 0) {
         const day = dayKey(message.timestamp);
         if (day !== lastDay) {
           addDayDivider(message.timestamp);
+          days.push({ key: day, timestamp: message.timestamp });
           lastDay = day;
         }
       }
@@ -453,11 +460,29 @@ async function openSession(session: SessionRow): Promise<void> {
     }
     // Empty transcript → welcome copy (P255, hermes chat intro parity).
     if (rendered === 0) renderIntro(el.messages, session.id);
+    renderDayJump(days);
   } catch (error) {
     addMessage("system", fmt(t.session.loadFailed, { error }));
   }
   state.findBar?.refresh();
   void updateContextMeter();
+}
+
+/** P375: chat-header day jump — transcripts spanning two or more days
+ * list their days in a dropdown that scrolls to the picked divider. */
+function renderDayJump(days: { key: string; timestamp: number }[]): void {
+  el.dayJump.innerHTML = "";
+  if (days.length < 2) {
+    el.dayJump.hidden = true;
+    return;
+  }
+  for (const day of days) {
+    const option = document.createElement("option");
+    option.value = day.key;
+    option.textContent = dayLabel(day.timestamp, { month: "short", day: "numeric" });
+    el.dayJump.appendChild(option);
+  }
+  el.dayJump.hidden = false;
 }
 
 async function refreshSessions(): Promise<void> {
@@ -1543,6 +1568,7 @@ async function start(): Promise<void> {
   el.newSession.onclick = async () => {
     state.current = null;
     el.contextMeter.hidden = true;
+    el.dayJump.hidden = true;
     el.chatTitle.textContent = t.session.newTitle;
     el.messages.innerHTML = "";
     renderIntro(el.messages, "new");
@@ -1554,6 +1580,13 @@ async function start(): Promise<void> {
   el.sessionFilter.addEventListener("input", () => {
     state.sessionFilterText = el.sessionFilter.value;
     renderSessions();
+  });
+
+  // P375: day jump scrolls the matching divider into view.
+  el.dayJump.addEventListener("change", () => {
+    const key = el.dayJump.value;
+    const divider = el.messages.querySelector<HTMLElement>(`.day-divider[data-day="${key}"]`);
+    divider?.scrollIntoView({ block: "start" });
   });
   el.send.onclick = () => void sendTurn();
   el.mic.onclick = () => void toggleMic();
