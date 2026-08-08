@@ -24,6 +24,8 @@ function fmtWhen(ts: number | null | undefined): string {
 // P440: persistence keys for the list filters.
 const STATUS_FILTER_KEY = "ulnclaw.sessions.statusFilter";
 const REASON_FILTER_KEY = "ulnclaw.sessions.reasonFilter";
+// P446: persistence key for the selected session.
+const SELECTED_KEY = "ulnclaw.sessions.selected";
 
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
@@ -38,6 +40,8 @@ export class SessionsViewWidget {
   // P443: keyboard navigation state for the list.
   private visible: SessionRow[] = [];
   private kbIndex = 0;
+  // P446: whether the persisted selection has been restored this mount.
+  private restored = false;
 
   constructor(
     private root: HTMLElement,
@@ -264,6 +268,15 @@ export class SessionsViewWidget {
     try {
       this.all = await client.listSessions();
       this.all.sort((a, b) => (b.last_activity_at || b.started_at) - (a.last_activity_at || a.started_at));
+      // P446: restore the persisted selection on the first load.
+      if (!this.restored) {
+        this.restored = true;
+        const saved = localStorage.getItem(SELECTED_KEY);
+        if (saved && !this.selected && this.all.some((session) => session.id === saved)) {
+          this.selected = saved;
+          this.loadTranscript(saved).catch(() => undefined);
+        }
+      }
       (this.root.querySelector("#sessions-view-count") as HTMLElement).textContent =
         t.sessionsView.count.replace("{count}", String(this.all.length));
       this.renderList();
@@ -440,6 +453,10 @@ export class SessionsViewWidget {
 
   private renderList(): void {
     const list = this.root.querySelector("#sessions-view-list") as HTMLElement;
+    // P446: persist the current selection for the next visit.
+    if (this.selected) {
+      localStorage.setItem(SELECTED_KEY, this.selected);
+    }
     const filter = (this.root.querySelector("#sessions-view-filter") as HTMLInputElement).value
       .trim()
       .toLowerCase();
@@ -687,6 +704,7 @@ export class SessionsViewWidget {
       (this.root.querySelector("#sessions-delete-dialog") as HTMLDialogElement).close();
       this.status(t.sessionsView.deleted.replace("{id}", sessionId.slice(0, 12)), false);
       this.selected = null;
+      localStorage.removeItem(SELECTED_KEY);
       const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
       pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.select)}</p>`;
       for (const id of ["#sessions-view-export", "#sessions-view-export-html", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-open-chat", "#sessions-view-delete", "#sessions-view-rename"]) {
