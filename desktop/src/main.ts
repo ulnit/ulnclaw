@@ -800,7 +800,12 @@ async function updateStatusBar(): Promise<void> {
     return;
   }
   try {
-    const info = await state.client.systemInfo();
+    const [info, usage] = await Promise.all([
+      state.client.systemInfo(),
+      // P370: process token/tool census for the status bar; keep the
+      // payload small — only the summary cards matter here.
+      state.client.usage(1).catch(() => null),
+    ]);
     const segs: string[] = [
       `v${info.version} · ${info.os}/${info.arch} · ${t.chrome.statusUp.replace("{duration}", formatUptime(info.uptime_secs))}`,
     ];
@@ -808,6 +813,13 @@ async function updateStatusBar(): Promise<void> {
     segs.push(t.chrome.statusSessions.replace("{count}", String(info.sessions)));
     segs.push(t.chrome.statusRuns.replace("{count}", String(info.active_runs)));
     segs.push(t.chrome.statusPlugins.replace("{count}", String(info.plugins_loaded)));
+    if (usage) {
+      segs.push(
+        t.chrome.statusTokens
+          .replace("{tokens}", formatTokens(usage.process.total_tokens))
+          .replace("{calls}", String(usage.process.tool_calls)),
+      );
+    }
     el.statusbar.innerHTML = segs
       .map((seg) => `<span class="statusbar-seg">${seg}</span>`)
       .join("");
