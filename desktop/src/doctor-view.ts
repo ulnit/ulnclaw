@@ -27,6 +27,8 @@ function escapeHtmlDoctor(text: string): string {
 export class DoctorWidget {
   private busy = false;
   private lastReport: DoctorPayload | null = null;
+  /** P527: severity filter applied to the rendered check rows. */
+  private levelFilter: "all" | "warn" | "fail" = "all";
   private logsTimer: number | null = null;
   private mcpPollers: number[] = [];
 
@@ -43,6 +45,11 @@ export class DoctorWidget {
           <input id="doctor-online-check" type="checkbox" />
           <span data-i18n="doctor.online">Include provider connectivity probes (slow)</span>
         </label>
+        <select id="doctor-level-filter" data-i18n-title="doctor.levelTitle">
+          <option value="all" data-i18n="doctor.levelAll">All levels</option>
+          <option value="warn" data-i18n="doctor.levelWarn">Warnings + failures</option>
+          <option value="fail" data-i18n="doctor.levelFail">Failures only</option>
+        </select>
         <button id="doctor-export" class="ghost" data-i18n="doctor.exportJson" hidden>JSON</button>
         <span class="spacer"></span>
         <span id="doctor-status" class="jobs-counts"></span>
@@ -145,6 +152,15 @@ export class DoctorWidget {
     });
     this.root.querySelector("#doctor-run")!.addEventListener("click", () => {
       this.run().catch(() => undefined);
+    });
+    // P527: re-render the cached report through the severity filter.
+    this.root.querySelector("#doctor-level-filter")!.addEventListener("change", () => {
+      const select = this.root.querySelector("#doctor-level-filter") as HTMLSelectElement;
+      this.levelFilter =
+        select.value === "fail" ? "fail" : select.value === "warn" ? "warn" : "all";
+      if (this.lastReport) {
+        this.render(this.lastReport.report.sections, this.lastReport.report.issues);
+      }
     });
     this.root.querySelector("#ops-audit-btn")!.addEventListener("click", () => {
       this.runOps("securityAudit").catch(() => undefined);
@@ -1517,7 +1533,27 @@ export class DoctorWidget {
       body.appendChild(empty);
       return;
     }
-    for (const section of sections) {
+    // P527: severity filter — "warn" keeps warnings + failures, "fail"
+    // keeps failures only; sections left empty are hidden entirely.
+    const keep = (level: DoctorCheck["level"]): boolean =>
+      this.levelFilter === "all" ||
+      (this.levelFilter === "warn"
+        ? level === "warn" || level === "fail"
+        : level === "fail");
+    const filtered = sections
+      .map((section) => ({
+        title: section.title,
+        checks: section.checks.filter((check) => keep(check.level)),
+      }))
+      .filter((section) => section.checks.length > 0);
+    if (filtered.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "config-note";
+      empty.textContent = t.doctor.filterNoMatch;
+      body.appendChild(empty);
+      return;
+    }
+    for (const section of filtered) {
       const header = document.createElement("h3");
       header.className = "config-section";
       header.textContent = section.title;

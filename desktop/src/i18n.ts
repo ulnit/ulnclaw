@@ -239,6 +239,7 @@ export interface Translations {
   doctor: {
     run: string; running: string; online: string; issues: string;
     noIssues: string; failed: string; empty: string; exportJson: string;
+    levelTitle: string; levelAll: string; levelWarn: string; levelFail: string; filterNoMatch: string;
   };
   webhooks: {
     count: string; empty: string; loadFailed: string; createTitle: string;
@@ -636,6 +637,7 @@ const en: Translations = {
     online: "Include provider connectivity probes (slow)",
     issues: "Issues found", noIssues: "✓ No issues found.",
     failed: "Doctor run failed: {error}", empty: "No checks reported.", exportJson: "Export JSON",
+    levelTitle: "Filter checks by severity", levelAll: "All levels", levelWarn: "Warnings + failures", levelFail: "Failures only", filterNoMatch: "No checks match this severity filter.",
   },
   webhooks: {
     count: "{count} subscription(s)", empty: "No dynamic webhook subscriptions yet.",
@@ -1131,6 +1133,7 @@ const zh: Translations = {
     online: "包含 provider 连通性探测（较慢）",
     issues: "发现的问题", noIssues: "✓ 未发现问题。",
     failed: "诊断失败：{error}", empty: "没有检查项。", exportJson: "导出 JSON",
+    levelTitle: "按严重级别筛选检查项", levelAll: "全部级别", levelWarn: "警告与失败", levelFail: "仅失败", filterNoMatch: "没有匹配该严重级别的检查项。",
   },
   webhooks: {
     count: "{count} 个订阅", empty: "还没有动态 webhook 订阅。",
@@ -1626,6 +1629,7 @@ const zhHant: Translations = {
     online: "包含 provider 連通性探測（較慢）",
     issues: "發現的問題", noIssues: "✓ 未發現問題。",
     failed: "診斷失敗：{error}", empty: "沒有檢查項。", exportJson: "匯出 JSON",
+    levelTitle: "依嚴重程度篩選檢查項", levelAll: "全部層級", levelWarn: "警告與失敗", levelFail: "僅失敗", filterNoMatch: "沒有匹配該嚴重程度的檢查項。",
   },
   webhooks: {
     count: "{count} 個訂閱", empty: "還沒有動態 webhook 訂閱。",
@@ -2121,6 +2125,7 @@ const ja: Translations = {
     online: "プロバイダー接続Probeを含む（低速）",
     issues: "見つかった問題", noIssues: "✓ 問題は見つかりませんでした。",
     failed: "ドクター実行に失敗：{error}", empty: "チェック項目がありません。", exportJson: "JSON をエクスポート",
+    levelTitle: "重要度でチェックを絞り込み", levelAll: "すべてのレベル", levelWarn: "警告と失敗", levelFail: "失敗のみ", filterNoMatch: "この重要度に一致するチェック項目はありません。",
   },
   webhooks: {
     count: "{count} 件の購読", empty: "動的 webhook 購読はまだありません。",
@@ -2616,6 +2621,7 @@ const ar: Translations = {
     online: "تضمين اختبارات اتصال المزودين (بطيء)",
     issues: "المشاكل المكتشفة", noIssues: "✓ لم يتم العثور على مشاكل.",
     failed: "فشل الفحص: {error}", empty: "لا توجد فحوصات.", exportJson: "تصدير JSON",
+    levelTitle: "تصفية الفحوصات حسب الخطورة", levelAll: "جميع المستويات", levelWarn: "تحذيرات وأعطال", levelFail: "الأعطال فقط", filterNoMatch: "لا توجد فحوصات تطابق مستوى الخطورة هذا.",
   },
   webhooks: {
     count: "{count} اشتراك(ات)", empty: "لا توجد اشتراكات ويب هوك ديناميكية بعد.",
