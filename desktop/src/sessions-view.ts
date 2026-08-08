@@ -236,6 +236,16 @@ export class SessionsViewWidget {
       } else if (event.key === "PageDown") {
         event.preventDefault();
         pane.scrollTop += pane.clientHeight * 0.9;
+      } else if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        (event.key === "ArrowUp" || event.key === "ArrowDown")
+      ) {
+        // P480: step between day dividers.
+        event.preventDefault();
+        this.jumpDayDivider(event.key === "ArrowDown" ? 1 : -1);
       }
     });
     // P450: the count header toggles activity ↔ title sorting.
@@ -1001,6 +1011,28 @@ export class SessionsViewWidget {
         );
       });
     });
+  }
+
+  /** P480: step between day dividers in the transcript pane. */
+  private jumpDayDivider(direction: 1 | -1): void {
+    const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    const dividers = Array.from(pane.querySelectorAll<HTMLElement>(".day-divider"));
+    if (!dividers.length) return;
+    const paneTop = pane.getBoundingClientRect().top;
+    let target: HTMLElement | null = null;
+    if (direction === 1) {
+      target = dividers.find((divider) => divider.getBoundingClientRect().top - paneTop > 4) ?? null;
+    } else {
+      for (let i = dividers.length - 1; i >= 0; i--) {
+        if (dividers[i].getBoundingClientRect().top - paneTop < -4) {
+          target = dividers[i];
+          break;
+        }
+      }
+      target = target ?? dividers[0];
+    }
+    if (!target) return;
+    pane.scrollTop += target.getBoundingClientRect().top - paneTop - 8;
   }
 
   /** P479: local calendar-day key for divider lookup. */
