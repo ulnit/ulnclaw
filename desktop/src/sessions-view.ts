@@ -102,6 +102,7 @@ export class SessionsViewWidget {
         <button id="sessions-view-import" class="ghost" data-i18n="sessionsView.import" data-i18n-title="sessionsView.importTitle"></button>
         <button id="sessions-view-prune" class="ghost" data-i18n="sessionsView.prune" data-i18n-title="sessionsView.pruneTitle"></button>
         <button id="sessions-view-archive" class="ghost" data-i18n="sessionsView.archive" data-i18n-title="sessionsView.archiveTitle"></button>
+        <select id="sessions-view-dayjump" class="ghost" data-i18n-title="session.dayJumpTitle" hidden></select>
         <button id="sessions-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="sessions-view-status" class="config-status" hidden></div>
@@ -171,6 +172,18 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-status-filter")!.addEventListener("change", () => {
       this.renderList();
+    });
+    // P479: date-jump dropdown over the transcript's day dividers.
+    this.root.querySelector("#sessions-view-dayjump")!.addEventListener("change", () => {
+      const select = this.root.querySelector("#sessions-view-dayjump") as HTMLSelectElement;
+      const day = select.value;
+      select.value = "";
+      if (!day) return;
+      const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+      pane.querySelector<HTMLElement>(`.day-divider[data-day="${day}"]`)?.scrollIntoView({
+        block: "start",
+        behavior: "smooth",
+      });
     });
     // P469: model quick-filter.
     this.root.querySelector("#sessions-view-model-filter")!.addEventListener("change", () => {
@@ -395,6 +408,7 @@ export class SessionsViewWidget {
         this.bindCopyButtons(holder);
         for (const node of Array.from(holder.children)) pane.appendChild(node);
         this.syncDayDividers(pane);
+      this.updateDayJump(pane);
         const session = this.all.find((candidate) => candidate.id === sessionId);
         const existing = pane.querySelector(".sessions-view-meta");
         if (session && existing) {
@@ -854,6 +868,7 @@ export class SessionsViewWidget {
       pane.innerHTML = meta + this.renderMessages(messages.slice(this.transcriptStart));
       this.updateTranscriptBanner(sessionId);
       this.syncDayDividers(pane);
+      this.updateDayJump(pane);
       // P454: per-message copy actions.
       this.bindCopyButtons(pane);
       pane.scrollTop = 0;
@@ -875,6 +890,7 @@ export class SessionsViewWidget {
         ),
       )}</p>`;
       exportBtn.hidden = true;
+      (this.root.querySelector("#sessions-view-dayjump") as HTMLSelectElement).hidden = true;
       (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-export-json") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = true;
@@ -929,6 +945,7 @@ export class SessionsViewWidget {
     pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
     this.updateTranscriptBanner(sessionId);
     this.syncDayDividers(pane);
+      this.updateDayJump(pane);
     this.findBar?.refresh();
   }
 
@@ -956,6 +973,7 @@ export class SessionsViewWidget {
       pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
       this.updateTranscriptBanner(sessionId);
       this.syncDayDividers(pane);
+      this.updateDayJump(pane);
       this.findBar?.refresh();
     } catch (error) {
       this.status(
@@ -983,6 +1001,40 @@ export class SessionsViewWidget {
         );
       });
     });
+  }
+
+  /** P479: local calendar-day key for divider lookup. */
+  private dayKey(timestamp: number): string {
+    const date = new Date(timestamp * 1000);
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${date.getFullYear()}-${month}-${day}`;
+  }
+
+  /** P479: populate the date-jump dropdown from the rendered dividers. */
+  private updateDayJump(pane: HTMLElement): void {
+    const select = this.root.querySelector("#sessions-view-dayjump") as HTMLSelectElement;
+    if (!select) return;
+    const dividers = Array.from(pane.querySelectorAll<HTMLElement>(".day-divider"));
+    if (dividers.length < 2) {
+      select.hidden = true;
+      select.innerHTML = "";
+      return;
+    }
+    const current = select.value;
+    select.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = t.session.dayJumpTitle;
+    select.appendChild(placeholder);
+    for (const divider of dividers) {
+      const option = document.createElement("option");
+      option.value = divider.dataset.day || "";
+      option.textContent = divider.querySelector(".day-divider-label")?.textContent ?? option.value;
+      select.appendChild(option);
+    }
+    select.value = dividers.some((divider) => divider.dataset.day === current) ? current : "";
+    select.hidden = false;
   }
 
   /** P477: localized calendar-day label for transcript day dividers. */
@@ -1015,6 +1067,7 @@ export class SessionsViewWidget {
         ) {
           const divider = document.createElement("div");
           divider.className = "day-divider";
+          divider.dataset.day = this.dayKey(ts);
           const label = document.createElement("span");
           label.className = "day-divider-label";
           label.textContent = this.dayLabel(ts);
@@ -1152,8 +1205,8 @@ export class SessionsViewWidget {
       localStorage.removeItem(SELECTED_KEY);
       const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
       pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.select)}</p>`;
-      for (const id of ["#sessions-view-export", "#sessions-view-export-html", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-open-chat", "#sessions-view-delete", "#sessions-view-rename"]) {
-        (this.root.querySelector(id) as HTMLButtonElement).hidden = true;
+      for (const id of ["#sessions-view-export", "#sessions-view-export-html", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-open-chat", "#sessions-view-delete", "#sessions-view-rename", "#sessions-view-dayjump"]) {
+        (this.root.querySelector(id) as HTMLElement).hidden = true;
       }
       await this.refresh();
     } catch (error) {
