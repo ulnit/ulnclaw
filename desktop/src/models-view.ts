@@ -44,6 +44,8 @@ export class ModelsViewWidget {
       <div id="models-view-body" class="models-view-body"></div>
       <h3 class="config-section" data-i18n="modelsView.auxTitle">Auxiliary task models</h3>
       <div id="models-view-aux"></div>
+      <h3 class="config-section" data-i18n="modelsView.moaTitle">Mixture-of-Agents presets</h3>
+      <div id="models-view-moa"></div>
       <h3 class="config-section" data-i18n="modelsView.usageTitle">Model usage (30 days)</h3>
       <div id="models-view-usage"></div>
       <h3 class="config-section" data-i18n="modelsView.endpointsTitle">Custom endpoints</h3>
@@ -110,6 +112,7 @@ export class ModelsViewWidget {
       this.render(payload, this.filterQuery());
       this.renderGatewayModel().catch(() => undefined);
       this.renderAuxiliary().catch(() => undefined);
+      this.renderMoa().catch(() => undefined);
       this.renderUsage().catch(() => undefined);
       this.renderEndpoints().catch(() => undefined);
       this.status("");
@@ -466,6 +469,95 @@ export class ModelsViewWidget {
         v.auxFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
         true,
       );
+    }
+  }
+
+  /** MoA preset summary + JSON editor (GET/PUT /api/model/moa; hermes
+   * MoA dashboard parity, lean; P606). */
+  private async renderMoa(): Promise<void> {
+    const client = this.client();
+    const box = this.root.querySelector("#models-view-moa") as HTMLElement;
+    if (!client) {
+      box.innerHTML = "";
+      return;
+    }
+    const v = t.modelsView;
+    try {
+      const payload = await client.modelMoa();
+      box.innerHTML = "";
+      const names = Object.keys(payload.presets || {});
+      if (names.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "config-note";
+        empty.textContent = v.moaEmpty;
+        box.appendChild(empty);
+      }
+      for (const name of names.sort()) {
+        const preset = payload.presets[name];
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const label = document.createElement("span");
+        label.className = "monitoring-label";
+        label.textContent = name === payload.default_preset ? `${name} ★` : name;
+        const value = document.createElement("span");
+        value.className = "monitoring-value";
+        const refs = (preset.reference_models || [])
+          .map((slot) => `${slot.provider}:${slot.model}${slot.enabled === false ? " (off)" : ""}`)
+          .join(", ");
+        value.textContent = `${v.moaRefs}: ${refs} — ${v.moaAggregator}: ${preset.aggregator?.provider}:${preset.aggregator?.model}`;
+        value.title = value.textContent;
+        row.append(label, value);
+        box.appendChild(row);
+      }
+      const hint = document.createElement("p");
+      hint.className = "config-note";
+      hint.textContent = v.moaHint;
+      box.appendChild(hint);
+      const editor = document.createElement("textarea");
+      editor.className = "models-view-moa-editor";
+      editor.spellcheck = false;
+      const editable = {
+        default_preset: payload.default_preset ?? "",
+        presets: payload.presets || {},
+      };
+      editor.value = JSON.stringify(editable, null, 2);
+      box.appendChild(editor);
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "ghost";
+      saveBtn.textContent = v.moaSave;
+      saveBtn.addEventListener("click", () => {
+        void this.saveMoa(editor, saveBtn);
+      });
+      box.appendChild(saveBtn);
+    } catch {
+      box.innerHTML = "";
+    }
+  }
+
+  /** Validate the editor JSON and PUT it (P606). */
+  private async saveMoa(editor: HTMLTextAreaElement, button: HTMLButtonElement): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const v = t.modelsView;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(editor.value);
+    } catch {
+      this.status(v.moaBadJson, true);
+      return;
+    }
+    button.disabled = true;
+    try {
+      await client.modelMoaSave(parsed);
+      this.status(v.moaSaved);
+      await this.renderMoa();
+    } catch (error) {
+      this.status(
+        v.moaFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
+        true,
+      );
+    } finally {
+      button.disabled = false;
     }
   }
 

@@ -697,6 +697,25 @@ export interface McpServerRow {
   cached_tools?: { name: string; description: string }[];
 }
 
+export interface MoaSlotConfig {
+  provider: string;
+  model: string;
+  enabled?: boolean;
+}
+
+export interface MoaPresetConfig {
+  reference_models: MoaSlotConfig[];
+  aggregator: MoaSlotConfig;
+  degraded_reference_policy?: string;
+}
+
+export interface MoaConfigPayload {
+  default_preset?: string;
+  presets: Record<string, MoaPresetConfig>;
+  reference_models?: MoaSlotConfig[];
+  aggregator?: MoaSlotConfig;
+}
+
 export interface McpCatalogEntry {
   name: string;
   description: string;
@@ -2691,6 +2710,26 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
     return value as { ok: boolean; task: string; reset: boolean };
+  }
+
+  /** GET /api/model/moa — MoA presets + flattened default view (P606). */
+  async modelMoa(): Promise<MoaConfigPayload> {
+    const response = await fetch(this.endpoint("/api/model/moa"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `moa HTTP ${response.status}`);
+    return value as MoaConfigPayload;
+  }
+
+  /** PUT /api/model/moa — replace [moa] presets (P606). */
+  async modelMoaSave(body: unknown): Promise<{ ok: boolean; presets: number }> {
+    const response = await fetch(this.endpoint("/api/model/moa"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `moa HTTP ${response.status}`);
+    return value as { ok: boolean; presets: number };
   }
 
   /** GET /api/model/recommended-default — sensible default model for a

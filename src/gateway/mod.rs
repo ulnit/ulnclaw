@@ -1451,6 +1451,111 @@ fn model_set_auxiliary(body: Value, provider: String, model: String) -> Response
     .into_response()
 }
 
+/// Drop JSON null leaves so `json_to_toml` does not materialize optional
+/// fields as empty strings (which would break typed re-parses).
+fn strip_json_nulls(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .filter(|(_, item)| !item.is_null())
+                .map(|(key, item)| (key, strip_json_nulls(item)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .filter(|item| !item.is_null())
+                .map(strip_json_nulls)
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// `GET /api/model/moa` — MoA preset configuration plus a flattened view
+/// of the resolved default preset (hermes `/api/model/moa` parity).
+async fn model_moa_get() -> Response {
+    let path = crate::config_cmd::config_path();
+    let config = crate::config::UlncLawConfig::load(Some(&path)).unwrap_or_default();
+    let mut value = serde_json::to_value(&config.moa).unwrap_or_else(|_| json!({}));
+    if let Ok((name, preset)) = config.moa.resolve_preset(None) {
+        value["default_preset"] = json!(name);
+        value["reference_models"] =
+            serde_json::to_value(&preset.reference_models).unwrap_or_else(|_| json!([]));
+        value["aggregator"] = serde_json::to_value(&preset.aggregator).unwrap_or_else(|_| json!({}));
+        value["degraded_reference_policy"] = json!(preset.degraded_reference_policy);
+    }
+    Json(value).into_response()
+}
+
+/// `PUT /api/model/moa` — replace the `[moa]` section with validated
+/// presets (hermes `PUT /api/model/moa` parity, lean: presets form only).
+async fn model_moa_put(Json(body): Json<Value>) -> Response {
+    let moa: crate::config::MoaConfig = match serde_json::from_value(body) {
+        Ok(parsed) => parsed,
+        Err(e) => return bad_request(&format!("invalid moa config: {e}"), None),
+    };
+    if moa.presets.is_empty() {
+        return bad_request("at least one preset is required", None);
+    }
+    for (name, preset) in &moa.presets {
+        if preset.aggregator.provider.trim().is_empty() || preset.aggregator.model.trim().is_empty() {
+            return bad_request(
+                &format!("preset '{name}' aggregator needs provider and model"),
+                None,
+            );
+        }
+        if preset.reference_models.is_empty() {
+            return bad_request(
+                &format!("preset '{name}' needs at least one reference model"),
+                None,
+            );
+        }
+        for (index, slot) in preset.reference_models.iter().enumerate() {
+            if slot.provider.trim().is_empty() || slot.model.trim().is_empty() {
+                return bad_request(
+                    &format!("preset '{name}' reference #{index} needs provider and model"),
+                    None,
+                );
+            }
+        }
+    }
+    if let Some(default_name) = moa.default_preset.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        if !moa.presets.contains_key(default_name) {
+            return bad_request(
+                &format!("default_preset '{default_name}' is not among the presets"),
+                None,
+            );
+        }
+    }
+    let cleaned = match serde_json::to_value(&moa) {
+        Ok(value) => strip_json_nulls(value),
+        Err(e) => return server_error(&format!("moa serialize failed: {e}")),
+    };
+    let moa_toml = match json_to_toml(cleaned) {
+        Ok(value) => value,
+        Err(e) => return bad_request(&e, None),
+    };
+    let path = crate::config_cmd::config_path();
+    let mut doc = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    let Some(root) = doc.as_table_mut() else {
+        return bad_request("config root is not a table", None);
+    };
+    root.insert("moa".into(), moa_toml);
+    if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+        return server_error(&e);
+    }
+    Json(json!({
+        "ok": true,
+        "presets": moa.presets.len(),
+        "note": "restart the gateway (or start a new MoA session) to apply",
+    }))
+    .into_response()
+}
+
 /// Query for `GET /api/model/recommended-default`.
 #[derive(Debug, Deserialize)]
 struct RecommendedDefaultQuery {
@@ -5743,6 +5848,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model/info", get(model_info_api))
         .route("/api/model/set", post(model_set_api))
         .route("/api/model/auxiliary", get(model_auxiliary))
+        .route("/api/model/moa", get(model_moa_get).put(model_moa_put))
         .route("/api/model/recommended-default", get(model_recommended_default))
         .route("/api/providers/custom-endpoints", get(custom_endpoints_list).post(custom_endpoints_upsert))
         .route("/api/providers/custom-endpoints/validate", post(custom_endpoints_validate))
@@ -15833,6 +15939,76 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["reset"], true);
         let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
         assert!(!on_disk.contains("[auxiliary.compression]"), "{on_disk}");
+
+        match prev {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_model_moa_endpoints() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Empty config: no presets, no flattened view.
+        let (status, body) = get_json(app.clone(), "/api/model/moa", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["presets"].as_object().unwrap().is_empty());
+        assert!(body.get("reference_models").is_none());
+
+        // Valid PUT persists the preset.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/model/moa", Some(token),
+            json!({
+                "default_preset": "fast",
+                "presets": {
+                    "fast": {
+                        "reference_models": [
+                            {"provider": "openai", "model": "gpt-test"},
+                            {"provider": "anthropic", "model": "claude-test", "enabled": false},
+                        ],
+                        "aggregator": {"provider": "anthropic", "model": "claude-agg"},
+                        "degraded_reference_policy": "silent",
+                    }
+                }
+            }),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(on_disk.contains("[moa.presets.fast]"), "{on_disk}");
+        assert!(on_disk.contains("claude-agg"), "{on_disk}");
+
+        // GET returns the preset plus the flattened default view.
+        let (status, body) = get_json(app.clone(), "/api/model/moa", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["default_preset"], "fast");
+        assert_eq!(body["presets"]["fast"]["reference_models"].as_array().unwrap().len(), 2);
+        assert_eq!(body["reference_models"].as_array().unwrap().len(), 2);
+        assert_eq!(body["aggregator"]["model"], "claude-agg");
+        assert_eq!(body["degraded_reference_policy"], "silent");
+
+        // Validation: empty presets, blank aggregator model, unknown default.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/model/moa", Some(token),
+            json!({"presets": {}}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/model/moa", Some(token),
+            json!({"presets": {"p": {"reference_models": [{"provider": "a", "model": "b"}], "aggregator": {"provider": "", "model": ""}}}}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/model/moa", Some(token),
+            json!({"default_preset": "missing", "presets": {"p": {"reference_models": [{"provider": "a", "model": "b"}], "aggregator": {"provider": "a", "model": "b"}}}}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
 
         match prev {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
