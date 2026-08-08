@@ -147,6 +147,7 @@ export interface Translations {
     filterPlaceholder: string; count: string; empty: string; noMatch: string;
     statusFilterTitle: string; statusAll: string; statusOpen: string; statusEnded: string; statusArchived: string;
     reasonFilter: string;
+    sortByActivity: string; sortByTitle: string;
     select: string; loading: string; loadFailed: string; transcriptFailed: string;
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
@@ -485,6 +486,7 @@ const en: Translations = {
     statusEnded: "Ended",
     statusArchived: "Archived",
     reasonFilter: "End reason: {reason} — click to clear",
+    sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity",
     count: "{count} sessions",
     empty: "No sessions recorded yet.",
     noMatch: "No sessions match the filter.",
@@ -951,6 +953,7 @@ const zh: Translations = {
     statusEnded: "已结束",
     statusArchived: "已归档",
     reasonFilter: "结束原因：{reason}——点击清除",
+    sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序",
     count: "{count} 个会话",
     empty: "暂无会话记录。",
     noMatch: "没有匹配过滤条件的会话。",
@@ -1417,6 +1420,7 @@ const zhHant: Translations = {
     statusEnded: "已結束",
     statusArchived: "已歸檔",
     reasonFilter: "結束原因：{reason}——點選清除",
+    sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序",
     count: "{count} 個會話",
     empty: "暫無會話記錄。",
     noMatch: "沒有符合過濾條件的會話。",
@@ -1883,6 +1887,7 @@ const ja: Translations = {
     statusEnded: "終了済み",
     statusArchived: "アーカイブ済み",
     reasonFilter: "終了理由：{reason} — クリックで解除",
+    sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に切り替え", sortByTitle: "タイトル順 — クリックでアクティビティ順に切り替え",
     count: "{count} 件のセッション",
     empty: "セッションはまだ記録されていません。",
     noMatch: "フィルタに一致するセッションはありません。",
@@ -2349,6 +2354,7 @@ const ar: Translations = {
     statusEnded: "منتهية",
     statusArchived: "مؤرشفة",
     reasonFilter: "سبب الانتهاء: {reason} — انقر للإزالة",
+    sortByActivity: "مرتبة حسب النشاط الأخير — انقر للترتيب حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للترتيب حسب النشاط الأخير",
     count: "{count} جلسة",
     empty: "لا توجد جلسات مسجلة بعد.",
     noMatch: "لا توجد جلسات مطابقة للتصفية.",

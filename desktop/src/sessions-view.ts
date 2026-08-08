@@ -28,6 +28,8 @@ const REASON_FILTER_KEY = "ulnclaw.sessions.reasonFilter";
 const SELECTED_KEY = "ulnclaw.sessions.selected";
 // P449: persistence key for the transcript search text.
 const SEARCH_KEY = "ulnclaw.sessions.search";
+// P450: persistence key for the list sort mode.
+const SORT_KEY = "ulnclaw.sessions.sort";
 
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
@@ -44,6 +46,9 @@ export class SessionsViewWidget {
   private kbIndex = 0;
   // P446: whether the persisted selection has been restored this mount.
   private restored = false;
+  // P450: activity-first or title-first list sorting.
+  private sortMode: "activity" | "title" =
+    localStorage.getItem(SORT_KEY) === "title" ? "title" : "activity";
 
   constructor(
     private root: HTMLElement,
@@ -153,6 +158,17 @@ export class SessionsViewWidget {
       this.endReasonFilter = null;
       this.renderList();
     });
+    // P450: the count header toggles activity ↔ title sorting.
+    const countHeader = this.root.querySelector("#sessions-view-count") as HTMLElement;
+    countHeader.classList.add("clickable");
+    countHeader.addEventListener("click", () => {
+      this.sortMode = this.sortMode === "title" ? "activity" : "title";
+      localStorage.setItem(SORT_KEY, this.sortMode);
+      this.applySortLabel();
+      this.sortSessions();
+      this.renderList();
+    });
+    this.applySortLabel();
     let searchDebounce: number | null = null;
     this.root.querySelector("#sessions-view-search")!.addEventListener("input", () => {
       if (searchDebounce !== null) window.clearTimeout(searchDebounce);
@@ -278,7 +294,7 @@ export class SessionsViewWidget {
     }
     try {
       this.all = await client.listSessions();
-      this.all.sort((a, b) => (b.last_activity_at || b.started_at) - (a.last_activity_at || a.started_at));
+      this.sortSessions();
       // P446: restore the persisted selection on the first load.
       if (!this.restored) {
         this.restored = true;
@@ -302,6 +318,24 @@ export class SessionsViewWidget {
         true,
       );
     }
+  }
+
+  /** P450: sort the loaded rows per the active sort mode. */
+  private sortSessions(): void {
+    if (this.sortMode === "title") {
+      this.all.sort((a, b) => (a.title || a.id).localeCompare(b.title || b.id));
+    } else {
+      this.all.sort(
+        (a, b) => (b.last_activity_at || b.started_at) - (a.last_activity_at || a.started_at),
+      );
+    }
+  }
+
+  /** P450: count-header tooltip reflects the active sort mode. */
+  private applySortLabel(): void {
+    const countHeader = this.root.querySelector("#sessions-view-count") as HTMLElement;
+    countHeader.title =
+      this.sortMode === "title" ? t.sessionsView.sortByTitle : t.sessionsView.sortByActivity;
   }
 
   /** P448: select a session from outside (command-palette bridge). */

@@ -1218,6 +1218,9 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 }
 /* P447: message-count meta on sessions-view rows. */
 .sessions-view-msgcount { opacity: 0.75; font-size: 0.9em; }
+/* P450: sortable count header. */
+#sessions-view-count.clickable { cursor: pointer; }
+#sessions-view-count.clickable:hover { color: var(--text); }
 /* P438: end-reason drill-down pill. */
 .sessions-view-reason-pill {
   align-self: flex-start;
