@@ -2234,6 +2234,7 @@ function shortcutRows(): [string, string][] {
     [`${mod}+F`, t.chrome.scFind],
     ["Enter", t.chrome.scFocus],
     ["F1", t.chrome.scShortcuts],
+    ["↑ / ↓", t.chrome.scRecall],
   ];
 }
 
