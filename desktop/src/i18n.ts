@@ -149,6 +149,7 @@ export interface Translations {
     reasonFilter: string;
     sortByActivity: string; sortByTitle: string;
     projectFilter: string;
+    copyMessageTitle: string; copied: string; copyFailed: string;
     select: string; loading: string; loadFailed: string; transcriptFailed: string;
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
@@ -490,6 +491,7 @@ const en: Translations = {
     reasonFilter: "End reason: {reason} — click to clear",
     sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity",
     projectFilter: "Project: {project} — click to clear",
+    copyMessageTitle: "Copy message", copied: "Message copied.", copyFailed: "Copy failed.",
     count: "{count} sessions",
     empty: "No sessions recorded yet.",
     noMatch: "No sessions match the filter.",
@@ -959,6 +961,7 @@ const zh: Translations = {
     reasonFilter: "结束原因：{reason}——点击清除",
     sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序",
     projectFilter: "项目：{project}——点击清除",
+    copyMessageTitle: "复制消息", copied: "消息已复制。", copyFailed: "复制失败。",
     count: "{count} 个会话",
     empty: "暂无会话记录。",
     noMatch: "没有匹配过滤条件的会话。",
@@ -1428,6 +1431,7 @@ const zhHant: Translations = {
     reasonFilter: "結束原因：{reason}——點選清除",
     sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序",
     projectFilter: "專案：{project}——點選清除",
+    copyMessageTitle: "複製訊息", copied: "訊息已複製。", copyFailed: "複製失敗。",
     count: "{count} 個會話",
     empty: "暫無會話記錄。",
     noMatch: "沒有符合過濾條件的會話。",
@@ -1897,6 +1901,7 @@ const ja: Translations = {
     reasonFilter: "終了理由：{reason} — クリックで解除",
     sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に切り替え", sortByTitle: "タイトル順 — クリックでアクティビティ順に切り替え",
     projectFilter: "プロジェクト：{project} — クリックで解除",
+    copyMessageTitle: "メッセージをコピー", copied: "メッセージをコピーしました。", copyFailed: "コピーに失敗しました。",
     count: "{count} 件のセッション",
     empty: "セッションはまだ記録されていません。",
     noMatch: "フィルタに一致するセッションはありません。",
@@ -2366,6 +2371,7 @@ const ar: Translations = {
     reasonFilter: "سبب الانتهاء: {reason} — انقر للإزالة",
     sortByActivity: "مرتبة حسب النشاط الأخير — انقر للترتيب حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للترتيب حسب النشاط الأخير",
     projectFilter: "المشروع: {project} — انقر للإزالة",
+    copyMessageTitle: "نسخ الرسالة", copied: "تم نسخ الرسالة.", copyFailed: "فشل النسخ.",
     count: "{count} جلسة",
     empty: "لا توجد جلسات مسجلة بعد.",
     noMatch: "لا توجد جلسات مطابقة للتصفية.",

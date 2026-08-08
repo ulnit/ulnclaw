@@ -665,6 +665,19 @@ export class SessionsViewWidget {
       const session = this.all.find((candidate) => candidate.id === sessionId);
       const meta = session ? this.renderTranscriptMeta(session, messages.length) : "";
       pane.innerHTML = meta + this.renderMessages(messages);
+      // P454: per-message copy actions.
+      pane.querySelectorAll<HTMLElement>(".sessions-view-copy").forEach((button) => {
+        button.addEventListener("click", () => {
+          const content = button
+            .closest(".sessions-view-msg")
+            ?.querySelector(".sessions-view-content");
+          const text = content?.textContent ?? "";
+          void navigator.clipboard.writeText(text).then(
+            () => this.status(t.sessionsView.copied, false),
+            () => this.status(t.sessionsView.copyFailed, true),
+          );
+        });
+      });
       pane.scrollTop = 0;
       exportBtn.hidden = false;
       (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = false;
@@ -745,7 +758,7 @@ export class SessionsViewWidget {
         if (!content && !toolCalls) return "";
         return `
           <div class="sessions-view-msg sessions-view-msg-${escapeHtml(message.role)}">
-            <div class="sessions-view-role">${escapeHtml(this.roleLabel(message.role))}${nameTag}</div>
+            <div class="sessions-view-role">${escapeHtml(this.roleLabel(message.role))}${nameTag}${message.content ? `<button class="sessions-view-copy" title="${escapeHtml(t.sessionsView.copyMessageTitle)}">⧉</button>` : ""}</div>
             ${content}
             ${toolCalls}
           </div>`;
