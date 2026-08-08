@@ -63,6 +63,8 @@ const state = {
   bridge: null as DesktopBridge | null,
   sessions: [] as SessionRow[],
   current: null as SessionRow | null,
+  /** P368: session id -> total tokens from /api/usage (sidebar badges). */
+  sessionTokens: new Map<string, number>(),
   busy: false,
   managedPid: null as number | null,
   skills: [] as SkillRow[],
@@ -179,6 +181,11 @@ function renderSessions(): void {
       ? `${sessionWhen(session.last_activity_at)} · ${session.message_count}`
       : sessionWhen(session.last_activity_at);
     whenEl.title = whenFull;
+    const tokens = state.sessionTokens.get(session.id) ?? 0;
+    if (tokens > 0) {
+      whenEl.textContent += ` · ${formatTokens(tokens)} tok`;
+      whenEl.title = `${whenFull} · ${fmt(t.session.tokensTitle, { tokens: tokens.toLocaleString() })}`;
+    }
     item.appendChild(main);
     if (session.project) {
       const badge = document.createElement("span");
@@ -436,9 +443,24 @@ async function refreshSessions(): Promise<void> {
   if (!state.client) return;
   try {
     state.sessions = await state.client.listSessions();
+    await refreshSessionTokens();
     renderSessions();
   } catch {
     /* gateway offline — dot already reflects it */
+  }
+}
+
+/** P368: per-session token badges — map session id -> total tokens
+ * from /api/usage so renderSessions can annotate sidebar rows. */
+async function refreshSessionTokens(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const usage = await state.client.usage(500);
+    const next = new Map<string, number>();
+    for (const row of usage.sessions) next.set(row.id, row.total_tokens);
+    state.sessionTokens = next;
+  } catch {
+    /* gateway offline — keep the last badges */
   }
 }
 
