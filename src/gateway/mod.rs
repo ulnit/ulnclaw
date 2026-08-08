@@ -10063,6 +10063,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /verbose [on|off] show or persist agent.verbose
   /yolo [on|off]   show or persist approvals.mode=off (auto-approve; deny rules still bind)
   /personality [name|none]  list or activate a personality (agent.personalities)
+  /runs            list the tracked runs (newest first)
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -10822,6 +10823,31 @@ async fn resolve_gateway_slash(
                 )),
                 Err(e) => Some(GatewaySlash::Direct(e)),
             }
+        }
+        "/runs" => {
+            // The slash twin of GET /v1/runs: newest-first digest of
+            // the tracked runs (status, session, error when present).
+            let runs = state.runs.lock().await;
+            let mut data: Vec<&RunState> = runs.values().collect();
+            data.sort_by(|a, b| {
+                b.created_at
+                    .partial_cmp(&a.created_at)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if data.is_empty() {
+                return Some(GatewaySlash::Direct("no runs tracked yet.".to_string()));
+            }
+            let mut lines = vec![format!("tracked runs ({}):", data.len())];
+            for run in data.iter().take(10) {
+                let session = run.session_id.as_deref().unwrap_or("-");
+                let mut line = format!("  {} \u{2014} {} (session {session})", run.run_id, run.status);
+                if let Some(error) = run.error.as_deref().filter(|e| !e.is_empty()) {
+                    let clipped: String = error.chars().take(80).collect();
+                    line.push_str(&format!(": {clipped}"));
+                }
+                lines.push(line);
+            }
+            Some(GatewaySlash::Direct(lines.join("\n")))
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');
@@ -14272,6 +14298,63 @@ mod tests {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_runs_digest() {
+        // P621: /runs renders the tracked-run digest (newest first).
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-runs", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/runs").await;
+        assert_eq!(reply["response"], "no runs tracked yet.");
+
+        state.runs.lock().await.insert(
+            "run_old".to_string(),
+            RunState {
+                run_id: "run_old".to_string(),
+                status: "completed".to_string(),
+                session_id: Some(sid.clone()),
+                message: "older run".to_string(),
+                created_at: 100.0,
+                finished_at: Some(105.0),
+                result: Some("done".to_string()),
+                error: None,
+                iterations: Some(3),
+                stop_requested: false,
+                approval: None,
+            },
+        );
+        state.runs.lock().await.insert(
+            "run_new".to_string(),
+            RunState {
+                run_id: "run_new".to_string(),
+                status: "failed".to_string(),
+                session_id: Some(sid.clone()),
+                message: "newer run".to_string(),
+                created_at: 200.0,
+                finished_at: Some(201.0),
+                result: None,
+                error: Some("provider exploded".to_string()),
+                iterations: None,
+                stop_requested: false,
+                approval: None,
+            },
+        );
+
+        let reply = post_chat(app.clone(), &sid, "/runs").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("tracked runs (2):"), "{text}");
+        // Newest first.
+        let new_pos = text.find("run_new").unwrap();
+        let old_pos = text.find("run_old").unwrap();
+        assert!(new_pos < old_pos, "{text}");
+        assert!(text.contains("provider exploded"), "{text}");
+        assert!(text.contains(&sid), "{text}");
     }
 
     #[tokio::test]
