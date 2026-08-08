@@ -84,6 +84,10 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .msg-actions { display: flex; align-items: flex-end; margin: 0 4px; }
 .msg-actions button { opacity: 0.35; font-size: 12px; padding: 2px 5px; }
 .msg-actions button:hover, .msg-actions button:focus { opacity: 1; }
+/* P367: chat day dividers — centered, dim, hairline rules either side. */
+.day-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.day-divider::before, .day-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.day-divider-label { font-size: 11px; color: var(--dim); letter-spacing: 0.03em; white-space: nowrap; }
 .bubble.streaming::after { content: "▍"; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 

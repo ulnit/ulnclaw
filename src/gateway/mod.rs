@@ -7404,10 +7404,37 @@ async fn delete_session(
     }
 }
 
+/// Query parameters for `GET /api/sessions/:id/messages`.
+#[derive(Debug, Deserialize)]
+struct MessagesQuery {
+    /// `timestamps=true` adds the stored per-message epoch seconds
+    /// (day-divider rendering in the desktop chat; P367).
+    timestamps: Option<String>,
+}
+
 async fn session_messages(
     State(state): State<Arc<GatewayState>>,
     Path(id): Path<String>,
+    Query(query): Query<MessagesQuery>,
 ) -> Response {
+    if query_flag(query.timestamps.as_ref()) {
+        return match state.store.load_messages_with_timestamps(&id) {
+            Ok(rows) => {
+                let data: Vec<Value> = rows
+                    .into_iter()
+                    .map(|(timestamp, message)| {
+                        let mut value = serde_json::to_value(&message).unwrap_or_else(|_| json!({}));
+                        if let Value::Object(map) = &mut value {
+                            map.insert("timestamp".to_string(), json!(timestamp));
+                        }
+                        value
+                    })
+                    .collect();
+                Json(json!({"object": "list", "session_id": id, "data": data})).into_response()
+            }
+            Err(e) => server_error(&e.to_string()),
+        };
+    }
     match state.store.load_messages(&id) {
         Ok(messages) => Json(json!({"object": "list", "session_id": id, "data": messages})).into_response(),
         Err(e) => server_error(&e.to_string()),
@@ -15081,6 +15108,62 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_session_messages_timestamps_query() {
+        // P367: `?timestamps=true` merges the stored per-message epoch
+        // seconds into each serialized message (desktop chat day dividers).
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let (status, body) =
+            send_json(app.clone(), "POST", "/api/sessions", Some(token), json!({})).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let session_id = body["id"].as_str().unwrap().to_string();
+
+        let message = |content: &str| Message {
+            role: Role::User,
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        state
+            .store
+            .append_message_at(&session_id, &message("yesterday"), 1_770_000_000.0)
+            .unwrap();
+        state
+            .store
+            .append_message_at(&session_id, &message("today"), 1_770_090_000.0)
+            .unwrap();
+
+        // Default listing carries no timestamp field.
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages", session_id),
+            Some(token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let data = body["data"].as_array().unwrap();
+        assert_eq!(data.len(), 2);
+        assert!(data[0].get("timestamp").is_none());
+
+        // `timestamps=true` merges epoch seconds into every row.
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?timestamps=true", session_id),
+            Some(token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let data = body["data"].as_array().unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0]["content"], "yesterday");
+        assert_eq!(data[0]["timestamp"].as_f64(), Some(1_770_000_000.0));
+        assert_eq!(data[1]["timestamp"].as_f64(), Some(1_770_090_000.0));
     }
 
     #[tokio::test]

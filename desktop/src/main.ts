@@ -27,7 +27,7 @@ import { LearningOverlay } from "./learning";
 import { notify, notifyError, notifySuccess, notificationHistory, notificationUnread, markNotificationsRead, clearNotificationHistory, onNotificationHistoryChange } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
 import { resolveBootFailure, showBootFailure } from "./boot-failure";
-import { applyStatic, fmt, onLocaleChange, t } from "./i18n";
+import { applyStatic, currentLocale, fmt, onLocaleChange, t } from "./i18n";
 import { LanguageSwitcher } from "./language-switcher";
 import { OnboardingOverlay } from "./onboarding";
 import { SessionPickerDialog } from "./session-picker";
@@ -367,6 +367,40 @@ async function speakMessage(text: string, button: HTMLButtonElement): Promise<vo
   }
 }
 
+// Chat day dividers (P367, hermes transcript parity): calendar-day
+// boundary markers rendered from the per-message stored timestamps.
+const LOCALE_DATE_TAGS: Record<string, string> = {
+  en: "en-US", zh: "zh-CN", "zh-hant": "zh-TW", ja: "ja-JP", ar: "ar",
+};
+
+function dayKey(timestamp: number): string {
+  const date = new Date(timestamp * 1000);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function addDayDivider(timestamp: number): void {
+  const date = new Date(timestamp * 1000);
+  const now = new Date();
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const label = isToday
+    ? t.session.dayToday
+    : date.toLocaleDateString(LOCALE_DATE_TAGS[currentLocale()] ?? "en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+  const divider = document.createElement("div");
+  divider.className = "day-divider";
+  const text = document.createElement("span");
+  text.className = "day-divider-label";
+  text.textContent = label;
+  divider.appendChild(text);
+  el.messages.appendChild(divider);
+}
+
 async function openSession(session: SessionRow): Promise<void> {
   state.current = session;
   el.chatTitle.textContent = session.title || session.id.slice(0, 8);
@@ -374,10 +408,18 @@ async function openSession(session: SessionRow): Promise<void> {
   el.messages.innerHTML = "";
   renderSessions();
   try {
-    const messages = await state.client!.messages(session.id);
+    const messages = await state.client!.messages(session.id, { timestamps: true });
     let rendered = 0;
+    let lastDay = "";
     for (const message of messages) {
       if (message.role === "system" || !message.content) continue;
+      if (typeof message.timestamp === "number" && message.timestamp > 0) {
+        const day = dayKey(message.timestamp);
+        if (day !== lastDay) {
+          addDayDivider(message.timestamp);
+          lastDay = day;
+        }
+      }
       addMessage(message.role, message.content);
       rendered += 1;
     }

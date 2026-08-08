@@ -26,6 +26,8 @@ export interface MessageRow {
   name?: string | null;
   tool_call_id?: string | null;
   tool_calls?: { id: string; function?: { name?: string; arguments?: string } }[];
+  /** Stored epoch seconds when requested via `timestamps=true` (P367). */
+  timestamp?: number;
 }
 
 export interface ChatReply {
@@ -1081,8 +1083,9 @@ export class GatewayClient {
     }
   }
 
-  async messages(sessionId: string): Promise<MessageRow[]> {
-    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/messages`), {
+  async messages(sessionId: string, options?: { timestamps?: boolean }): Promise<MessageRow[]> {
+    const suffix = options?.timestamps ? "?timestamps=true" : "";
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/messages${suffix}`), {
       headers: this.headers(),
     });
     if (!response.ok) throw new Error(`messages: HTTP ${response.status}`);
