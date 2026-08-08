@@ -44,6 +44,11 @@ body { background: var(--bg); color: var(--text); }
 /* P386: session-list cap expander row. */
 .session-show-all { font-size: 12px; color: var(--dim); padding: 6px; text-align: center; width: 100%; }
 .session-show-all:hover { color: var(--text); }
+/* P392: sidebar relative-date group headers. */
+.session-group-header {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--dim); padding: 8px 4px 2px;
+}
 #session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .session-item {
   text-align: left; background: var(--panel-2); color: var(--text);

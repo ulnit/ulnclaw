@@ -189,6 +189,31 @@ const SOURCE_BADGES: Record<string, string> = {
   "gateway-run": "⚙",
 };
 
+/** P392: sidebar session rows group by relative age. */
+function ageGroup(timestamp: number): "today" | "yesterday" | "week" | "older" {
+  const now = new Date();
+  const date = new Date(timestamp * 1000);
+  if (sameCalendarDay(date, now)) return "today";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameCalendarDay(date, yesterday)) return "yesterday";
+  if (now.getTime() - timestamp * 1000 < 7 * 86_400_000) return "week";
+  return "older";
+}
+
+function ageGroupLabel(group: "today" | "yesterday" | "week" | "older"): string {
+  switch (group) {
+    case "today":
+      return t.session.dayToday;
+    case "yesterday":
+      return t.session.groupYesterday;
+    case "week":
+      return t.session.groupWeek;
+    default:
+      return t.session.groupOlder;
+  }
+}
+
 function renderSessions(): void {
   el.sessionList.innerHTML = "";
   // P372: optional sidebar filter (title or id substring, case-insensitive).
@@ -203,7 +228,17 @@ function renderSessions(): void {
         session.id.toLowerCase().includes(filter)
       );
     });
+  let lastGroup: "today" | "yesterday" | "week" | "older" | "" = "";
   for (const session of sorted.slice(0, state.sessionListLimit)) {
+    // P392: relative-date group header when the age bucket changes.
+    const group = ageGroup(session.last_activity_at);
+    if (group !== lastGroup) {
+      const header = document.createElement("div");
+      header.className = "session-group-header";
+      header.textContent = ageGroupLabel(group);
+      el.sessionList.appendChild(header);
+      lastGroup = group;
+    }
     const item = document.createElement("div");
     item.className = "session-item" + (state.current?.id === session.id ? " active" : "");
     const title = session.title || session.id.slice(0, 8);
