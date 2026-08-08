@@ -658,6 +658,11 @@ async function openSession(session: SessionRow): Promise<void> {
   el.dayJump.hidden = true;
   el.chatActions.hidden = false;
   renderSessions();
+  // P417: bring the freshly activated row into view (palette/picker
+  // jumps may land far from the current scroll position).
+  el.sessionList
+    .querySelector(".session-item.active")
+    ?.scrollIntoView({ block: "nearest" });
   try {
     const messages = await state.client!.messages(session.id, { timestamps: true });
     let rendered = 0;
