@@ -1711,16 +1711,17 @@ function transcriptText(): string {
 }
 
 /**
- * P435: OS-level notification for a settled run (Web Notifications API).
- * Only fires when the window is unfocused — the in-app stacks cover the
- * focused case — and lazily requests permission on first settle.
+ * P435/P437: OS-level notification (Web Notifications API). Only used when
+ * the window is unfocused — the in-app stacks cover the focused case — and
+ * lazily requests permission on first use. Click focuses the window and
+ * jumps to the runs view.
  */
-function systemNotifySettle(failed: boolean, snippet: string, runId: string): void {
+function systemNotify(title: string, body: string, tag: string): void {
   if (!state.settings.notifySystem || typeof Notification === "undefined") return;
   const show = () => {
-    const note = new Notification(failed ? t.bridge.runFailed : t.bridge.runCompleted, {
-      body: snippet || undefined,
-      tag: runId ? `ulnclaw-run-${runId}` : undefined,
+    const note = new Notification(title, {
+      body: body || undefined,
+      tag: tag || undefined,
     });
     note.onclick = () => {
       window.focus();
@@ -1780,7 +1781,28 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
         meta: runId ? `#${runId.slice(0, 8)}` : undefined,
         action: { label: t.bridge.runOpenRuns, onClick: () => switchView("runs") },
       });
-      if (!document.hasFocus()) systemNotifySettle(failed, snippet, runId);
+      if (!document.hasFocus()) {
+        systemNotify(
+          failed ? t.bridge.runFailed : t.bridge.runCompleted,
+          snippet,
+          runId ? `ulnclaw-run-${runId}` : "",
+        );
+      }
+      break;
+    }
+    case "run.approval": {
+      const command = String(payload.command ?? "").trim();
+      const runId = String(payload.run_id ?? "");
+      notify({
+        kind: "warning",
+        title: t.bridge.approvalNeeded,
+        message: command || t.bridge.approvalNeeded,
+        meta: runId ? `#${runId.slice(0, 8)}` : undefined,
+        action: { label: t.bridge.approvalReview, onClick: () => switchView("runs") },
+      });
+      if (!document.hasFocus()) {
+        systemNotify(t.bridge.approvalNeeded, command, runId ? `ulnclaw-approval-${runId}` : "");
+      }
       break;
     }
     case "terminal.read": {

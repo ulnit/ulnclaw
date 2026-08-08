@@ -10199,6 +10199,46 @@ async fn start_run(
     (StatusCode::ACCEPTED, Json(json!({"run_id": run_id, "status": "running", "session_id": session_id}))).into_response()
 }
 
+/// Approval pump (extracted in P437): wire a run's approval channel into
+/// the router, pump pending approvals into the run state + the
+/// pending-approvals map, and notify the desktop shell so a human can be
+/// pulled in. Lives until the run task unregisters on settle.
+fn spawn_approval_pump(state: Arc<GatewayState>, run_id: String, session_id: String) {
+    let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<PendingApproval>();
+    state.router.register(&run_id, &session_id, approval_tx);
+    tokio::spawn(async move {
+        while let Some(pending) = approval_rx.recv().await {
+            {
+                let mut runs = state.runs.lock().await;
+                if let Some(run) = runs.get_mut(&run_id) {
+                    run.status = "waiting_for_approval".to_string();
+                    run.approval = Some(json!({
+                        "command": pending.command,
+                        "reason": pending.reason,
+                        "choices": ["once", "session", "always", "deny"],
+                    }));
+                }
+            }
+            // P437: pull a human in — surface the pending approval on the
+            // desktop bridge (inert without a subscribed shell).
+            crate::desktop_bridge::publish(
+                &session_id,
+                "run.approval",
+                &json!({
+                    "run_id": run_id,
+                    "command": pending.command,
+                    "reason": pending.reason,
+                }),
+            );
+            state
+                .pending_approvals
+                .lock()
+                .await
+                .insert(run_id.clone(), pending.respond);
+        }
+    });
+}
+
 /// Execute one agent turn as a tracked background run: registers approval
 /// routing, pumps pending approvals into run state, and updates the run row
 /// when the turn finishes. Shared by `/v1/runs` (`cron = false`) and
@@ -10211,30 +10251,7 @@ fn spawn_tracked_run(
     message: String,
     cron: bool,
 ) {
-    // Approval plumbing: channel from the approve callback into run state.
-    let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<PendingApproval>();
-    state.router.register(&run_id, &session_id, approval_tx);
-    let pump = state.clone();
-    let pump_run_id = run_id.clone();
-    tokio::spawn(async move {
-        while let Some(pending) = approval_rx.recv().await {
-            {
-                let mut runs = pump.runs.lock().await;
-                if let Some(run) = runs.get_mut(&pump_run_id) {
-                    run.status = "waiting_for_approval".to_string();
-                    run.approval = Some(json!({
-                        "command": pending.command,
-                        "reason": pending.reason,
-                        "choices": ["once", "session", "always", "deny"],
-                    }));
-                }
-            }
-            pump.pending_approvals
-                .lock()
-                .await
-                .insert(pump_run_id.clone(), pending.respond);
-        }
-    });
+    spawn_approval_pump(state.clone(), run_id.clone(), session_id.clone());
 
     state
         .metrics
@@ -15442,6 +15459,82 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             }
         }
         assert!(found, "run settle event not published on the desktop bus");
+    }
+
+    #[tokio::test]
+    async fn test_approval_pump_publishes_desktop_event() {
+        let (state, _temp) = jobs_state();
+        let mut rx = crate::desktop_bridge::subscribe();
+        let run_id = "run-approval-test".to_string();
+        let session_id = "sess-approval-test".to_string();
+
+        state.runs.lock().await.insert(
+            run_id.clone(),
+            RunState {
+                run_id: run_id.clone(),
+                status: "running".to_string(),
+                session_id: Some(session_id.clone()),
+                message: "needs approval".to_string(),
+                created_at: now_secs(),
+                finished_at: None,
+                result: None,
+                error: None,
+                iterations: None,
+                stop_requested: false,
+                approval: None,
+            },
+        );
+
+        spawn_approval_pump(state.clone(), run_id.clone(), session_id.clone());
+
+        // Agent side raises a dangerous-command approval.
+        let router = state.router.clone();
+        let request_run_id = run_id.clone();
+        let request = tokio::spawn(async move {
+            router
+                .request(&request_run_id, "dangerous command".into(), "rm -rf /".into())
+                .await
+        });
+
+        // The pump publishes a run.approval envelope for this run.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline && !found {
+            match rx.try_recv() {
+                Ok(envelope)
+                    if envelope.payload["run_id"] == json!(run_id)
+                        && envelope.event == "run.approval" =>
+                {
+                    assert_eq!(envelope.payload["command"], json!("rm -rf /"));
+                    found = true;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+        assert!(found, "approval event not published on the desktop bus");
+
+        // The run row flipped to waiting_for_approval with the pending detail.
+        {
+            let runs = state.runs.lock().await;
+            let run = &runs[&run_id];
+            assert_eq!(run.status, "waiting_for_approval");
+            assert_eq!(run.approval.as_ref().unwrap()["command"], json!("rm -rf /"));
+        }
+
+        // Resolve like POST /v1/runs/:id/approval would; the agent unblocks.
+        let respond = state
+            .pending_approvals
+            .lock()
+            .await
+            .remove(&run_id)
+            .expect("parked respond");
+        let _ = respond.send("once".to_string());
+        assert!(request.await.unwrap());
     }
 
     #[tokio::test]
