@@ -22,6 +22,8 @@ function fmtWhen(ts: number | null): string {
 export class JobsWidget {
   private jobs: CronJob[] = [];
   private timer: number | null = null;
+  /** Known delivery-target ids for P507 edit-time validation. */
+  private deliveryTargetIds = new Set<string>();
 
   constructor(
     private root: HTMLElement,
@@ -110,7 +112,47 @@ export class JobsWidget {
     const client = this.client();
     if (!client) return;
     this.jobs = await client.jobsList(true);
+    void this.cacheDeliveryTargets();
     this.render();
+  }
+
+  /** P507: cache known delivery-target ids for edit-time validation. */
+  private async cacheDeliveryTargets(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    try {
+      const targets = await client.jobDeliveryTargets();
+      this.deliveryTargetIds = new Set(targets.map((target) => target.id));
+    } catch {
+      // keep the previous cache; validation stays advisory anyway
+    }
+  }
+
+  /**
+   * P507: save a job edit with inline delivery-target validation — an
+   * unknown target (not `origin`/`all`, not a listed target, and no
+   * listed platform prefix for `platform:chat[:thread]` forms) asks
+   * for confirmation before saving.
+   */
+  private async updateJob(id: string, prompt: string, schedule: string, deliver: string | null): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (deliver && !this.isKnownDeliveryTarget(deliver)) {
+      if (!window.confirm(t.jobs.deliverUnknownConfirm.replace("{target}", deliver))) return;
+    }
+    try {
+      await client.jobUpdate(id, { prompt, schedule, deliver });
+      await this.refresh();
+    } catch {
+      // surface via the next poll; createFailed-style toast not wired here
+    }
+  }
+
+  private isKnownDeliveryTarget(deliver: string): boolean {
+    if (deliver === "origin" || deliver === "all") return true;
+    if (this.deliveryTargetIds.has(deliver)) return true;
+    const base = deliver.split(":")[0];
+    return this.deliveryTargetIds.has(base);
   }
 
   private async populateDeliverTargets(): Promise<void> {
@@ -279,13 +321,7 @@ export class JobsWidget {
       if (nextSchedule === null) return;
       const nextDeliver = window.prompt(t.jobs.deliverPrompt, job.deliver || "");
       if (nextDeliver === null) return;
-      void client
-        .jobUpdate(job.id, {
-          prompt: nextPrompt,
-          schedule: nextSchedule,
-          deliver: nextDeliver.trim() || null,
-        })
-        .then(() => void this.refresh());
+      void this.updateJob(job.id, nextPrompt, nextSchedule, nextDeliver.trim() || null);
     });
     mk("🗑", t.jobs.delete, () => {
       if (!client) return;

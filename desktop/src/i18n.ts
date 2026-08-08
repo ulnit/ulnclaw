@@ -126,6 +126,7 @@ export interface Translations {
     runsLeft: string; deleteConfirm: string;
     deliverBadge: string; deliverTitle: string; deliveryError: string; deliverPrompt: string;
     sortTitle: string; sortDefault: string; sortNextRun: string;
+    deliverUnknownConfirm: string;
   };
   usage: {
     windowNote: string; perSession: string; empty: string;
@@ -476,6 +477,7 @@ const en: Translations = {
     deliveryError: "last delivery failed (hover for details)",
     deliverPrompt: "Delivery target (local/origin/platform; empty clears):",
     sortTitle: "Sort jobs", sortDefault: "Default order", sortNextRun: "Next run first",
+    deliverUnknownConfirm: "“{target}” is not a known delivery target (origin/all/local or a connected platform). Save anyway?",
   },
   usage: {
     windowNote: "Token accounting · last {count} sessions",
@@ -962,6 +964,7 @@ const zh: Translations = {
     deliveryError: "上次投递失败（悬停查看详情）",
     deliverPrompt: "投递目标（local/origin/平台名；留空清除）：",
     sortTitle: "任务排序", sortDefault: "默认顺序", sortNextRun: "下次运行优先",
+    deliverUnknownConfirm: "“{target}”不是已知投递目标（origin/all/local 或已连接平台）。仍要保存吗？",
   },
   usage: {
     windowNote: "令牌核算 · 最近 {count} 个会话",
@@ -1448,6 +1451,7 @@ const zhHant: Translations = {
     deliveryError: "上次投遞失敗（懸停檢視詳情）",
     deliverPrompt: "投遞目標（local/origin/平台名；留空清除）：",
     sortTitle: "任務排序", sortDefault: "預設順序", sortNextRun: "下次執行優先",
+    deliverUnknownConfirm: "「{target}」不是已知投遞目標（origin/all/local 或已連接平台）。仍要儲存嗎？",
   },
   usage: {
     windowNote: "令牌核算 · 最近 {count} 個工作階段",
@@ -1934,6 +1938,7 @@ const ja: Translations = {
     deliveryError: "前回の配信に失敗（ホバーで詳細）",
     deliverPrompt: "配信先（local/origin/プラットフォーム名；空でクリア）:",
     sortTitle: "ジョブの並び替え", sortDefault: "既定の順序", sortNextRun: "次回実行が早い順",
+    deliverUnknownConfirm: "「{target}」は既知の配信先ではありません（origin/all/local または接続済みプラットフォーム）。保存しますか？",
   },
   usage: {
     windowNote: "トークン集計 · 直近 {count} セッション",
@@ -2420,6 +2425,7 @@ const ar: Translations = {
     deliveryError: "فشل آخر تسليم (مرّر للتفاصيل)",
     deliverPrompt: "وجهة التسليم (local/origin/المنصة؛ فارغ للمسح):",
     sortTitle: "ترتيب المهام", sortDefault: "الترتيب الافتراضي", sortNextRun: "الأقرب تشغيلًا أولًا",
+    deliverUnknownConfirm: "الهدف “{target}” ليس وجهة تسليم معروفة (origin/all/local أو منصة متصلة). الحفظ على أي حال؟",
   },
   usage: {
     windowNote: "إحصاء الرموز · آخر {count} جلسة",
