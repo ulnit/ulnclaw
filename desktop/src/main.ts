@@ -1117,7 +1117,10 @@ function startApprovalWatcher(): void {
 
 async function pollHealth(): Promise<void> {
   if (!state.client) return;
+  // P412: time the health probe so the dot tooltip can show latency.
+  const probeStartedAt = performance.now();
   const ok = await state.client.health();
+  const probeLatencyMs = Math.round(performance.now() - probeStartedAt);
   el.dot.className = "dot " + (ok ? "up" : "down");
   el.dot.title = ok ? t.session.reachable : t.session.unreachable;
   if (ok) {
@@ -1134,6 +1137,7 @@ async function pollHealth(): Promise<void> {
         `${detailed.provider}/${detailed.model}`,
         detailed.auth_required ? t.chrome.dotAuthOn : t.chrome.dotAuthOff,
         t.chrome.dotRuns.replace("{count}", String(detailed.runs_tracked)),
+        t.chrome.dotLatency.replace("{ms}", String(probeLatencyMs)),
       ].join(" · ");
     }
     void updateStatusBar();
