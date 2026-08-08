@@ -102,6 +102,7 @@ export interface Translations {
     metaStarted: string; metaCompleted: string; metaParents: string; metaChildren: string;
     attachmentsTitle: string;
     dispatch: string; dispatchResult: string; dispatchFailed: string;
+    filterPlaceholder: string; filterNoMatch: string;
   };
   projects: {
     addFolder: string; archive: string; restore: string; bindBoard: string;
@@ -440,6 +441,7 @@ const en: Translations = {
     metaStarted: "Started", metaCompleted: "Completed", metaParents: "Parents", metaChildren: "Children",
     attachmentsTitle: "Attachments",
     dispatch: "Dispatch", dispatchResult: "Dispatched: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", dispatchFailed: "Dispatch failed: {error}",
+    filterPlaceholder: "Filter tasks…", filterNoMatch: "No tasks match the filter.",
   },
   projects: {
     addFolder: "Add folder", archive: "Archive", restore: "Restore",
@@ -934,6 +936,7 @@ const zh: Translations = {
     metaStarted: "开始于", metaCompleted: "完成于", metaParents: "父任务", metaChildren: "子任务",
     attachmentsTitle: "附件",
     dispatch: "派发", dispatchResult: "派发完成：生成 {spawned} · 提升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派发失败:{error}",
+    filterPlaceholder: "筛选任务…", filterNoMatch: "没有匹配筛选条件的任务。",
   },
   projects: {
     addFolder: "添加文件夹", archive: "归档", restore: "恢复",
@@ -1428,6 +1431,7 @@ const zhHant: Translations = {
     metaStarted: "開始於", metaCompleted: "完成於", metaParents: "父工作", metaChildren: "子工作",
     attachmentsTitle: "附件",
     dispatch: "派發", dispatchResult: "派發完成：產生 {spawned} · 晉升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派發失敗:{error}",
+    filterPlaceholder: "篩選任務…", filterNoMatch: "沒有匹配篩選條件的任務。",
   },
   projects: {
     addFolder: "新增資料夾", archive: "封存", restore: "還原",
@@ -1922,6 +1926,7 @@ const ja: Translations = {
     metaStarted: "開始", metaCompleted: "完了", metaParents: "親タスク", metaChildren: "子タスク",
     attachmentsTitle: "添付",
     dispatch: "ディスパッチ", dispatchResult: "ディスパッチ完了: 起動 {spawned} · 昇格 {promoted} · 回収 {reclaimed}", dispatchFailed: "ディスパッチに失敗しました: {error}",
+    filterPlaceholder: "タスクを絞り込み…", filterNoMatch: "条件に一致するタスクがありません。",
   },
   projects: {
     addFolder: "フォルダを追加", archive: "アーカイブ", restore: "復元",
@@ -2416,6 +2421,7 @@ const ar: Translations = {
     metaStarted: "بدأت", metaCompleted: "اكتملت", metaParents: "المهام الأم", metaChildren: "المهام الفرعية",
     attachmentsTitle: "المرفقات",
     dispatch: "توزيع", dispatchResult: "تم التوزيع: {spawned} انطلاق · {promoted} ترقية · {reclaimed} استرداد", dispatchFailed: "فشل التوزيع: {error}",
+    filterPlaceholder: "تصفية المهام…", filterNoMatch: "لا توجد مهام تطابق التصفية.",
   },
   projects: {
     addFolder: "إضافة مجلد", archive: "أرشفة", restore: "استعادة",

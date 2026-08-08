@@ -28,6 +28,8 @@ export class KanbanWidget {
   private tasks: KanbanTask[] = [];
   private board = "" as string;
   private timer: number | null = null;
+  /** P526: live task-filter text (title / assignee / id). */
+  private filterText = "";
 
   constructor(
     private root: HTMLElement,
@@ -42,6 +44,7 @@ export class KanbanWidget {
         <span id="kanban-counts" class="kanban-counts"></span>
         <span id="kanban-dispatch-status" class="config-note"></span>
         <span class="spacer"></span>
+        <input id="kanban-filter" type="search" data-i18n-ph="kanban.filterPlaceholder" />
         <button id="kanban-dispatch" class="ghost" data-i18n="kanban.dispatch">Dispatch</button>
         <button id="kanban-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
@@ -78,6 +81,15 @@ export class KanbanWidget {
     };
     (this.root.querySelector("#kanban-refresh") as HTMLButtonElement).onclick = () =>
       void this.refresh();
+    // P526: live task filter — re-renders the cached tasks client-side.
+    this.root.querySelector("#kanban-filter")!.addEventListener("input", () => {
+      this.filterText = (
+        (this.root.querySelector("#kanban-filter") as HTMLInputElement).value || ""
+      )
+        .trim()
+        .toLowerCase();
+      this.renderColumns();
+    });
     (this.root.querySelector("#kanban-dispatch") as HTMLButtonElement).onclick = () =>
       void this.dispatch();
 
@@ -186,8 +198,19 @@ export class KanbanWidget {
   private renderColumns(): void {
     const wrap = this.root.querySelector("#kanban-columns")!;
     wrap.innerHTML = "";
+    // P526: narrow the cached tasks across every column by title,
+    // assignee, or id before splitting them into the four columns.
+    const query = this.filterText;
+    const visible = query
+      ? this.tasks.filter(
+          (task) =>
+            task.title.toLowerCase().includes(query) ||
+            (task.assignee || "").toLowerCase().includes(query) ||
+            task.id.toLowerCase().includes(query),
+        )
+      : this.tasks;
     for (const column of COLUMNS) {
-      const tasks = this.tasks
+      const tasks = visible
         .filter((t) => column.statuses.includes(t.status))
         .sort((a, b) => b.priority - a.priority || b.created_at - a.created_at);
       const col = document.createElement("div");
@@ -205,6 +228,12 @@ export class KanbanWidget {
       }
       col.appendChild(cards);
       wrap.appendChild(col);
+    }
+    if (query && visible.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "config-note";
+      empty.textContent = t.kanban.filterNoMatch;
+      wrap.appendChild(empty);
     }
   }
 
