@@ -7952,6 +7952,9 @@ struct SessionsImportBody {
     #[serde(default)]
     #[allow(dead_code)]
     profile: Option<String>,
+    /// P575: report what the import would do without writing anything.
+    #[serde(default)]
+    dry_run: bool,
 }
 
 const IMPORT_MAX_SESSIONS: usize = 500;
@@ -8044,6 +8047,21 @@ async fn import_sessions(
             .map(str::to_string)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let started_at = raw.started_at.unwrap_or_else(now_secs);
+        if body.dry_run {
+            // P575: existence check only — nothing touches the store.
+            match state.store.get_session_row(&id) {
+                Ok(Some(_)) => skipped += 1,
+                Ok(None) => {
+                    imported += 1;
+                    total_messages += parsed_messages.len() as u64;
+                    total_bytes += session_bytes;
+                }
+                Err(e) => {
+                    errors.push(json!({"index": index, "id": id, "error": e.to_string()}));
+                }
+            }
+            continue;
+        }
         match state.store.insert_imported_session(
             &id,
             raw.source.as_deref().unwrap_or("import"),
@@ -8090,6 +8108,7 @@ async fn import_sessions(
         "skipped": skipped,
         "messages": total_messages,
         "errors": errors,
+        "dry_run": body.dry_run,
     }))
     .into_response()
 }
@@ -15597,6 +15616,32 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["imported"], 0);
         assert_eq!(body["skipped"], 1);
+
+        // P575: dry-run reports without writing — the known id would
+        // skip, a fresh id would import, and nothing touches the store.
+        let dry_payload = json!({
+            "dry_run": true,
+            "sessions": [
+                {"id": "imported-session-1", "messages": [{"role": "user", "content": "q1"}]},
+                {"id": "dry-new", "messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": "a"},
+                ]},
+            ],
+        });
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/import",
+            &dry_payload.to_string(),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["dry_run"], true);
+        assert_eq!(body["imported"], 1);
+        assert_eq!(body["skipped"], 1);
+        assert_eq!(body["messages"], 2);
+        assert!(state.store.get_session_row("dry-new").unwrap().is_none());
 
         // Imported row keeps title and original message timestamps.
         let row = state
