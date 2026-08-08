@@ -5,6 +5,7 @@
 // session. Complements the chat sidebar, which only renders resumable
 // sessions for continued conversation.
 
+import { FindBar } from "./find-bar";
 import type { GatewayClient, MessageRow, SessionPruneOptions, SessionRow } from "./gateway";
 import { fmt, onLocaleChange, t } from "./i18n";
 
@@ -65,6 +66,9 @@ export class SessionsViewWidget {
   private projectFilter: string | null = localStorage.getItem(PROJECT_FILTER_KEY);
   // P469: model quick-filter selection.
   private modelFilter: string | null = localStorage.getItem(MODEL_FILTER_KEY);
+  // P470: find-in-transcript bar scoped to this view.
+  private findBar: FindBar | null = null;
+  private active = false;
   // P450: activity-first or title-first list sorting.
   private sortMode: "activity" | "title" =
     localStorage.getItem(SORT_KEY) === "title" ? "title" : "activity";
@@ -183,7 +187,14 @@ export class SessionsViewWidget {
     onLocaleChange(() => {
       this.updateStatusOptions();
       this.updateModelOptions();
+      this.findBar?.rerender();
     });
+    // P470: Ctrl/Cmd+F find-in-transcript while this view is shown.
+    this.findBar = new FindBar(
+      this.root,
+      this.root.querySelector("#sessions-view-transcript") as HTMLElement,
+      () => this.active,
+    );
     this.root.querySelector("#sessions-view-reason-pill")!.addEventListener("click", () => {
       this.endReasonFilter = null;
       this.renderList();
@@ -323,11 +334,14 @@ export class SessionsViewWidget {
   }
 
   start(): void {
+    this.active = true;
     this.refresh().catch(() => undefined);
   }
 
   stop(): void {
-    /* on-demand only */
+    // P470: leaving the view closes any open find bar.
+    this.active = false;
+    this.findBar?.close();
   }
 
   private status(message: string, isError = false): void {
@@ -759,6 +773,7 @@ export class SessionsViewWidget {
       // P454: per-message copy actions.
       this.bindCopyButtons(pane);
       pane.scrollTop = 0;
+      this.findBar?.refresh();
       exportBtn.hidden = false;
       (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-export-json") as HTMLButtonElement).hidden = false;
@@ -828,6 +843,7 @@ export class SessionsViewWidget {
     this.transcriptStart = start;
     pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
     this.updateTranscriptBanner(sessionId);
+    this.findBar?.refresh();
   }
 
   /** P468: fetch the previous window from the gateway and prepend it. */
@@ -852,6 +868,7 @@ export class SessionsViewWidget {
       for (const node of Array.from(holder.children)) pane.insertBefore(node, anchor);
       pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
       this.updateTranscriptBanner(sessionId);
+      this.findBar?.refresh();
     } catch (error) {
       this.status(
         t.sessionsView.transcriptFailed.replace(

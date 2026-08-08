@@ -1232,6 +1232,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 /* P447: message-count meta on sessions-view rows. */
 .sessions-view-msgcount { opacity: 0.75; font-size: 0.9em; }
 /* P450: sortable count header. */
+/* P470: containing block for the view-scoped find bar. */
+#sessions-view { position: relative; }
 #sessions-view-count.clickable { cursor: pointer; }
 #sessions-view-count.clickable:hover { color: var(--text); }
 /* P451: date group headers in the sessions browser. */
