@@ -119,6 +119,7 @@ export class SessionsViewWidget {
       <div class="sessions-view-body">
         <div class="sessions-view-listcol">
           <input id="sessions-view-filter" type="search" data-i18n-ph="sessionsView.filterPlaceholder" />
+          <label class="check sessions-view-unread-only"><input id="sessions-view-unread-only" type="checkbox" /><span data-i18n="sessionsView.unreadOnly">Unread only</span></label>
           <select id="sessions-view-status-filter" data-i18n-title="sessionsView.statusFilterTitle">
             <option value="all" data-i18n="sessionsView.statusAll">All statuses</option>
             <option value="open" data-i18n="sessionsView.statusOpen">Open</option>
@@ -180,6 +181,10 @@ export class SessionsViewWidget {
       this.refresh().catch(() => undefined);
     });
     this.root.querySelector("#sessions-view-filter")!.addEventListener("input", () => {
+      this.renderList();
+    });
+    // P499: unread-only quick toggle.
+    this.root.querySelector("#sessions-view-unread-only")!.addEventListener("change", () => {
       this.renderList();
     });
     this.root.querySelector("#sessions-view-status-filter")!.addEventListener("change", () => {
@@ -303,6 +308,7 @@ export class SessionsViewWidget {
     // P482: one-click reset of every list filter.
     this.root.querySelector("#sessions-view-clear-filters")!.addEventListener("click", () => {
       (this.root.querySelector("#sessions-view-filter") as HTMLInputElement).value = "";
+      (this.root.querySelector("#sessions-view-unread-only") as HTMLInputElement).checked = false;
       const searchInput = this.root.querySelector("#sessions-view-search") as HTMLInputElement;
       searchInput.value = "";
       localStorage.removeItem(SEARCH_KEY);
@@ -889,11 +895,13 @@ export class SessionsViewWidget {
     this.updateSourceOptions();
     if (this.sourceFilter) localStorage.setItem(SOURCE_FILTER_KEY, this.sourceFilter);
     else localStorage.removeItem(SOURCE_FILTER_KEY);
+    // P499: unread-only toggle state.
+    const unreadOnly = (this.root.querySelector("#sessions-view-unread-only") as HTMLInputElement).checked;
     // P482: show the clear-filters action while any filter is active.
     const searchValue = (this.root.querySelector("#sessions-view-search") as HTMLInputElement).value.trim();
     const filtersActive = Boolean(filter) || status !== "all" || this.modelFilter !== null
       || this.sourceFilter !== null || this.endReasonFilter !== null || this.projectFilter !== null
-      || Boolean(searchValue);
+      || Boolean(searchValue) || unreadOnly;
     (this.root.querySelector("#sessions-view-clear-filters") as HTMLButtonElement).hidden = !filtersActive;
     this.visible = [];
     // P438: show/clear the end-reason drill-down pill.
@@ -917,6 +925,7 @@ export class SessionsViewWidget {
       localStorage.removeItem(PROJECT_FILTER_KEY);
     }
     const rows = this.all.filter((session) => {
+      if (unreadOnly && !this.isUnread?.(session.id)) return false;
       if (this.sourceFilter && session.source !== this.sourceFilter) return false;
       if (this.modelFilter && session.model !== this.modelFilter) return false;
       if (this.projectFilter && session.project !== this.projectFilter) return false;
