@@ -1357,6 +1357,15 @@ change unless --apply is passed.")]
         #[arg(long)]
         apply: bool,
     },
+    /// Re-title one session from its first exchange via the LLM
+    /// (HTTP twin: POST /api/sessions/:id/retitle; P569)
+    Retitle {
+        /// Session id (prefix ok)
+        id: String,
+        /// Write the new title (default: dry run)
+        #[arg(long)]
+        apply: bool,
+    },
     /// Repair a malformed state.db schema so hidden sessions reappear
     /// (hermes sessions repair)
     Repair {
@@ -8522,6 +8531,68 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                 println!("  every title already reflects the user's request.");
             } else if apply {
                 println!("\u{2713} Re-titled {} session(s).", changed);
+            }
+        }
+        SessionAction::Retitle { id, apply } => {
+            // P569: single-session retitler — the CLI twin of
+            // POST /api/sessions/:id/retitle (P559).
+            let resolved = store
+                .resolve_session_id(&id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Session '{}' not found.", id))?;
+            let row = store
+                .get_session_row(&resolved)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Session '{}' not found.", id))?;
+            let user_text = store
+                .get_first_user_text(&resolved)
+                .map_err(|e| e.to_string())?;
+            if user_text.trim().is_empty() {
+                return Err("Session has no user message to title from.".to_string());
+            }
+            let first_reply = store
+                .get_first_assistant_text(&resolved)
+                .map_err(|e| e.to_string())?;
+            let provider = build_provider(config, None)?;
+            let Some(new_title) = ulnclaw::title_generator::generate_title_forced(
+                config,
+                provider,
+                &user_text,
+                &first_reply,
+            )
+            .await
+            else {
+                return Err("Title generation failed (provider unreachable?).".to_string());
+            };
+            let old_title = row.title.as_deref().unwrap_or("");
+            if !ulnclaw::session::retitle::is_titlelike(&new_title) {
+                println!(
+                    "Kept {:?} — got {:?} (rejected as not title-like).",
+                    old_title, new_title
+                );
+                return Ok(());
+            }
+            if new_title == old_title {
+                println!("Title already up to date: {:?}", old_title);
+                return Ok(());
+            }
+            println!("{}\n    {:?}\n    \u{2192} {:?}", resolved, old_title, new_title);
+            if !apply {
+                println!("(dry run — pass --apply to write)");
+                return Ok(());
+            }
+            match store.set_session_title(&resolved, &new_title) {
+                Ok(()) => println!("\u{2713} Re-titled."),
+                Err(_) => {
+                    // Unique-title collision: dedupe like the live titler.
+                    let deduped = store
+                        .get_next_title_in_lineage(&new_title)
+                        .map_err(|e| e.to_string())?;
+                    store
+                        .set_session_title(&resolved, &deduped)
+                        .map_err(|e| e.to_string())?;
+                    println!("\u{2713} Re-titled to {:?} (title was taken).", deduped);
+                }
             }
         }
         SessionAction::Delete { id, yes } => {
