@@ -30,6 +30,8 @@ const SELECTED_KEY = "ulnclaw.sessions.selected";
 const SEARCH_KEY = "ulnclaw.sessions.search";
 // P450: persistence key for the list sort mode.
 const SORT_KEY = "ulnclaw.sessions.sort";
+// P453: persistence key for the project drill-down.
+const PROJECT_FILTER_KEY = "ulnclaw.sessions.projectFilter";
 
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
@@ -46,6 +48,8 @@ export class SessionsViewWidget {
   private kbIndex = 0;
   // P446: whether the persisted selection has been restored this mount.
   private restored = false;
+  // P453: project drill-down set from the row chips.
+  private projectFilter: string | null = localStorage.getItem(PROJECT_FILTER_KEY);
   // P450: activity-first or title-first list sorting.
   private sortMode: "activity" | "title" =
     localStorage.getItem(SORT_KEY) === "title" ? "title" : "activity";
@@ -87,6 +91,7 @@ export class SessionsViewWidget {
             <option value="archived" data-i18n="sessionsView.statusArchived">Archived</option>
           </select>
           <button id="sessions-view-reason-pill" class="sessions-view-reason-pill" hidden></button>
+          <button id="sessions-view-project-pill" class="sessions-view-reason-pill" hidden></button>
           <input id="sessions-view-search" type="search" data-i18n-ph="sessionsView.searchPlaceholder" />
           <div id="sessions-view-list" class="sessions-view-list" tabindex="0"></div>
         </div>
@@ -156,6 +161,10 @@ export class SessionsViewWidget {
     onLocaleChange(() => this.updateStatusOptions());
     this.root.querySelector("#sessions-view-reason-pill")!.addEventListener("click", () => {
       this.endReasonFilter = null;
+      this.renderList();
+    });
+    this.root.querySelector("#sessions-view-project-pill")!.addEventListener("click", () => {
+      this.projectFilter = null;
       this.renderList();
     });
     // P450: the count header toggles activity ↔ title sorting.
@@ -546,7 +555,18 @@ export class SessionsViewWidget {
       reasonPill.hidden = true;
       localStorage.removeItem(REASON_FILTER_KEY);
     }
+    // P453: show/clear the project drill-down pill.
+    const projectPill = this.root.querySelector("#sessions-view-project-pill") as HTMLButtonElement;
+    if (this.projectFilter) {
+      projectPill.hidden = false;
+      projectPill.textContent = `${fmt(t.sessionsView.projectFilter, { project: this.projectFilter })} ✕`;
+      localStorage.setItem(PROJECT_FILTER_KEY, this.projectFilter);
+    } else {
+      projectPill.hidden = true;
+      localStorage.removeItem(PROJECT_FILTER_KEY);
+    }
     const rows = this.all.filter((session) => {
+      if (this.projectFilter && session.project !== this.projectFilter) return false;
       if (this.endReasonFilter && session.end_reason !== this.endReasonFilter) return false;
       if (status === "open" && session.end_reason) return false;
       if (status === "ended" && (!session.end_reason || session.end_reason === "archived")) return false;
@@ -584,6 +604,7 @@ export class SessionsViewWidget {
               ${session.model ? `<span class="sessions-view-model">${escapeHtml(session.model)}</span>` : ""}
               ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
               ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" data-reason="${escapeHtml(session.end_reason)}" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
+              ${session.project ? `<span class="sessions-view-chip sessions-view-project" data-project="${escapeHtml(session.project)}" title="${escapeHtml(session.project)}">${escapeHtml(session.project)}</span>` : ""}
               ${session.message_count ? `<span class="sessions-view-msgcount">${escapeHtml(fmt(t.sessionsView.msgCount, { count: String(session.message_count) }))}</span>` : ""}
               <span title="${escapeHtml(fmtWhen(session.started_at))}">${fmtWhen(session.last_activity_at || session.started_at)}</span>
             </div>
@@ -602,6 +623,14 @@ export class SessionsViewWidget {
       chip.addEventListener("click", (event) => {
         event.stopPropagation();
         this.endReasonFilter = chip.dataset.reason || null;
+        this.renderList();
+      });
+    }
+    // P453: project chips drill the list down to that project.
+    for (const chip of Array.from(list.querySelectorAll<HTMLElement>(".sessions-view-project"))) {
+      chip.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.projectFilter = chip.dataset.project || null;
         this.renderList();
       });
     }
