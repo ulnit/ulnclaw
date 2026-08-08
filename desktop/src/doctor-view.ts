@@ -64,8 +64,30 @@ export class DoctorWidget {
         <div id="browser-rows"></div>
       </section>
       <section id="doctor-mcp" class="doctor-monitoring" hidden>
-        <h3 class="config-section" data-i18n="mcpPanel.title">MCP servers</h3>
+        <h3 class="config-section"><span data-i18n="mcpPanel.title">MCP servers</span>
+          <button id="mcp-add" class="ghost mcp-add-btn" data-i18n="mcpPanel.addServer">Add server</button>
+        </h3>
         <div id="mcp-rows"></div>
+        <dialog id="mcp-add-dialog">
+          <h2 data-i18n="mcpPanel.dialogTitle">Add MCP server</h2>
+          <label><span data-i18n="mcpPanel.nameLabel">Name</span>
+            <input id="mcp-add-name" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <label><span data-i18n="mcpPanel.commandLabel">Command (stdio)</span>
+            <input id="mcp-add-command" type="text" autocomplete="off" spellcheck="false" placeholder="npx" />
+          </label>
+          <label><span data-i18n="mcpPanel.argsLabel">Arguments</span>
+            <input id="mcp-add-args" type="text" autocomplete="off" spellcheck="false" placeholder="-y @modelcontextprotocol/server-filesystem /tmp" />
+          </label>
+          <label><span data-i18n="mcpPanel.urlLabel">URL (http/sse)</span>
+            <input id="mcp-add-url" type="text" autocomplete="off" spellcheck="false" placeholder="https://…" />
+          </label>
+          <p id="mcp-add-status" class="config-status" hidden></p>
+          <menu>
+            <button id="mcp-add-cancel" data-i18n="mcpPanel.cancelBtn">Cancel</button>
+            <button id="mcp-add-save" value="default" data-i18n="mcpPanel.saveBtn">Save</button>
+          </menu>
+        </dialog>
       </section>
       <section id="doctor-system" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="systemPanel.title">System</h3>
@@ -186,6 +208,7 @@ export class DoctorWidget {
     this.loadMonitoring().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
+    this.wireMcpAdd();
     this.loadSystem().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
     this.loadBackups().catch(() => undefined);
@@ -322,6 +345,59 @@ export class DoctorWidget {
     }
   }
 
+  /** Add-server dialog wiring for the MCP panel (P603). */
+  private wireMcpAdd(): void {
+    const addBtn = this.root.querySelector("#mcp-add") as HTMLButtonElement | null;
+    const dialog = this.root.querySelector("#mcp-add-dialog") as HTMLDialogElement | null;
+    if (!addBtn || !dialog) return;
+    const input = (id: string): HTMLInputElement =>
+      this.root.querySelector(`#${id}`) as HTMLInputElement;
+    const statusEl = this.root.querySelector("#mcp-add-status") as HTMLElement;
+    addBtn.addEventListener("click", () => {
+      input("mcp-add-name").value = "";
+      input("mcp-add-command").value = "";
+      input("mcp-add-args").value = "";
+      input("mcp-add-url").value = "";
+      statusEl.hidden = true;
+      dialog.showModal();
+      input("mcp-add-name").focus();
+    });
+    this.root.querySelector("#mcp-add-cancel")!.addEventListener("click", () => dialog.close());
+    this.root.querySelector("#mcp-add-save")!.addEventListener("click", () => {
+      const client = this.client();
+      if (!client) return;
+      const name = input("mcp-add-name").value.trim();
+      const command = input("mcp-add-command").value.trim();
+      const args = input("mcp-add-args")
+        .value.trim()
+        .split(/\s+/)
+        .filter((entry) => entry.length > 0);
+      const url = input("mcp-add-url").value.trim();
+      const body: Parameters<GatewayClient["mcpServerAdd"]>[0] = { name };
+      if (command) {
+        body.command = command;
+        body.args = args;
+      }
+      if (url) body.url = url;
+      statusEl.hidden = true;
+      void client
+        .mcpServerAdd(body)
+        .then((result) => {
+          dialog.close();
+          void this.loadMcp();
+          void Promise.resolve(result);
+        })
+        .catch((error: unknown) => {
+          statusEl.hidden = false;
+          statusEl.classList.add("error");
+          statusEl.textContent = t.mcpPanel.actionFailed.replace(
+            "{error}",
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+    });
+  }
+
   private async loadMcp(): Promise<void> {
     const client = this.client();
     const section = this.root.querySelector("#doctor-mcp") as HTMLElement;
@@ -389,6 +465,71 @@ export class DoctorWidget {
           });
           row.appendChild(connect);
         }
+        if (server.enabled === false) {
+          const badge = document.createElement("span");
+          badge.className = "mcp-disabled-badge";
+          badge.textContent = t.mcpPanel.disabledBadge;
+          row.appendChild(badge);
+        }
+        const actions = document.createElement("span");
+        actions.className = "mcp-row-actions";
+        const testBtn = document.createElement("button");
+        testBtn.className = "ghost";
+        testBtn.textContent = t.mcpPanel.testBtn;
+        testBtn.addEventListener("click", () => {
+          testBtn.disabled = true;
+          testBtn.textContent = t.mcpPanel.testing;
+          void client
+            .mcpServerTest(server.name)
+            .then((result) => {
+              this.mcpFlowNote(row, t.mcpPanel.testOk.replace("{count}", String(result.count)), false);
+            })
+            .catch((error: unknown) => {
+              this.mcpFlowNote(
+                row,
+                t.mcpPanel.testFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
+                true,
+              );
+            })
+            .finally(() => {
+              testBtn.disabled = false;
+              testBtn.textContent = t.mcpPanel.testBtn;
+            });
+        });
+        const toggleBtn = document.createElement("button");
+        toggleBtn.className = "ghost";
+        toggleBtn.textContent = server.enabled === false ? t.mcpPanel.enableBtn : t.mcpPanel.disableBtn;
+        toggleBtn.addEventListener("click", () => {
+          void client
+            .mcpServerSetEnabled(server.name, server.enabled === false)
+            .then(() => this.loadMcp())
+            .catch((error: unknown) => {
+              this.mcpFlowNote(
+                row,
+                t.mcpPanel.actionFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
+                true,
+              );
+            });
+        });
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "ghost";
+        deleteBtn.textContent = "\u{1F5D1}";
+        deleteBtn.title = t.mcpPanel.deleteConfirm.replace("{name}", server.name);
+        deleteBtn.addEventListener("click", () => {
+          if (!window.confirm(t.mcpPanel.deleteConfirm.replace("{name}", server.name))) return;
+          void client
+            .mcpServerDelete(server.name)
+            .then(() => this.loadMcp())
+            .catch((error: unknown) => {
+              this.mcpFlowNote(
+                row,
+                t.mcpPanel.actionFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
+                true,
+              );
+            });
+        });
+        actions.append(testBtn, toggleBtn, deleteBtn);
+        row.appendChild(actions);
         rows.appendChild(row);
       }
       section.hidden = false;

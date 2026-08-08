@@ -3277,7 +3277,7 @@ async fn make_agent_in(
     register_builtin_tools(&mut registry);
 
     // MCP servers: connect and register their tools (hermes mcp_tool.py).
-    for server in &config.mcp.servers {
+    for server in config.mcp.servers.iter().filter(|server| server.enabled) {
         match ulnclaw::mcp::register_mcp_server_lazy(&mut registry, server).await {
             Ok(count) => eprintln!("[mcp] {}: {} tools registered", server.name, count),
             Err(e) => eprintln!("[mcp] {}: unavailable ({})", server.name, e),

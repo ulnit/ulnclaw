@@ -220,6 +220,7 @@ where
             auth: None,
             oauth: crate::mcp::oauth::McpOAuthConfig::default(),
             lazy: false,
+            enabled: true,
         };
         let mut client = McpClient::connect(&server_cfg).await.map_err(|e| {
             AgentError::Tool(format!("cua-driver MCP connect failed: {e}"))
@@ -1270,6 +1271,7 @@ pub async fn health_report(cfg: &ComputerUseConfig) -> Result<Value> {
         auth: None,
         oauth: crate::mcp::oauth::McpOAuthConfig::default(),
         lazy: false,
+        enabled: true,
     };
     let mut client = McpClient::connect(&server_cfg)
         .await

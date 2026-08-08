@@ -692,6 +692,8 @@ export interface McpServerRow {
   target: string;
   auth: "none" | "headers" | "oauth";
   oauth_tokens: boolean;
+  lazy?: boolean;
+  enabled?: boolean;
   cached_tools?: { name: string; description: string }[];
 }
 
@@ -1481,6 +1483,81 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`mcp servers HTTP ${response.status}`);
     const value = await response.json();
     return (value.servers || []) as McpServerRow[];
+  }
+
+  /** POST /api/mcp/servers — add a server to config.toml (P603). */
+  async mcpServerAdd(body: {
+    name: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    transport?: string;
+    headers?: Record<string, string>;
+    auth?: string;
+    lazy?: boolean;
+    enabled?: boolean;
+  }): Promise<{ ok: boolean; name: string; note: string }> {
+    const response = await fetch(this.endpoint("/api/mcp/servers"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `mcp HTTP ${response.status}`);
+    return value as { ok: boolean; name: string; note: string };
+  }
+
+  /** PUT /api/mcp/servers — merge fields into a server (P603). */
+  async mcpServerUpdate(body: {
+    name: string;
+    command?: string;
+    args?: string[];
+    url?: string;
+    lazy?: boolean;
+    enabled?: boolean;
+  }): Promise<{ ok: boolean; name: string; note: string }> {
+    const response = await fetch(this.endpoint("/api/mcp/servers"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `mcp HTTP ${response.status}`);
+    return value as { ok: boolean; name: string; note: string };
+  }
+
+  /** DELETE /api/mcp/servers/:name — remove a server (P603). */
+  async mcpServerDelete(name: string): Promise<{ ok: boolean; name: string }> {
+    const response = await fetch(this.endpoint(`/api/mcp/servers/${encodeURIComponent(name)}`), {
+      method: "DELETE",
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `mcp HTTP ${response.status}`);
+    return value as { ok: boolean; name: string };
+  }
+
+  /** PUT /api/mcp/servers/:name/enabled — flip the flag (P603). */
+  async mcpServerSetEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; name: string; enabled: boolean }> {
+    const response = await fetch(
+      this.endpoint(`/api/mcp/servers/${encodeURIComponent(name)}/enabled`),
+      { method: "PUT", headers: this.headers(), body: JSON.stringify({ enabled }) },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `mcp HTTP ${response.status}`);
+    return value as { ok: boolean; name: string; enabled: boolean };
+  }
+
+  /** POST /api/mcp/servers/:name/test — connect + list tools (P603). */
+  async mcpServerTest(name: string): Promise<{ ok: boolean; name: string; tools: string[]; count: number }> {
+    const response = await fetch(
+      this.endpoint(`/api/mcp/servers/${encodeURIComponent(name)}/test`),
+      { method: "POST", headers: this.headers(), body: "{}" },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `mcp HTTP ${response.status}`);
+    return value as { ok: boolean; name: string; tools: string[]; count: number };
   }
 
   /** GET /metrics — raw Prometheus text exposition. */

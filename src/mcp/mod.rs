@@ -63,6 +63,14 @@ pub struct McpServerConfig {
     /// server; the child is started on first tool call.
     #[serde(default)]
     pub lazy: bool,
+    /// Enabled flag (hermes `PUT /api/mcp/servers/{name}/enabled`);
+    /// disabled servers are skipped at registration. Defaults true.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +348,27 @@ impl AnyMcpClient {
             AnyMcpClient::Remote(c) => c.call_tool(name, arguments).await,
         }
     }
+
+    pub async fn close(&mut self) {
+        match self {
+            AnyMcpClient::Stdio(c) => c.close().await,
+            AnyMcpClient::Remote(c) => c.close().await,
+        }
+    }
+}
+
+/// Connection test for one server (hermes `POST
+/// /api/mcp/servers/{name}/test`): connect, list tools, close, and
+/// report the discovered tool names.
+pub async fn test_server(config: &McpServerConfig) -> Result<Vec<String>> {
+    let mut client = connect_any(config).await?;
+    let tools = client.list_tools().await?;
+    let names = tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(|value| value.as_str()).map(str::to_string))
+        .collect();
+    client.close().await;
+    Ok(names)
 }
 
 /// Connect one server using the transport its config selects.
@@ -717,9 +746,9 @@ pub async fn reload_mcp_servers(
         }
     }
 
-    // Reconnect from the fresh config.
+    // Reconnect from the fresh config (disabled servers stay down).
     let mut connected: Vec<String> = Vec::new();
-    for server in &config.mcp.servers {
+    for server in config.mcp.servers.iter().filter(|server| server.enabled) {
         match register_mcp_server_lazy(registry, server).await {
             Ok(count) => {
                 report.tool_count += count;
@@ -850,6 +879,7 @@ while True:
             auth: None,
             oauth: oauth::McpOAuthConfig::default(),
             lazy,
+            enabled: true,
         }
     }
 
@@ -915,6 +945,7 @@ while True:
             auth: None,
             oauth: oauth::McpOAuthConfig::default(),
             lazy: true,
+            enabled: true,
         };
         let prev = std::env::var("ULNCLAW_HOME").ok();
         std::env::set_var("ULNCLAW_HOME", tmp.path());

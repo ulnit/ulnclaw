@@ -299,7 +299,10 @@ export interface Translations {
     connected: string; connectFailed: string; disconnected: string;
   };
   logsPanel: { title: string; allLevels: string; searchPlaceholder: string; };
-  mcpPanel: { title: string; none: string; oauthTokens: string; oauthPending: string; connect: string; connecting: string; openAuth: string; approved: string; failed: string; toolsCached: string; };
+  mcpPanel: { title: string; none: string; oauthTokens: string; oauthPending: string; connect: string; connecting: string; openAuth: string; approved: string; failed: string; toolsCached: string;
+    addServer: string; dialogTitle: string; nameLabel: string; commandLabel: string; argsLabel: string; urlLabel: string; saveBtn: string; cancelBtn: string; savedNote: string;
+    testBtn: string; testing: string; testOk: string; testFailed: string; enableBtn: string; disableBtn: string; disabledBadge: string;
+    deleteConfirm: string; deletedNote: string; actionFailed: string; };
   kanbanPanel: { title: string; none: string; openOf: string; current: string; byStatus: string; blocked: string; };
   storagePanel: { title: string; size: string; contents: string; counts: string; path: string; optimize: string; optimizeTitle: string; optimizing: string; optimized: string; optimizeFailed: string; };
   systemPanel: { title: string; version: string; platform: string; uptime: string; contents: string; sessionsWord: string; messagesWord: string; runsWord: string; jobs: string; enabledWord: string; disabledWord: string; plugins: string; home: string; config: string; desktopManaged: string; };
@@ -761,7 +764,10 @@ const en: Translations = {
     connectFailed: "Connect failed: {error}", disconnected: "Live override cleared",
   },
   logsPanel: { title: "Gateway log", allLevels: "All levels", searchPlaceholder: "search\u2026" },
-  mcpPanel: { title: "MCP servers", none: "No MCP servers configured ([mcp] section).", oauthTokens: "oauth (tokens stored)", oauthPending: "oauth (not authorized)", connect: "Connect", connecting: "Starting…", openAuth: "Open authorization page", approved: "Authorized ✓", failed: "OAuth flow failed.", toolsCached: "{count} cached tools" },
+  mcpPanel: { title: "MCP servers", none: "No MCP servers configured ([mcp] section).", oauthTokens: "oauth (tokens stored)", oauthPending: "oauth (not authorized)", connect: "Connect", connecting: "Starting…", openAuth: "Open authorization page", approved: "Authorized ✓", failed: "OAuth flow failed.", toolsCached: "{count} cached tools",
+    addServer: "Add server", dialogTitle: "Add MCP server", nameLabel: "Name", commandLabel: "Command (stdio)", argsLabel: "Arguments (space-separated)", urlLabel: "URL (http/sse)", saveBtn: "Save", cancelBtn: "Cancel", savedNote: "Saved {name} \u2014 restart the gateway to connect.",
+    testBtn: "Test", testing: "Testing\u2026", testOk: "{count} tool(s) available.", testFailed: "Test failed: {error}", enableBtn: "Enable", disableBtn: "Disable", disabledBadge: "disabled",
+    deleteConfirm: "Remove MCP server '{name}' from config.toml?", deletedNote: "Removed {name}.", actionFailed: "Action failed: {error}" },
   kanbanPanel: { title: "Kanban diagnostics", none: "No kanban boards configured.", openOf: "{open} open · {total} total", current: "current", byStatus: "Status counts", blocked: "Blocked tasks" },
   storagePanel: { title: "Session store", size: "Database size", contents: "Contents", counts: "{sessions} sessions · {messages} messages", path: "Path", optimize: "Optimize", optimizeTitle: "Merge FTS segments and VACUUM the session store (ulnclaw sessions optimize)", optimizing: "Optimizing…", optimized: "{indexes} index(es) merged · {before} → {after}", optimizeFailed: "Optimize failed: {error}" },
   systemPanel: { title: "System", version: "Version", platform: "Platform", uptime: "Uptime", contents: "Store", sessionsWord: "sessions", messagesWord: "messages", runsWord: "active runs", jobs: "Cron jobs", enabledWord: "enabled", disabledWord: "disabled", plugins: "Plugins", home: "Home", config: "Config", desktopManaged: "desktop-managed" },
@@ -1300,7 +1306,10 @@ const zh: Translations = {
     connectFailed: "连接失败:{error}", disconnected: "已清除运行时覆盖",
   },
   logsPanel: { title: "网关日志", allLevels: "全部级别", searchPlaceholder: "搜索…" },
-  mcpPanel: { title: "MCP 服务器", none: "未配置 MCP 服务器（[mcp] 段）。", oauthTokens: "oauth（已存令牌）", oauthPending: "oauth（未授权）", connect: "连接", connecting: "启动中…", openAuth: "打开授权页面", approved: "已授权 ✓", failed: "OAuth 流程失败。", toolsCached: "{count} 个缓存工具" },
+  mcpPanel: { title: "MCP 服务器", none: "未配置 MCP 服务器（[mcp] 段）。", oauthTokens: "oauth（已存令牌）", oauthPending: "oauth（未授权）", connect: "连接", connecting: "启动中…", openAuth: "打开授权页面", approved: "已授权 ✓", failed: "OAuth 流程失败。", toolsCached: "{count} 个缓存工具",
+    addServer: "添加服务器", dialogTitle: "添加 MCP 服务器", nameLabel: "名称", commandLabel: "命令（stdio）", argsLabel: "参数（空格分隔）", urlLabel: "URL（http/sse）", saveBtn: "保存", cancelBtn: "取消", savedNote: "已保存 {name}——重启网关后连接。",
+    testBtn: "测试", testing: "测试中…", testOk: "可用工具 {count} 个。", testFailed: "测试失败：{error}", enableBtn: "启用", disableBtn: "禁用", disabledBadge: "已禁用",
+    deleteConfirm: "从 config.toml 移除 MCP 服务器 '{name}'？", deletedNote: "已移除 {name}。", actionFailed: "操作失败：{error}" },
   kanbanPanel: { title: "看板诊断", none: "未配置看板。", openOf: "{open} 进行中 · 共 {total}", current: "当前", byStatus: "状态计数", blocked: "受阻任务" },
   storagePanel: { title: "会话存储", size: "数据库大小", contents: "内容", counts: "{sessions} 个会话 · {messages} 条消息", path: "路径", optimize: "优化", optimizeTitle: "合并 FTS 段并 VACUUM 会话存储（等同 ulnclaw sessions optimize）", optimizing: "优化中…", optimized: "已合并 {indexes} 个索引 · {before} → {after}", optimizeFailed: "优化失败:{error}" },
   systemPanel: { title: "系统", version: "版本", platform: "平台", uptime: "运行时长", contents: "存储", sessionsWord: "会话", messagesWord: "消息", runsWord: "活动运行", jobs: "定时任务", enabledWord: "启用", disabledWord: "禁用", plugins: "插件", home: "主目录", config: "配置", desktopManaged: "桌面托管" },
@@ -1839,7 +1848,10 @@ const zhHant: Translations = {
     connectFailed: "連線失敗:{error}", disconnected: "已清除執行期覆寫",
   },
   logsPanel: { title: "閘道日誌", allLevels: "全部層級", searchPlaceholder: "搜尋…" },
-  mcpPanel: { title: "MCP 伺服器", none: "未設定 MCP 伺服器（[mcp] 段）。", oauthTokens: "oauth（已存權杖）", oauthPending: "oauth（未授權）", connect: "連線", connecting: "啟動中…", openAuth: "開啟授權頁面", approved: "已授權 ✓", failed: "OAuth 流程失敗。", toolsCached: "{count} 個快取工具" },
+  mcpPanel: { title: "MCP 伺服器", none: "未設定 MCP 伺服器（[mcp] 段）。", oauthTokens: "oauth（已存權杖）", oauthPending: "oauth（未授權）", connect: "連線", connecting: "啟動中…", openAuth: "開啟授權頁面", approved: "已授權 ✓", failed: "OAuth 流程失敗。", toolsCached: "{count} 個快取工具",
+    addServer: "新增伺服器", dialogTitle: "新增 MCP 伺服器", nameLabel: "名稱", commandLabel: "命令（stdio）", argsLabel: "參數（空格分隔）", urlLabel: "URL（http/sse）", saveBtn: "儲存", cancelBtn: "取消", savedNote: "已儲存 {name}——重啟閘道後連線。",
+    testBtn: "測試", testing: "測試中…", testOk: "可用工具 {count} 個。", testFailed: "測試失敗：{error}", enableBtn: "啟用", disableBtn: "停用", disabledBadge: "已停用",
+    deleteConfirm: "從 config.toml 移除 MCP 伺服器 '{name}'？", deletedNote: "已移除 {name}。", actionFailed: "操作失敗：{error}" },
   kanbanPanel: { title: "看板診斷", none: "未設定看板。", openOf: "{open} 進行中 · 共 {total}", current: "目前", byStatus: "狀態計數", blocked: "受阻工作" },
   storagePanel: { title: "會話儲存", size: "資料庫大小", contents: "內容", counts: "{sessions} 個會話 · {messages} 則訊息", path: "路徑", optimize: "最佳化", optimizeTitle: "合併 FTS 段並 VACUUM 會話儲存（等同 ulnclaw sessions optimize）", optimizing: "最佳化中…", optimized: "已合併 {indexes} 個索引 · {before} → {after}", optimizeFailed: "最佳化失敗:{error}" },
   systemPanel: { title: "系統", version: "版本", platform: "平台", uptime: "執行時長", contents: "儲存", sessionsWord: "會話", messagesWord: "訊息", runsWord: "活動執行", jobs: "排程工作", enabledWord: "啟用", disabledWord: "停用", plugins: "外掛", home: "主目錄", config: "設定", desktopManaged: "桌面託管" },
@@ -2378,7 +2390,10 @@ const ja: Translations = {
     connectFailed: "接続に失敗しました: {error}", disconnected: "ライブオーバーライドを解除しました",
   },
   logsPanel: { title: "ゲートウェイログ", allLevels: "全レベル", searchPlaceholder: "検索…" },
-  mcpPanel: { title: "MCP サーバー", none: "MCP サーバーは未設定です（[mcp] セクション）。", oauthTokens: "oauth（トークン保存済み）", oauthPending: "oauth（未承認）", connect: "接続", connecting: "開始中…", openAuth: "認証ページを開く", approved: "承認済み ✓", failed: "OAuth フローが失敗しました。", toolsCached: "キャッシュ済みツール {count} 件" },
+  mcpPanel: { title: "MCP サーバー", none: "MCP サーバーは未設定です（[mcp] セクション）。", oauthTokens: "oauth（トークン保存済み）", oauthPending: "oauth（未承認）", connect: "接続", connecting: "開始中…", openAuth: "認証ページを開く", approved: "承認済み ✓", failed: "OAuth フローが失敗しました。", toolsCached: "キャッシュ済みツール {count} 件",
+    addServer: "サーバーを追加", dialogTitle: "MCP サーバーを追加", nameLabel: "名前", commandLabel: "コマンド（stdio）", argsLabel: "引数（スペース区切り）", urlLabel: "URL（http/sse）", saveBtn: "保存", cancelBtn: "キャンセル", savedNote: "{name} を保存しました — 再起動後に接続します。",
+    testBtn: "テスト", testing: "テスト中…", testOk: "利用可能なツール {count} 件。", testFailed: "テストに失敗: {error}", enableBtn: "有効化", disableBtn: "無効化", disabledBadge: "無効",
+    deleteConfirm: "config.toml から MCP サーバー '{name}' を削除しますか？", deletedNote: "{name} を削除しました。", actionFailed: "操作に失敗: {error}" },
   kanbanPanel: { title: "カンバン診断", none: "カンバンボードは未設定です。", openOf: "未完了 {open} · 全 {total}", current: "現在", byStatus: "ステータス別件数", blocked: "ブロック中タスク" },
   storagePanel: { title: "セッションストア", size: "データベースサイズ", contents: "内容", counts: "{sessions} セッション · {messages} メッセージ", path: "パス", optimize: "最適化", optimizeTitle: "FTS セグメントをマージしセッションストアを VACUUM（ulnclaw sessions optimize と同等）", optimizing: "最適化中…", optimized: "{indexes} 件のインデックスをマージ · {before} → {after}", optimizeFailed: "最適化に失敗しました: {error}" },
   systemPanel: { title: "システム", version: "バージョン", platform: "プラットフォーム", uptime: "稼働時間", contents: "ストア", sessionsWord: "セッション", messagesWord: "メッセージ", runsWord: "実行中", jobs: "cron ジョブ", enabledWord: "有効", disabledWord: "無効", plugins: "プラグイン", home: "ホーム", config: "設定", desktopManaged: "デスクトップ管理" },
@@ -2917,7 +2932,10 @@ const ar: Translations = {
     connectFailed: "فشل الاتصال: {error}", disconnected: "تمت إزالة التجاوز الحي",
   },
   logsPanel: { title: "سجل البوابة", allLevels: "كل المستويات", searchPlaceholder: "بحث…" },
-  mcpPanel: { title: "خوادم MCP", none: "لا توجد خوادم MCP مهيأة (قسم [mcp]).", oauthTokens: "oauth (الرموز محفوظة)", oauthPending: "oauth (غير مصرح)", connect: "اتصال", connecting: "جارٍ البدء…", openAuth: "فتح صفحة التفويض", approved: "تم التفويض ✓", failed: "فشل تدفق OAuth.", toolsCached: "{count} أداة مخزنة" },
+  mcpPanel: { title: "خوادم MCP", none: "لا توجد خوادم MCP مهيأة (قسم [mcp]).", oauthTokens: "oauth (الرموز محفوظة)", oauthPending: "oauth (غير مصرح)", connect: "اتصال", connecting: "جارٍ البدء…", openAuth: "فتح صفحة التفويض", approved: "تم التفويض ✓", failed: "فشل تدفق OAuth.", toolsCached: "{count} أداة مخزنة",
+    addServer: "إضافة خادم", dialogTitle: "إضافة خادم MCP", nameLabel: "الاسم", commandLabel: "الأمر (stdio)", argsLabel: "الوسائط (مفصولة بمسافات)", urlLabel: "العنوان (http/sse)", saveBtn: "حفظ", cancelBtn: "إلغاء", savedNote: "تم حفظ {name} — أعد تشغيل البوابة للاتصال.",
+    testBtn: "اختبار", testing: "جارٍ الاختبار…", testOk: "{count} أداة متاحة.", testFailed: "فشل الاختبار: {error}", enableBtn: "تفعيل", disableBtn: "تعطيل", disabledBadge: "معطّل",
+    deleteConfirm: "إزالة خادم MCP '{name}' من config.toml؟", deletedNote: "تمت إزالة {name}.", actionFailed: "فشلت العملية: {error}" },
   kanbanPanel: { title: "تشخيصات كانبان", none: "لا توجد لوحات كانبان مهيأة.", openOf: "{open} مفتوحة · {total} الإجمالي", current: "الحالية", byStatus: "أعداد الحالات", blocked: "المهام المحظورة" },
   storagePanel: { title: "مخزن الجلسات", size: "حجم قاعدة البيانات", contents: "المحتويات", counts: "{sessions} جلسة · {messages} رسالة", path: "المسار", optimize: "تحسين", optimizeTitle: "دمج مقاطع FTS وتفريغ مخزن الجلسات (يعادل ulnclaw sessions optimize)", optimizing: "جارٍ التحسين…", optimized: "تم دمج {indexes} فهرسًا · {before} ← {after}", optimizeFailed: "فشل التحسين: {error}" },
   systemPanel: { title: "النظام", version: "الإصدار", platform: "المنصة", uptime: "مدة التشغيل", contents: "المخزن", sessionsWord: "جلسة", messagesWord: "رسالة", runsWord: "تشغيل نشط", jobs: "مهام cron", enabledWord: "مفعلة", disabledWord: "معطلة", plugins: "الإضافات", home: "المجلد الرئيسي", config: "الإعدادات", desktopManaged: "بإدارة سطح المكتب" },

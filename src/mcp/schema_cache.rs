@@ -205,6 +205,7 @@ mod tests {
             auth: None,
             oauth: crate::mcp::oauth::McpOAuthConfig::default(),
             lazy: false,
+            enabled: true,
         }
     }
 

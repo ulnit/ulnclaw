@@ -3642,11 +3642,302 @@ async fn mcp_servers_list(State(state): State<Arc<GatewayState>>) -> Json<Value>
                 "target": target,
                 "auth": auth,
                 "oauth_tokens": oauth_tokens,
+                "lazy": server.lazy,
+                "enabled": server.enabled,
                 "cached_tools": cached_tools,
             })
         })
         .collect();
     Json(json!({ "servers": servers }))
+}
+
+/// Shared body for the `POST|PUT /api/mcp/servers` CRUD endpoints.
+#[derive(Debug, Deserialize)]
+struct McpServerBody {
+    name: String,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    args: Option<Vec<String>>,
+    #[serde(default)]
+    env: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    transport: Option<String>,
+    #[serde(default)]
+    headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    auth: Option<String>,
+    #[serde(default)]
+    lazy: Option<bool>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+/// `&mut` access to the `mcp.servers` array in a config document,
+/// creating the section when missing.
+fn mcp_servers_array_mut(root: &mut toml::Value) -> std::result::Result<&mut Vec<toml::Value>, String> {
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| "config root is not a table".to_string())?;
+    let mcp = table
+        .entry("mcp")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let mcp = mcp
+        .as_table_mut()
+        .ok_or_else(|| "[mcp] in config.toml is not a table".to_string())?;
+    let servers = mcp
+        .entry("servers")
+        .or_insert_with(|| toml::Value::Array(Vec::new()));
+    servers
+        .as_array_mut()
+        .ok_or_else(|| "[mcp.servers] in config.toml is not an array".to_string())
+}
+
+fn mcp_server_name(entry: &toml::Value) -> String {
+    entry
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Build/merge one `[[mcp.servers]]` table from a CRUD body. With an
+/// existing entry the provided fields are merged over it (unknown keys
+/// survive); without one the entry is built fresh and needs either a
+/// `command` or a `url`.
+fn mcp_server_table(body: &McpServerBody, existing: Option<&toml::Value>) -> std::result::Result<toml::Table, String> {
+    let mut table = match existing {
+        Some(entry) => entry
+            .as_table()
+            .cloned()
+            .ok_or_else(|| "existing server entry is not a table".to_string())?,
+        None => toml::Table::new(),
+    };
+    let mut set = |key: &str, value: toml::Value| {
+        table.insert(key.to_string(), value);
+    };
+    set("name", toml::Value::String(body.name.trim().to_string()));
+    if let Some(command) = body.command.as_deref().map(str::trim).filter(|raw| !raw.is_empty()) {
+        set("command", toml::Value::String(command.to_string()));
+    }
+    if let Some(args) = &body.args {
+        set("args", toml::Value::Array(args.iter().map(|arg| toml::Value::String(arg.clone())).collect()));
+    }
+    if let Some(env) = &body.env {
+        let mut env_table = toml::Table::new();
+        for (key, value) in env {
+            env_table.insert(key.clone(), toml::Value::String(value.clone()));
+        }
+        set("env", toml::Value::Table(env_table));
+    }
+    if let Some(url) = body.url.as_deref().map(str::trim).filter(|raw| !raw.is_empty()) {
+        set("url", toml::Value::String(url.to_string()));
+    }
+    if let Some(transport) = body.transport.as_deref().map(str::trim).filter(|raw| !raw.is_empty()) {
+        set("transport", toml::Value::String(transport.to_string()));
+    }
+    if let Some(headers) = &body.headers {
+        let mut headers_table = toml::Table::new();
+        for (key, value) in headers {
+            headers_table.insert(key.clone(), toml::Value::String(value.clone()));
+        }
+        set("headers", toml::Value::Table(headers_table));
+    }
+    if let Some(auth) = body.auth.as_deref().map(str::trim).filter(|raw| !raw.is_empty()) {
+        set("auth", toml::Value::String(auth.to_string()));
+    }
+    if let Some(lazy) = body.lazy {
+        set("lazy", toml::Value::Boolean(lazy));
+    }
+    if let Some(enabled) = body.enabled {
+        set("enabled", toml::Value::Boolean(enabled));
+    }
+    if existing.is_none() {
+        let has_command = table.get("command").and_then(|value| value.as_str()).map(str::trim).map(|raw| !raw.is_empty()).unwrap_or(false);
+        let has_url = table.get("url").and_then(|value| value.as_str()).map(str::trim).map(|raw| !raw.is_empty()).unwrap_or(false);
+        if !has_command && !has_url {
+            return Err("a server needs either a command (stdio) or a url (http/sse)".to_string());
+        }
+    }
+    Ok(table)
+}
+
+fn mcp_validate_name(name: &str) -> std::result::Result<(), String> {
+    if !crate::profiles_cmd::is_valid_name(name) {
+        return Err("server name must start with a letter/digit and use only letters, digits, '-' or '_' (max 64)".to_string());
+    }
+    Ok(())
+}
+
+/// `POST /api/mcp/servers` — add a server to config.toml (hermes
+/// `POST /api/mcp/servers` parity).
+async fn mcp_server_add(Json(body): Json<McpServerBody>) -> Response {
+    let name = body.name.trim().to_string();
+    if let Err(e) = mcp_validate_name(&name) {
+        return bad_request(&e, None);
+    }
+    let path = crate::config_cmd::config_path();
+    let mut root = match crate::config_cmd::load_toml(&path) {
+        Ok(value) => value,
+        Err(e) => return server_error(&e),
+    };
+    let table = match mcp_server_table(&body, None) {
+        Ok(table) => table,
+        Err(e) => return bad_request(&e, None),
+    };
+    {
+        let servers = match mcp_servers_array_mut(&mut root) {
+            Ok(servers) => servers,
+            Err(e) => return bad_request(&e, None),
+        };
+        if servers.iter().any(|entry| mcp_server_name(entry) == name) {
+            return bad_request(&format!("server '{name}' already exists"), None);
+        }
+        servers.push(toml::Value::Table(table));
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &root) {
+        return server_error(&e);
+    }
+    Json(json!({
+        "ok": true,
+        "name": name,
+        "note": "restart the gateway (or reload MCP) to connect",
+    }))
+    .into_response()
+}
+
+/// `PUT /api/mcp/servers` — merge new fields into an existing server
+/// (hermes `PUT /api/mcp/servers` parity).
+async fn mcp_server_update(Json(body): Json<McpServerBody>) -> Response {
+    let name = body.name.trim().to_string();
+    let path = crate::config_cmd::config_path();
+    let mut root = match crate::config_cmd::load_toml(&path) {
+        Ok(value) => value,
+        Err(e) => return server_error(&e),
+    };
+    let position = {
+        let servers = match mcp_servers_array_mut(&mut root) {
+            Ok(servers) => servers,
+            Err(e) => return bad_request(&e, None),
+        };
+        match servers.iter().position(|entry| mcp_server_name(entry) == name) {
+            Some(position) => position,
+            None => return not_found(&format!("no MCP server named '{name}'")),
+        }
+    };
+    let servers = match mcp_servers_array_mut(&mut root) {
+        Ok(servers) => servers,
+        Err(e) => return bad_request(&e, None),
+    };
+    let existing = servers[position].clone();
+    let table = match mcp_server_table(&body, Some(&existing)) {
+        Ok(table) => table,
+        Err(e) => return bad_request(&e, None),
+    };
+    servers[position] = toml::Value::Table(table);
+    if let Err(e) = crate::config_cmd::save_toml(&path, &root) {
+        return server_error(&e);
+    }
+    Json(json!({
+        "ok": true,
+        "name": name,
+        "note": "restart the gateway (or reload MCP) to apply",
+    }))
+    .into_response()
+}
+
+/// `DELETE /api/mcp/servers/:name` — remove a server from config.toml
+/// (hermes `DELETE /api/mcp/servers/{name}` parity).
+async fn mcp_server_delete(Path(name): Path<String>) -> Response {
+    let path = crate::config_cmd::config_path();
+    let mut root = match crate::config_cmd::load_toml(&path) {
+        Ok(value) => value,
+        Err(e) => return server_error(&e),
+    };
+    let removed = {
+        let servers = match mcp_servers_array_mut(&mut root) {
+            Ok(servers) => servers,
+            Err(e) => return bad_request(&e, None),
+        };
+        let before = servers.len();
+        servers.retain(|entry| mcp_server_name(entry) != name);
+        servers.len() < before
+    };
+    if !removed {
+        return not_found(&format!("no MCP server named '{name}'"));
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &root) {
+        return server_error(&e);
+    }
+    Json(json!({ "ok": true, "name": name })).into_response()
+}
+
+/// Body for `PUT /api/mcp/servers/:name/enabled`.
+#[derive(Debug, Deserialize)]
+struct McpEnabledBody {
+    enabled: bool,
+}
+
+/// `PUT /api/mcp/servers/:name/enabled` — flip the enabled flag
+/// (hermes `PUT /api/mcp/servers/{name}/enabled` parity).
+async fn mcp_server_set_enabled(Path(name): Path<String>, Json(body): Json<McpEnabledBody>) -> Response {
+    let path = crate::config_cmd::config_path();
+    let mut root = match crate::config_cmd::load_toml(&path) {
+        Ok(value) => value,
+        Err(e) => return server_error(&e),
+    };
+    let found = {
+        let servers = match mcp_servers_array_mut(&mut root) {
+            Ok(servers) => servers,
+            Err(e) => return bad_request(&e, None),
+        };
+        match servers.iter_mut().find(|entry| mcp_server_name(entry) == name) {
+            Some(entry) => {
+                if let Some(table) = entry.as_table_mut() {
+                    table.insert("enabled".to_string(), toml::Value::Boolean(body.enabled));
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
+    };
+    if !found {
+        return not_found(&format!("no MCP server named '{name}'"));
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &root) {
+        return server_error(&e);
+    }
+    Json(json!({
+        "ok": true,
+        "name": name,
+        "enabled": body.enabled,
+        "note": "restart the gateway (or reload MCP) to apply",
+    }))
+    .into_response()
+}
+
+/// `POST /api/mcp/servers/:name/test` — connect + list tools against
+/// the in-memory config (hermes `POST /api/mcp/servers/{name}/test`
+/// parity).
+async fn mcp_server_test(State(state): State<Arc<GatewayState>>, Path(name): Path<String>) -> Response {
+    let config = state.agent.context().config.clone();
+    let Some(server) = config.mcp.servers.iter().find(|server| server.name == name).cloned() else {
+        return not_found(&format!("no MCP server named '{name}'"));
+    };
+    match crate::mcp::test_server(&server).await {
+        Ok(tools) => Json(json!({
+            "ok": true,
+            "name": name,
+            "tools": tools,
+            "count": tools.len(),
+        }))
+        .into_response(),
+        Err(e) => bad_request(&format!("connection test failed: {e}"), None),
+    }
 }
 
 /// Query parameters for `GET /api/sessions/search`.
@@ -5348,6 +5639,10 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/logs/tail", get(logs_tail))
         .route("/api/logs", get(logs_api))
         .route("/api/mcp/servers", get(mcp_servers_list))
+        .route("/api/mcp/servers", post(mcp_server_add).put(mcp_server_update))
+        .route("/api/mcp/servers/:name", delete(mcp_server_delete))
+        .route("/api/mcp/servers/:name/enabled", put(mcp_server_set_enabled))
+        .route("/api/mcp/servers/:name/test", post(mcp_server_test))
         .route("/api/insights", get(insights))
         .route("/api/channels", get(channels_status))
         .route("/api/messaging/platforms", get(messaging_platforms))
@@ -15211,6 +15506,97 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
 
         std::env::set_current_dir(saved_cwd).unwrap();
         match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_server_crud_endpoints() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Name validation + transport requirement.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/mcp/servers", Some(token),
+            json!({"name": "bad name"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/mcp/servers", Some(token),
+            json!({"name": "srv"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Add a stdio server.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/mcp/servers", Some(token),
+            json!({"name": "srv", "command": "echo", "args": ["hi"], "env": {"K": "v"}}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(on_disk.contains("[[mcp.servers]]"), "{on_disk}");
+        assert!(on_disk.contains("command = \"echo\""), "{on_disk}");
+
+        // Duplicate add is rejected.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/mcp/servers", Some(token),
+            json!({"name": "srv", "command": "echo"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Update merges fields (lazy flips, command survives).
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/mcp/servers", Some(token),
+            json!({"name": "srv", "lazy": true}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(on_disk.contains("lazy = true"), "{on_disk}");
+        assert!(on_disk.contains("command = \"echo\""), "{on_disk}");
+
+        // Enabled toggle.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/mcp/servers/srv/enabled", Some(token),
+            json!({"enabled": false}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["enabled"], false);
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(on_disk.contains("enabled = false"), "{on_disk}");
+
+        // Update of an unknown server 404s.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/mcp/servers", Some(token),
+            json!({"name": "nope", "lazy": true}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Test endpoint: unknown server 404s; a dead command reports a
+        // structured failure (spawn/handshake), never a panic.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/mcp/servers/nope/test", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Delete removes the entry.
+        let (status, _) = request_json(
+            app.clone(), "DELETE", "/api/mcp/servers/srv", None, token,
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = request_json(
+            app.clone(), "DELETE", "/api/mcp/servers/srv", None, token,
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(!on_disk.contains("command = \"echo\""), "{on_disk}");
+
+        match prev {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }

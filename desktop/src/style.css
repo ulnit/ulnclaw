@@ -1581,6 +1581,11 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .mcp-tools-list { margin: 6px 0 2px 12px; display: flex; flex-direction: column; gap: 3px; }
 .mcp-tool code { font-family: var(--mono, monospace); font-size: 0.95em; }
 .mcp-tool-desc { opacity: 0.6; margin-left: 8px; }
+.mcp-add-btn { font-size: 11px; padding: 1px 10px; margin-left: 10px; }
+.mcp-row-actions { display: inline-flex; gap: 4px; margin-left: auto; }
+.mcp-row-actions button { font-size: 11px; padding: 1px 8px; }
+.mcp-disabled-badge { font-size: 0.75em; opacity: 0.6; border: 1px solid var(--hover); border-radius: 999px; padding: 0 8px; margin-left: 6px; }
+#mcp-add-dialog input { width: 100%; box-sizing: border-box; }
 .channels-disabled { opacity: 0.5; }
 
 /* Runs view (P279) */

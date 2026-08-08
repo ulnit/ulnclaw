@@ -530,6 +530,7 @@ mod tests {
             auth: None,
             oauth: Default::default(),
             lazy: false,
+            enabled: true,
         });
         config.mcp.servers.push(crate::mcp::McpServerConfig {
             name: "local".to_string(),
@@ -542,6 +543,7 @@ mod tests {
             auth: None,
             oauth: Default::default(),
             lazy: false,
+            enabled: true,
         });
         let components = discover_mcp_components(&config);
         assert_eq!(components.len(), 1);
