@@ -250,7 +250,7 @@ export interface Translations {
   runs: {
     count: string; empty: string; loadFailed: string; stop: string; stopping: string;
     result: string; approvalTitle: string; approveOnce: string; approveSession: string;
-    approveAlways: string; deny: string; approveFailed: string; stopFailed: string;
+    approveAlways: string; deny: string; approveFailed: string; stopConfirm: string; stopFailed: string;
     delegationsTitle: string; noDelegations: string; loading: string; noResult: string;
     approvalWaitingTitle: string; approvalWaitingBody: string; viewRuns: string;
     timelineTitle: string; openSessionTitle: string;
@@ -643,7 +643,7 @@ const en: Translations = {
   },
   runs: {
     count: "{count} runs · {active} active", empty: "No async runs tracked yet.",
-    loadFailed: "Failed to load runs: {error}", stop: "Stop", stopping: "Stopping…",
+    loadFailed: "Failed to load runs: {error}", stop: "Stop", stopping: "Stopping…", stopConfirm: "Stop run {id}? In-flight work will be cancelled.",
     result: "Result", approvalTitle: "Approval requested",
     approveOnce: "Once", approveSession: "Session", approveAlways: "Always", deny: "Deny",
     approveFailed: "Approval failed: {error}", stopFailed: "Stop failed: {error}",
@@ -1127,7 +1127,7 @@ const zh: Translations = {
   },
   runs: {
     count: "{count} 个运行 · {active} 活跃", empty: "还没有跟踪的异步运行。",
-    loadFailed: "加载运行失败：{error}", stop: "停止", stopping: "停止中…",
+    loadFailed: "加载运行失败：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "确定停止运行 {id}？进行中的工作将被取消。",
     result: "结果", approvalTitle: "请求批准",
     approveOnce: "一次", approveSession: "本会话", approveAlways: "始终", deny: "拒绝",
     approveFailed: "批准失败：{error}", stopFailed: "停止失败：{error}",
@@ -1611,7 +1611,7 @@ const zhHant: Translations = {
   },
   runs: {
     count: "{count} 個執行 · {active} 活躍", empty: "還沒有追蹤的非同步執行。",
-    loadFailed: "載入執行失敗：{error}", stop: "停止", stopping: "停止中…",
+    loadFailed: "載入執行失敗：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "確定停止執行 {id}？進行中的工作將被取消。",
     result: "結果", approvalTitle: "請求核准",
     approveOnce: "一次", approveSession: "本工作階段", approveAlways: "始終", deny: "拒絕",
     approveFailed: "核准失敗：{error}", stopFailed: "停止失敗：{error}",
@@ -2095,7 +2095,7 @@ const ja: Translations = {
   },
   runs: {
     count: "{count} 件の実行 · {active} アクティブ", empty: "追跡中の非同期実行はありません。",
-    loadFailed: "実行の読み込みに失敗：{error}", stop: "停止", stopping: "停止中…",
+    loadFailed: "実行の読み込みに失敗：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "実行 {id} を停止しますか？進行中の作業はキャンセルされます。",
     result: "結果", approvalTitle: "承認要求",
     approveOnce: "今回", approveSession: "セッション", approveAlways: "常に", deny: "拒否",
     approveFailed: "承認に失敗：{error}", stopFailed: "停止に失敗：{error}",
@@ -2579,7 +2579,7 @@ const ar: Translations = {
   },
   runs: {
     count: "{count} تشغيل(ات) · {active} نشط", empty: "لا توجد تشغيلات غير متزامنة متتبعة بعد.",
-    loadFailed: "فشل تحميل التشغيلات: {error}", stop: "إيقاف", stopping: "جارٍ الإيقاف…",
+    loadFailed: "فشل تحميل التشغيلات: {error}", stop: "إيقاف", stopping: "جارٍ الإيقاف…", stopConfirm: "إيقاف التشغيل {id}؟ سيتم إلغاء العمل الجاري.",
     result: "النتيجة", approvalTitle: "طلب موافقة",
     approveOnce: "مرة", approveSession: "الجلسة", approveAlways: "دائمًا", deny: "رفض",
     approveFailed: "فشل الاعتماد: {error}", stopFailed: "فشل الإيقاف: {error}",

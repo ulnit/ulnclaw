@@ -373,6 +373,7 @@ export class RunsWidget {
   private async stopRun(runId: string): Promise<void> {
     const client = this.client();
     if (!client || this.busy) return;
+    if (!window.confirm(t.runs.stopConfirm.replace("{id}", runId.slice(0, 8)))) return;
     this.busy = true;
     try {
       await client.stopRun(runId);
