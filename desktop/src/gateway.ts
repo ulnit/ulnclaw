@@ -2229,6 +2229,21 @@ export class GatewayClient {
     return value as { ok: boolean; output: string };
   }
 
+  /** GET /api/git/file-diff — diff for one path (P601). */
+  async gitFileDiff(
+    path: string,
+    file: string,
+    mode: "working" | "staged" | "all" = "working",
+  ): Promise<{ file: string; mode: string; diff: string }> {
+    const params = new URLSearchParams({ path, file, mode });
+    const response = await fetch(this.endpoint(`/api/git/file-diff?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { file: string; mode: string; diff: string };
+  }
+
   /** POST /api/git/branch/create — create a branch (P599). */
   async gitBranchCreate(
     path: string,

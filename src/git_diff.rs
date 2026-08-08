@@ -385,6 +385,39 @@ pub fn push(cwd: &Path) -> Result<String> {
     mutate(&["push"], cwd, "git push", Duration::from_secs(60))
 }
 
+/// Diff for a single path (hermes `/api/git/file-diff` parity).
+/// Untracked paths in working/all modes fold in via `--no-index` so
+/// brand-new files show up as additions.
+pub fn file_diff(cwd: &Path, file: &str, mode: DiffMode) -> Result<String> {
+    require_repo(cwd)?;
+    let file = file.trim();
+    if file.is_empty() {
+        return Err(AgentError::Tool("file is required".to_string()));
+    }
+    let untracked = untracked_files(cwd).iter().any(|path| path == file);
+    if untracked && !matches!(mode, DiffMode::Staged) {
+        let target = cwd.join(file);
+        let (code, out) = run_git(
+            &["diff", "--no-index", "--", "/dev/null", &target.to_string_lossy()],
+            cwd,
+            GIT_TIMEOUT_LONG,
+        )?;
+        // --no-index exits 1 when the paths differ — that is the diff.
+        if code > 1 {
+            return Err(AgentError::Tool("git diff failed".to_string()));
+        }
+        return Ok(out);
+    }
+    let mut args: Vec<&str> = mode.base_args();
+    args.push("--");
+    args.push(file);
+    let (code, out) = run_git(&args, cwd, GIT_TIMEOUT_LONG)?;
+    if code != 0 {
+        return Err(AgentError::Tool("git diff failed".to_string()));
+    }
+    Ok(out)
+}
+
 /// Branch-name sanity: no whitespace, no `..`, no control chars, no
 /// leading `-` (git refuses these; keeps CLI injection impossible).
 fn valid_branch_name(name: &str) -> bool {
@@ -578,6 +611,20 @@ mod tests {
         let branches = local_branches(&dir).unwrap();
         assert_eq!(branches[0], current_branch_name(&dir));
         assert!(branches.iter().any(|name| name == "feature/x"));
+
+        // Per-file diffs: working diff sees the edit, staged diff is
+        // empty until staged, untracked folds in via --no-index.
+        std::fs::write(dir.join("tracked.txt"), "line one\nline two\nline three\n").unwrap();
+        std::fs::write(dir.join("stray.txt"), "brand new\n").unwrap();
+        let working = file_diff(&dir, "tracked.txt", DiffMode::Working).unwrap();
+        assert!(working.contains("+line three"));
+        assert!(file_diff(&dir, "tracked.txt", DiffMode::Staged).unwrap().trim().is_empty());
+        stage(&dir, &["tracked.txt".to_string()]).unwrap();
+        let staged = file_diff(&dir, "tracked.txt", DiffMode::Staged).unwrap();
+        assert!(staged.contains("+line three"));
+        let stray = file_diff(&dir, "stray.txt", DiffMode::Working).unwrap();
+        assert!(stray.contains("+brand new"));
+        unstage(&dir, &[]).unwrap();
 
         // Branch create/switch: invalid names rejected, switching works.
         assert!(create_branch(&dir, "bad name", None).is_err());

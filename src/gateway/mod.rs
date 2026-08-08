@@ -2761,6 +2761,35 @@ async fn git_push(Json(body): Json<GitActionBody>) -> Response {
     }
 }
 
+/// Query parameters for `GET /api/git/file-diff`.
+#[derive(Debug, Deserialize)]
+struct GitFileDiffQuery {
+    #[serde(default)]
+    path: Option<String>,
+    file: String,
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+/// `GET /api/git/file-diff` — the diff for one path (hermes
+/// `/api/git/file-diff` parity). Untracked files fold in via
+/// `--no-index` in working/all modes.
+async fn git_file_diff(Query(query): Query<GitFileDiffQuery>) -> Response {
+    let target = match fs_query_path(&FsPathQuery { path: query.path.or_else(|| Some(".".to_string())) }) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let mode = match query.mode.as_deref().unwrap_or("working") {
+        "staged" => crate::git_diff::DiffMode::Staged,
+        "all" => crate::git_diff::DiffMode::All,
+        _ => crate::git_diff::DiffMode::Working,
+    };
+    match crate::git_diff::file_diff(&target, &query.file, mode) {
+        Ok(diff) => Json(json!({ "file": query.file, "mode": mode.as_str(), "diff": diff })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
 /// Body for the `POST /api/git/branch/*` endpoints.
 #[derive(Debug, Deserialize)]
 struct GitBranchBody {
@@ -5161,6 +5190,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/mkdir", post(fs_mkdir))
         .route("/api/fs/git-root", get(fs_git_root))
         .route("/api/fs/git-diff", get(fs_git_diff))
+        .route("/api/git/file-diff", get(git_file_diff))
         .route("/api/git/status", get(git_status))
         .route("/api/git/branches", get(git_branches))
         .route("/api/git/stage", post(git_stage))
@@ -15227,6 +15257,27 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (status, body) = get_json(app.clone(), "/api/git/status?path=.", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body["unstaged"].as_array().unwrap().is_empty());
+
+        // Per-file diff: unstaged edit, then the staged view.
+        std::fs::write(dir.path().join("tracked.txt"), "one\ntwo\nthree\n").unwrap();
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/git/file-diff?path=.&file=tracked.txt",
+            Some("sekret"),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["diff"].as_str().unwrap().contains("+three"));
+        let (status, _) = send_json(app.clone(), "POST", "/api/git/stage", Some("sekret"), json!({"paths": ["tracked.txt"]})).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/git/file-diff?path=.&file=tracked.txt&mode=staged",
+            Some("sekret"),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["diff"].as_str().unwrap().contains("+three"));
+        let (status, _) = send_json(app.clone(), "POST", "/api/git/unstage", Some("sekret"), json!({"paths": ["tracked.txt"]})).await;
+        assert_eq!(status, StatusCode::OK);
 
         // Branch create + switch round-trip.
         let (status, body) = send_json(

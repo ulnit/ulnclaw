@@ -271,6 +271,51 @@ export class FileTreePanel {
   }
 
   /**
+   * Inline per-file diff (P601) — clicking a change row toggles a
+   * collapsed diff under it, fetched from `/api/git/file-diff`.
+   */
+  private toggleFileDiff(container: HTMLElement, file: string, kind: string): void {
+    const marker = `file-diff:${file}`;
+    const existing = container.querySelector<HTMLElement>(`[data-diff="${CSS.escape(marker)}"]`);
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const client = this.client();
+    if (!client || !this.rootPath) return;
+    const pre = document.createElement("pre");
+    pre.className = "file-tree-diff file-tree-group-diff";
+    pre.dataset.diff = marker;
+    pre.textContent = t.learning.loading;
+    const rows = container.querySelectorAll(".file-tree-group-row");
+    let anchorEl: Element | null = null;
+    for (const row of rows) {
+      const label = row.querySelector(".file-tree-group-file");
+      if (label && label.textContent === file) {
+        anchorEl = row;
+        break;
+      }
+    }
+    if (anchorEl && anchorEl.nextSibling) {
+      container.insertBefore(pre, anchorEl.nextSibling);
+    } else {
+      container.appendChild(pre);
+    }
+    const mode = kind === "staged" ? "staged" : this.diffMode === "staged" ? "working" : this.diffMode;
+    void client
+      .gitFileDiff(this.rootPath, file, mode)
+      .then((result) => {
+        pre.textContent = result.diff.trim() || t.fileTree.noChanges;
+      })
+      .catch((error: unknown) => {
+        pre.textContent = t.fileTree.diffFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+  }
+
+  /**
    * Per-file change groups (P600) — staged / modified / untracked rows
    * with per-row stage/unstage/revert actions over the same
    * `/api/git/*` endpoints (hermes per-file review parity).
@@ -319,6 +364,7 @@ export class FileTreePanel {
         label.className = "file-tree-group-file";
         label.textContent = file;
         label.title = file;
+        label.addEventListener("click", () => this.toggleFileDiff(details, file, group.kind));
         row.appendChild(label);
         if (group.kind === "staged") {
           const unstage = document.createElement("button");
