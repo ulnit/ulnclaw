@@ -90,7 +90,7 @@ export interface Translations {
   slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; insights: string; skillFallback: string; resume: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
     failureTitle: string; retry: string; openSettings: string; dismiss: string };
-  bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string };
+    bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string; runCompleted: string; runFailed: string; runOpenRuns: string };
   kanban: {
     todo: string; doing: string; done: string; blocked: string;
     addTask: string; addComment: string; comment: string; unblock: string;
@@ -392,6 +392,7 @@ const en: Translations = {
     preview: "Preview: {label}",
     terminalClosed: "Terminal closed: {id}{running}",
     stillRunning: " (still running)", terminalEmpty: "terminal pane is empty",
+    runCompleted: "Run completed", runFailed: "Run failed", runOpenRuns: "Open runs",
   },
   kanban: {
     todo: "To do", doing: "Doing", done: "Done", blocked: "Blocked",
@@ -851,6 +852,7 @@ const zh: Translations = {
     preview: "预览：{label}",
     terminalClosed: "终端已关闭：{id}{running}",
     stillRunning: "（仍在运行）", terminalEmpty: "终端面板为空",
+    runCompleted: "运行完成", runFailed: "运行失败", runOpenRuns: "查看运行",
   },
   kanban: {
     todo: "待办", doing: "进行中", done: "已完成", blocked: "受阻",
@@ -1310,6 +1312,7 @@ const zhHant: Translations = {
     preview: "預覽：{label}",
     terminalClosed: "終端已關閉：{id}{running}",
     stillRunning: "（仍在執行）", terminalEmpty: "終端面板為空",
+    runCompleted: "執行完成", runFailed: "執行失敗", runOpenRuns: "檢視執行",
   },
   kanban: {
     todo: "待辦", doing: "進行中", done: "已完成", blocked: "受阻",
@@ -1769,6 +1772,7 @@ const ja: Translations = {
     preview: "プレビュー：{label}",
     terminalClosed: "ターミナルを閉じました：{id}{running}",
     stillRunning: "（まだ実行中）", terminalEmpty: "ターミナルペインは空です",
+    runCompleted: "実行完了", runFailed: "実行失敗", runOpenRuns: "実行を開く",
   },
   kanban: {
     todo: "未着手", doing: "進行中", done: "完了", blocked: "ブロック中",
@@ -2228,6 +2232,7 @@ const ar: Translations = {
     preview: "معاينة: {label}",
     terminalClosed: "أُغلق الطرفي: {id}{running}",
     stillRunning: " (لا يزال يعمل)", terminalEmpty: "لوحة الطرفي فارغة",
+    runCompleted: "اكتمل التشغيل", runFailed: "فشل التشغيل", runOpenRuns: "عرض التشغيلات",
   },
   kanban: {
     todo: "قيد الانتظار", doing: "قيد التنفيذ", done: "منجز", blocked: "محجوب",

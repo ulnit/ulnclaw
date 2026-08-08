@@ -1735,6 +1735,20 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       }
       break;
     }
+    case "run.completed":
+    case "run.failed": {
+      const failed = envelope.event === "run.failed";
+      const snippet = String(payload.snippet ?? "").trim();
+      const runId = String(payload.run_id ?? "");
+      notify({
+        kind: failed ? "error" : "success",
+        title: failed ? t.bridge.runFailed : t.bridge.runCompleted,
+        message: snippet || (failed ? t.bridge.runFailed : t.bridge.runCompleted),
+        meta: runId ? `#${runId.slice(0, 8)}` : undefined,
+        action: { label: t.bridge.runOpenRuns, onClick: () => switchView("runs") },
+      });
+      break;
+    }
     case "terminal.read": {
       const id = String(payload.id ?? "");
       if (!id || !state.client) break;

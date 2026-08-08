@@ -10260,6 +10260,7 @@ fn spawn_tracked_run(
         )
         .await;
         let mut runs = runner.runs.lock().await;
+        let mut settle: Option<(bool, String)> = None;
         if let Some(run) = runs.get_mut(&spawn_run_id) {
             match outcome {
                 Ok(result) => {
@@ -10269,9 +10270,11 @@ fn spawn_tracked_run(
                         .metrics
                         .runs_completed
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let snippet = result.content.chars().take(140).collect::<String>();
                     run.result = Some(result.content);
                     run.session_id = result.session_id.or(run.session_id.take());
                     run.iterations = Some(result.iterations);
+                    settle = Some((true, snippet));
                 }
                 Err(e) => {
                     run.status = "failed".to_string();
@@ -10279,13 +10282,29 @@ fn spawn_tracked_run(
                         .metrics
                         .runs_failed
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    run.error = Some(e.to_string());
+                    let message = e.to_string();
+                    run.error = Some(message.clone());
+                    settle = Some((false, message.chars().take(140).collect()));
                 }
             }
             run.finished_at = Some(now_secs());
         }
         drop(runs);
         runner.router.unregister(&spawn_run_id);
+        // Desktop shell notification (P433): surface the settled run on the
+        // UI bridge so the Tauri webview can toast it. Inert unless a
+        // desktop consumer is subscribed to /api/desktop/events.
+        if let Some((succeeded, snippet)) = settle {
+            crate::desktop_bridge::publish(
+                &session_id,
+                if succeeded { "run.completed" } else { "run.failed" },
+                &json!({
+                    "run_id": spawn_run_id,
+                    "status": if succeeded { "completed" } else { "failed" },
+                    "snippet": snippet,
+                }),
+            );
+        }
         }),
     );
     // Profile secret scope inheritance (hermes copy_context parity): a
@@ -15371,6 +15390,58 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (_, row) = get_json(app, &format!("/api/sessions/{id}"), Some(token)).await;
         assert_eq!(row["source"], "gateway");
         assert!(row["cwd"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_run_settle_publishes_desktop_event() {
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Subscribe before the run starts so the settle event can't slip by.
+        let mut rx = crate::desktop_bridge::subscribe();
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/v1/runs", Some(token),
+            json!({"message": "settle me"}),
+        ).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let run_id = body["run_id"].as_str().expect("run id").to_string();
+
+        // The provider is unreachable, so the run settles to failed.
+        let mut settled = String::new();
+        for _ in 0..60 {
+            let (_, run) = get_json(app.clone(), &format!("/v1/runs/{}", run_id), Some(token)).await;
+            settled = run["status"].as_str().unwrap_or("").to_string();
+            if settled == "completed" || settled == "failed" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(settled, "failed");
+
+        // The settle published a desktop bridge envelope for this run
+        // (filter by run_id: parallel tests share the process-wide bus).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline && !found {
+            match rx.try_recv() {
+                Ok(envelope)
+                    if envelope.payload["run_id"] == json!(run_id)
+                        && matches!(envelope.event.as_str(), "run.completed" | "run.failed") =>
+                {
+                    assert_eq!(envelope.payload["status"], json!("failed"));
+                    found = true;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+        assert!(found, "run settle event not published on the desktop bus");
     }
 
     #[tokio::test]
