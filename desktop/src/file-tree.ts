@@ -35,6 +35,13 @@ export class FileTreePanel {
     refresh.addEventListener("click", () => {
       if (this.rootPath) void this.loadRoot(this.rootPath);
     });
+    const mkdir = document.createElement("button");
+    mkdir.className = "ghost";
+    mkdir.textContent = "+";
+    mkdir.title = t.fileTree.newFolder;
+    mkdir.addEventListener("click", () => {
+      void this.createFolder();
+    });
     const close = document.createElement("button");
     close.className = "ghost";
     close.textContent = "\u2715";
@@ -42,7 +49,7 @@ export class FileTreePanel {
     close.addEventListener("click", () => {
       this.aside.hidden = true;
     });
-    header.append(this.rootLabel, refresh, close);
+    header.append(this.rootLabel, mkdir, refresh, close);
 
     this.body = document.createElement("div");
     this.body.className = "file-tree-body";
@@ -94,6 +101,26 @@ export class FileTreePanel {
       return;
     }
     await this.loadRoot(root);
+  }
+
+  /** P591: create a folder under the current root and re-list. */
+  private async createFolder(): Promise<void> {
+    const client = this.client();
+    if (!client || !this.rootPath) return;
+    const name = window.prompt(t.fileTree.newFolderPrompt);
+    if (!name || !name.trim()) return;
+    const path = `${this.rootPath.replace(/[\\/]+$/, "")}/${name.trim()}`;
+    try {
+      await client.fsMkdir(path);
+      await this.loadRoot(this.rootPath);
+    } catch (error) {
+      window.alert(
+        t.fileTree.mkdirFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
   }
 
   private async loadRoot(root: string): Promise<void> {
