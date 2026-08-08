@@ -282,7 +282,8 @@ export interface Translations {
     title: string; tagline: string; searchPlaceholder: string; building: string;
     loading: string; notConnected: string; noMatches: string; save: string;
     saved: string; archive: string; archived: string; delete: string; deleted: string;
-    close: string;
+    pin: string; unpin: string; pinnedDone: string; unpinned: string;
+    restore: string; restored: string; close: string;
   };
   notify: { dismiss: string; clearAll: string; details: string; stackTitle: string };
   onboarding: {
@@ -684,7 +685,8 @@ const en: Translations = {
     loading: "Loading…", notConnected: "Gateway not connected.",
     noMatches: "No matching nodes.", save: "Save", saved: "Saved.",
     archive: "Archive", archived: "Archived.", delete: "Delete", deleted: "Deleted.",
-    close: "Close",
+    pin: "Pin", unpin: "Unpin", pinnedDone: "Pinned.", unpinned: "Unpinned.",
+    restore: "Restore", restored: "Restored.", close: "Close",
   },
   notify: { dismiss: "Dismiss notification", clearAll: "Clear all", details: "Details", stackTitle: "Notifications" },
   onboarding: {
@@ -1108,7 +1110,8 @@ const zh: Translations = {
     loading: "加载中…", notConnected: "网关未连接。",
     noMatches: "没有匹配的节点。", save: "保存", saved: "已保存。",
     archive: "归档", archived: "已归档。", delete: "删除", deleted: "已删除。",
-    close: "关闭",
+    pin: "固定", unpin: "取消固定", pinnedDone: "已固定。", unpinned: "已取消固定。",
+    restore: "恢复", restored: "已恢复。", close: "关闭",
   },
   notify: { dismiss: "关闭通知", clearAll: "全部清除", details: "详情", stackTitle: "通知" },
   onboarding: {
@@ -1532,7 +1535,8 @@ const zhHant: Translations = {
     loading: "載入中…", notConnected: "閘道未連線。",
     noMatches: "沒有符合的節點。", save: "儲存", saved: "已儲存。",
     archive: "封存", archived: "已封存。", delete: "刪除", deleted: "已刪除。",
-    close: "關閉",
+    pin: "固定", unpin: "取消固定", pinnedDone: "已固定。", unpinned: "已取消固定。",
+    restore: "還原", restored: "已還原。", close: "關閉",
   },
   notify: { dismiss: "關閉通知", clearAll: "全部清除", details: "詳情", stackTitle: "通知" },
   onboarding: {
@@ -1956,7 +1960,8 @@ const ja: Translations = {
     loading: "読み込み中…", notConnected: "ゲートウェイ未接続。",
     noMatches: "一致するノードがありません。", save: "保存", saved: "保存しました。",
     archive: "アーカイブ", archived: "アーカイブしました。", delete: "削除", deleted: "削除しました。",
-    close: "閉じる",
+    pin: "ピン留め", unpin: "ピン解除", pinnedDone: "ピン留めしました。", unpinned: "ピン留めを解除しました。",
+    restore: "復元", restored: "復元しました。", close: "閉じる",
   },
   notify: { dismiss: "通知を閉じる", clearAll: "すべてクリア", details: "詳細", stackTitle: "通知" },
   onboarding: {
@@ -2380,7 +2385,8 @@ const ar: Translations = {
     loading: "جارٍ التحميل…", notConnected: "البوابة غير متصلة.",
     noMatches: "لا عقد مطابقة.", save: "حفظ", saved: "تم الحفظ.",
     archive: "أرشفة", archived: "تمت الأرشفة.", delete: "حذف", deleted: "تم الحذف.",
-    close: "إغلاق",
+    pin: "تثبيت", unpin: "إلغاء التثبيت", pinnedDone: "تم التثبيت.", unpinned: "تم إلغاء التثبيت.",
+    restore: "استعادة", restored: "تمت الاستعادة.", close: "إغلاق",
   },
   notify: { dismiss: "إغلاق الإشعار", clearAll: "مسح الكل", details: "التفاصيل", stackTitle: "الإشعارات" },
   onboarding: {

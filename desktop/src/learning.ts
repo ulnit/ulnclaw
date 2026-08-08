@@ -252,10 +252,46 @@ export class LearningOverlay {
         status.textContent = `Failed: ${err}`;
       }
     };
+    const pinBtn = document.createElement("button");
+    pinBtn.className = "ghost";
+    pinBtn.textContent = node.pinned ? t.learning.unpin : t.learning.pin;
+    pinBtn.disabled = true;
+    pinBtn.onclick = async () => {
+      try {
+        await client.curatorAction(node.pinned ? "unpin" : "pin", node.id);
+        status.textContent = node.pinned ? t.learning.unpinned : t.learning.pinnedDone;
+        setTimeout(() => {
+          detailDialog.close();
+          void this.open();
+        }, 500);
+      } catch (err) {
+        status.textContent = `Failed: ${err}`;
+      }
+    };
+    const restoreBtn = document.createElement("button");
+    restoreBtn.className = "ghost";
+    restoreBtn.textContent = t.learning.restore;
+    restoreBtn.disabled = true;
+    restoreBtn.onclick = async () => {
+      try {
+        await client.curatorAction("restore", node.id);
+        status.textContent = t.learning.restored;
+        setTimeout(() => {
+          detailDialog.close();
+          void this.open();
+        }, 500);
+      } catch (err) {
+        status.textContent = `Failed: ${err}`;
+      }
+    };
     const closeBtn = document.createElement("button");
     closeBtn.className = "ghost";
     closeBtn.textContent = t.learning.close;
     closeBtn.onclick = () => detailDialog.close();
+    if (node.kind === "skill") {
+      actions.append(pinBtn);
+      if (node.state === "archived") actions.append(restoreBtn);
+    }
     actions.append(saveBtn, deleteBtn, closeBtn);
     detailDialog.append(head, area, status, actions);
     this.dialog.appendChild(detailDialog);
@@ -268,6 +304,10 @@ export class LearningOverlay {
       area.textContent = detail.content;
       saveBtn.disabled = false;
       deleteBtn.disabled = false;
+      if (node.kind === "skill") {
+        pinBtn.disabled = false;
+        if (node.state === "archived") restoreBtn.disabled = false;
+      }
     } catch (err) {
       area.textContent = `Failed to load node: ${err}`;
     }
