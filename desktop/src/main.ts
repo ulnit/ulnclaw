@@ -75,6 +75,9 @@ const state = {
   sessionListLimit: 100,
   /** P393: per-session composer drafts (session id -> unsent text). */
   drafts: new Map<string, string>(),
+  /** P394: keyboard navigation over the visible sidebar rows. */
+  sessionListVisible: [] as SessionRow[],
+  sessionCursor: 0,
   busy: false,
   managedPid: null as number | null,
   skills: [] as SkillRow[],
@@ -230,8 +233,12 @@ function renderSessions(): void {
         session.id.toLowerCase().includes(filter)
       );
     });
+  const visible = sorted.slice(0, state.sessionListLimit);
+  state.sessionListVisible = visible;
+  state.sessionCursor = Math.min(state.sessionCursor, Math.max(0, visible.length - 1));
   let lastGroup: "today" | "yesterday" | "week" | "older" | "" = "";
-  for (const session of sorted.slice(0, state.sessionListLimit)) {
+  let rowIndex = 0;
+  for (const session of visible) {
     // P392: relative-date group header when the age bucket changes.
     const group = ageGroup(session.last_activity_at);
     if (group !== lastGroup) {
@@ -242,7 +249,11 @@ function renderSessions(): void {
       lastGroup = group;
     }
     const item = document.createElement("div");
-    item.className = "session-item" + (state.current?.id === session.id ? " active" : "");
+    item.className =
+      "session-item" +
+      (state.current?.id === session.id ? " active" : "") +
+      (rowIndex === state.sessionCursor ? " cursor" : "");
+    rowIndex += 1;
     const title = session.title || session.id.slice(0, 8);
     const whenFull = new Date(session.last_activity_at * 1000).toLocaleString();
     const main = document.createElement("div");
@@ -1762,6 +1773,29 @@ async function start(): Promise<void> {
     renderSessions();
   });
 
+  // P394: keyboard navigation over the sidebar session list.
+  el.sessionList.addEventListener("keydown", (event) => {
+    const count = state.sessionListVisible.length;
+    if (count === 0) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      state.sessionCursor =
+        event.key === "ArrowDown"
+          ? Math.min(count - 1, state.sessionCursor + 1)
+          : Math.max(0, state.sessionCursor - 1);
+      renderSessions();
+      el.sessionList
+        .querySelector(".session-item.cursor")
+        ?.scrollIntoView({ block: "nearest" });
+    } else if (event.key === "Enter") {
+      const session = state.sessionListVisible[state.sessionCursor];
+      if (session) {
+        event.preventDefault();
+        void openSession(session);
+      }
+    }
+  });
+
   // P375: day jump scrolls the matching divider into view.
   el.dayJump.addEventListener("change", () => {
     const key = el.dayJump.value;
@@ -2423,6 +2457,7 @@ function shortcutRows(): [string, string][] {
     ["Enter", t.chrome.scFocus],
     ["F1", t.chrome.scShortcuts],
     ["↑ / ↓", t.chrome.scRecall],
+    ["↑ / ↓ + Enter", t.chrome.scSessionNav],
   ];
 }
 
