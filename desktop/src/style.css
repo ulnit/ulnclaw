@@ -1234,6 +1234,10 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   background: rgba(150, 140, 220, 0.22);
   cursor: pointer;
 }
+.sessions-view-chip.sessions-view-source {
+  background: rgba(200, 120, 160, 0.22);
+  cursor: pointer;
+}
 /* P447: message-count meta on sessions-view rows. */
 .sessions-view-msgcount { opacity: 0.75; font-size: 0.9em; }
 /* P450: sortable count header. */
