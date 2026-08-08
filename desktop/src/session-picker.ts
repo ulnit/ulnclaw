@@ -21,6 +21,8 @@ export interface SessionPickerHooks {
   /** P550: sidebar pin-state parity — pinned rows float to the top. */
   isPinned?(id: string): boolean;
   togglePin?(session: SessionRow): void;
+  /** P557: unread parity — rows with pending replies get the ● mark. */
+  isUnread?(id: string): boolean;
 }
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -160,7 +162,8 @@ export class SessionPickerDialog {
     for (const session of rows) {
       const row = document.createElement("button");
       row.type = "button";
-      row.className = "session-picker-row";
+      row.className = "session-picker-row"
+        + (this.hooks.isUnread?.(session.id) ? " unread" : "");
       const icon = document.createElement("span");
       icon.className = "session-picker-icon";
       icon.setAttribute("aria-hidden", "true");

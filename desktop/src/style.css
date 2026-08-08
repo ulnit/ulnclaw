@@ -1053,6 +1053,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .session-picker-row-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-picker-meta { font-size: 11px; color: #8fa3c0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-picker-check { color: var(--accent); width: 14px; }
+/* P557: unread ● mark on picker rows (sidebar/sessions-view parity). */
+.session-picker-row.unread .session-picker-row-title::before { content: "● "; color: var(--accent); font-size: 0.85em; }
 /* P550: pin toggle on session-picker rows — dim until hovered, solid when pinned. */
 .session-picker-pin { font-size: 12px; opacity: 0.3; cursor: pointer; }
 .session-picker-row:hover .session-picker-pin, .session-picker-pin.pinned { opacity: 1; }

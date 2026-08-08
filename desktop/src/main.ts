@@ -3181,6 +3181,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     },
     isPinned: (id) => pinnedSessions.has(id),
     togglePin: (session) => togglePinSession(session),
+    isUnread: (id) => unreadSessions.has(id),
     search: async (query) => (state.client ? state.client.searchSessions(query, 20) : []),
   });
 
