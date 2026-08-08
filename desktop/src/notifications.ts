@@ -53,6 +53,61 @@ const items: AppNotification[] = [];
 const timers = new Map<string, number>();
 let expanded = false;
 
+// P357: notification history drawer — a ring buffer of everything the
+// stacks have shown, with an unread counter for the chrome bell.
+const HISTORY_CAP = 100;
+const historyItems: AppNotification[] = [];
+let unreadCount = 0;
+const historyListeners = new Set<() => void>();
+
+export interface HistoryEntry {
+  id: string;
+  kind: NotificationKind;
+  title?: string;
+  message: string;
+  detail?: string;
+  createdAt: number;
+}
+
+export function notificationHistory(): HistoryEntry[] {
+  return historyItems.map((note) => ({
+    id: note.id,
+    kind: note.kind,
+    title: note.title,
+    message: note.message,
+    detail: note.detail,
+    createdAt: note.createdAt,
+  }));
+}
+
+export function notificationUnread(): number {
+  return unreadCount;
+}
+
+export function markNotificationsRead(): void {
+  if (unreadCount === 0) return;
+  unreadCount = 0;
+  historyListeners.forEach((listener) => listener());
+}
+
+export function clearNotificationHistory(): void {
+  historyItems.length = 0;
+  unreadCount = 0;
+  historyListeners.forEach((listener) => listener());
+}
+
+export function onNotificationHistoryChange(listener: () => void): () => void {
+  historyListeners.add(listener);
+  return () => historyListeners.delete(listener);
+}
+
+function recordHistory(note: AppNotification): void {
+  historyItems.unshift(note);
+  if (historyItems.length > HISTORY_CAP) historyItems.length = HISTORY_CAP;
+  unreadCount += 1;
+  historyListeners.forEach((listener) => listener());
+}
+
 function defaultDuration(kind: NotificationKind): number {
   // hermes parity: errors/warnings stay until dismissed.
   return kind === "error" || kind === "warning" ? 0 : 5000;
@@ -215,6 +270,7 @@ export function notify(input: NotificationInput): string {
     items.unshift(note);
   }
   scheduleDismiss(note, input.durationMs ?? defaultDuration(kind));
+  recordHistory(note);
   render();
   return note.id;
 }

@@ -32,6 +32,7 @@
         <button id="new-session" class="primary" data-i18n="chrome.newSession">New session</button>
         <div id="session-list"></div>
         <div class="sidebar-footer">
+          <button id="notify-bell" class="ghost notify-bell" title="Notifications" data-i18n-title="notify.historyTitle">🔔<span id="notify-badge" class="notify-badge" hidden></span></button>
           <button id="settings-btn" class="ghost" data-i18n="chrome.settings">Settings</button>
         </div>
       </aside>
@@ -92,6 +93,14 @@
             <button id="settings-save" value="default" data-i18n="chrome.save">Save</button>
           </menu>
         </form>
+      </dialog>
+      <dialog id="notify-history-dialog" class="fs-dialog">
+        <h2 data-i18n="notify.historyTitle">Notifications</h2>
+        <div id="notify-history-list" class="notify-history-list"></div>
+        <menu>
+          <button id="notify-history-clear" value="cancel" data-i18n="notify.historyClear">Clear</button>
+          <button value="cancel" data-i18n="chrome.shortcutsClose">Close</button>
+        </menu>
       </dialog>
       <dialog id="shortcuts-dialog" class="fs-dialog">
         <h2 data-i18n="chrome.shortcutsTitle">Keyboard shortcuts</h2>

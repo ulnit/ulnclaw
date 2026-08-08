@@ -1474,3 +1474,15 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 .shortcuts-table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .shortcuts-table td { padding: 4px 10px; border-bottom: 1px solid var(--border, rgba(128,128,128,0.18)); }
 .shortcuts-table td:first-child { font-family: var(--font-mono, monospace); white-space: nowrap; opacity: 0.9; }
+
+/* P357: notification history bell + drawer. */
+.notify-bell { position: relative; }
+.notify-badge {
+  position: absolute; top: -4px; right: -4px;
+  min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: #d33; color: #fff;
+  font-size: 10px; line-height: 16px; text-align: center;
+}
+.notify-history-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-width: 340px; }
+.notify-history-row { display: flex; gap: 8px; align-items: baseline; padding: 6px 8px; border: 1px solid var(--border, rgba(128,128,128,0.18)); border-radius: 6px; font-size: 12px; }
+.notify-history-row .notify-history-time { margin-left: auto; opacity: 0.6; white-space: nowrap; }

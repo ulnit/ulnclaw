@@ -301,7 +301,8 @@ export interface Translations {
     pin: string; unpin: string; pinnedDone: string; unpinned: string;
     restore: string; restored: string; close: string;
   };
-  notify: { dismiss: string; clearAll: string; details: string; stackTitle: string };
+  notify: { dismiss: string; clearAll: string; details: string; stackTitle: string;
+    historyTitle: string; historyEmpty: string; historyClear: string; };
   onboarding: {
     welcomeTitle: string; intro: string; bullet1: string; bullet2: string;
     bullet3: string; skip: string; getStarted: string; finish: string;
@@ -726,7 +727,7 @@ const en: Translations = {
     pin: "Pin", unpin: "Unpin", pinnedDone: "Pinned.", unpinned: "Unpinned.",
     restore: "Restore", restored: "Restored.", close: "Close",
   },
-  notify: { dismiss: "Dismiss notification", clearAll: "Clear all", details: "Details", stackTitle: "Notifications" },
+  notify: { dismiss: "Dismiss notification", clearAll: "Clear all", details: "Details", stackTitle: "Notifications" , historyTitle: "Notifications", historyEmpty: "No notifications yet.", historyClear: "Clear" },
   onboarding: {
     welcomeTitle: "Welcome to ulnclaw",
     intro: "ulnclaw is a Rust re-implementation of the Hermes Agent engine: 50+ tools, skills, scheduled jobs, messaging gateways and a local HTTP gateway — this desktop shell talks to the gateway over plain HTTP/SSE.",
@@ -1173,7 +1174,7 @@ const zh: Translations = {
     pin: "固定", unpin: "取消固定", pinnedDone: "已固定。", unpinned: "已取消固定。",
     restore: "恢复", restored: "已恢复。", close: "关闭",
   },
-  notify: { dismiss: "关闭通知", clearAll: "全部清除", details: "详情", stackTitle: "通知" },
+  notify: { dismiss: "关闭通知", clearAll: "全部清除", details: "详情", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "暂无通知。", historyClear: "清空" },
   onboarding: {
     welcomeTitle: "欢迎使用 ulnclaw",
     intro: "ulnclaw 是 Hermes Agent 引擎的 Rust 复刻：50+ 工具、技能、定时任务、消息网关与本地 HTTP 网关 —— 本桌面外壳通过纯 HTTP/SSE 与网关对话。",
@@ -1620,7 +1621,7 @@ const zhHant: Translations = {
     pin: "固定", unpin: "取消固定", pinnedDone: "已固定。", unpinned: "已取消固定。",
     restore: "還原", restored: "已還原。", close: "關閉",
   },
-  notify: { dismiss: "關閉通知", clearAll: "全部清除", details: "詳情", stackTitle: "通知" },
+  notify: { dismiss: "關閉通知", clearAll: "全部清除", details: "詳情", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "暫無通知。", historyClear: "清空" },
   onboarding: {
     welcomeTitle: "歡迎使用 ulnclaw",
     intro: "ulnclaw 是 Hermes Agent 引擎的 Rust 重製：50+ 工具、技能、排程工作、訊息閘道與本機 HTTP 閘道 —— 本桌面外殼透過純 HTTP/SSE 與閘道對話。",
@@ -2067,7 +2068,7 @@ const ja: Translations = {
     pin: "ピン留め", unpin: "ピン解除", pinnedDone: "ピン留めしました。", unpinned: "ピン留めを解除しました。",
     restore: "復元", restored: "復元しました。", close: "閉じる",
   },
-  notify: { dismiss: "通知を閉じる", clearAll: "すべてクリア", details: "詳細", stackTitle: "通知" },
+  notify: { dismiss: "通知を閉じる", clearAll: "すべてクリア", details: "詳細", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "通知はまだありません。", historyClear: "クリア" },
   onboarding: {
     welcomeTitle: "ulnclaw へようこそ",
     intro: "ulnclaw は Hermes Agent エンジンの Rust 再実装です：50 以上のツール、スキル、定時ジョブ、メッセージングゲートウェイ、ローカル HTTP ゲートウェイ — このデスクトップシェルは純 HTTP/SSE でゲートウェイと通信します。",
@@ -2514,7 +2515,7 @@ const ar: Translations = {
     pin: "تثبيت", unpin: "إلغاء التثبيت", pinnedDone: "تم التثبيت.", unpinned: "تم إلغاء التثبيت.",
     restore: "استعادة", restored: "تمت الاستعادة.", close: "إغلاق",
   },
-  notify: { dismiss: "إغلاق الإشعار", clearAll: "مسح الكل", details: "التفاصيل", stackTitle: "الإشعارات" },
+  notify: { dismiss: "إغلاق الإشعار", clearAll: "مسح الكل", details: "التفاصيل", stackTitle: "الإشعارات" , historyTitle: "الإشعارات", historyEmpty: "لا إشعارات بعد.", historyClear: "مسح" },
   onboarding: {
     welcomeTitle: "مرحبًا بك في ulnclaw",
     intro: "ulnclaw إعادة تنفيذ بـ Rust لمحرك Hermes Agent: أكثر من 50 أداة، ومهارات، ومهام مجدولة، وبوابات رسائل، وبوابة HTTP محلية — تتحدث هذه الواجهة مع البوابة عبر HTTP/SSE مباشرة.",

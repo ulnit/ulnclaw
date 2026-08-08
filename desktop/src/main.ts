@@ -24,7 +24,7 @@ import { FindBar } from "./find-bar";
 import { CommandPalette } from "./command-palette";
 import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
-import { notify, notifyError, notifySuccess } from "./notifications";
+import { notify, notifyError, notifySuccess, notificationHistory, notificationUnread, markNotificationsRead, clearNotificationHistory, onNotificationHistoryChange } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
 import { resolveBootFailure, showBootFailure } from "./boot-failure";
 import { applyStatic, fmt, onLocaleChange, t } from "./i18n";
@@ -107,6 +107,11 @@ const el = {
   slashPop: document.getElementById("slash-pop")!,
   attachChips: document.getElementById("attach-chips")!,
   settingsBtn: document.getElementById("settings-btn") as HTMLButtonElement,
+  notifyBell: document.getElementById("notify-bell") as HTMLButtonElement,
+  notifyBadge: document.getElementById("notify-badge")!,
+  notifyHistoryDialog: document.getElementById("notify-history-dialog") as HTMLDialogElement,
+  notifyHistoryList: document.getElementById("notify-history-list")!,
+  notifyHistoryClear: document.getElementById("notify-history-clear") as HTMLButtonElement,
   settings: document.getElementById("settings") as HTMLDialogElement,
   settingUrl: document.getElementById("setting-url") as HTMLInputElement,
   settingKey: document.getElementById("setting-key") as HTMLInputElement,
@@ -1395,6 +1400,14 @@ async function start(): Promise<void> {
     el.settingManage.checked = state.settings.manage;
     el.settings.showModal();
   };
+  el.notifyBell.onclick = () => openNotifyHistory();
+  el.notifyHistoryClear.onclick = () => {
+    clearNotificationHistory();
+    renderNotifyBadge();
+    renderNotifyHistory();
+  };
+  onNotificationHistoryChange(() => renderNotifyBadge());
+  renderNotifyBadge();
   el.settings.addEventListener("close", () => {
     if (el.settings.returnValue !== "default") return;
     const next: GatewaySettings = {
@@ -1726,6 +1739,61 @@ async function start(): Promise<void> {
   setInterval(() => void pollHealth(), 10000);
   setInterval(() => void refreshSessions(), 30000);
   startApprovalWatcher();
+}
+
+// ---------------------------------------------------------------------------
+// Notification history drawer (P357) — a bell in the sidebar footer with
+// an unread badge opens the ring buffer of everything the stacks showed.
+// ---------------------------------------------------------------------------
+
+const NOTIFY_KIND_ICON: Record<string, string> = {
+  error: "⛔",
+  warning: "⚠️",
+  info: "ℹ️",
+  success: "✅",
+};
+
+function renderNotifyBadge(): void {
+  const unread = notificationUnread();
+  el.notifyBadge.hidden = unread === 0;
+  el.notifyBadge.textContent = unread > 99 ? "99+" : String(unread);
+}
+
+function notifyTimeAgo(ms: number): string {
+  const secs = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+function renderNotifyHistory(): void {
+  const entries = notificationHistory();
+  if (entries.length === 0) {
+    el.notifyHistoryList.innerHTML = `<p class="empty">${t.notify.historyEmpty}</p>`;
+    return;
+  }
+  el.notifyHistoryList.innerHTML = entries
+    .map((entry) => {
+      const icon = NOTIFY_KIND_ICON[entry.kind] ?? NOTIFY_KIND_ICON.info;
+      const title = entry.title ? `<strong>${entry.title}</strong> ` : "";
+      return `
+        <div class="notify-history-row">
+          <span>${icon}</span>
+          <span>${title}${entry.message}</span>
+          <span class="notify-history-time">${notifyTimeAgo(entry.createdAt)}</span>
+        </div>`;
+    })
+    .join("");
+}
+
+function openNotifyHistory(): void {
+  markNotificationsRead();
+  renderNotifyBadge();
+  renderNotifyHistory();
+  el.notifyHistoryDialog.showModal();
 }
 
 // ---------------------------------------------------------------------------
