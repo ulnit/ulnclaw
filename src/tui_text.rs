@@ -176,6 +176,8 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("F2", "toggle recent-first \u{2194} alphabetical sort"),
         ("F3", "toggle the conversation preview in the details pane"),
         ("F5", "reload the session list from disk"),
+        ("F6", "rename the highlighted session (Enter saves, Esc cancels)"),
+        ("F7", "fork the highlighted session (y confirms)"),
         ("F8", "archive the highlighted session (y confirms)"),
         ("F9", "delete the highlighted session forever (y confirms)"),
         ("/", "search message bodies (FTS) while no filter is typed \u{2014} Enter runs, Esc cancels"),
@@ -210,17 +212,58 @@ pub fn browse_transcript_search_prompt(query: &str) -> String {
     format!("transcript search: {query}\u{258F}  Enter = search \u{00B7} Esc = cancel")
 }
 
+/// Footer confirmation prompt for forking the highlighted session from
+/// the browser (P512). Forking marks the source branched and opens a
+/// child session carrying the transcript forward.
+pub fn browse_fork_confirm_text(label: &str) -> String {
+    let mut label: String = label.chars().take(40).collect();
+    if label.chars().count() == 40 {
+        label.push('\u{2026}');
+    }
+    format!("Fork \u{201C}{label}\u{201D}?  y = fork \u{00B7} any other key = cancel")
+}
+
+/// Footer prompt while typing a new title for the highlighted session
+/// (P512). Empty input on Enter keeps the current title.
+pub fn browse_rename_prompt_text(label: &str, buffer: &str) -> String {
+    let mut label: String = label.chars().take(30).collect();
+    if label.chars().count() == 30 {
+        label.push('\u{2026}');
+    }
+    format!(
+        "Rename \u{201C}{label}\u{201D}: {buffer}\u{258F}  Enter = save \u{00B7} Esc = cancel"
+    )
+}
+
 #[cfg(test)]
 mod browse_tui_upgrade_tests {
     #[test]
     fn browse_help_entries_cover_core_keys() {
         let entries = super::browse_help_entries();
         let keys: Vec<&str> = entries.iter().map(|(k, _)| *k).collect();
-        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F5", "F8", "F9", "/", "Shift+Tab"] {
+        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F5", "F6", "F7", "F8", "F9", "/", "Shift+Tab"] {
             assert!(keys.contains(&expected), "missing help row for {expected}");
         }
         // Every entry has a non-empty description.
         assert!(entries.iter().all(|(_, d)| !d.is_empty()));
+    }
+
+    #[test]
+    fn browse_fork_and_rename_prompts() {
+        let fork = super::browse_fork_confirm_text("Fix the build");
+        assert!(fork.contains("Fix the build"));
+        assert!(fork.contains("y = fork"));
+        let long = "x".repeat(80);
+        let fork_long = super::browse_fork_confirm_text(&long);
+        assert!(fork_long.contains('\u{2026}'));
+
+        let rename = super::browse_rename_prompt_text("Fix the build", "New title");
+        assert!(rename.contains("Fix the build"));
+        assert!(rename.contains("New title"));
+        assert!(rename.contains("Enter = save"));
+        // The buffer renders live as the user types.
+        let empty = super::browse_rename_prompt_text("Fix the build", "");
+        assert!(empty.contains("Enter = save"));
     }
 
     #[test]

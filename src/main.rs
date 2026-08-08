@@ -8364,6 +8364,47 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                             .map_err(|e| e.to_string())?;
                     delete_store.delete_session(id).map_err(|e| e.to_string())
                 };
+                // P512: rename (title write) and fork (mark the source
+                // branched, create a child session carrying the
+                // transcript forward) — fresh store connections like
+                // the other browser callbacks.
+                let rename_home = home.clone();
+                let rename = move |id: &str, title: &str| {
+                    let rename_store =
+                        SqliteSessionStore::open(rename_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    rename_store
+                        .set_session_title(id, title)
+                        .map_err(|e| e.to_string())
+                };
+                let fork_home = home.clone();
+                let fork = move |id: &str| {
+                    let fork_store =
+                        SqliteSessionStore::open(fork_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    let source = fork_store
+                        .get_session_row(id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("session {id} not found"))?;
+                    let fork_id = uuid::Uuid::new_v4().to_string();
+                    fork_store
+                        .end_session(id, "branched")
+                        .map_err(|e| e.to_string())?;
+                    fork_store
+                        .create_named_session(&fork_id, "cli", source.model.as_deref(), Some(id))
+                        .map_err(|e| e.to_string())?;
+                    let messages = fork_store.load_messages(id).map_err(|e| e.to_string())?;
+                    for message in &messages {
+                        fork_store
+                            .append_message(&fork_id, message)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    let title = format!("{} fork", source.title.as_deref().unwrap_or("fork"));
+                    fork_store
+                        .set_session_title(&fork_id, &title)
+                        .map_err(|e| e.to_string())?;
+                    Ok(fork_id)
+                };
                 match run_session_browse_tui(
                     rows.clone(),
                     project_by_session.clone(),
@@ -8372,6 +8413,8 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     Some(&preview),
                     Some(&transcript_search),
                     Some(&delete),
+                    Some(&rename),
+                    Some(&fork),
                 ) {
                     Ok(selected) => selected,
                     Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
@@ -8629,8 +8672,13 @@ fn browse_row_matches(
 /// highlighted session after an inline `y` confirmation (via
 /// `archive`, then auto-reloads), `Shift+Tab` cycles the source filter
 /// backwards, and transient footer notices report reload/archive
-/// outcomes until the next keypress. Returns the selected session id,
-/// or `None` when cancelled.
+/// outcomes until the next keypress.
+///
+/// P512 interaction upgrades: `F6` renames the highlighted session
+/// through an inline title prompt (Enter saves via `rename`, Esc
+/// cancels), and `F7` forks it after an inline `y` confirmation (via
+/// `fork`, which returns the new session id). Returns the selected
+/// session id, or `None` when cancelled.
 fn run_session_browse_tui(
     mut rows: Vec<ulnclaw::session::sqlite::BrowseRow>,
     mut projects: std::collections::HashMap<String, String>,
@@ -8639,6 +8687,8 @@ fn run_session_browse_tui(
     preview: Option<&dyn Fn(&str) -> Result<Vec<(String, Option<String>)>, String>>,
     transcript_search: Option<&dyn Fn(&str) -> Result<Vec<(String, String)>, String>>,
     delete: Option<&dyn Fn(&str) -> Result<(), String>>,
+    rename: Option<&dyn Fn(&str, &str) -> Result<(), String>>,
+    fork: Option<&dyn Fn(&str) -> Result<String, String>>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -8698,6 +8748,10 @@ fn run_session_browse_tui(
     let mut search_query = String::new();
     let mut search_hits: Option<Vec<(String, String)>> = None;
     let mut confirm_delete = false;
+    // P512: rename prompt state (F6) and fork confirmation (F7).
+    let mut rename_mode = false;
+    let mut rename_buffer = String::new();
+    let mut confirm_fork = false;
 
     loop {
         // Tab cycles "all sources" plus each distinct source present in
@@ -8982,12 +9036,32 @@ fn run_session_browse_tui(
             )
             .map_err(|e| e.to_string())?;
             out.flush().map_err(|e| e.to_string())?;
+        } else if rename_mode {
+            let label = highlighted_label.clone().unwrap_or_default();
+            queue!(
+                out,
+                SetForegroundColor(Color::Cyan),
+                Print(ulnclaw::tui_text::browse_rename_prompt_text(&label, &rename_buffer)),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
         } else if confirm_delete {
             let label = highlighted_label.clone().unwrap_or_default();
             queue!(
                 out,
                 SetForegroundColor(Color::Red),
                 Print(ulnclaw::tui_text::browse_delete_confirm_text(&label)),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
+        } else if confirm_fork {
+            let label = highlighted_label.clone().unwrap_or_default();
+            queue!(
+                out,
+                SetForegroundColor(Color::Cyan),
+                Print(ulnclaw::tui_text::browse_fork_confirm_text(&label)),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -9092,6 +9166,55 @@ fn run_session_browse_tui(
                     }
                     continue;
                 }
+                // P512: rename prompt captures keys until Enter (save)
+                // or Esc (cancel).
+                if rename_mode {
+                    match key.code {
+                        KeyCode::Esc => {
+                            rename_mode = false;
+                            rename_buffer.clear();
+                        }
+                        KeyCode::Enter => {
+                            rename_mode = false;
+                            let title = rename_buffer.trim().to_string();
+                            rename_buffer.clear();
+                            if title.is_empty() {
+                                continue;
+                            }
+                            if let Some(id) = highlighted_id.clone() {
+                                match rename {
+                                    Some(rename_fn) => match rename_fn(&id, &title) {
+                                        Ok(()) => {
+                                            if let Some(reload_fn) = reload {
+                                                if let Ok((fresh_rows, fresh_projects)) = reload_fn() {
+                                                    rows = fresh_rows;
+                                                    projects = fresh_projects;
+                                                }
+                                            }
+                                            cursor_idx = 0;
+                                            scroll_offset = 0;
+                                            notice = Some(format!("Renamed to \u{201C}{title}\u{201D}."));
+                                        }
+                                        Err(e) => {
+                                            notice = Some(format!("Rename failed: {e}"));
+                                        }
+                                    },
+                                    None => {
+                                        notice = Some("Renaming is unavailable here.".to_string());
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            rename_buffer.pop();
+                        }
+                        KeyCode::Char(ch) => {
+                            rename_buffer.push(ch);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 // Help overlay is modal: any key dismisses it (P224).
                 if show_help {
                     show_help = false;
@@ -9126,6 +9249,37 @@ fn run_session_browse_tui(
                                 },
                                 None => {
                                     notice = Some("Deleting is unavailable here.".to_string());
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+                // P512: fork confirmation is modal — y forks, any other
+                // key cancels.
+                if confirm_fork {
+                    confirm_fork = false;
+                    if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                        if let Some(id) = highlighted_id.clone() {
+                            match fork {
+                                Some(fork_fn) => match fork_fn(&id) {
+                                    Ok(new_id) => {
+                                        if let Some(reload_fn) = reload {
+                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn() {
+                                                rows = fresh_rows;
+                                                projects = fresh_projects;
+                                            }
+                                        }
+                                        cursor_idx = 0;
+                                        scroll_offset = 0;
+                                        notice = Some(format!("Forked {id} as {new_id}."));
+                                    }
+                                    Err(e) => {
+                                        notice = Some(format!("Fork failed: {e}"));
+                                    }
+                                },
+                                None => {
+                                    notice = Some("Forking is unavailable here.".to_string());
                                 }
                             }
                         }
@@ -9280,6 +9434,21 @@ fn run_session_browse_tui(
                             None => {
                                 notice = Some("Reload is unavailable here.".to_string());
                             }
+                        }
+                    }
+                    KeyCode::F(6) => {
+                        // P512: rename the highlighted session through an
+                        // inline title prompt.
+                        if highlighted_id.is_some() && rename.is_some() {
+                            rename_buffer.clear();
+                            rename_mode = true;
+                        }
+                    }
+                    KeyCode::F(7) => {
+                        // P512: fork the highlighted session after an
+                        // inline confirmation.
+                        if highlighted_id.is_some() && fork.is_some() {
+                            confirm_fork = true;
                         }
                     }
                     KeyCode::F(8) => {
