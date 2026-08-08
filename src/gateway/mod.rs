@@ -7464,6 +7464,8 @@ struct MessagesQuery {
     /// `timestamps=true` adds the stored per-message epoch seconds
     /// (day-divider rendering in the desktop chat; P367).
     timestamps: Option<String>,
+    /// P462: return only the trailing N messages (tail pagination).
+    limit: Option<usize>,
 }
 
 async fn session_messages(
@@ -7474,7 +7476,7 @@ async fn session_messages(
     if query_flag(query.timestamps.as_ref()) {
         return match state.store.load_messages_with_timestamps(&id) {
             Ok(rows) => {
-                let data: Vec<Value> = rows
+                let mut data: Vec<Value> = rows
                     .into_iter()
                     .map(|(timestamp, message)| {
                         let mut value = serde_json::to_value(&message).unwrap_or_else(|_| json!({}));
@@ -7484,13 +7486,27 @@ async fn session_messages(
                         value
                     })
                     .collect();
+                // P462: trailing-window pagination.
+                let data = match query.limit {
+                    Some(limit) if data.len() > limit => data.split_off(data.len() - limit),
+                    _ => data,
+                };
                 Json(json!({"object": "list", "session_id": id, "data": data})).into_response()
             }
             Err(e) => server_error(&e.to_string()),
         };
     }
     match state.store.load_messages(&id) {
-        Ok(messages) => Json(json!({"object": "list", "session_id": id, "data": messages})).into_response(),
+        Ok(mut messages) => {
+            // P462: trailing-window pagination.
+            let messages = match query.limit {
+                Some(limit) if messages.len() > limit => {
+                    messages.split_off(messages.len() - limit)
+                }
+                _ => messages,
+            };
+            Json(json!({"object": "list", "session_id": id, "data": messages})).into_response()
+        }
         Err(e) => server_error(&e.to_string()),
     }
 }
@@ -15770,6 +15786,60 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         }
         // Transcript untouched.
         assert_eq!(state.store.load_messages(&session_id).unwrap().len(), 24);
+    }
+
+    #[tokio::test]
+    async fn test_session_messages_limit_tail() {
+        use crate::provider::{Message, Role};
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+        let session_id = state.store.create_session("gateway", None, None).unwrap();
+        for i in 0..5 {
+            state
+                .store
+                .append_message(
+                    &session_id,
+                    &Message {
+                        role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                        content: Some(format!("m{i}")),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                )
+                .unwrap();
+        }
+        // Plain tail.
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?limit=2", session_id),
+            Some(token),
+        )
+        .await;
+        let rows = body["data"].as_array().expect("rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["content"], json!("m3"));
+        assert_eq!(rows[1]["content"], json!("m4"));
+        // Timestamped tail keeps the envelope.
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?limit=3&timestamps=true", session_id),
+            Some(token),
+        )
+        .await;
+        let rows = body["data"].as_array().expect("rows");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["content"], json!("m2"));
+        assert!(rows[0]["timestamp"].as_f64().is_some());
+        // Limit larger than the transcript is a no-op.
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?limit=99", session_id),
+            Some(token),
+        )
+        .await;
+        assert_eq!(body["data"].as_array().expect("rows").len(), 5);
     }
 
     #[test]
