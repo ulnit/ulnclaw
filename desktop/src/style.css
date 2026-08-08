@@ -34,12 +34,16 @@ body { background: var(--bg); color: var(--text); }
 .dot.down { background: var(--bad); }
 
 /* P372: sidebar session filter box. */
+.session-toolbar { display: flex; gap: 4px; margin: 8px 0 2px; align-items: center; }
 .session-filter {
-  width: 100%; box-sizing: border-box; margin: 8px 0 2px; padding: 6px 10px;
+  flex: 1; min-width: 0; box-sizing: border-box; padding: 6px 10px;
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
   border-radius: 8px; font-size: 13px;
 }
 .session-filter:focus { outline: none; border-color: var(--accent); }
+/* P407: session sort toggle beside the filter. */
+#session-sort { padding: 5px 8px; border-radius: 8px; font-size: 12px; color: var(--dim); }
+#session-sort:hover { color: var(--text); background: var(--panel-2); }
 .session-filter-empty { color: var(--dim); font-size: 12px; padding: 10px 4px; text-align: center; }
 /* P386: session-list cap expander row. */
 .session-show-all { font-size: 12px; color: var(--dim); padding: 6px; text-align: center; width: 100%; }

@@ -75,6 +75,10 @@ const state = {
   sessionListLimit: 100,
   /** P393: per-session composer drafts (session id -> unsent text). */
   drafts: new Map<string, string>(),
+  /** P407: sidebar session sort order (persisted). */
+  sessionSortMode: (localStorage.getItem("ulnclaw.sessionSort") === "title"
+    ? "title"
+    : "activity") as "activity" | "title",
   /** P394: keyboard navigation over the visible sidebar rows. */
   sessionListVisible: [] as SessionRow[],
   sessionCursor: 0,
@@ -112,6 +116,7 @@ const el = {
   statusbar: document.getElementById("statusbar")!,
   sessionList: document.getElementById("session-list")!,
   sessionFilter: document.getElementById("session-filter") as HTMLInputElement,
+  sessionSort: document.getElementById("session-sort") as HTMLButtonElement,
   newSession: document.getElementById("new-session") as HTMLButtonElement,
   messages: document.getElementById("messages")!,
   scrollBottom: document.getElementById("scroll-bottom") as HTMLButtonElement,
@@ -219,12 +224,24 @@ function ageGroupLabel(group: "today" | "yesterday" | "week" | "older"): string 
   }
 }
 
+/** P407: reflect the session sort mode on the toggle button. */
+function refreshSortButton(): void {
+  el.sessionSort.textContent = state.sessionSortMode === "title" ? "AZ" : "⏱";
+  el.sessionSort.title =
+    state.sessionSortMode === "title" ? t.session.sortByTitle : t.session.sortByActivity;
+}
+
 function renderSessions(): void {
   el.sessionList.innerHTML = "";
   // P372: optional sidebar filter (title or id substring, case-insensitive).
   const filter = state.sessionFilterText.trim().toLowerCase();
   const sorted = [...state.sessions]
-    .sort((a, b) => b.last_activity_at - a.last_activity_at)
+    // P407: sort by recent activity or title (locale-aware).
+    .sort((a, b) =>
+      state.sessionSortMode === "title"
+        ? (a.title || a.id.slice(0, 8)).localeCompare(b.title || b.id.slice(0, 8))
+        : b.last_activity_at - a.last_activity_at,
+    )
     .filter((session) => {
       if (!filter) return true;
       const title = session.title || session.id.slice(0, 8);
@@ -644,6 +661,9 @@ const COMPOSER_HISTORY_KEY = "ulnclaw.composerHistory";
 
 /** P397: sidebar session filter persists across restarts. */
 const SESSION_FILTER_KEY = "ulnclaw.sessionFilter";
+
+/** P407: session sort order persists across restarts. */
+const SESSION_SORT_KEY = "ulnclaw.sessionSort";
 
 /** P398: the active view persists across restarts. */
 const ACTIVE_VIEW_KEY = "ulnclaw.activeView";
@@ -1875,6 +1895,19 @@ async function start(): Promise<void> {
     }
     renderSessions();
   });
+
+  // P407: session sort toggle (activity ↔ title), persisted.
+  el.sessionSort.onclick = () => {
+    state.sessionSortMode = state.sessionSortMode === "activity" ? "title" : "activity";
+    try {
+      localStorage.setItem(SESSION_SORT_KEY, state.sessionSortMode);
+    } catch {
+      /* storage unavailable */
+    }
+    refreshSortButton();
+    renderSessions();
+  };
+  refreshSortButton();
 
   // P394: keyboard navigation over the sidebar session list.
   el.sessionList.addEventListener("keydown", (event) => {
