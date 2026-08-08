@@ -71,6 +71,8 @@ const state = {
   composerHistory: [] as string[],
   composerHistoryIndex: null as number | null,
   composerDraft: "",
+  /** P386: sidebar session-list cap (raised by the Show all row). */
+  sessionListLimit: 100,
   busy: false,
   managedPid: null as number | null,
   skills: [] as SkillRow[],
@@ -199,7 +201,7 @@ function renderSessions(): void {
         session.id.toLowerCase().includes(filter)
       );
     });
-  for (const session of sorted.slice(0, 100)) {
+  for (const session of sorted.slice(0, state.sessionListLimit)) {
     const item = document.createElement("div");
     item.className = "session-item" + (state.current?.id === session.id ? " active" : "");
     const title = session.title || session.id.slice(0, 8);
@@ -275,6 +277,26 @@ function renderSessions(): void {
     empty.className = "session-filter-empty";
     empty.textContent = t.session.filterNoMatch;
     el.sessionList.appendChild(empty);
+  }
+  // P386: the list is capped; offer an expander when rows overflow.
+  if (sorted.length > state.sessionListLimit) {
+    const more = document.createElement("button");
+    more.className = "ghost session-show-all";
+    more.textContent = fmt(t.session.showAll, { count: sorted.length });
+    more.onclick = () => {
+      state.sessionListLimit = sorted.length;
+      renderSessions();
+    };
+    el.sessionList.appendChild(more);
+  } else if (state.sessionListLimit > 100 && sorted.length > 100) {
+    const less = document.createElement("button");
+    less.className = "ghost session-show-all";
+    less.textContent = t.session.showLess;
+    less.onclick = () => {
+      state.sessionListLimit = 100;
+      renderSessions();
+    };
+    el.sessionList.appendChild(less);
   }
 }
 
