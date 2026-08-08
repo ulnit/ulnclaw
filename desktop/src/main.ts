@@ -615,6 +615,30 @@ const SIDEBAR_COLLAPSED_KEY = "ulnclaw.sidebarCollapsed";
 /** P395: composer drafts persist across restarts (session id -> text). */
 const DRAFTS_KEY = "ulnclaw.drafts";
 
+/** P396: ↑/↓ prompt-recall history persists across restarts. */
+const COMPOSER_HISTORY_KEY = "ulnclaw.composerHistory";
+
+function persistComposerHistory(): void {
+  try {
+    localStorage.setItem(COMPOSER_HISTORY_KEY, JSON.stringify(state.composerHistory));
+  } catch {
+    /* storage full/unavailable — history stays in-memory */
+  }
+}
+
+function loadPersistedComposerHistory(): void {
+  try {
+    const raw = localStorage.getItem(COMPOSER_HISTORY_KEY);
+    if (!raw) return;
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      state.composerHistory = parsed.filter((v): v is string => typeof v === "string").slice(-50);
+    }
+  } catch {
+    /* corrupt payload — start fresh */
+  }
+}
+
 function persistDrafts(): void {
   try {
     let entries = [...state.drafts.entries()];
@@ -783,6 +807,7 @@ async function sendTurn(): Promise<void> {
   if (text) {
     state.composerHistory.push(text);
     if (state.composerHistory.length > 50) state.composerHistory.shift();
+    persistComposerHistory();
   }
   state.composerHistoryIndex = null;
   if (state.current) {
@@ -2335,6 +2360,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   }
   // P395: restore persisted composer drafts.
   loadPersistedDrafts();
+  // P396: restore persisted prompt-recall history.
+  loadPersistedComposerHistory();
   el.statusbar.addEventListener("click", (event) => {
     const seg = (event.target as HTMLElement).closest<HTMLElement>(".statusbar-seg");
     const target = seg?.dataset.target;
