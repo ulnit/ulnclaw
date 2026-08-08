@@ -8787,6 +8787,10 @@ fn run_session_browse_tui(
     // P528: F10 cycles a model quick-filter — 0 shows every model, then
     // each distinct model present in the loaded rows.
     let mut model_idx: usize = 0;
+    // P529: details-pane scroll offset (Ctrl+U / Ctrl+D) for previews
+    // longer than the pane; resets when the highlighted session moves.
+    let mut pane_scroll: usize = 0;
+    let mut last_pane_id: Option<String> = None;
 
     loop {
         // Tab cycles "all sources" plus each distinct source present in
@@ -8868,6 +8872,11 @@ fn run_session_browse_tui(
             .get(cursor_idx)
             .map(|row| row.archived)
             .unwrap_or(false);
+        // P529: a moving highlight restarts the pane at the top.
+        if highlighted_id != last_pane_id {
+            pane_scroll = 0;
+            last_pane_id = highlighted_id.clone();
+        }
 
         let (cols, rows_h) = terminal::size().map_err(|e| e.to_string())?;
         let (cols, rows_h) = (cols as usize, rows_h as usize);
@@ -8895,7 +8904,7 @@ fn run_session_browse_tui(
             queue!(
                 out,
                 SetForegroundColor(Color::Yellow),
-                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F10 model  F2 sort  F3 preview  F1 help  F5 reload  F8 archive  Esc quit"),
+                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F10 model  F2 sort  F3 preview  Ctrl+U/D pane  F1 help  F5 reload  F8 archive  Esc quit"),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -9066,11 +9075,36 @@ fn run_session_browse_tui(
                     }
                 }
                 let max_lines = rows_h.saturating_sub(3);
-                for (offset, line) in pane_lines.iter().take(max_lines).enumerate() {
+                // P529: scrollable viewport over the pane lines.
+                pane_scroll = pane_scroll.min(pane_lines.len().saturating_sub(1));
+                let visible: Vec<&String> = pane_lines
+                    .iter()
+                    .skip(pane_scroll)
+                    .take(max_lines)
+                    .collect();
+                for (offset, line) in visible.iter().enumerate() {
                     queue!(
                         out,
                         cursor::MoveTo(pane_x, (2 + offset) as u16),
                         Print(line)
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                // Dim scroll cue beside the "Details" header.
+                let has_more = pane_scroll + max_lines < pane_lines.len();
+                if has_more || pane_scroll > 0 {
+                    let cue = match (pane_scroll > 0, has_more) {
+                        (true, true) => "\u{2195} Ctrl+U/D",
+                        (true, false) => "\u{2191} Ctrl+U",
+                        (false, true) => "\u{2193} Ctrl+D",
+                        (false, false) => "",
+                    };
+                    queue!(
+                        out,
+                        cursor::MoveTo(pane_x + 8, 1),
+                        SetForegroundColor(Color::DarkGrey),
+                        Print(cue),
+                        ResetColor
                     )
                     .map_err(|e| e.to_string())?;
                 }
@@ -9501,6 +9535,14 @@ fn run_session_browse_tui(
                     KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // P278: Ctrl+L forces a redraw (stray output, resize
                         // artifacts) — the loop repaints unconditionally.
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // P529: scroll the details pane down four lines.
+                        pane_scroll = pane_scroll.saturating_add(4);
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // P529: scroll the details pane back up four lines.
+                        pane_scroll = pane_scroll.saturating_sub(4);
                     }
                     KeyCode::F(1) => {
                         // P224: keybinding help overlay.

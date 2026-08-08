@@ -175,6 +175,7 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("Shift+Tab", "cycle the source filter backwards"),
         ("F2", "toggle recent-first \u{2194} alphabetical sort"),
         ("F3", "toggle the conversation preview in the details pane"),
+        ("Ctrl+U/D", "scroll the details pane when the preview overflows"),
         ("F4", "toggle archived sessions into the list"),
         ("F5", "reload the session list from disk"),
         ("F6", "rename the highlighted session (Enter saves, Esc cancels)"),
@@ -253,7 +254,7 @@ mod browse_tui_upgrade_tests {
     fn browse_help_entries_cover_core_keys() {
         let entries = super::browse_help_entries();
         let keys: Vec<&str> = entries.iter().map(|(k, _)| *k).collect();
-        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "/", "Shift+Tab"] {
+        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "Ctrl+U/D", "/", "Shift+Tab"] {
             assert!(keys.contains(&expected), "missing help row for {expected}");
         }
         // Every entry has a non-empty description.
