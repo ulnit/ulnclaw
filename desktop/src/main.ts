@@ -2353,6 +2353,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     kanbanQuickAdd: () => runKanbanQuickAdd(),
     toggleSidebar: () => toggleSidebar(),
     themePicker: () => openThemePicker(),
+    fontPicker: () => openFontPicker(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
@@ -2616,6 +2617,44 @@ async function openThemePicker(): Promise<void> {
       applyTheme(theme.name);
       state.client?.dashboardSetTheme(theme.name).catch(() => undefined);
       if (el.settingTheme.value !== theme.name) el.settingTheme.value = theme.name;
+      dialog.close();
+    };
+    list.appendChild(row);
+  }
+  dialog.append(heading, list);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
+}
+
+/** P401: palette font picker — apply + persist the dashboard font. */
+async function openFontPicker(): Promise<void> {
+  if (!state.client) return;
+  let active: string;
+  try {
+    active = await state.client.dashboardFont();
+  } catch (error) {
+    notifyError(fmt(t.palette.fontFailed, { error: String(error) }));
+    return;
+  }
+  const dialog = document.createElement("dialog");
+  dialog.className = "theme-picker-dialog";
+  const heading = document.createElement("div");
+  heading.className = "theme-picker-title";
+  heading.textContent = t.palette.fontPickerTitle;
+  const list = document.createElement("div");
+  list.className = "theme-picker-list";
+  for (const font of FONT_IDS) {
+    const row = document.createElement("button");
+    row.className = "theme-picker-item" + (font === active ? " active" : "");
+    row.textContent = font.replace(/-/g, " ");
+    row.onclick = () => {
+      applyFont(font);
+      state.client?.dashboardSetFont(font).catch(() => undefined);
+      if (el.settingFont.value !== font) el.settingFont.value = font;
       dialog.close();
     };
     list.appendChild(row);
