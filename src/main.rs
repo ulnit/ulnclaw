@@ -8344,6 +8344,28 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                             break;
                         }
                     }
+                    // P515: also surface the newest non-empty message so a
+                    // session can be identified by its last activity too.
+                    if let Some(last) = messages.iter().rev().find(|message| {
+                        message
+                            .content
+                            .as_deref()
+                            .map(|text| !text.trim().is_empty())
+                            .unwrap_or(false)
+                    }) {
+                        let already_shown = exchange
+                            .iter()
+                            .any(|(_, content)| *content == last.content);
+                        if !already_shown {
+                            let role = match last.role {
+                                ulnclaw::provider::Role::User => "you",
+                                ulnclaw::provider::Role::Assistant => "assistant",
+                                ulnclaw::provider::Role::System => "system",
+                                _ => "tool",
+                            };
+                            exchange.push((format!("last \u{00B7} {role}"), last.content.clone()));
+                        }
+                    }
                     Ok(exchange)
                 };
                 // P340: transcript search (FTS over message bodies) and
