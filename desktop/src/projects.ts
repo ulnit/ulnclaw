@@ -15,6 +15,8 @@ export class ProjectsWidget {
   constructor(
     private root: HTMLElement,
     private client: () => GatewayClient | null,
+    // P427: start a chat session rooted at the project's folder.
+    private newSessionInProject: ((cwd: string, title: string) => void) | null = null,
   ) {}
 
   /** Build the static skeleton once; `refresh` fills it with data. */
@@ -280,6 +282,12 @@ export class ProjectsWidget {
         if (!client) return;
         void client.projectSetActive(project.id).then(() => void this.refresh());
       });
+    }
+    // P427: spin up a session bound to the project's cwd (primary
+    // folder first, else the first registered folder).
+    const sessionCwd = project.primary_path ?? project.folders[0]?.path;
+    if (sessionCwd && this.newSessionInProject) {
+      mk(t.projects.newSessionHere, () => this.newSessionInProject!(sessionCwd, project.name));
     }
     mk(t.projects.addFolder, () => {
       if (!client) return;

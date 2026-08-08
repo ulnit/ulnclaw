@@ -2255,7 +2255,24 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   const tabPairing = document.getElementById("tab-pairing") as HTMLButtonElement;
   state.kanban = new KanbanWidget(kanbanMain, () => state.client);
   state.kanban.mount();
-  state.projects = new ProjectsWidget(projectsMain, () => state.client);
+  state.projects = new ProjectsWidget(
+    projectsMain,
+    () => state.client,
+    // P427: create a cwd-bound session for the project and open it.
+    (cwd, title) => {
+      if (!state.client) return;
+      void state.client
+        .createSession({ cwd, title })
+        .then((session) => {
+          state.sessions.unshift(session);
+          void openSession(session);
+          switchView("chat");
+        })
+        .catch((error) => {
+          notifyError(fmt(t.session.createFailed, { error: String(error) }));
+        });
+    },
+  );
   state.projects.mount();
   state.jobs = new JobsWidget(jobsMain, () => state.client);
   state.jobs.mount();
