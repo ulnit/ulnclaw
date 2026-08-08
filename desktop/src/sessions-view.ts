@@ -104,6 +104,7 @@ export class SessionsViewWidget {
         <button id="sessions-view-export-html" class="ghost" data-i18n-title="sessionsView.exportHtmlTitle" hidden>⭳ HTML</button>
         <button id="sessions-view-export-json" class="ghost" data-i18n-title="sessionsView.exportJsonTitle" hidden>⭳ JSON</button>
         <button id="sessions-view-import" class="ghost" data-i18n="sessionsView.import" data-i18n-title="sessionsView.importTitle"></button>
+        <button id="sessions-view-list-csv" class="ghost" data-i18n="sessionsView.listCsv" data-i18n-title="sessionsView.listCsvTitle"></button>
         <button id="sessions-view-prune" class="ghost" data-i18n="sessionsView.prune" data-i18n-title="sessionsView.pruneTitle"></button>
         <button id="sessions-view-archive" class="ghost" data-i18n="sessionsView.archive" data-i18n-title="sessionsView.archiveTitle"></button>
         <select id="sessions-view-dayjump" class="ghost" data-i18n-title="session.dayJumpTitle" hidden></select>
@@ -290,6 +291,10 @@ export class SessionsViewWidget {
     });
     this.applySortLabel();
     let searchDebounce: number | null = null;
+    // P492: download the filtered list as CSV.
+    this.root.querySelector("#sessions-view-list-csv")!.addEventListener("click", () => {
+      this.exportListCsv();
+    });
     // P482: one-click reset of every list filter.
     this.root.querySelector("#sessions-view-clear-filters")!.addEventListener("click", () => {
       (this.root.querySelector("#sessions-view-filter") as HTMLInputElement).value = "";
@@ -576,6 +581,44 @@ export class SessionsViewWidget {
       select.appendChild(option);
     }
     select.value = this.modelFilter ?? "";
+  }
+
+  /** P492: download the currently filtered session list as CSV. */
+  private exportListCsv(): void {
+    const rows = this.visible.length > 0 ? this.visible : this.all;
+    const header = [
+      "id", "title", "source", "model", "project", "message_count",
+      "end_reason", "started_at", "last_activity_at",
+    ];
+    const lines = [header.join(",")];
+    for (const session of rows) {
+      lines.push([
+        this.csvCell(session.id),
+        this.csvCell(session.title),
+        this.csvCell(session.source),
+        this.csvCell(session.model),
+        this.csvCell(session.project ?? null),
+        this.csvCell(session.message_count ?? null),
+        this.csvCell(session.end_reason ?? null),
+        this.csvCell(session.started_at),
+        this.csvCell(session.last_activity_at),
+      ].join(","));
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `ulnclaw-sessions-${Date.now()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+    this.status(fmt(t.sessionsView.listCsvDone, { count: String(rows.length) }), false);
+  }
+
+  private csvCell(value: string | number | null): string {
+    const text = String(value ?? "");
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   }
 
   /** P490: run a full-text search from outside (composer /search). */
