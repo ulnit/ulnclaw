@@ -28,6 +28,8 @@ export interface SessionRow {
   end_reason?: string | null;
   /** Owning project slug (longest-prefix cwd match in projects.db). */
   project?: string | null;
+  /** P509/P510: last-message snippet when listed with `?preview=true`. */
+  last_message?: string | null;
 }
 
 export interface MessageRow {
@@ -1041,8 +1043,8 @@ export class GatewayClient {
     }
   }
 
-  async listSessions(): Promise<SessionRow[]> {
-    const response = await fetch(this.endpoint("/api/sessions"), { headers: this.headers() });
+  async listSessions(preview = false): Promise<SessionRow[]> {
+    const response = await fetch(this.endpoint(`/api/sessions${preview ? "?preview=true" : ""}`), { headers: this.headers() });
     if (!response.ok) throw new Error(`sessions: HTTP ${response.status}`);
     const value = await response.json();
     // P421: /api/sessions answers {"object":"list","data":[…]} (hermes

@@ -527,7 +527,8 @@ export class SessionsViewWidget {
       return;
     }
     try {
-      this.all = await client.listSessions();
+      // P510: request last-message previews for the list rows.
+      this.all = await client.listSessions(true);
       this.sortSessions();
       // P446: restore the persisted selection on the first load.
       if (!this.restored) {
@@ -942,7 +943,7 @@ export class SessionsViewWidget {
       if (status === "ended" && (!session.end_reason || session.end_reason === "archived")) return false;
       if (status === "archived" && session.end_reason !== "archived") return false;
       if (!filter) return true;
-      const haystack = `${session.title || ""} ${session.id} ${session.model || ""} ${session.source || ""}`;
+      const haystack = `${session.title || ""} ${session.id} ${session.model || ""} ${session.source || ""} ${session.last_message || ""}`;
       return haystack.toLowerCase().includes(filter);
     });
     if (rows.length === 0) {
@@ -976,6 +977,7 @@ export class SessionsViewWidget {
               <button class="sessions-view-row-action" data-action="delete" title="${escapeHtml(t.sessionsView.deleteTitle)}">🗑</button>
             </span>
             <div class="sessions-view-row-title">${escapeHtml(title)}</div>
+            ${session.last_message ? `<div class="sessions-view-row-snippet">${escapeHtml(session.last_message)}</div>` : ""}
             <div class="sessions-view-row-meta">
               ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip sessions-view-source" data-source="${escapeHtml(session.source)}" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
               ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" data-reason="${escapeHtml(session.end_reason)}" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
