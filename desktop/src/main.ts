@@ -239,6 +239,13 @@ function renderSessions(): void {
     item.onclick = () => openSession(session);
     el.sessionList.appendChild(item);
   }
+  // P373: empty-state hint when the filter matches nothing.
+  if (sorted.length === 0 && filter) {
+    const empty = document.createElement("div");
+    empty.className = "session-filter-empty";
+    empty.textContent = t.session.filterNoMatch;
+    el.sessionList.appendChild(empty);
+  }
 }
 
 async function renameSession(session: SessionRow): Promise<void> {
