@@ -35,6 +35,9 @@ export class SessionPickerDialog {
   private searchSeq = 0;
   private hits: SessionSearchHit[] = [];
   private hitsQuery = "";
+  private filters: HTMLDivElement;
+  private statusFilter: "all" | "open" | "ended" | "archived" = "all";
+  private reasonFilter: string | null = null;
 
   constructor(private hooks: SessionPickerHooks) {
     this.dialog = document.createElement("dialog");
@@ -52,9 +55,11 @@ export class SessionPickerDialog {
         this.dialog.close();
       }
     });
+    this.filters = document.createElement("div");
+    this.filters.className = "session-picker-filters";
     this.list = document.createElement("div");
     this.list.className = "session-picker-list";
-    this.dialog.append(title, this.search, this.list);
+    this.dialog.append(title, this.search, this.filters, this.list);
     document.body.appendChild(this.dialog);
   }
 
@@ -62,6 +67,8 @@ export class SessionPickerDialog {
     this.search.value = "";
     this.hits = [];
     this.hitsQuery = "";
+    this.statusFilter = "all";
+    this.reasonFilter = null;
     this.renderList();
     this.dialog.showModal();
     this.search.focus();
@@ -97,10 +104,12 @@ export class SessionPickerDialog {
   }
 
   private renderList(): void {
+    this.renderFilters();
     this.list.innerHTML = "";
     const q = normalize(this.search.value);
     const rows = [...this.hooks.sessions()]
       .sort((a, b) => b.last_activity_at - a.last_activity_at)
+      .filter((session) => this.matchesStatus(session))
       .slice(0, 200)
       .filter((session) => {
         if (!q) return true;
@@ -108,7 +117,8 @@ export class SessionPickerDialog {
         return `${title} ${session.id}`.toLowerCase().includes(q);
       });
     const seen = new Set(rows.map((session) => session.id));
-    const hits = q.length >= 2 && this.hitsQuery === q
+    const filtered = this.statusFilter !== "all" || this.reasonFilter !== null;
+    const hits = q.length >= 2 && this.hitsQuery === q && !filtered
       ? this.hits.filter((hit) => !seen.has(hit.session_id))
       : [];
     if (!rows.length && !hits.length) {
@@ -184,5 +194,61 @@ export class SessionPickerDialog {
       };
       this.list.appendChild(row);
     }
+  }
+
+  // P464: status + end-reason quick-filter chips, mirroring the Sessions
+  // view's status semantics (open = no end_reason, ended = non-archived
+  // end_reason, archived = end_reason "archived").
+  private renderFilters(): void {
+    this.filters.innerHTML = "";
+    const statuses: Array<{ id: "all" | "open" | "ended" | "archived"; label: string }> = [
+      { id: "all", label: t.sessionsView.statusAll },
+      { id: "open", label: t.sessionsView.statusOpen },
+      { id: "ended", label: t.sessionsView.statusEnded },
+      { id: "archived", label: t.sessionsView.statusArchived },
+    ];
+    for (const status of statuses) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "session-picker-chip"
+        + (this.reasonFilter === null && this.statusFilter === status.id ? " active" : "");
+      chip.textContent = status.label;
+      chip.title = t.sessionsView.statusFilterTitle;
+      chip.onclick = () => {
+        this.statusFilter = status.id;
+        this.reasonFilter = null;
+        this.renderList();
+      };
+      this.filters.appendChild(chip);
+    }
+    const reasons = [...new Set(
+      this.hooks.sessions()
+        .map((session) => session.end_reason)
+        .filter((reason): reason is string => !!reason),
+    )].sort();
+    if (!reasons.length) return;
+    const sep = document.createElement("span");
+    sep.className = "session-picker-chip-sep";
+    this.filters.appendChild(sep);
+    for (const reason of reasons) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "session-picker-chip" + (this.reasonFilter === reason ? " active" : "");
+      chip.textContent = reason.replace(/_/g, " ");
+      chip.title = fmt(t.session.endReasonTitle, { reason });
+      chip.onclick = () => {
+        this.reasonFilter = this.reasonFilter === reason ? null : reason;
+        this.renderList();
+      };
+      this.filters.appendChild(chip);
+    }
+  }
+
+  private matchesStatus(session: SessionRow): boolean {
+    if (this.reasonFilter !== null) return session.end_reason === this.reasonFilter;
+    if (this.statusFilter === "open") return !session.end_reason;
+    if (this.statusFilter === "ended") return !!session.end_reason && session.end_reason !== "archived";
+    if (this.statusFilter === "archived") return session.end_reason === "archived";
+    return true;
   }
 }
