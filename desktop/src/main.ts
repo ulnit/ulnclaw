@@ -1883,6 +1883,12 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
           runId ? `ulnclaw-run-${runId}` : "",
         );
       }
+      // P467: a settled run changed message counts + the transcript —
+      // refresh the sidebar, the sessions-browser list, and (when the
+      // settled session is open there) its transcript in place.
+      void refreshSessions();
+      void state.sessionsBrowser?.refresh();
+      state.sessionsBrowser?.refreshTranscript(envelope.session_id);
       break;
     }
     case "run.approval": {

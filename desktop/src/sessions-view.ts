@@ -394,6 +394,13 @@ export class SessionsViewWidget {
     this.loadTranscript(sessionId).catch(() => undefined);
   }
 
+  /** P467: reload the transcript in place when a run settles in the
+   * selected session (keeps the current tail-window vs full mode). */
+  refreshTranscript(sessionId: string): void {
+    if (this.selected !== sessionId) return;
+    this.loadTranscript(sessionId).catch(() => undefined);
+  }
+
   /** Prune/archive dialog (P314) — mirrors `ulnclaw sessions prune`
    * and `sessions archive` over POST /api/sessions/prune|archive. */
   private openPruneDialog(mode: "prune" | "archive"): void {
