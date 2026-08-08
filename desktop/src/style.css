@@ -1469,3 +1469,8 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 #statusbar .statusbar-seg { display: inline-flex; gap: 4px; align-items: center; }
 #statusbar .statusbar-seg::before { content: "·"; margin-right: 10px; opacity: 0.6; }
 #statusbar .statusbar-seg:first-child::before { content: ""; margin: 0; }
+
+/* P356: keyboard shortcuts dialog table. */
+.shortcuts-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.shortcuts-table td { padding: 4px 10px; border-bottom: 1px solid var(--border, rgba(128,128,128,0.18)); }
+.shortcuts-table td:first-child { font-family: var(--font-mono, monospace); white-space: nowrap; opacity: 0.9; }

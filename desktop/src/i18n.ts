@@ -68,6 +68,9 @@ export interface Translations {
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string;
+    shortcuts: string; shortcutsTitle: string; shortcutsClose: string;
+    scModelPicker: string; scNewSession: string; scCycle: string; scSessionPicker: string;
+    scSettings: string; scSidebar: string; scPalette: string; scFind: string; scFocus: string; scShortcuts: string;
   };
   session: {
     titlePrompt: string; renamed: string; renameFailed: string; deleteConfirm: string;
@@ -331,6 +334,11 @@ const en: Translations = {
     replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save", restartGateway: "Restart gateway", restartDone: "Gateway restarted.", restartFailed: "Gateway restart timed out.", restartUnavailable: "The gateway is not managed here — restart it where it runs.",
     settingsTheme: "Theme", settingsFont: "Font",
     statusUp: "up {duration}", statusSessions: "{count} sessions", statusRuns: "{count} runs", statusPlugins: "{count} plugins",
+    shortcuts: "Keyboard shortcuts", shortcutsTitle: "Keyboard shortcuts", shortcutsClose: "Close",
+    scModelPicker: "Open the model picker", scNewSession: "New session", scCycle: "Cycle sessions",
+    scSessionPicker: "Open the session picker", scSettings: "Open settings", scSidebar: "Toggle sidebar",
+    scPalette: "Command palette", scFind: "Find in chat", scFocus: "Focus the composer",
+    scShortcuts: "Show this dialog",
   },
   session: {
     titlePrompt: "Session title:", renamed: "Session renamed.",
@@ -773,6 +781,11 @@ const zh: Translations = {
     replayOnboarding: "重放引导", cancel: "取消", save: "保存", restartGateway: "重启网关", restartDone: "网关已重启。", restartFailed: "网关重启超时。", restartUnavailable: "此环境不管理网关——请在网关运行处重启。",
     settingsTheme: "主题", settingsFont: "字体",
     statusUp: "运行 {duration}", statusSessions: "{count} 会话", statusRuns: "{count} 运行", statusPlugins: "{count} 插件",
+    shortcuts: "键盘快捷键", shortcutsTitle: "键盘快捷键", shortcutsClose: "关闭",
+    scModelPicker: "打开模型挑选器", scNewSession: "新建会话", scCycle: "循环切换会话",
+    scSessionPicker: "打开会话挑选器", scSettings: "打开设置", scSidebar: "切换侧栏",
+    scPalette: "命令面板", scFind: "聊天内查找", scFocus: "聚焦输入框",
+    scShortcuts: "显示本对话框",
   },
   session: {
     titlePrompt: "会话标题：", renamed: "会话已重命名。",
@@ -1215,6 +1228,11 @@ const zhHant: Translations = {
     replayOnboarding: "重播引導", cancel: "取消", save: "儲存", restartGateway: "重啟閘道", restartDone: "閘道已重啟。", restartFailed: "閘道重啟逾時。", restartUnavailable: "此環境不管理閘道——請在閘道執行處重啟。",
     settingsTheme: "主題", settingsFont: "字型",
     statusUp: "執行 {duration}", statusSessions: "{count} 工作階段", statusRuns: "{count} 執行", statusPlugins: "{count} 外掛",
+    shortcuts: "鍵盤快捷鍵", shortcutsTitle: "鍵盤快捷鍵", shortcutsClose: "關閉",
+    scModelPicker: "開啟模型挑選器", scNewSession: "新增工作階段", scCycle: "循環切換工作階段",
+    scSessionPicker: "開啟工作階段挑選器", scSettings: "開啟設定", scSidebar: "切換側欄",
+    scPalette: "命令面板", scFind: "聊天內尋找", scFocus: "聚焦輸入框",
+    scShortcuts: "顯示本對話框",
   },
   session: {
     titlePrompt: "工作階段標題：", renamed: "已重新命名工作階段。",
@@ -1657,6 +1675,11 @@ const ja: Translations = {
     replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存", restartGateway: "ゲートウェイを再起動", restartDone: "ゲートウェイを再起動しました。", restartFailed: "ゲートウェイの再起動がタイムアウトしました。", restartUnavailable: "この環境はゲートウェイを管理していません — 実行場所で再起動してください。",
     settingsTheme: "テーマ", settingsFont: "フォント",
     statusUp: "稼働 {duration}", statusSessions: "{count} セッション", statusRuns: "{count} 実行", statusPlugins: "{count} プラグイン",
+    shortcuts: "キーボードショートカット", shortcutsTitle: "キーボードショートカット", shortcutsClose: "閉じる",
+    scModelPicker: "モデルピッカーを開く", scNewSession: "新規セッション", scCycle: "セッションを切り替え",
+    scSessionPicker: "セッションピッカーを開く", scSettings: "設定を開く", scSidebar: "サイドバーを切り替え",
+    scPalette: "コマンドパレット", scFind: "チャット内検索", scFocus: "入力欄にフォーカス",
+    scShortcuts: "このダイアログを表示",
   },
   session: {
     titlePrompt: "セッションタイトル：", renamed: "セッション名を変更しました。",
@@ -2099,6 +2122,11 @@ const ar: Translations = {
     replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ", restartGateway: "إعادة تشغيل البوابة", restartDone: "تمت إعادة تشغيل البوابة.", restartFailed: "انتهت مهلة إعادة تشغيل البوابة.", restartUnavailable: "البوابة غير مُدارة هنا — أعد تشغيلها حيث تعمل.",
     settingsTheme: "السمة", settingsFont: "الخط",
     statusUp: "يعمل منذ {duration}", statusSessions: "{count} جلسة", statusRuns: "{count} تشغيل", statusPlugins: "{count} إضافة",
+    shortcuts: "اختصارات لوحة المفاتيح", shortcutsTitle: "اختصارات لوحة المفاتيح", shortcutsClose: "إغلاق",
+    scModelPicker: "فتح منتقي النماذج", scNewSession: "جلسة جديدة", scCycle: "التنقل بين الجلسات",
+    scSessionPicker: "فتح منتقي الجلسات", scSettings: "فتح الإعدادات", scSidebar: "تبديل الشريط الجانبي",
+    scPalette: "لوحة الأوامر", scFind: "بحث في المحادثة", scFocus: "تركيز مربع الإدخال",
+    scShortcuts: "إظهار هذا الحوار",
   },
   session: {
     titlePrompt: "عنوان الجلسة:", renamed: "أُعيدت تسمية الجلسة.",

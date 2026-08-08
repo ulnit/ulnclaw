@@ -114,6 +114,9 @@ const el = {
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
   settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
+  settingsShortcuts: document.getElementById("settings-shortcuts") as HTMLButtonElement,
+  shortcutsDialog: document.getElementById("shortcuts-dialog") as HTMLDialogElement,
+  shortcutsTable: document.getElementById("shortcuts-table")!,
   settingsRestart: document.getElementById("settings-restart") as HTMLButtonElement,
   attachFile: document.getElementById("attach-file") as HTMLButtonElement,
   fsDialog: document.getElementById("fs-dialog") as HTMLDialogElement,
@@ -1133,6 +1136,13 @@ function cycleSession(direction: 1 | -1): void {
 
 function installHotkeys(): void {
   window.addEventListener("keydown", (event) => {
+    // F1 — keyboard shortcuts cheatsheet (works over dialogs/inputs).
+    if (event.key === "F1") {
+      event.preventDefault();
+      if (el.shortcutsDialog.open) el.shortcutsDialog.close();
+      else openShortcuts();
+      return;
+    }
     const mod = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
     // mod+shift+m — model picker (hermes composer.modelPicker chord).
@@ -1291,6 +1301,10 @@ async function start(): Promise<void> {
   el.settingsOnboarding.onclick = () => {
     el.settings.close();
     void state.onboarding!.maybeOpen(true);
+  };
+  el.settingsShortcuts.onclick = () => {
+    el.settings.close();
+    openShortcuts();
   };
 
   el.newSession.onclick = async () => {
@@ -1695,6 +1709,7 @@ async function start(): Promise<void> {
     renderSessions();
     refreshModelBadge();
     void updateStatusBar();
+    if (el.shortcutsDialog.open) renderShortcuts();
     hatchBtn.textContent = t.chrome.hatchPet;
     state.kanban?.rerender();
     state.projects?.rerender();
@@ -1711,6 +1726,42 @@ async function start(): Promise<void> {
   setInterval(() => void pollHealth(), 10000);
   setInterval(() => void refreshSessions(), 30000);
   startApprovalWatcher();
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts cheatsheet (P356) — the hermes-subset chord table
+// rendered from i18n, opened from the settings dialog or F1.
+// ---------------------------------------------------------------------------
+
+function shortcutMod(): string {
+  return navigator.platform.toLowerCase().includes("mac") ? "⌘" : "Ctrl";
+}
+
+function shortcutRows(): [string, string][] {
+  const mod = shortcutMod();
+  return [
+    [`${mod}+Shift+M`, t.chrome.scModelPicker],
+    [`${mod}+N / Shift+N`, t.chrome.scNewSession],
+    ["Ctrl+Tab / Ctrl+Shift+Tab", t.chrome.scCycle],
+    [`${mod}+Shift+F`, t.chrome.scSessionPicker],
+    [`${mod}+,`, t.chrome.scSettings],
+    [`${mod}+B`, t.chrome.scSidebar],
+    [`${mod}+K`, t.chrome.scPalette],
+    [`${mod}+F`, t.chrome.scFind],
+    ["Enter", t.chrome.scFocus],
+    ["F1", t.chrome.scShortcuts],
+  ];
+}
+
+function renderShortcuts(): void {
+  el.shortcutsTable.innerHTML = shortcutRows()
+    .map(([chord, label]) => `<tr><td>${chord}</td><td>${label}</td></tr>`)
+    .join("");
+}
+
+function openShortcuts(): void {
+  renderShortcuts();
+  el.shortcutsDialog.showModal();
 }
 
 // Stop a managed gateway when the window closes.

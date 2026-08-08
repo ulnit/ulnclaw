@@ -85,12 +85,20 @@
             <select id="setting-font"></select>
           </label>
           <menu>
+            <button id="settings-shortcuts" value="cancel" data-i18n="chrome.shortcuts">Keyboard shortcuts</button>
             <button id="settings-onboarding" value="cancel" data-i18n="chrome.replayOnboarding">Replay onboarding</button>
             <button id="settings-restart" value="cancel" data-i18n="chrome.restartGateway" hidden>Restart gateway</button>
             <button value="cancel" data-i18n="chrome.cancel">Cancel</button>
             <button id="settings-save" value="default" data-i18n="chrome.save">Save</button>
           </menu>
         </form>
+      </dialog>
+      <dialog id="shortcuts-dialog" class="fs-dialog">
+        <h2 data-i18n="chrome.shortcutsTitle">Keyboard shortcuts</h2>
+        <table id="shortcuts-table" class="shortcuts-table"></table>
+        <menu>
+          <button value="cancel" data-i18n="chrome.shortcutsClose">Close</button>
+        </menu>
       </dialog>
       <dialog id="fs-dialog" class="fs-dialog">
         <h2 data-i18n="chrome.fsTitle">Attach a file</h2>
