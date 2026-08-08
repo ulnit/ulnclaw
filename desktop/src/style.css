@@ -1487,6 +1487,7 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 #statusbar .statusbar-seg { display: inline-flex; gap: 4px; align-items: center; }
 #statusbar .statusbar-seg::before { content: "·"; margin-right: 10px; opacity: 0.6; }
 #statusbar .statusbar-seg:first-child::before { content: ""; margin: 0; }
+#statusbar .statusbar-seg:hover { color: var(--text); text-decoration: underline; }
 
 /* P356: keyboard shortcuts dialog table. */
 .shortcuts-table { border-collapse: collapse; width: 100%; font-size: 13px; }

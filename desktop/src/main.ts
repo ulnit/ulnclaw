@@ -910,19 +910,21 @@ async function updateStatusBar(): Promise<void> {
       // P382: kanban column census for the status bar.
       state.client.kanbanTasks().catch(() => null),
     ]);
-    const segs: string[] = [
-      `v${info.version} · ${info.os}/${info.arch} · ${t.chrome.statusUp.replace("{duration}", formatUptime(info.uptime_secs))}`,
+    // P385: each segment carries the view it jumps to on click.
+    const segs: [string, string][] = [
+      [`v${info.version} · ${info.os}/${info.arch} · ${t.chrome.statusUp.replace("{duration}", formatUptime(info.uptime_secs))}`, "doctor"],
     ];
-    if (gatewayModel) segs.push(gatewayModel);
-    segs.push(t.chrome.statusSessions.replace("{count}", String(info.sessions)));
-    segs.push(t.chrome.statusRuns.replace("{count}", String(info.active_runs)));
-    segs.push(t.chrome.statusPlugins.replace("{count}", String(info.plugins_loaded)));
+    if (gatewayModel) segs.push([gatewayModel, "doctor"]);
+    segs.push([t.chrome.statusSessions.replace("{count}", String(info.sessions)), "sessions"]);
+    segs.push([t.chrome.statusRuns.replace("{count}", String(info.active_runs)), "runs"]);
+    segs.push([t.chrome.statusPlugins.replace("{count}", String(info.plugins_loaded)), "plugins"]);
     if (usage) {
-      segs.push(
+      segs.push([
         t.chrome.statusTokens
           .replace("{tokens}", formatTokens(usage.process.total_tokens))
           .replace("{calls}", String(usage.process.tool_calls)),
-      );
+        "usage",
+      ]);
     }
     if (tasks) {
       const todo = tasks.filter((task) =>
@@ -930,15 +932,16 @@ async function updateStatusBar(): Promise<void> {
       ).length;
       const doing = tasks.filter((task) => task.status === "running").length;
       const blocked = tasks.filter((task) => task.status === "blocked").length;
-      segs.push(
+      segs.push([
         t.chrome.statusKanban
           .replace("{todo}", String(todo))
           .replace("{doing}", String(doing))
           .replace("{blocked}", String(blocked)),
-      );
+        "kanban",
+      ]);
     }
     el.statusbar.innerHTML = segs
-      .map((seg) => `<span class="statusbar-seg">${seg}</span>`)
+      .map(([text, target]) => `<span class="statusbar-seg" data-target="${target}">${text}</span>`)
       .join("");
     el.statusbar.hidden = false;
   } catch {
@@ -2138,7 +2141,20 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   });
 
   await pollHealth();
-  el.statusbar.addEventListener("click", () => switchView("doctor"));
+  // P385: status-bar segments jump to their view (doctor fallback).
+  el.statusbar.addEventListener("click", (event) => {
+    const seg = (event.target as HTMLElement).closest<HTMLElement>(".statusbar-seg");
+    const target = seg?.dataset.target;
+    switchView(
+      target === "sessions" ||
+        target === "runs" ||
+        target === "plugins" ||
+        target === "usage" ||
+        target === "kanban"
+        ? target
+        : "doctor",
+    );
+  });
   await refreshSessions();
   state.skills = (await state.client.listSkills()) || [];
   setInterval(() => void pollHealth(), 10000);
