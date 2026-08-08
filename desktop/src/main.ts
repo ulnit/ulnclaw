@@ -3,7 +3,7 @@
 // everything else is plain HTTP (gateway.ts).
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
-import type { DashboardTheme, FsEntry, GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
+import type { DashboardTheme, FsEntry, GatewaySettings, Project, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import type { KanbanBoard } from "./gateway";
 import { KanbanWidget } from "./kanban";
 import { ProjectsWidget } from "./projects";
@@ -2561,6 +2561,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     copyLastReply: () => runCopyLastReply(),
     forkSession: () => runForkSession(),
     toggleHideArchived: () => toggleHideArchived(),
+    newSessionInProject: () => runNewSessionInProject(),
     archiveSession: () => runArchiveSession(),
     unarchiveSession: () => runUnarchiveSession(),
   });
@@ -3037,6 +3038,33 @@ async function runForkSession(): Promise<void> {
     await openSession(forked);
   } catch (error) {
     notifyError(fmt(t.palette.forkFailed, { error: String(error) }));
+  }
+}
+
+/** P428: palette action — start a session rooted at the active
+ * project's folder (primary path first, else the first folder). */
+async function runNewSessionInProject(): Promise<void> {
+  if (!state.client) return;
+  let active: Project | undefined;
+  try {
+    const listing = await state.client.projectsList();
+    active = listing.projects.find((project) => project.id === listing.active_id);
+  } catch (error) {
+    notifyError(fmt(t.palette.projectsLoadFailed, { error: String(error) }));
+    return;
+  }
+  const cwd = active?.primary_path ?? active?.folders[0]?.path;
+  if (!active || !cwd) {
+    notifyError(t.palette.noActiveProject);
+    return;
+  }
+  try {
+    const session = await state.client.createSession({ cwd, title: active.name });
+    state.sessions.unshift(session);
+    notifySuccess(fmt(t.palette.projectSessionCreated, { label: active.name }));
+    await openSession(session);
+  } catch (error) {
+    notifyError(fmt(t.session.createFailed, { error: String(error) }));
   }
 }
 

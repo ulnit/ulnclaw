@@ -45,6 +45,7 @@ export interface CommandPaletteHooks {
   copyLastReply(): void | Promise<void>;
   forkSession(): void | Promise<void>;
   toggleHideArchived(): void;
+  newSessionInProject(): void | Promise<void>;
   archiveSession(): void | Promise<void>;
   unarchiveSession(): void | Promise<void>;
 }
@@ -173,6 +174,7 @@ export class CommandPalette {
       { id: "copy-last-reply", label: t.palette.copyLastReply, group: t.palette.gatewayGroup, run: () => hooks.copyLastReply() },
       { id: "fork-session", label: t.palette.forkSession, group: t.palette.sessionGroup, run: () => hooks.forkSession() },
       { id: "toggle-hide-archived", label: t.palette.toggleHideArchived, group: t.palette.sessionGroup, run: () => hooks.toggleHideArchived() },
+      { id: "new-session-in-project", label: t.palette.newSessionInProject, group: t.palette.sessionGroup, run: () => hooks.newSessionInProject() },
     ];
     const current = hooks.currentSessionId();
     for (const session of hooks.sessions()) {
