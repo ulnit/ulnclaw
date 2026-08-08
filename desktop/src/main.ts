@@ -148,6 +148,20 @@ const el = {
   fsPreviewClose: document.getElementById("fs-preview-close") as HTMLButtonElement,
 };
 
+/** P364: compact relative time for sidebar session rows (full
+ * timestamp stays in the tooltip). */
+function sessionWhen(epochSeconds: number): string {
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - epochSeconds));
+  if (secs < 60) return t.session.whenNow;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  return new Date(epochSeconds * 1000).toLocaleDateString();
+}
+
 function renderSessions(): void {
   el.sessionList.innerHTML = "";
   const sorted = [...state.sessions].sort((a, b) => b.last_activity_at - a.last_activity_at);
@@ -155,11 +169,16 @@ function renderSessions(): void {
     const item = document.createElement("div");
     item.className = "session-item" + (state.current?.id === session.id ? " active" : "");
     const title = session.title || session.id.slice(0, 8);
-    const when = new Date(session.last_activity_at * 1000).toLocaleString();
+    const whenFull = new Date(session.last_activity_at * 1000).toLocaleString();
     const main = document.createElement("div");
     main.className = "session-main";
-    main.innerHTML = `<span class="title"></span><span class="when">${when}</span>`;
+    main.innerHTML = `<span class="title"></span><span class="when"></span>`;
     main.querySelector(".title")!.textContent = title;
+    const whenEl = main.querySelector<HTMLSpanElement>(".when")!;
+    whenEl.textContent = session.message_count
+      ? `${sessionWhen(session.last_activity_at)} · ${session.message_count}`
+      : sessionWhen(session.last_activity_at);
+    whenEl.title = whenFull;
     item.appendChild(main);
     if (session.project) {
       const badge = document.createElement("span");
