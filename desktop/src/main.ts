@@ -2155,6 +2155,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     updateCheck: () => runUpdateCheck(),
     kanbanDispatch: () => runKanbanDispatch(),
     kanbanQuickAdd: () => runKanbanQuickAdd(),
+    toggleSidebar: () => toggleSidebar(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
