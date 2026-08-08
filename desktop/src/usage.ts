@@ -72,6 +72,12 @@ export class UsageWidget {
       <header id="usage-header">
         <span id="usage-window" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <select id="usage-limit" data-i18n-title="usage.limitTitle" title="Per-session rows">
+          <option value="20">20</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+        </select>
         <input id="usage-filter" type="search" data-i18n-ph="usage.filterPlaceholder" />
         <button id="usage-export" class="ghost" data-i18n="usage.exportCsv">CSV</button>
         <button id="usage-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
@@ -93,6 +99,15 @@ export class UsageWidget {
     `;
     this.root.querySelector("#usage-export")!.addEventListener("click", () => {
       this.exportCsv();
+    });
+    const limitSelect = this.root.querySelector("#usage-limit") as HTMLSelectElement;
+    limitSelect.value = String(this.rowLimit());
+    limitSelect.addEventListener("change", () => {
+      const value = Number(limitSelect.value);
+      if ([20, 50, 100, 200].includes(value)) {
+        window.localStorage.setItem("ulnclaw.usage.limit", String(value));
+        this.refresh().catch(() => undefined);
+      }
     });
     this.root.querySelector("#usage-filter")!.addEventListener("input", () => {
       if (this.lastUsage) this.render(this.lastUsage);
@@ -133,7 +148,7 @@ export class UsageWidget {
     if (!client || this.busy) return;
     this.busy = true;
     try {
-      const usage = await client.usage(50);
+      const usage = await client.usage(this.rowLimit());
       this.lastUsage = usage;
       this.render(usage);
     } catch {
@@ -141,6 +156,12 @@ export class UsageWidget {
     } finally {
       this.busy = false;
     }
+  }
+
+  /** P587: per-session row limit, persisted in localStorage. */
+  private rowLimit(): number {
+    const stored = Number(window.localStorage.getItem("ulnclaw.usage.limit"));
+    return [20, 50, 100, 200].includes(stored) ? stored : 50;
   }
 
   /** P366: download the per-session usage table as CSV. */

@@ -142,7 +142,7 @@ export interface Translations {
     prompt: string; completion: string; toolCalls: string;
     requests: string; runs: string; completed: string; failed: string;
     colSession: string; colModel: string; colMessages: string;
-    colInput: string; colOutput: string; colTotal: string; colStarted: string; exportCsv: string;
+    colInput: string; colOutput: string; colTotal: string; colStarted: string; exportCsv: string; limitTitle: string;
   };
   insights: {
     title: string; days7: string; days30: string; days90: string; sourcePlaceholder: string;
@@ -514,7 +514,7 @@ const en: Translations = {
     prompt: "prompt", completion: "completion", toolCalls: "Tool calls",
     requests: "API requests", runs: "Async runs", completed: "completed", failed: "failed",
     colSession: "Session", colModel: "Model", colMessages: "Msgs",
-    colInput: "Input", colOutput: "Output", colTotal: "Total", colStarted: "Started", exportCsv: "Export CSV",
+    colInput: "Input", colOutput: "Output", colTotal: "Total", colStarted: "Started", exportCsv: "Export CSV", limitTitle: "Per-session rows",
   },
   insights: {
     title: "Insights",
@@ -1019,7 +1019,7 @@ const zh: Translations = {
     prompt: "提示", completion: "补全", toolCalls: "工具调用",
     requests: "API 请求", runs: "异步运行", completed: "完成", failed: "失败",
     colSession: "会话", colModel: "模型", colMessages: "消息",
-    colInput: "输入", colOutput: "输出", colTotal: "总计", colStarted: "开始时间", exportCsv: "导出 CSV",
+    colInput: "输入", colOutput: "输出", colTotal: "总计", colStarted: "开始时间", exportCsv: "导出 CSV", limitTitle: "每会话行数",
   },
   insights: {
     title: "洞察",
@@ -1524,7 +1524,7 @@ const zhHant: Translations = {
     prompt: "提示", completion: "補全", toolCalls: "工具呼叫",
     requests: "API 請求", runs: "非同步執行", completed: "完成", failed: "失敗",
     colSession: "工作階段", colModel: "模型", colMessages: "訊息",
-    colInput: "輸入", colOutput: "輸出", colTotal: "總計", colStarted: "開始時間", exportCsv: "匯出 CSV",
+    colInput: "輸入", colOutput: "輸出", colTotal: "總計", colStarted: "開始時間", exportCsv: "匯出 CSV", limitTitle: "每工作階段行數",
   },
   insights: {
     title: "洞察",
@@ -2029,7 +2029,7 @@ const ja: Translations = {
     prompt: "プロンプト", completion: "補完", toolCalls: "ツール呼び出し",
     requests: "API リクエスト", runs: "非同期実行", completed: "完了", failed: "失敗",
     colSession: "セッション", colModel: "モデル", colMessages: "件数",
-    colInput: "入力", colOutput: "出力", colTotal: "合計", colStarted: "開始", exportCsv: "CSV をエクスポート",
+    colInput: "入力", colOutput: "出力", colTotal: "合計", colStarted: "開始", exportCsv: "CSV をエクスポート", limitTitle: "セッションごとの行数",
   },
   insights: {
     title: "インサイト",
@@ -2534,7 +2534,7 @@ const ar: Translations = {
     prompt: "مطالبات", completion: "إكمالات", toolCalls: "استدعاءات الأدوات",
     requests: "طلبات API", runs: "تشغيلات غير متزامنة", completed: "اكتملت", failed: "فشلت",
     colSession: "الجلسة", colModel: "النموذج", colMessages: "رسائل",
-    colInput: "دخل", colOutput: "خرج", colTotal: "الإجمالي", colStarted: "البدء", exportCsv: "تصدير CSV",
+    colInput: "دخل", colOutput: "خرج", colTotal: "الإجمالي", colStarted: "البدء", exportCsv: "تصدير CSV", limitTitle: "صفوف لكل جلسة",
   },
   insights: {
     title: "الرؤى",
