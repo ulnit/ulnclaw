@@ -2976,6 +2976,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
         renderUnreadBadge();
       }
     },
+    // P556: pin hooks over the P548 persisted pin set.
+    (sessionId) => pinnedSessions.has(sessionId),
+    (session) => togglePinSession(session),
   );
   state.sessionsBrowser.mount();
   state.modelsView = new ModelsViewWidget(modelsMain, () => state.client);

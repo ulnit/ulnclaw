@@ -104,6 +104,9 @@ export class SessionsViewWidget {
     // P496: unread tracking hooks (read-state lives in the shell).
     private isUnread: ((sessionId: string) => boolean) | null = null,
     private onRead: ((sessionId: string) => void) | null = null,
+    // P556: pin hooks — the pin set itself lives in the shell (P548).
+    private isPinned: ((sessionId: string) => boolean) | null = null,
+    private onTogglePin: ((session: SessionRow) => void) | null = null,
   ) {}
 
   mount(): void {
@@ -604,6 +607,14 @@ export class SessionsViewWidget {
         (a, b) => (b.last_activity_at || b.started_at) - (a.last_activity_at || a.started_at),
       );
     }
+    // P556: pinned sessions float to the top regardless of sort mode
+    // (stable sort keeps the intra-group ordering intact).
+    if (this.isPinned) {
+      const pinned = this.isPinned;
+      this.all.sort(
+        (a, b) => (pinned(b.id) ? 1 : 0) - (pinned(a.id) ? 1 : 0),
+      );
+    }
   }
 
   /** P450: count-header tooltip reflects the active sort mode. */
@@ -988,6 +999,7 @@ export class SessionsViewWidget {
         const active = session.id === this.selected ? " active" : "";
         const kb = index === this.kbIndex ? " kb-focus" : "";
         const unread = this.isUnread?.(session.id) ? " unread" : "";
+        const pinned = this.isPinned?.(session.id) === true;
         let header = "";
         if (showGroups) {
           const group = this.dateGroup(session.last_activity_at || session.started_at);
@@ -999,11 +1011,12 @@ export class SessionsViewWidget {
         return header + `
           <div class="sessions-view-row${active}${kb}${unread}" data-id="${escapeHtml(session.id)}">
             <span class="sessions-view-row-actions">
+              <button class="sessions-view-row-action" data-action="pin" title="${escapeHtml(pinned ? t.palette.unpinSession : t.palette.pinSession)}">${pinned ? "\u{1F4CC}" : "\u{1F4CD}"}</button>
               <button class="sessions-view-row-action" data-action="rename" title="${escapeHtml(t.sessionsView.renameTitle)}">✎</button>
               <button class="sessions-view-row-action" data-action="fork" title="${escapeHtml(t.sessionsView.forkTitle)}">⑂</button>
               <button class="sessions-view-row-action" data-action="delete" title="${escapeHtml(t.sessionsView.deleteTitle)}">🗑</button>
             </span>
-            <div class="sessions-view-row-title">${escapeHtml(title)}</div>
+            <div class="sessions-view-row-title">${pinned ? "\u{1F4CC} " : ""}${escapeHtml(title)}</div>
             ${session.last_message ? `<div class="sessions-view-row-snippet">${escapeHtml(session.last_message)}</div>` : ""}
             <div class="sessions-view-row-meta">
               ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip sessions-view-source" data-source="${escapeHtml(session.source)}" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
@@ -1039,6 +1052,15 @@ export class SessionsViewWidget {
         if (button.dataset.action === "rename") this.renameSelected(id).catch(() => undefined);
         else if (button.dataset.action === "fork") this.forkSelected(id).catch(() => undefined);
         else if (button.dataset.action === "delete") this.deleteSelected(id).catch(() => undefined);
+        else if (button.dataset.action === "pin") {
+          // P556: toggle the pin, then re-sort + re-render in place.
+          const session = this.all.find((candidate) => candidate.id === id);
+          if (session && this.onTogglePin) {
+            this.onTogglePin(session);
+            this.sortSessions();
+            this.renderList();
+          }
+        }
       });
     }
     // P438: end-reason chips drill the list down to that reason.
