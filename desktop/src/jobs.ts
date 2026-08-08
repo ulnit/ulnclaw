@@ -5,6 +5,8 @@
 import type { CronJob, GatewayClient } from "./gateway";
 import { fmt, t } from "./i18n";
 
+const SORT_KEY = "ulnclaw.jobs.sort";
+
 function fmtWhen(ts: number | null): string {
   if (!ts) return "—";
   const date = new Date(ts * 1000);
@@ -32,6 +34,10 @@ export class JobsWidget {
       <header id="jobs-header">
         <span id="jobs-counts" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <select id="jobs-sort" data-i18n-title="jobs.sortTitle">
+          <option value="default" data-i18n="jobs.sortDefault">Default order</option>
+          <option value="next_run" data-i18n="jobs.sortNextRun">Next run first</option>
+        </select>
         <button id="jobs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
         <button id="jobs-new" class="primary" data-i18n="jobs.newJob">New job</button>
       </header>
@@ -66,6 +72,12 @@ export class JobsWidget {
 
     (this.root.querySelector("#jobs-refresh") as HTMLButtonElement).onclick = () =>
       void this.refresh();
+    const sortSelect = this.root.querySelector("#jobs-sort") as HTMLSelectElement;
+    sortSelect.value = this.sortMode;
+    sortSelect.addEventListener("change", () => {
+      window.localStorage.setItem(SORT_KEY, sortSelect.value);
+      this.render();
+    });
     (this.root.querySelector("#jobs-new") as HTMLButtonElement).onclick = () => {
       const dialog = this.root.querySelector("#job-create") as HTMLDialogElement;
       this.populateDeliverTargets().catch(() => undefined);
@@ -155,6 +167,11 @@ export class JobsWidget {
     if (this.jobs.length) this.render();
   }
 
+  /** Persisted job ordering (P506): "default" (API order) or "next_run". */
+  private get sortMode(): string {
+    return window.localStorage.getItem(SORT_KEY) ?? "default";
+  }
+
   private render(): void {
     const counts = this.root.querySelector("#jobs-counts") as HTMLElement;
     const enabled = this.jobs.filter((job) => job.enabled).length;
@@ -167,7 +184,16 @@ export class JobsWidget {
       list.querySelector(".jobs-empty")!.textContent = t.jobs.empty;
       return;
     }
-    for (const job of this.jobs) {
+    const ordered = [...this.jobs];
+    if (this.sortMode === "next_run") {
+      ordered.sort((a, b) => {
+        const nextA = a.next_run ?? Number.MAX_SAFE_INTEGER;
+        const nextB = b.next_run ?? Number.MAX_SAFE_INTEGER;
+        if (nextA !== nextB) return nextA - nextB;
+        return a.name.localeCompare(b.name);
+      });
+    }
+    for (const job of ordered) {
       list.appendChild(this.renderRow(job));
     }
   }

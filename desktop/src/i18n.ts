@@ -125,6 +125,7 @@ export interface Translations {
     create: string; createFailed: string; counts: string; empty: string; meta: string;
     runsLeft: string; deleteConfirm: string;
     deliverBadge: string; deliverTitle: string; deliveryError: string; deliverPrompt: string;
+    sortTitle: string; sortDefault: string; sortNextRun: string;
   };
   usage: {
     windowNote: string; perSession: string; empty: string;
@@ -474,6 +475,7 @@ const en: Translations = {
     deliverBadge: "\u2192 {target}", deliverTitle: "Delivery target for job results",
     deliveryError: "last delivery failed (hover for details)",
     deliverPrompt: "Delivery target (local/origin/platform; empty clears):",
+    sortTitle: "Sort jobs", sortDefault: "Default order", sortNextRun: "Next run first",
   },
   usage: {
     windowNote: "Token accounting · last {count} sessions",
@@ -959,6 +961,7 @@ const zh: Translations = {
     deliverBadge: "\u2192 {target}", deliverTitle: "定时任务结果的投递目标",
     deliveryError: "上次投递失败（悬停查看详情）",
     deliverPrompt: "投递目标（local/origin/平台名；留空清除）：",
+    sortTitle: "任务排序", sortDefault: "默认顺序", sortNextRun: "下次运行优先",
   },
   usage: {
     windowNote: "令牌核算 · 最近 {count} 个会话",
@@ -1444,6 +1447,7 @@ const zhHant: Translations = {
     deliverBadge: "\u2192 {target}", deliverTitle: "定時任務結果的投遞目標",
     deliveryError: "上次投遞失敗（懸停檢視詳情）",
     deliverPrompt: "投遞目標（local/origin/平台名；留空清除）：",
+    sortTitle: "任務排序", sortDefault: "預設順序", sortNextRun: "下次執行優先",
   },
   usage: {
     windowNote: "令牌核算 · 最近 {count} 個工作階段",
@@ -1929,6 +1933,7 @@ const ja: Translations = {
     deliverBadge: "\u2192 {target}", deliverTitle: "ジョブ結果の配信先",
     deliveryError: "前回の配信に失敗（ホバーで詳細）",
     deliverPrompt: "配信先（local/origin/プラットフォーム名；空でクリア）:",
+    sortTitle: "ジョブの並び替え", sortDefault: "既定の順序", sortNextRun: "次回実行が早い順",
   },
   usage: {
     windowNote: "トークン集計 · 直近 {count} セッション",
@@ -2414,6 +2419,7 @@ const ar: Translations = {
     deliverBadge: "\u2192 {target}", deliverTitle: "وجهة تسليم نتائج المهمة",
     deliveryError: "فشل آخر تسليم (مرّر للتفاصيل)",
     deliverPrompt: "وجهة التسليم (local/origin/المنصة؛ فارغ للمسح):",
+    sortTitle: "ترتيب المهام", sortDefault: "الترتيب الافتراضي", sortNextRun: "الأقرب تشغيلًا أولًا",
   },
   usage: {
     windowNote: "إحصاء الرموز · آخر {count} جلسة",
