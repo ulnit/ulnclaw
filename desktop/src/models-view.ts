@@ -290,6 +290,13 @@ export class ModelsViewWidget {
             .filter(Boolean)
             .join(" ")
         : "";
+      let recommended = "";
+      try {
+        const rec = await client.modelRecommendedDefault(info.provider);
+        if (rec.model && rec.model !== info.model) recommended = rec.model;
+      } catch {
+        /* catalog offline — skip the recommendation row */
+      }
       box.innerHTML = `
         <section class="models-view-provider">
           <h3 class="config-section">${escapeHtml(v.gatewayTitle)}</h3>
@@ -298,7 +305,17 @@ export class ModelsViewWidget {
             <span class="monitoring-value">${escapeHtml(info.base_url)}</span>
             <span class="jobs-counts">${info.context.effective ? `${escapeHtml(v.gatewayContext)}: ${fmtNum(info.context.effective)}` : ""} ${icons}</span>
           </div>
+          ${recommended ? `
+          <div class="monitoring-row">
+            <span class="monitoring-label">${escapeHtml(v.recommendedDefault)}: <code>${escapeHtml(recommended)}</code></span>
+            <button id="models-view-rec-set" class="ghost">${escapeHtml(v.gatewaySet)}</button>
+          </div>` : ""}
         </section>`;
+      if (recommended) {
+        box.querySelector("#models-view-rec-set")?.addEventListener("click", () => {
+          void this.setModel(info.provider, recommended);
+        });
+      }
     } catch {
       box.innerHTML = "";
     }

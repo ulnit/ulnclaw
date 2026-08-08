@@ -123,6 +123,13 @@ const el = {
   fsStatus: document.getElementById("fs-status")!,
   fsClose: document.getElementById("fs-close") as HTMLButtonElement,
   fsMkdir: document.getElementById("fs-mkdir") as HTMLButtonElement,
+  fsGitRoot: document.getElementById("fs-git-root") as HTMLButtonElement,
+  fsPreviewDialog: document.getElementById("fs-preview-dialog") as HTMLDialogElement,
+  fsPreviewTitle: document.getElementById("fs-preview-title")!,
+  fsPreviewText: document.getElementById("fs-preview-text") as HTMLTextAreaElement,
+  fsPreviewStatus: document.getElementById("fs-preview-status")!,
+  fsPreviewSave: document.getElementById("fs-preview-save") as HTMLButtonElement,
+  fsPreviewClose: document.getElementById("fs-preview-close") as HTMLButtonElement,
 };
 
 function renderSessions(): void {
@@ -854,6 +861,12 @@ async function renderFsEntries(path: string): Promise<void> {
         if (state.client) window.open(state.client.fsDownloadUrl(entry.path), "_blank");
       };
       row.appendChild(download);
+      const preview = document.createElement("button");
+      preview.className = "ghost fs-entry-download";
+      preview.textContent = "\u{1F441}";
+      preview.title = t.chrome.fsPreviewOpen;
+      preview.onclick = () => void openFsPreview(entry.path);
+      row.appendChild(preview);
     }
     el.fsEntries.appendChild(row);
   }
@@ -873,6 +886,49 @@ async function pickFsFile(entry: FsEntry): Promise<void> {
   } catch (error) {
     el.fsStatus.textContent = fmt(t.chrome.fsFailed, { error });
     addMessage("system", fmt(t.session.uploadFailed, { error }));
+  }
+}
+
+// Text-file preview/edit over /api/fs/read-text + write-text (P347).
+let fsPreviewPath = "";
+
+async function openFsPreview(path: string): Promise<void> {
+  if (!state.client) return;
+  fsPreviewPath = path;
+  el.fsPreviewTitle.textContent = path.split("/").pop() || path;
+  el.fsPreviewTitle.title = path;
+  el.fsPreviewText.value = "";
+  el.fsPreviewText.readOnly = true;
+  el.fsPreviewSave.disabled = true;
+  el.fsPreviewStatus.textContent = t.chrome.fsPreviewLoading;
+  el.fsPreviewDialog.showModal();
+  try {
+    const preview = await state.client.fsReadText(path);
+    if (preview.binary) {
+      el.fsPreviewStatus.textContent = t.chrome.fsPreviewBinary;
+      return;
+    }
+    el.fsPreviewText.value = preview.text;
+    if (preview.truncated) {
+      el.fsPreviewStatus.textContent = t.chrome.fsPreviewTruncated;
+    } else {
+      el.fsPreviewStatus.textContent = "";
+      el.fsPreviewText.readOnly = false;
+      el.fsPreviewSave.disabled = false;
+    }
+  } catch (error) {
+    el.fsPreviewStatus.textContent = fmt(t.chrome.fsPreviewFailed, { error });
+  }
+}
+
+async function saveFsPreview(): Promise<void> {
+  if (!state.client || !fsPreviewPath || el.fsPreviewSave.disabled) return;
+  try {
+    await state.client.fsWriteText(fsPreviewPath, el.fsPreviewText.value);
+    el.fsPreviewStatus.textContent = t.chrome.fsPreviewSaved;
+    setTimeout(() => el.fsPreviewDialog.close(), 500);
+  } catch (error) {
+    el.fsPreviewStatus.textContent = fmt(t.chrome.fsPreviewSaveFailed, { error });
   }
 }
 
@@ -1231,6 +1287,21 @@ async function start(): Promise<void> {
         el.fsStatus.textContent = fmt(t.chrome.fsFailed, { error });
       });
   };
+  el.fsGitRoot.onclick = () => {
+    const current = el.fsPath.value.trim();
+    if (!current || !state.client) return;
+    state.client
+      .fsGitRoot(current)
+      .then(({ root }) => {
+        if (root) return renderFsEntries(root);
+        el.fsStatus.textContent = t.chrome.fsGitRootNone;
+      })
+      .catch((error) => {
+        el.fsStatus.textContent = fmt(t.chrome.fsFailed, { error });
+      });
+  };
+  el.fsPreviewSave.onclick = () => void saveFsPreview();
+  el.fsPreviewClose.onclick = () => el.fsPreviewDialog.close();
   el.input.addEventListener("keydown", (event) => {
     if (!el.slashPop.hidden) {
       const items = slashCandidates(el.input.value);

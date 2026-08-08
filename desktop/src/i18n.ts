@@ -62,6 +62,7 @@ export interface Translations {
     micTitle: string; micRecording: string; micFailed: string;
     attachTitle: string; fsTitle: string; fsUpTitle: string; fsEmpty: string; fsFailed: string;
     fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
+    fsGitRootTitle: string; fsGitRootNone: string; fsPreviewOpen: string; fsPreviewTitle: string; fsPreviewLoading: string; fsPreviewBinary: string; fsPreviewTruncated: string; fsPreviewFailed: string; fsPreviewSave: string; fsPreviewSaved: string; fsPreviewSaveFailed: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
     manageProcess: string; replayOnboarding: string; cancel: string; save: string;
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
@@ -157,7 +158,7 @@ export interface Translations {
     colModel: string; colFamily: string; colContext: string; colMaxOut: string;
     colCaps: string; colPrice: string;
     usageTitle: string; usageEmpty: string; usageSessions: string; usageMessages: string; usageTokens: string;
-    gatewayTitle: string; gatewayContext: string; gatewaySet: string; gatewaySetConfirm: string; gatewaySetDone: string; gatewaySetFailed: string;
+    gatewayTitle: string; gatewayContext: string; gatewaySet: string; gatewaySetConfirm: string; gatewaySetDone: string; gatewaySetFailed: string; recommendedDefault: string;
     endpointsTitle: string; endpointsEmpty: string; endpointsTest: string; endpointsActivate: string; endpointsActivated: string; endpointsDeleteConfirm: string; endpointsSaved: string; endpointsFailed: string;
   };
   pluginsView: {
@@ -241,7 +242,7 @@ export interface Translations {
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; test: string; stateConnected: string; stateNotConfigured: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
-  checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
+  checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
   opsPanel: { title: string; securityAudit: string; promptSize: string; dump: string; running: string; auditClean: string; failed: string; };
   updatePanel: { title: string; check: string; apply: string; checking: string; applying: string; upToDate: string; behind: string; behindShallow: string; checkFailed: string; applyConfirm: string; applyDone: string; applyFailed: string; };
   hatch: {
@@ -311,7 +312,7 @@ const en: Translations = {
     micTitle: "Voice input (record and transcribe)",
     micRecording: "Recording\u2026 click to stop",
     micFailed: "Voice input failed: {error}",
-    attachTitle: "Attach a file from the gateway filesystem", fsTitle: "Attach a file", fsUpTitle: "Up one directory", fsEmpty: "Empty directory", fsFailed: "File browser failed: {error}", fsDownloadTitle: "Download this file", fsMkdirTitle: "New folder", fsMkdirPrompt: "New folder name:",
+    attachTitle: "Attach a file from the gateway filesystem", fsTitle: "Attach a file", fsUpTitle: "Up one directory", fsEmpty: "Empty directory", fsFailed: "File browser failed: {error}", fsDownloadTitle: "Download this file", fsMkdirTitle: "New folder", fsMkdirPrompt: "New folder name:", fsGitRootTitle: "Jump to the nearest git repository root", fsGitRootNone: "No git repository found above this path.", fsPreviewOpen: "Preview or edit this text file", fsPreviewTitle: "Preview", fsPreviewLoading: "Loading preview…", fsPreviewBinary: "Binary file — no text preview.", fsPreviewTruncated: "Preview truncated — file too large to edit here.", fsPreviewFailed: "Preview failed: {error}", fsPreviewSave: "Save", fsPreviewSaved: "Saved.", fsPreviewSaveFailed: "Save failed: {error}",
     settingsTitle: "Gateway settings", gatewayUrl: "Gateway URL",
     apiKey: "API key (optional, [gateway] key)", bearerToken: "bearer token",
     manageProcess: "Manage the gateway process (start/stop with the app)",
@@ -466,7 +467,7 @@ const en: Translations = {
     docs: "Docs", noModels: "No models listed.",
     colModel: "Model", colFamily: "Family", colContext: "Context", colMaxOut: "Max out", colCaps: "Caps", colPrice: "$/Mtok",
     usageTitle: "Model usage (30 days)", usageEmpty: "No model usage recorded yet.",
-    gatewayTitle: "Gateway model", gatewayContext: "context", gatewaySet: "Set as gateway model", gatewaySetConfirm: "Switch the gateway model to {provider}/{model}? Applies to new sessions once the gateway restarts.", gatewaySetDone: "Gateway model updated — restart the gateway to apply.", gatewaySetFailed: "Model switch failed: {error}", endpointsTitle: "Custom endpoints", endpointsEmpty: "No custom endpoints configured.", endpointsTest: "Test", endpointsActivate: "Activate", endpointsActivated: "Custom endpoint activated — restart the gateway to apply.", endpointsDeleteConfirm: "Delete the {id} endpoint and its stored key?", endpointsSaved: "Endpoint saved.", endpointsFailed: "Endpoint operation failed: {error}",
+    gatewayTitle: "Gateway model", gatewayContext: "context", gatewaySet: "Set as gateway model", gatewaySetConfirm: "Switch the gateway model to {provider}/{model}? Applies to new sessions once the gateway restarts.", gatewaySetDone: "Gateway model updated — restart the gateway to apply.", gatewaySetFailed: "Model switch failed: {error}", recommendedDefault: "Recommended default", endpointsTitle: "Custom endpoints", endpointsEmpty: "No custom endpoints configured.", endpointsTest: "Test", endpointsActivate: "Activate", endpointsActivated: "Custom endpoint activated — restart the gateway to apply.", endpointsDeleteConfirm: "Delete the {id} endpoint and its stored key?", endpointsSaved: "Endpoint saved.", endpointsFailed: "Endpoint operation failed: {error}",
     usageSessions: "sessions", usageMessages: "msgs", usageTokens: "tokens",
   },
   pluginsView: {
@@ -602,6 +603,7 @@ const en: Translations = {
     prune: "Prune\u2026", prunePrompt: "Retention window in days:",
     pruned: "Pruned: {orphan} orphan, {stale} stale; freed {bytes}.",
     pruneFailed: "Prune failed: {error}",
+    restore: "Restore…", restoreTitle: "Restore a checkpoint", restoreEmpty: "No checkpoints recorded for this project.", restoreConfirm: "Restore {dir} to checkpoint {hash}? Uncommitted changes may be overwritten.", restoreDone: "Checkpoint restored.", restoreFailed: "Restore failed: {error}", close: "Close",
   },
   opsPanel: {
     title: "Ops actions", securityAudit: "Security audit", promptSize: "Prompt size",
@@ -736,7 +738,7 @@ const zh: Translations = {
     micTitle: "语音输入（录音并转写）",
     micRecording: "录音中…点击停止",
     micFailed: "语音输入失败：{error}",
-    attachTitle: "从网关文件系统附加文件", fsTitle: "附加文件", fsUpTitle: "上一级目录", fsEmpty: "空目录", fsFailed: "文件浏览失败：{error}", fsDownloadTitle: "下载此文件", fsMkdirTitle: "新建文件夹", fsMkdirPrompt: "新文件夹名称：",
+    attachTitle: "从网关文件系统附加文件", fsTitle: "附加文件", fsUpTitle: "上一级目录", fsEmpty: "空目录", fsFailed: "文件浏览失败：{error}", fsDownloadTitle: "下载此文件", fsMkdirTitle: "新建文件夹", fsMkdirPrompt: "新文件夹名称：", fsGitRootTitle: "跳转到最近的 Git 仓库根目录", fsGitRootNone: "该路径上方未找到 Git 仓库。", fsPreviewOpen: "预览/编辑此文本文件", fsPreviewTitle: "预览", fsPreviewLoading: "加载预览中…", fsPreviewBinary: "二进制文件——无文本预览。", fsPreviewTruncated: "预览已截断——文件过大，无法在此编辑。", fsPreviewFailed: "预览失败：{error}", fsPreviewSave: "保存", fsPreviewSaved: "已保存。", fsPreviewSaveFailed: "保存失败：{error}",
     settingsTitle: "网关设置", gatewayUrl: "网关 URL",
     apiKey: "API 密钥（可选，[gateway] key）", bearerToken: "bearer 令牌",
     manageProcess: "管理网关进程（随应用启动/停止）",
@@ -891,7 +893,7 @@ const zh: Translations = {
     docs: "文档", noModels: "未列出模型。",
     colModel: "模型", colFamily: "家族", colContext: "上下文", colMaxOut: "最大输出", colCaps: "能力", colPrice: "$/Mtok",
     usageTitle: "模型用量（30 天）", usageEmpty: "尚无模型用量记录。",
-    gatewayTitle: "网关模型", gatewayContext: "上下文", gatewaySet: "设为网关模型", gatewaySetConfirm: "将网关模型切换为 {provider}/{model}？网关重启后对新会话生效。", gatewaySetDone: "网关模型已更新——重启网关后生效。", gatewaySetFailed: "模型切换失败：{error}", endpointsTitle: "自定义端点", endpointsEmpty: "尚未配置自定义端点。", endpointsTest: "测试", endpointsActivate: "启用", endpointsActivated: "自定义端点已启用——重启网关后生效。", endpointsDeleteConfirm: "删除 {id} 端点及其存储的密钥？", endpointsSaved: "端点已保存。", endpointsFailed: "端点操作失败：{error}",
+    gatewayTitle: "网关模型", gatewayContext: "上下文", gatewaySet: "设为网关模型", gatewaySetConfirm: "将网关模型切换为 {provider}/{model}？网关重启后对新会话生效。", gatewaySetDone: "网关模型已更新——重启网关后生效。", gatewaySetFailed: "模型切换失败：{error}", recommendedDefault: "推荐默认", endpointsTitle: "自定义端点", endpointsEmpty: "尚未配置自定义端点。", endpointsTest: "测试", endpointsActivate: "启用", endpointsActivated: "自定义端点已启用——重启网关后生效。", endpointsDeleteConfirm: "删除 {id} 端点及其存储的密钥？", endpointsSaved: "端点已保存。", endpointsFailed: "端点操作失败：{error}",
     usageSessions: "会话", usageMessages: "消息", usageTokens: "令牌",
   },
   pluginsView: {
@@ -1027,6 +1029,7 @@ const zh: Translations = {
     prune: "清理\u2026", prunePrompt: "保留窗口（天）：",
     pruned: "已清理：{orphan} 个孤儿、{stale} 个过期；释放 {bytes}。",
     pruneFailed: "清理失败：{error}",
+    restore: "恢复…", restoreTitle: "恢复检查点", restoreEmpty: "该项目尚无检查点记录。", restoreConfirm: "将 {dir} 恢复到检查点 {hash}？未提交的更改可能被覆盖。", restoreDone: "检查点已恢复。", restoreFailed: "恢复失败：{error}", close: "关闭",
   },
   opsPanel: {
     title: "运维操作", securityAudit: "安全审计", promptSize: "提示词体积",
@@ -1161,7 +1164,7 @@ const zhHant: Translations = {
     micTitle: "語音輸入（錄音並轉寫）",
     micRecording: "錄音中…點選停止",
     micFailed: "語音輸入失敗：{error}",
-    attachTitle: "從閘道檔案系統附加檔案", fsTitle: "附加檔案", fsUpTitle: "上一層目錄", fsEmpty: "空目錄", fsFailed: "檔案瀏覽失敗：{error}", fsDownloadTitle: "下載此檔案", fsMkdirTitle: "新增資料夾", fsMkdirPrompt: "新資料夾名稱：",
+    attachTitle: "從閘道檔案系統附加檔案", fsTitle: "附加檔案", fsUpTitle: "上一層目錄", fsEmpty: "空目錄", fsFailed: "檔案瀏覽失敗：{error}", fsDownloadTitle: "下載此檔案", fsMkdirTitle: "新增資料夾", fsMkdirPrompt: "新資料夾名稱：", fsGitRootTitle: "跳轉到最近的 Git 倉庫根目錄", fsGitRootNone: "該路徑上方未找到 Git 倉庫。", fsPreviewOpen: "預覽/編輯此文字檔案", fsPreviewTitle: "預覽", fsPreviewLoading: "載入預覽中…", fsPreviewBinary: "二進位檔案——無文字預覽。", fsPreviewTruncated: "預覽已截斷——檔案過大，無法在此編輯。", fsPreviewFailed: "預覽失敗：{error}", fsPreviewSave: "儲存", fsPreviewSaved: "已儲存。", fsPreviewSaveFailed: "儲存失敗：{error}",
     settingsTitle: "閘道設定", gatewayUrl: "閘道 URL",
     apiKey: "API 金鑰（選填，[gateway] key）", bearerToken: "bearer 權杖",
     manageProcess: "管理閘道程序（隨應用程式啟動/停止）",
@@ -1316,7 +1319,7 @@ const zhHant: Translations = {
     docs: "文件", noModels: "未列出模型。",
     colModel: "模型", colFamily: "家族", colContext: "上下文", colMaxOut: "最大輸出", colCaps: "能力", colPrice: "$/Mtok",
     usageTitle: "模型用量（30 天）", usageEmpty: "尚無模型用量紀錄。",
-    gatewayTitle: "閘道模型", gatewayContext: "內文窗口", gatewaySet: "設為閘道模型", gatewaySetConfirm: "將閘道模型切換為 {provider}/{model}？閘道重啟後對新工作階段生效。", gatewaySetDone: "閘道模型已更新——重啟閘道後生效。", gatewaySetFailed: "模型切換失敗：{error}", endpointsTitle: "自訂端點", endpointsEmpty: "尚未配置自訂端點。", endpointsTest: "測試", endpointsActivate: "啟用", endpointsActivated: "自訂端點已啟用——重啟閘道後生效。", endpointsDeleteConfirm: "刪除 {id} 端點及其儲存的密鑰？", endpointsSaved: "端點已儲存。", endpointsFailed: "端點操作失敗：{error}",
+    gatewayTitle: "閘道模型", gatewayContext: "內文窗口", gatewaySet: "設為閘道模型", gatewaySetConfirm: "將閘道模型切換為 {provider}/{model}？閘道重啟後對新工作階段生效。", gatewaySetDone: "閘道模型已更新——重啟閘道後生效。", gatewaySetFailed: "模型切換失敗：{error}", recommendedDefault: "推薦預設", endpointsTitle: "自訂端點", endpointsEmpty: "尚未配置自訂端點。", endpointsTest: "測試", endpointsActivate: "啟用", endpointsActivated: "自訂端點已啟用——重啟閘道後生效。", endpointsDeleteConfirm: "刪除 {id} 端點及其儲存的密鑰？", endpointsSaved: "端點已儲存。", endpointsFailed: "端點操作失敗：{error}",
     usageSessions: "工作階段", usageMessages: "訊息", usageTokens: "記號",
   },
   pluginsView: {
@@ -1452,6 +1455,7 @@ const zhHant: Translations = {
     prune: "清理\u2026", prunePrompt: "保留窗口（天）：",
     pruned: "已清理：{orphan} 個孤兒、{stale} 個過期；釋放 {bytes}。",
     pruneFailed: "清理失敗：{error}",
+    restore: "還原…", restoreTitle: "還原檢查點", restoreEmpty: "該專案尚無檢查點記錄。", restoreConfirm: "將 {dir} 還原到檢查點 {hash}？未提交的變更可能被覆寫。", restoreDone: "檢查點已還原。", restoreFailed: "還原失敗：{error}", close: "關閉",
   },
   opsPanel: {
     title: "維運操作", securityAudit: "安全稽核", promptSize: "提示詞體積",
@@ -1586,7 +1590,7 @@ const ja: Translations = {
     micTitle: "音声入力（録音して文字起こし）",
     micRecording: "録音中…クリックで停止",
     micFailed: "音声入力に失敗しました: {error}",
-    attachTitle: "ゲートウェイのファイルシステムからファイルを添付", fsTitle: "ファイルを添付", fsUpTitle: "一つ上のディレクトリへ", fsEmpty: "空のディレクトリ", fsFailed: "ファイルブラウザーに失敗しました: {error}", fsDownloadTitle: "このファイルをダウンロード", fsMkdirTitle: "新しいフォルダー", fsMkdirPrompt: "新しいフォルダー名:",
+    attachTitle: "ゲートウェイのファイルシステムからファイルを添付", fsTitle: "ファイルを添付", fsUpTitle: "一つ上のディレクトリへ", fsEmpty: "空のディレクトリ", fsFailed: "ファイルブラウザーに失敗しました: {error}", fsDownloadTitle: "このファイルをダウンロード", fsMkdirTitle: "新しいフォルダー", fsMkdirPrompt: "新しいフォルダー名:", fsGitRootTitle: "最も近い Git リポジトリのルートへ移動", fsGitRootNone: "このパスの上位に Git リポジトリが見つかりません。", fsPreviewOpen: "このテキストファイルをプレビュー/編集", fsPreviewTitle: "プレビュー", fsPreviewLoading: "プレビューを読み込み中…", fsPreviewBinary: "バイナリファイル — テキストプレビューなし。", fsPreviewTruncated: "プレビューは切り詰められました — ファイルが大きすぎてここでは編集できません。", fsPreviewFailed: "プレビューに失敗しました: {error}", fsPreviewSave: "保存", fsPreviewSaved: "保存しました。", fsPreviewSaveFailed: "保存に失敗しました: {error}",
     settingsTitle: "ゲートウェイ設定", gatewayUrl: "ゲートウェイ URL",
     apiKey: "API キー（任意、[gateway] key）", bearerToken: "bearer トークン",
     manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）",
@@ -1741,7 +1745,7 @@ const ja: Translations = {
     docs: "ドキュメント", noModels: "モデルがリストされていません。",
     colModel: "モデル", colFamily: "ファミリー", colContext: "コンテキスト", colMaxOut: "最大出力", colCaps: "機能", colPrice: "$/Mtok",
     usageTitle: "モデル使用量（30 日）", usageEmpty: "モデル使用量はまだ記録されていません。",
-    gatewayTitle: "ゲートウェイモデル", gatewayContext: "コンテキスト", gatewaySet: "ゲートウェイモデルに設定", gatewaySetConfirm: "ゲートウェイモデルを {provider}/{model} に切り替えますか？ゲートウェイ再起動後、新しいセッションに適用されます。", gatewaySetDone: "ゲートウェイモデルを更新しました——再起動後に適用されます。", gatewaySetFailed: "モデル切り替えに失敗しました: {error}", endpointsTitle: "カスタムエンドポイント", endpointsEmpty: "カスタムエンドポイントは未設定です。", endpointsTest: "テスト", endpointsActivate: "有効化", endpointsActivated: "カスタムエンドポイントを有効化しました——再起動後に適用されます。", endpointsDeleteConfirm: "エンドポイント {id} とその保存キーを削除しますか？", endpointsSaved: "エンドポイントを保存しました。", endpointsFailed: "エンドポイント操作に失敗しました: {error}",
+    gatewayTitle: "ゲートウェイモデル", gatewayContext: "コンテキスト", gatewaySet: "ゲートウェイモデルに設定", gatewaySetConfirm: "ゲートウェイモデルを {provider}/{model} に切り替えますか？ゲートウェイ再起動後、新しいセッションに適用されます。", gatewaySetDone: "ゲートウェイモデルを更新しました——再起動後に適用されます。", gatewaySetFailed: "モデル切り替えに失敗しました: {error}", recommendedDefault: "推奨デフォルト", endpointsTitle: "カスタムエンドポイント", endpointsEmpty: "カスタムエンドポイントは未設定です。", endpointsTest: "テスト", endpointsActivate: "有効化", endpointsActivated: "カスタムエンドポイントを有効化しました——再起動後に適用されます。", endpointsDeleteConfirm: "エンドポイント {id} とその保存キーを削除しますか？", endpointsSaved: "エンドポイントを保存しました。", endpointsFailed: "エンドポイント操作に失敗しました: {error}",
     usageSessions: "セッション", usageMessages: "メッセージ", usageTokens: "トークン",
   },
   pluginsView: {
@@ -1877,6 +1881,7 @@ const ja: Translations = {
     prune: "枝切り\u2026", prunePrompt: "保持期間（日数）:",
     pruned: "枝切り完了: 孤立 {orphan}、期限切れ {stale}; {bytes} 解放。",
     pruneFailed: "枝切りに失敗しました: {error}",
+    restore: "復元…", restoreTitle: "チェックポイントを復元", restoreEmpty: "このプロジェクトにはチェックポイントが記録されていません。", restoreConfirm: "{dir} をチェックポイント {hash} に復元しますか？未コミットの変更が上書きされる可能性があります。", restoreDone: "チェックポイントを復元しました。", restoreFailed: "復元に失敗しました: {error}", close: "閉じる",
   },
   opsPanel: {
     title: "運用アクション", securityAudit: "セキュリティ監査", promptSize: "プロンプトサイズ",
@@ -2011,7 +2016,7 @@ const ar: Translations = {
     micTitle: "إدخال صوتي (تسجيل وتحويل إلى نص)",
     micRecording: "جارٍ التسجيل… انقر للإيقاف",
     micFailed: "فشل الإدخال الصوتي: {error}",
-    attachTitle: "إرفاق ملف من نظام ملفات البوابة", fsTitle: "إرفاق ملف", fsUpTitle: "مجلد واحد للأعلى", fsEmpty: "مجلد فارغ", fsFailed: "فشل متصفح الملفات: {error}", fsDownloadTitle: "تنزيل هذا الملف", fsMkdirTitle: "مجلد جديد", fsMkdirPrompt: "اسم المجلد الجديد:",
+    attachTitle: "إرفاق ملف من نظام ملفات البوابة", fsTitle: "إرفاق ملف", fsUpTitle: "مجلد واحد للأعلى", fsEmpty: "مجلد فارغ", fsFailed: "فشل متصفح الملفات: {error}", fsDownloadTitle: "تنزيل هذا الملف", fsMkdirTitle: "مجلد جديد", fsMkdirPrompt: "اسم المجلد الجديد:", fsGitRootTitle: "الانتقال إلى أقرب جذر مستودع Git", fsGitRootNone: "لم يُعثر على مستودع Git فوق هذا المسار.", fsPreviewOpen: "معاينة/تحرير هذا الملف النصي", fsPreviewTitle: "معاينة", fsPreviewLoading: "جارٍ تحميل المعاينة…", fsPreviewBinary: "ملف ثنائي — لا معاينة نصية.", fsPreviewTruncated: "المعاينة مبتورة — الملف أكبر من أن يُحرَّر هنا.", fsPreviewFailed: "فشلت المعاينة: {error}", fsPreviewSave: "حفظ", fsPreviewSaved: "تم الحفظ.", fsPreviewSaveFailed: "فشل الحفظ: {error}",
     settingsTitle: "إعدادات البوابة", gatewayUrl: "عنوان البوابة",
     apiKey: "مفتاح API (اختياري، [gateway] key)", bearerToken: "رمز bearer",
     manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)",
@@ -2166,7 +2171,7 @@ const ar: Translations = {
     docs: "الوثائق", noModels: "لا توجد نماذج مدرجة.",
     colModel: "النموذج", colFamily: "العائلة", colContext: "السياق", colMaxOut: "أقصى إخراج", colCaps: "القدرات", colPrice: "$/Mtok",
     usageTitle: "استخدام النماذج (30 يومًا)", usageEmpty: "لا يوجد استخدام للنماذج بعد.",
-    gatewayTitle: "نموذج البوابة", gatewayContext: "السياق", gatewaySet: "تعيين كنموذج للبوابة", gatewaySetConfirm: "تبديل نموذج البوابة إلى {provider}/{model}؟ يُطبق على الجلسات الجديدة بعد إعادة تشغيل البوابة.", gatewaySetDone: "تم تحديث نموذج البوابة — أعد تشغيل البوابة للتطبيق.", gatewaySetFailed: "فشل تبديل النموذج: {error}", endpointsTitle: "نقاط نهاية مخصصة", endpointsEmpty: "لا توجد نقاط نهاية مخصصة.", endpointsTest: "اختبار", endpointsActivate: "تفعيل", endpointsActivated: "تم تفعيل نقطة النهاية — أعد تشغيل البوابة للتطبيق.", endpointsDeleteConfirm: "حذف نقطة النهاية {id} ومفتاحها المخزن؟", endpointsSaved: "تم حفظ نقطة النهاية.", endpointsFailed: "فشلت عملية نقطة النهاية: {error}",
+    gatewayTitle: "نموذج البوابة", gatewayContext: "السياق", gatewaySet: "تعيين كنموذج للبوابة", gatewaySetConfirm: "تبديل نموذج البوابة إلى {provider}/{model}؟ يُطبق على الجلسات الجديدة بعد إعادة تشغيل البوابة.", gatewaySetDone: "تم تحديث نموذج البوابة — أعد تشغيل البوابة للتطبيق.", gatewaySetFailed: "فشل تبديل النموذج: {error}", recommendedDefault: "الافتراضي الموصى به", endpointsTitle: "نقاط نهاية مخصصة", endpointsEmpty: "لا توجد نقاط نهاية مخصصة.", endpointsTest: "اختبار", endpointsActivate: "تفعيل", endpointsActivated: "تم تفعيل نقطة النهاية — أعد تشغيل البوابة للتطبيق.", endpointsDeleteConfirm: "حذف نقطة النهاية {id} ومفتاحها المخزن؟", endpointsSaved: "تم حفظ نقطة النهاية.", endpointsFailed: "فشلت عملية نقطة النهاية: {error}",
     usageSessions: "جلسات", usageMessages: "رسائل", usageTokens: "رموز",
   },
   pluginsView: {
@@ -2302,6 +2307,7 @@ const ar: Translations = {
     prune: "تشذيب\u2026", prunePrompt: "نافذة الاحتفاظ بالأيام:",
     pruned: "تم التشذيب: {orphan} يتيمة، {stale} قديمة؛ حُرر {bytes}.",
     pruneFailed: "فشل التشذيب: {error}",
+    restore: "استعادة…", restoreTitle: "استعادة نقطة تحقق", restoreEmpty: "لا توجد نقاط تحقق مسجلة لهذا المشروع.", restoreConfirm: "استعادة {dir} إلى نقطة التحقق {hash}؟ قد تُستبدل التغييرات غير الملتزمة.", restoreDone: "تمت استعادة نقطة التحقق.", restoreFailed: "فشلت الاستعادة: {error}", close: "إغلاق",
   },
   opsPanel: {
     title: "إجراءات التشغيل", securityAudit: "تدقيق الأمان", promptSize: "حجم الموجه",

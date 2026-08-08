@@ -602,6 +602,28 @@ export interface FsEntry {
   isDirectory: boolean;
 }
 
+/** GET /api/fs/read-text payload (P347). */
+export interface FsReadText {
+  binary: boolean;
+  byteSize: number;
+  language: string;
+  mimeType: string;
+  path: string;
+  text: string;
+  truncated: boolean;
+}
+
+/** GET /api/checkpoints list item (P347). */
+export interface CheckpointEntry {
+  hash: string;
+  short_hash: string;
+  timestamp: string;
+  reason: string;
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+}
+
 /** OAuth device-flow posture from GET /api/oauth/status (P334). */
 export interface OAuthStatus {
   logged_in: boolean;
@@ -1722,6 +1744,39 @@ export class GatewayClient {
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
   }
 
+  /** GET /api/fs/git-root — nearest enclosing git checkout (P347). */
+  async fsGitRoot(path: string): Promise<{ root: string | null }> {
+    const params = new URLSearchParams({ path });
+    const response = await fetch(this.endpoint(`/api/fs/git-root?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
+    return value as { root: string | null };
+  }
+
+  /** GET /api/fs/read-text — capped UTF-8 preview with language hint (P347). */
+  async fsReadText(path: string): Promise<FsReadText> {
+    const params = new URLSearchParams({ path });
+    const response = await fetch(this.endpoint(`/api/fs/read-text?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
+    return value as FsReadText;
+  }
+
+  /** POST /api/fs/write-text — atomic text-file overwrite/create (P347). */
+  async fsWriteText(path: string, content: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/fs/write-text"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ path, content }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
+  }
+
   /** POST /api/audio/speak — synthesize speech over the configured
    * [tts] provider, returns a playable base64 data URL (P344). */
   async audioSpeak(text: string): Promise<string> {
@@ -1866,6 +1921,18 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
+  }
+
+  /** GET /api/model/recommended-default — sensible default model for a
+   * provider (first curated catalog entry; P347). */
+  async modelRecommendedDefault(provider?: string): Promise<{ provider: string; model: string }> {
+    const params = provider ? `?${new URLSearchParams({ provider }).toString()}` : "";
+    const response = await fetch(this.endpoint(`/api/model/recommended-default${params}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
+    return value as { provider: string; model: string };
   }
 
   /** GET /api/dashboard/themes — theme catalog + active theme (P331). */
@@ -2073,6 +2140,29 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `checkpoint prune HTTP ${response.status}`);
     return value.stats as CheckpointPruneStats;
+  }
+
+  /** GET /api/checkpoints?dir= — checkpoint list for a workdir (P347). */
+  async checkpointsList(dir: string): Promise<CheckpointEntry[]> {
+    const params = new URLSearchParams({ dir });
+    const response = await fetch(this.endpoint(`/api/checkpoints?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `checkpoints HTTP ${response.status}`);
+    return (value.checkpoints || []) as CheckpointEntry[];
+  }
+
+  /** POST /api/checkpoints/restore — restore a directory (or single
+   * file) to a checkpoint hash (P347). */
+  async checkpointsRestore(dir: string, hash: string, file?: string): Promise<void> {
+    const response = await fetch(this.endpoint("/api/checkpoints/restore"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify(file ? { dir, hash, file } : { dir, hash }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `checkpoint restore HTTP ${response.status}`);
   }
 
   /** GET /api/curator — curation overview (status/archived/usage; P316). */

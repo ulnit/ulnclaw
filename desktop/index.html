@@ -98,11 +98,21 @@
           <input id="fs-path" type="text" />
           <button id="fs-go" class="ghost">Go</button>
           <button id="fs-mkdir" class="ghost" title="New folder" data-i18n-title="chrome.fsMkdirTitle">📁+</button>
+          <button id="fs-git-root" class="ghost" title="Repo root" data-i18n-title="chrome.fsGitRootTitle">⎇</button>
         </div>
         <div id="fs-entries" class="fs-entries"></div>
         <p id="fs-status" class="config-note"></p>
         <menu>
           <button id="fs-close" value="cancel" data-i18n="chrome.cancel">Cancel</button>
+        </menu>
+      </dialog>
+      <dialog id="fs-preview-dialog" class="fs-dialog">
+        <h2 id="fs-preview-title" data-i18n="chrome.fsPreviewTitle">Preview</h2>
+        <textarea id="fs-preview-text" class="learning-node-content" spellcheck="false"></textarea>
+        <p id="fs-preview-status" class="config-note"></p>
+        <menu>
+          <button id="fs-preview-save" data-i18n="chrome.fsPreviewSave">Save</button>
+          <button id="fs-preview-close" value="cancel" data-i18n="chrome.cancel">Cancel</button>
         </menu>
       </dialog>
     </div>

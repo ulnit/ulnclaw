@@ -3,7 +3,7 @@
 // grouped by section, with an issues panel up top. Online provider
 // probes are opt-in since they are slow.
 
-import type { GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
+import type { CheckpointEntry, GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
 import { t } from "./i18n";
 
 const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
@@ -579,6 +579,13 @@ export class DoctorWidget {
         value.className = "monitoring-value";
         value.textContent = `${project.commits} commits${project.exists ? "" : " \u00b7 missing dir"}`;
         row.append(label, value);
+        if (project.exists) {
+          const restore = document.createElement("button");
+          restore.className = "ghost";
+          restore.textContent = t.checkpointsPanel.restore;
+          restore.onclick = () => void this.restoreProject(project.workdir);
+          row.appendChild(restore);
+        }
         rows.appendChild(row);
       }
 
@@ -625,6 +632,79 @@ export class DoctorWidget {
         );
       }
     }
+  }
+
+  /** P347: list a project's checkpoints and restore a picked hash over
+   * POST /api/checkpoints/restore. */
+  private async restoreProject(workdir: string): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const note = this.root.querySelector("#checkpoints-status-note");
+    let checkpoints: CheckpointEntry[];
+    try {
+      checkpoints = await client.checkpointsList(workdir);
+    } catch (error) {
+      if (note) {
+        note.textContent = t.checkpointsPanel.restoreFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      return;
+    }
+    if (!checkpoints.length) {
+      if (note) note.textContent = t.checkpointsPanel.restoreEmpty;
+      return;
+    }
+    const dialog = document.createElement("dialog");
+    dialog.className = "learning-node-dialog";
+    const title = document.createElement("h3");
+    title.textContent = t.checkpointsPanel.restoreTitle;
+    const sub = document.createElement("div");
+    sub.className = "config-note";
+    sub.textContent = workdir;
+    const select = document.createElement("select");
+    for (const checkpoint of checkpoints) {
+      const option = document.createElement("option");
+      option.value = checkpoint.hash;
+      option.textContent = `${checkpoint.short_hash} \u00b7 ${checkpoint.timestamp} \u00b7 ${checkpoint.reason} (${checkpoint.files_changed} files)`;
+      select.appendChild(option);
+    }
+    const status = document.createElement("div");
+    status.className = "learning-node-status";
+    const actions = document.createElement("div");
+    actions.className = "learning-node-actions";
+    const restoreBtn = document.createElement("button");
+    restoreBtn.textContent = t.checkpointsPanel.restore;
+    restoreBtn.onclick = async () => {
+      const hash = select.value;
+      const confirmText = t.checkpointsPanel.restoreConfirm
+        .replace("{hash}", hash.slice(0, 12))
+        .replace("{dir}", workdir);
+      if (!window.confirm(confirmText)) return;
+      try {
+        await client.checkpointsRestore(workdir, hash);
+        status.textContent = t.checkpointsPanel.restoreDone;
+        setTimeout(() => {
+          dialog.close();
+          void this.loadCheckpoints();
+        }, 500);
+      } catch (error) {
+        status.textContent = t.checkpointsPanel.restoreFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    };
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "ghost";
+    closeBtn.textContent = t.checkpointsPanel.close;
+    closeBtn.onclick = () => dialog.close();
+    actions.append(restoreBtn, closeBtn);
+    dialog.append(title, sub, select, status, actions);
+    this.root.appendChild(dialog);
+    dialog.showModal();
+    dialog.addEventListener("close", () => dialog.remove());
   }
 
   private backupStatus(message: string): void {
