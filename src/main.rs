@@ -8272,7 +8272,7 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
             // is given explicitly.
             let excludes: Vec<&str> = if source.is_some() { vec![] } else { vec!["tool"] };
             let rows = store
-                .list_sessions_for_browse(limit.max(1), source.as_deref(), &excludes)
+                .list_sessions_for_browse(limit.max(1), source.as_deref(), &excludes, false)
                 .map_err(|e| e.to_string())?;
             if rows.is_empty() {
                 println!("No sessions found.");
@@ -8294,7 +8294,7 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                 let reload_limit = limit.max(1);
                 let reload_excludes: Vec<String> =
                     excludes.iter().map(|s| s.to_string()).collect();
-                let reload = move || {
+                let reload = move |include_archived: bool| {
                     let fresh_store =
                         SqliteSessionStore::open(reload_home.join("state.db"))
                             .map_err(|e| e.to_string())?;
@@ -8305,6 +8305,7 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                             reload_limit,
                             reload_source.as_deref(),
                             &exclude_refs,
+                            include_archived,
                         )
                         .map_err(|e| e.to_string())?;
                     let fresh_projects = resolve_browse_projects(&fresh);
@@ -8619,6 +8620,12 @@ fn format_browse_row(
         Some(slug) => format!("\u{2302}{slug} {title}"),
         None => title,
     };
+    // P513: archived rows carry a ␡ marker when surfaced (F4 toggle).
+    let label = if row.archived {
+        format!("\u{2421} {label}")
+    } else {
+        label
+    };
     let name: String = label.chars().take(name_width).collect();
     format!(
         "{:<width$}  {:<10}  {:<6}  {}",
@@ -8682,7 +8689,7 @@ fn browse_row_matches(
 fn run_session_browse_tui(
     mut rows: Vec<ulnclaw::session::sqlite::BrowseRow>,
     mut projects: std::collections::HashMap<String, String>,
-    reload: Option<&dyn Fn() -> Result<(Vec<ulnclaw::session::sqlite::BrowseRow>, std::collections::HashMap<String, String>), String>>,
+    reload: Option<&dyn Fn(bool) -> Result<(Vec<ulnclaw::session::sqlite::BrowseRow>, std::collections::HashMap<String, String>), String>>,
     archive: Option<&dyn Fn(&str) -> Result<(), String>>,
     preview: Option<&dyn Fn(&str) -> Result<Vec<(String, Option<String>)>, String>>,
     transcript_search: Option<&dyn Fn(&str) -> Result<Vec<(String, String)>, String>>,
@@ -8752,6 +8759,9 @@ fn run_session_browse_tui(
     let mut rename_mode = false;
     let mut rename_buffer = String::new();
     let mut confirm_fork = false;
+    // P513: F4 toggles archived sessions into the list (reloads via the
+    // include_archived flag on the reload closure).
+    let mut show_archived = false;
 
     loop {
         // Tab cycles "all sources" plus each distinct source present in
@@ -8861,6 +8871,15 @@ fn run_session_browse_tui(
                 out,
                 SetForegroundColor(Color::Green),
                 Print("  [sort: A-Z]"),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if show_archived {
+            queue!(
+                out,
+                SetForegroundColor(Color::Green),
+                Print("  [+archived]"),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -9186,7 +9205,7 @@ fn run_session_browse_tui(
                                     Some(rename_fn) => match rename_fn(&id, &title) {
                                         Ok(()) => {
                                             if let Some(reload_fn) = reload {
-                                                if let Ok((fresh_rows, fresh_projects)) = reload_fn() {
+                                                if let Ok((fresh_rows, fresh_projects)) = reload_fn(show_archived) {
                                                     rows = fresh_rows;
                                                     projects = fresh_projects;
                                                 }
@@ -9234,7 +9253,7 @@ fn run_session_browse_tui(
                                             hits.retain(|(hit_id, _)| *hit_id != id);
                                         }
                                         if let Some(reload_fn) = reload {
-                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn() {
+                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn(show_archived) {
                                                 rows = fresh_rows;
                                                 projects = fresh_projects;
                                             }
@@ -9265,7 +9284,7 @@ fn run_session_browse_tui(
                                 Some(fork_fn) => match fork_fn(&id) {
                                     Ok(new_id) => {
                                         if let Some(reload_fn) = reload {
-                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn() {
+                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn(show_archived) {
                                                 rows = fresh_rows;
                                                 projects = fresh_projects;
                                             }
@@ -9297,7 +9316,7 @@ fn run_session_browse_tui(
                                     Ok(()) => {
                                         rows.retain(|r| r.id != id);
                                         if let Some(reload_fn) = reload {
-                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn() {
+                                            if let Ok((fresh_rows, fresh_projects)) = reload_fn(show_archived) {
                                                 rows = fresh_rows;
                                                 projects = fresh_projects;
                                             }
@@ -9414,11 +9433,38 @@ fn run_session_browse_tui(
                         // P224: keybinding help overlay.
                         show_help = true;
                     }
+                    KeyCode::F(4) => {
+                        // P513: toggle archived sessions in the list —
+                        // re-queries through the reload closure with the
+                        // include_archived flag.
+                        show_archived = !show_archived;
+                        cursor_idx = 0;
+                        scroll_offset = 0;
+                        match reload {
+                            Some(reload_fn) => match reload_fn(show_archived) {
+                                Ok((fresh_rows, fresh_projects)) => {
+                                    rows = fresh_rows;
+                                    projects = fresh_projects;
+                                    notice = Some(if show_archived {
+                                        "Showing archived sessions (F4 hides).".to_string()
+                                    } else {
+                                        "Hiding archived sessions.".to_string()
+                                    });
+                                }
+                                Err(e) => {
+                                    notice = Some(format!("Reload failed: {e}"));
+                                }
+                            },
+                            None => {
+                                notice = Some("Reload is unavailable here.".to_string());
+                            }
+                        }
+                    }
                     KeyCode::F(5) => {
                         // P224: reload the session list from disk — a live
                         // gateway may create sessions mid-browse.
                         match reload {
-                            Some(reload_fn) => match reload_fn() {
+                            Some(reload_fn) => match reload_fn(show_archived) {
                                 Ok((fresh_rows, fresh_projects)) => {
                                     let count = fresh_rows.len();
                                     rows = fresh_rows;
@@ -9522,6 +9568,12 @@ fn browse_details_pane_lines(
         &format!("source: {}", row.source),
         width,
     ));
+    if row.archived {
+        lines.extend(ulnclaw::tui_text::wrap_display_text(
+            "status: archived",
+            width,
+        ));
+    }
     if let Some(slug) = project {
         lines.extend(ulnclaw::tui_text::wrap_display_text(
             &format!("project: {slug}"),

@@ -178,6 +178,9 @@ pub struct BrowseRow {
     /// Working directory of the session — the browse surfaces resolve it
     /// against `projects.db` to show the owning project (P165).
     pub cwd: Option<String>,
+    /// P513: archived flag — rendered as a marker when the browser
+    /// includes archived sessions (F4 toggle).
+    pub archived: bool,
 }
 
 /// Maximum session title length in characters (hermes `MAX_TITLE_LENGTH`).
@@ -1511,6 +1514,7 @@ impl SqliteSessionStore {
         limit: usize,
         source: Option<&str>,
         exclude_sources: &[&str],
+        include_archived: bool,
     ) -> Result<Vec<BrowseRow>> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
         let mut sql = String::from(
@@ -1520,9 +1524,13 @@ impl SqliteSessionStore {
                      WHERE m.session_id = s.id AND m.role = 'user'
                        AND m.content IS NOT NULL AND m.content != ''
                      ORDER BY m.id LIMIT 1),
-                    s.cwd
-             FROM sessions s WHERE s.archived = 0",
+                    s.cwd,
+                    s.archived
+             FROM sessions s WHERE 1=1",
         );
+        if !include_archived {
+            sql.push_str(" AND s.archived = 0");
+        }
         let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(source) = source {
             sql.push_str(" AND s.source = ?");
@@ -1547,6 +1555,7 @@ impl SqliteSessionStore {
                     last_active: row.get(3)?,
                     preview: row.get(4)?,
                     cwd: row.get(5)?,
+                    archived: row.get::<_, i64>(6)? != 0,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;
@@ -2650,7 +2659,7 @@ mod tests {
 
         // Default browse excludes nothing on the store side (CLI passes the
         // exclusion list); newest first, preview = first user message.
-        let rows = store.list_sessions_for_browse(100, None, &[]).unwrap();
+        let rows = store.list_sessions_for_browse(100, None, &[], false).unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].id, tool_session); // newest, no messages
         assert_eq!(rows[0].preview, None);
@@ -2658,23 +2667,27 @@ mod tests {
         assert_eq!(cron_row.preview.as_deref(), Some("cron line"));
 
         // Excluding tool sources (hermes default browse behavior).
-        let rows = store.list_sessions_for_browse(100, None, &["tool"]).unwrap();
+        let rows = store.list_sessions_for_browse(100, None, &["tool"], false).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.source != "tool"));
 
         // Source filter.
-        let rows = store.list_sessions_for_browse(100, Some("cron"), &[]).unwrap();
+        let rows = store.list_sessions_for_browse(100, Some("cron"), &[], false).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, second);
 
-        // Archived sessions disappear.
+        // Archived sessions disappear by default…
         store.set_session_archived(&first, true).unwrap();
-        let rows = store.list_sessions_for_browse(100, Some("cli"), &[]).unwrap();
+        let rows = store.list_sessions_for_browse(100, Some("cli"), &[], false).unwrap();
         assert!(rows.is_empty());
+        // …but surface (flagged) when include_archived is set (P513).
+        let rows = store.list_sessions_for_browse(100, Some("cli"), &[], true).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].archived);
 
         // The session cwd rides along for project resolution (P165).
         let with_cwd = store.create_session("cli", None, Some("/work/repo")).unwrap();
-        let rows = store.list_sessions_for_browse(100, Some("cli"), &[]).unwrap();
+        let rows = store.list_sessions_for_browse(100, Some("cli"), &[], false).unwrap();
         let row = rows.iter().find(|r| r.id == with_cwd).unwrap();
         assert_eq!(row.cwd.as_deref(), Some("/work/repo"));
     }
