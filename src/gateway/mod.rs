@@ -2761,6 +2761,65 @@ async fn git_push(Json(body): Json<GitActionBody>) -> Response {
     }
 }
 
+/// `GET /api/git/worktrees` — linked worktrees of the checkout
+/// (hermes `/api/git/worktrees` parity).
+async fn git_worktrees(Query(query): Query<FsPathQuery>) -> Response {
+    let query = FsPathQuery { path: query.path.or_else(|| Some(".".to_string())) };
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    match crate::git_diff::list_worktrees(&target) {
+        Ok(trees) => Json(json!({
+            "worktrees": trees.iter().map(|tree| json!({
+                "path": tree.path,
+                "branch": tree.branch,
+                "is_main": tree.is_main,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// Body for the `POST /api/git/worktree/*` endpoints.
+#[derive(Debug, Deserialize)]
+struct GitWorktreeBody {
+    #[serde(default)]
+    path: Option<String>,
+    target: String,
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    new_branch: Option<String>,
+}
+
+/// `POST /api/git/worktree/add` — link a new worktree (hermes
+/// `/api/git/worktree/add` parity).
+async fn git_worktree_add(Json(body): Json<GitWorktreeBody>) -> Response {
+    let repo = match git_action_target(&GitActionBody { path: body.path.clone(), ..Default::default() }) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    match crate::git_diff::add_worktree(&repo, &body.target, body.branch.as_deref(), body.new_branch.as_deref()) {
+        Ok(output) => Json(json!({ "ok": true, "target": body.target, "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// `POST /api/git/worktree/remove` — unlink a worktree (hermes
+/// `/api/git/worktree/remove` parity).
+async fn git_worktree_remove(Json(body): Json<GitWorktreeBody>) -> Response {
+    let repo = match git_action_target(&GitActionBody { path: body.path.clone(), ..Default::default() }) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    match crate::git_diff::remove_worktree(&repo, &body.target) {
+        Ok(output) => Json(json!({ "ok": true, "target": body.target, "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
 /// Query parameters for `GET /api/git/file-diff`.
 #[derive(Debug, Deserialize)]
 struct GitFileDiffQuery {
@@ -5191,6 +5250,9 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/git-root", get(fs_git_root))
         .route("/api/fs/git-diff", get(fs_git_diff))
         .route("/api/git/file-diff", get(git_file_diff))
+        .route("/api/git/worktrees", get(git_worktrees))
+        .route("/api/git/worktree/add", post(git_worktree_add))
+        .route("/api/git/worktree/remove", post(git_worktree_remove))
         .route("/api/git/status", get(git_status))
         .route("/api/git/branches", get(git_branches))
         .route("/api/git/stage", post(git_stage))
@@ -15257,6 +15319,32 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (status, body) = get_json(app.clone(), "/api/git/status?path=.", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body["unstaged"].as_array().unwrap().is_empty());
+
+        // Worktrees: list, add (new branch), remove.
+        let (status, body) = get_json(app.clone(), "/api/git/worktrees?path=.", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["worktrees"].as_array().unwrap().len(), 1);
+        let wt_target = dir
+            .path()
+            .with_file_name(format!("{}-wt", dir.path().file_name().unwrap().to_string_lossy()));
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/git/worktree/add", Some("sekret"),
+            json!({"target": wt_target.display().to_string(), "new_branch": "wt-api"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = get_json(app.clone(), "/api/git/worktrees?path=.", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let trees = body["worktrees"].as_array().unwrap().clone();
+        assert_eq!(trees.len(), 2);
+        assert!(trees.iter().any(|tree| tree["branch"] == "wt-api"));
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/worktree/remove", Some("sekret"),
+            json!({"target": wt_target.display().to_string()}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = get_json(app.clone(), "/api/git/worktrees?path=.", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["worktrees"].as_array().unwrap().len(), 1);
 
         // Per-file diff: unstaged edit, then the staged view.
         std::fs::write(dir.path().join("tracked.txt"), "one\ntwo\nthree\n").unwrap();

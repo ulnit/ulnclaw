@@ -360,6 +360,8 @@ export interface Translations {
     committed: string; pushed: string; stagedNote: string; unstagedNote: string; reverted: string;
     newBranch: string; newBranchPrompt: string; createdBranch: string; switchedBranch: string;
     groupStaged: string; groupModified: string; groupUntracked: string;
+    worktrees: string; removeWorktree: string; removeWorktreeConfirm: string; removedWorktree: string;
+    addWorktree: string; addWorktreeTarget: string; addWorktreeBranch: string; addedWorktree: string;
   };
   learning: {
     title: string; tagline: string; searchPlaceholder: string; building: string;
@@ -876,6 +878,8 @@ const en: Translations = {
     stagedNote: "Staged.", unstagedNote: "Unstaged.", reverted: "Reverted {count} file(s).",
     newBranch: "New branch", newBranchPrompt: "New branch name:", createdBranch: "Created and switched to {name}.", switchedBranch: "Switched to {name}.",
     groupStaged: "Staged ({count})", groupModified: "Modified ({count})", groupUntracked: "Untracked ({count})",
+    worktrees: "Worktrees ({count})", removeWorktree: "Remove worktree", removeWorktreeConfirm: "Remove the worktree at {path}?", removedWorktree: "Removed {path}.",
+    addWorktree: "Add worktree", addWorktreeTarget: "New worktree directory:", addWorktreeBranch: "New branch name (empty = current):", addedWorktree: "Worktree added.",
   },
   learning: {
     title: "✨ Learning", tagline: "learned skills + memory, linked",
@@ -1413,6 +1417,8 @@ const zh: Translations = {
     stagedNote: "已暂存。", unstagedNote: "已取消暂存。", reverted: "已还原 {count} 个文件。",
     newBranch: "新建分支", newBranchPrompt: "新分支名称：", createdBranch: "已创建并切换到 {name}。", switchedBranch: "已切换到 {name}。",
     groupStaged: "已暂存（{count}）", groupModified: "已修改（{count}）", groupUntracked: "未跟踪（{count}）",
+    worktrees: "工作树（{count}）", removeWorktree: "移除工作树", removeWorktreeConfirm: "移除位于 {path} 的工作树？", removedWorktree: "已移除 {path}。",
+    addWorktree: "新增工作树", addWorktreeTarget: "新工作树目录：", addWorktreeBranch: "新分支名（留空 = 当前分支）：", addedWorktree: "已新增工作树。",
   },
   learning: {
     title: "✨ 学习", tagline: "已学技能 + 记忆，相互连接",
@@ -1950,6 +1956,8 @@ const zhHant: Translations = {
     stagedNote: "已暫存。", unstagedNote: "已取消暫存。", reverted: "已還原 {count} 個檔案。",
     newBranch: "新建分支", newBranchPrompt: "新分支名稱：", createdBranch: "已建立並切換到 {name}。", switchedBranch: "已切換到 {name}。",
     groupStaged: "已暫存（{count}）", groupModified: "已修改（{count}）", groupUntracked: "未追蹤（{count}）",
+    worktrees: "工作樹（{count}）", removeWorktree: "移除工作樹", removeWorktreeConfirm: "移除位於 {path} 的工作樹？", removedWorktree: "已移除 {path}。",
+    addWorktree: "新增工作樹", addWorktreeTarget: "新工作樹目錄：", addWorktreeBranch: "新分支名（留空 = 目前分支）：", addedWorktree: "已新增工作樹。",
   },
   learning: {
     title: "✨ 學習", tagline: "已學技能 + 記憶，相互連結",
@@ -2487,6 +2495,8 @@ const ja: Translations = {
     stagedNote: "ステージしました。", unstagedNote: "アンステージしました。", reverted: "{count} 個のファイルを元に戻しました。",
     newBranch: "新規ブランチ", newBranchPrompt: "新しいブランチ名:", createdBranch: "{name} を作成して切り替えました。", switchedBranch: "{name} に切り替えました。",
     groupStaged: "ステージ済み（{count}）", groupModified: "変更（{count}）", groupUntracked: "未追跡（{count}）",
+    worktrees: "ワークツリー（{count}）", removeWorktree: "ワークツリーを削除", removeWorktreeConfirm: "{path} のワークツリーを削除しますか？", removedWorktree: "{path} を削除しました。",
+    addWorktree: "ワークツリーを追加", addWorktreeTarget: "新しいワークツリーディレクトリ:", addWorktreeBranch: "新しいブランチ名（空欄 = 現在のブランチ）:", addedWorktree: "ワークツリーを追加しました。",
   },
   learning: {
     title: "✨ 学習", tagline: "学習済みスキル + メモリ、リンク付き",
@@ -3024,6 +3034,8 @@ const ar: Translations = {
     stagedNote: "تمت التهيئة.", unstagedNote: "تم إلغاء التهيئة.", reverted: "تم التراجع عن {count} ملف.",
     newBranch: "فرع جديد", newBranchPrompt: "اسم الفرع الجديد:", createdBranch: "تم إنشاء {name} والانتقال إليه.", switchedBranch: "تم الانتقال إلى {name}.",
     groupStaged: "مُهيَّأ ({count})", groupModified: "مُعدَّل ({count})", groupUntracked: "غير مُتتبع ({count})",
+    worktrees: "أشجار العمل ({count})", removeWorktree: "إزالة شجرة العمل", removeWorktreeConfirm: "إزالة شجرة العمل عند {path}؟", removedWorktree: "تمت إزالة {path}.",
+    addWorktree: "إضافة شجرة عمل", addWorktreeTarget: "دليل شجرة العمل الجديدة:", addWorktreeBranch: "اسم الفرع الجديد (فارغ = الحالي):", addedWorktree: "تمت إضافة شجرة العمل.",
   },
   learning: {
     title: "✨ التعلم", tagline: "مهارات متعلَّمة + ذاكرة، مترابطة",

@@ -422,6 +422,102 @@ export class FileTreePanel {
       }
       this.body.appendChild(details);
     }
+    this.renderWorktrees().catch(() => undefined);
+  }
+
+  /**
+   * Linked worktrees section (P602) — click a row to re-root the tree
+   * at that checkout; non-main rows can be removed, and the ＋ action
+   * links a new worktree (target dir + optional new branch).
+   */
+  private async renderWorktrees(): Promise<void> {
+    const client = this.client();
+    if (!client || !this.rootPath) return;
+    let trees: { path: string; branch: string; is_main: boolean }[];
+    try {
+      ({ worktrees: trees } = await client.gitWorktrees(this.rootPath));
+    } catch {
+      return;
+    }
+    if (trees.length === 0) return;
+    const details = document.createElement("details");
+    details.className = "file-tree-group";
+    details.open = trees.length > 1;
+    const summary = document.createElement("summary");
+    summary.textContent = t.gitReview.worktrees.replace("{count}", String(trees.length));
+    details.appendChild(summary);
+    for (const tree of trees) {
+      const row = document.createElement("div");
+      row.className = "file-tree-group-row";
+      const label = document.createElement("span");
+      label.className = "file-tree-group-file";
+      label.textContent = `${tree.branch} \u00b7 ${tree.path}`;
+      label.title = tree.path;
+      label.addEventListener("click", () => {
+        this.tab = "files";
+        void this.loadRoot(tree.path);
+      });
+      row.appendChild(label);
+      if (!tree.is_main) {
+        const remove = document.createElement("button");
+        remove.className = "ghost";
+        remove.textContent = "\u2715";
+        remove.title = t.gitReview.removeWorktree;
+        remove.addEventListener("click", () => {
+          if (!window.confirm(t.gitReview.removeWorktreeConfirm.replace("{path}", tree.path))) return;
+          void client
+            .gitWorktreeRemove(this.rootPath!, tree.path)
+            .then(() => {
+              this.reviewNote = {
+                text: t.gitReview.removedWorktree.replace("{path}", tree.path),
+                error: false,
+              };
+              return this.renderChanges();
+            })
+            .catch((error: unknown) => {
+              this.reviewNote = {
+                text: t.gitReview.failed.replace(
+                  "{error}",
+                  error instanceof Error ? error.message : String(error),
+                ),
+                error: true,
+              };
+              return this.renderChanges();
+            });
+        });
+        row.appendChild(remove);
+      }
+      details.appendChild(row);
+    }
+    const addRow = document.createElement("div");
+    addRow.className = "file-tree-group-row";
+    const addBtn = document.createElement("button");
+    addBtn.className = "ghost";
+    addBtn.textContent = `\uff0b ${t.gitReview.addWorktree}`;
+    addBtn.addEventListener("click", () => {
+      const target = (window.prompt(t.gitReview.addWorktreeTarget) || "").trim();
+      if (!target) return;
+      const branch = (window.prompt(t.gitReview.addWorktreeBranch) || "").trim();
+      void client
+        .gitWorktreeAdd(this.rootPath!, target, undefined, branch || undefined)
+        .then(() => {
+          this.reviewNote = { text: t.gitReview.addedWorktree, error: false };
+          return this.renderChanges();
+        })
+        .catch((error: unknown) => {
+          this.reviewNote = {
+            text: t.gitReview.failed.replace(
+              "{error}",
+              error instanceof Error ? error.message : String(error),
+            ),
+            error: true,
+          };
+          return this.renderChanges();
+        });
+    });
+    addRow.appendChild(addBtn);
+    details.appendChild(addRow);
+    this.body.appendChild(details);
   }
 
   /**

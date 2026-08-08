@@ -2229,6 +2229,48 @@ export class GatewayClient {
     return value as { ok: boolean; output: string };
   }
 
+  /** GET /api/git/worktrees — linked worktrees (P602). */
+  async gitWorktrees(path: string): Promise<{
+    worktrees: { path: string; branch: string; is_main: boolean }[];
+  }> {
+    const params = new URLSearchParams({ path });
+    const response = await fetch(this.endpoint(`/api/git/worktrees?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { worktrees: { path: string; branch: string; is_main: boolean }[] };
+  }
+
+  /** POST /api/git/worktree/add — link a new worktree (P602). */
+  async gitWorktreeAdd(
+    path: string,
+    target: string,
+    branch?: string,
+    newBranch?: string,
+  ): Promise<{ ok: boolean; target: string; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/worktree/add"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path, target, branch: branch || undefined, new_branch: newBranch || undefined }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; target: string; output: string };
+  }
+
+  /** POST /api/git/worktree/remove — unlink a worktree (P602). */
+  async gitWorktreeRemove(path: string, target: string): Promise<{ ok: boolean; target: string; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/worktree/remove"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path, target }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; target: string; output: string };
+  }
+
   /** GET /api/git/file-diff — diff for one path (P601). */
   async gitFileDiff(
     path: string,

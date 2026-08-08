@@ -385,6 +385,85 @@ pub fn push(cwd: &Path) -> Result<String> {
     mutate(&["push"], cwd, "git push", Duration::from_secs(60))
 }
 
+/// One linked worktree (hermes `/api/git/worktrees` parity).
+#[derive(Debug, Clone)]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub branch: String,
+    pub is_main: bool,
+}
+
+/// Parse `git worktree list --porcelain` output.
+pub fn list_worktrees(cwd: &Path) -> Result<Vec<WorktreeInfo>> {
+    require_repo(cwd)?;
+    let (code, out) = run_git(&["worktree", "list", "--porcelain"], cwd, GIT_TIMEOUT)?;
+    if code != 0 {
+        return Err(AgentError::Tool("git worktree list failed".to_string()));
+    }
+    let mut trees: Vec<WorktreeInfo> = Vec::new();
+    let mut path: Option<String> = None;
+    let mut branch = String::new();
+    let mut is_main = false;
+    for line in out.lines().chain(std::iter::once("")) {
+        if let Some(raw) = line.strip_prefix("worktree ") {
+            if let Some(previous) = path.take() {
+                trees.push(WorktreeInfo { path: previous, branch: std::mem::take(&mut branch), is_main });
+                is_main = false;
+            }
+            path = Some(raw.trim().to_string());
+        } else if line.starts_with("branch ") {
+            branch = line
+                .trim_start_matches("branch ")
+                .trim_start_matches("refs/heads/")
+                .to_string();
+        } else if line == "detached" {
+            branch = "(detached)".to_string();
+        } else if line.is_empty() {
+            if let Some(previous) = path.take() {
+                trees.push(WorktreeInfo { path: previous, branch: std::mem::take(&mut branch), is_main });
+                is_main = false;
+            }
+        }
+    }
+    if let Some(first) = trees.first_mut() {
+        first.is_main = true;
+    }
+    Ok(trees)
+}
+
+/// Add a worktree: `git worktree add <target> [<branch>]`, or with
+/// `new_branch` create it first (`-b`).
+pub fn add_worktree(cwd: &Path, target: &str, branch: Option<&str>, new_branch: Option<&str>) -> Result<String> {
+    require_repo(cwd)?;
+    let target = target.trim();
+    if target.is_empty() {
+        return Err(AgentError::Tool("target path is required".to_string()));
+    }
+    let mut args: Vec<&str> = vec!["worktree", "add"];
+    if let Some(new_branch) = new_branch.map(str::trim).filter(|raw| !raw.is_empty()) {
+        if !valid_branch_name(new_branch) {
+            return Err(AgentError::Tool("invalid branch name".to_string()));
+        }
+        args.push("-b");
+        args.push(new_branch);
+    }
+    args.push(target);
+    if let Some(branch) = branch.map(str::trim).filter(|raw| !raw.is_empty()) {
+        args.push(branch);
+    }
+    mutate(&args, cwd, "git worktree add", GIT_TIMEOUT_LONG)
+}
+
+/// Remove a worktree (`git worktree remove <target>`).
+pub fn remove_worktree(cwd: &Path, target: &str) -> Result<String> {
+    require_repo(cwd)?;
+    let target = target.trim();
+    if target.is_empty() {
+        return Err(AgentError::Tool("target path is required".to_string()));
+    }
+    mutate(&["worktree", "remove", target], cwd, "git worktree remove", GIT_TIMEOUT_LONG)
+}
+
 /// Diff for a single path (hermes `/api/git/file-diff` parity).
 /// Untracked paths in working/all modes fold in via `--no-index` so
 /// brand-new files show up as additions.
@@ -636,6 +715,26 @@ mod tests {
         assert_eq!(current_branch_name(&dir), "feature/y");
         assert!(switch_branch(&dir, "no-such-branch").is_err());
         switch_branch(&dir, &before).unwrap();
+
+        // Worktrees: list shows the main checkout; add/remove round-trip.
+        let trees = list_worktrees(&dir).unwrap();
+        assert_eq!(trees.len(), 1);
+        assert!(trees[0].is_main);
+        let target = dir.with_file_name(format!(
+            "ulnclaw-wt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        add_worktree(&dir, &target.to_string_lossy(), None, Some("wt-branch")).unwrap();
+        let trees = list_worktrees(&dir).unwrap();
+        assert_eq!(trees.len(), 2);
+        let added = trees.iter().find(|tree| tree.branch == "wt-branch").unwrap();
+        assert!(!added.is_main);
+        remove_worktree(&dir, &target.to_string_lossy()).unwrap();
+        assert_eq!(list_worktrees(&dir).unwrap().len(), 1);
 
         std::fs::remove_dir_all(&dir).ok();
     }
