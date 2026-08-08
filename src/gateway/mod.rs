@@ -1432,6 +1432,81 @@ async fn model_set_api(Json(body): Json<Value>) -> Response {
     .into_response()
 }
 
+/// Persist (or clear) `agent.reasoning_effort` in config.toml; returns
+/// the normalized level written (None = cleared). Shared by the
+/// `/reasoning` slash command and `PUT /api/reasoning` (P615).
+fn persist_reasoning_effort(
+    effort: Option<&str>,
+) -> std::result::Result<Option<String>, String> {
+    let normalized =
+        crate::kanban::normalize_reasoning_effort(effort).map_err(|e| e.to_string())?;
+    let path = crate::config_cmd::config_path();
+    let mut doc = crate::config_cmd::load_toml(&path)?;
+    let Some(root) = doc.as_table_mut() else {
+        return Err("config root is not a table".to_string());
+    };
+    let agent_entry = root
+        .entry("agent".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let Some(agent_table) = agent_entry.as_table_mut() else {
+        return Err("config [agent] is not a table".to_string());
+    };
+    match &normalized {
+        Some(level) => {
+            agent_table.insert(
+                "reasoning_effort".to_string(),
+                toml::Value::String(level.clone()),
+            );
+        }
+        None => {
+            agent_table.remove("reasoning_effort");
+        }
+    }
+    crate::config_cmd::save_toml(&path, &doc)?;
+    Ok(normalized)
+}
+
+/// `GET /api/reasoning` — the persisted `agent.reasoning_effort` pin
+/// plus the accepted levels (P615; the HTTP twin of `/reasoning`).
+async fn reasoning_get() -> Response {
+    let current = crate::config::UlncLawConfig::load(None)
+        .map(|c| c.agent.reasoning_effort)
+        .unwrap_or_default();
+    let effort = if current.trim().is_empty() {
+        Value::Null
+    } else {
+        Value::String(current.trim().to_string())
+    };
+    Json(json!({
+        "effort": effort,
+        "levels": crate::kanban::VALID_REASONING_EFFORTS,
+        "note": "applies to new runs; restart the gateway to change the running process",
+    }))
+    .into_response()
+}
+
+/// `PUT /api/reasoning` — persist or clear the reasoning effort
+/// (P615). Body: {"effort": "high"} pins; {"effort": "" | null |
+/// "clear"} clears. Unknown levels are a 400.
+async fn reasoning_set(Json(body): Json<Value>) -> Response {
+    let raw = body["effort"].as_str().map(str::trim).unwrap_or("");
+    let effort = if raw.is_empty() || matches!(raw, "clear" | "default" | "inherit") {
+        None
+    } else {
+        Some(raw)
+    };
+    match persist_reasoning_effort(effort) {
+        Ok(normalized) => Json(json!({
+            "ok": true,
+            "effort": normalized,
+            "note": "applies to new runs; restart the gateway to change the running process",
+        }))
+        .into_response(),
+        Err(e) if e.contains("reasoning_effort must be one of") => bad_request(&e, None),
+        Err(e) => server_error(&e),
+    }
+}
+
 /// `POST /api/gateway/restart` — spawn a detached `ulnclaw gateway
 /// --replace` on the same host/port; the replacement terminates this
 /// instance through the pidfile takeover (hermes `/api/gateway/restart`
@@ -5973,6 +6048,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model/auxiliary", get(model_auxiliary))
         .route("/api/model/moa", get(model_moa_get).put(model_moa_put))
         .route("/api/model/recommended-default", get(model_recommended_default))
+        .route("/api/reasoning", get(reasoning_get).put(reasoning_set))
         .route("/api/providers/custom-endpoints", get(custom_endpoints_list).post(custom_endpoints_upsert))
         .route("/api/providers/custom-endpoints/validate", post(custom_endpoints_validate))
         .route("/api/providers/validate", post(providers_validate))
@@ -10304,43 +10380,10 @@ async fn resolve_gateway_slash(
             } else {
                 Some(rest.trim())
             };
-            let normalized = match crate::kanban::normalize_reasoning_effort(effort) {
+            let normalized = match persist_reasoning_effort(effort) {
                 Ok(v) => v,
-                Err(e) => return Some(GatewaySlash::Direct(e.to_string())),
+                Err(e) => return Some(GatewaySlash::Direct(e)),
             };
-            let mut doc = match crate::config_cmd::load_toml(&path) {
-                Ok(v) => v,
-                Err(e) => {
-                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
-                }
-            };
-            let Some(root) = doc.as_table_mut() else {
-                return Some(GatewaySlash::Direct(
-                    "config root is not a table".to_string(),
-                ));
-            };
-            let agent_entry = root
-                .entry("agent".to_string())
-                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-            let Some(agent_table) = agent_entry.as_table_mut() else {
-                return Some(GatewaySlash::Direct(
-                    "config [agent] is not a table".to_string(),
-                ));
-            };
-            match &normalized {
-                Some(level) => {
-                    agent_table.insert(
-                        "reasoning_effort".to_string(),
-                        toml::Value::String(level.clone()),
-                    );
-                }
-                None => {
-                    agent_table.remove("reasoning_effort");
-                }
-            }
-            if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
-                return Some(GatewaySlash::Direct(format!("config save failed: {e}")));
-            }
             Some(GatewaySlash::Direct(match &normalized {
                 Some(level) => format!(
                     "reasoning effort set to {level} \u{2014} applies to new runs; restart the gateway to change this process"
@@ -14186,6 +14229,82 @@ mod tests {
             app.clone(), "POST", "/api/jobs/nope/run", Some(token), json!({}),
         ).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_reasoning_api_get_put_roundtrip() {
+        // P615: GET/PUT /api/reasoning persist agent.reasoning_effort.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let (state, _temp) = jobs_state();
+        let app = router(state);
+        let token = "sekret";
+
+        let (status, _) = get_json(app.clone(), "/api/reasoning", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Fresh install: no pin, levels advertised.
+        let (status, body) = get_json(app.clone(), "/api/reasoning", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["effort"].is_null(), "{body}");
+        assert!(
+            body["levels"].as_array().unwrap().iter().any(|l| l == "xhigh"),
+            "{body}"
+        );
+
+        // Pin a level — reflected on disk and in GET.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/reasoning",
+            Some(token),
+            json!({"effort": "xhigh"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["effort"], "xhigh");
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(text.contains("reasoning_effort = \"xhigh\""), "{text}");
+        let (_, body) = get_json(app.clone(), "/api/reasoning", Some(token)).await;
+        assert_eq!(body["effort"], "xhigh");
+
+        // Unknown levels are rejected.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/reasoning",
+            Some(token),
+            json!({"effort": "extreme"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("reasoning_effort must be one of"));
+
+        // Empty effort clears the pin.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/reasoning",
+            Some(token),
+            json!({"effort": ""}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["effort"].is_null(), "{body}");
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(!text.contains("reasoning_effort"), "{text}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

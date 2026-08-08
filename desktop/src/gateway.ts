@@ -726,6 +726,14 @@ export interface MoaConfigPayload {
   aggregator?: MoaSlotConfig;
 }
 
+/** GET/PUT /api/reasoning payload (P615). */
+export interface ReasoningPayload {
+  effort: string | null;
+  levels: string[];
+  note?: string;
+  ok?: boolean;
+}
+
 export interface McpCatalogEntry {
   name: string;
   description: string;
@@ -2744,6 +2752,26 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
     return value as { ok: boolean; task: string; reset: boolean };
+  }
+
+  /** GET /api/reasoning — persisted agent.reasoning_effort pin (P615). */
+  async reasoningGet(): Promise<ReasoningPayload> {
+    const response = await fetch(this.endpoint("/api/reasoning"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error?.message || `reasoning HTTP ${response.status}`);
+    return value as ReasoningPayload;
+  }
+
+  /** PUT /api/reasoning — persist or clear the reasoning effort (P615). */
+  async reasoningSet(effort: string | null): Promise<ReasoningPayload> {
+    const response = await fetch(this.endpoint("/api/reasoning"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ effort: effort ?? "" }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error?.message || `reasoning HTTP ${response.status}`);
+    return value as ReasoningPayload;
   }
 
   /** GET /api/model/moa — MoA presets + flattened default view (P606). */

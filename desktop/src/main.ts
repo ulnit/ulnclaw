@@ -89,6 +89,10 @@ const state = {
   composerHistory: [] as string[],
   composerHistoryIndex: null as number | null,
   composerDraft: "",
+  /** P615: gateway's persisted reasoning-effort pin (null = endpoint default). */
+  reasoningEffort: null as string | null,
+  reasoningLevels: [] as string[],
+  reasoningLoaded: false,
   /** P386: sidebar session-list cap (raised by the Show all row). */
   sessionListLimit: 100,
   /** P393: per-session composer drafts (session id -> unsent text). */
@@ -189,6 +193,8 @@ const el = {
   sessionInfoCopy: document.getElementById("session-info-copy") as HTMLButtonElement,
   modelBadge: document.getElementById("model-badge")!,
   tokenBadge: document.getElementById("token-badge")!,
+  reasoningBadge: document.getElementById("reasoning-badge") as HTMLButtonElement,
+  reasoningPop: document.getElementById("reasoning-pop")!,
   projectBadge: document.getElementById("project-badge")!,
   endBadge: document.getElementById("end-badge")!,
   contextMeter: document.getElementById("context-meter")!,
@@ -1506,6 +1512,71 @@ function refreshComposerPlaceholder(): void {
   el.input.placeholder = model ? `${base} — ${model}` : base;
 }
 
+/** P615: reasoning-effort chip beside the model badge — shows the
+ * gateway's persisted agent.reasoning_effort pin (⚡ auto when clear);
+ * clicking pops the level list and persists the pick. */
+function refreshReasoningBadge(): void {
+  const effort = state.reasoningEffort;
+  el.reasoningBadge.textContent = effort
+    ? `\u{26A1} ${effort}`
+    : `\u{26A1} ${t.chrome.reasoningAuto}`;
+  el.reasoningBadge.title = t.chrome.reasoningTitle;
+  el.reasoningBadge.classList.toggle("pinned", !!effort);
+  el.reasoningBadge.hidden = false;
+}
+
+async function loadReasoningState(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const payload = await state.client.reasoningGet();
+    state.reasoningEffort = payload.effort;
+    state.reasoningLevels = payload.levels ?? [];
+    refreshReasoningBadge();
+  } catch {
+    // Gateway without /api/reasoning (or unreachable): keep chip hidden.
+  }
+}
+
+function toggleReasoningPop(): void {
+  if (!el.reasoningPop.hidden) {
+    el.reasoningPop.hidden = true;
+    return;
+  }
+  const items: (string | null)[] = [null, ...state.reasoningLevels];
+  el.reasoningPop.innerHTML = items
+    .map((level) => {
+      const label = level ?? t.chrome.reasoningAuto;
+      const active = (level ?? "") === (state.reasoningEffort ?? "");
+      return `<div class="slash-item${active ? " selected" : ""}" data-level="${level ?? ""}">\u{26A1} ${escapeHtmlInfo(label)}</div>`;
+    })
+    .join("");
+  const rect = el.reasoningBadge.getBoundingClientRect();
+  el.reasoningPop.style.position = "fixed";
+  el.reasoningPop.style.left = `${rect.left}px`;
+  el.reasoningPop.style.top = `${rect.bottom + 6}px`;
+  el.reasoningPop.style.right = "auto";
+  el.reasoningPop.style.bottom = "auto";
+  el.reasoningPop.style.minWidth = "160px";
+  el.reasoningPop.hidden = false;
+}
+
+async function applyReasoningPick(level: string | null): Promise<void> {
+  el.reasoningPop.hidden = true;
+  if (!state.client) return;
+  try {
+    const payload = await state.client.reasoningSet(level);
+    state.reasoningEffort = payload.effort;
+    refreshReasoningBadge();
+    notifySuccess(
+      payload.effort
+        ? `\u{26A1} ${payload.effort}`
+        : `\u{26A1} ${t.chrome.reasoningAuto}`,
+    );
+  } catch (error) {
+    notifyError(String(error));
+  }
+}
+
 /** P545: total-token chip for the open session, beside the model
  * badge — sourced from the same /api/usage map as the sidebar rows. */
 function refreshTokenBadge(): void {
@@ -1681,6 +1752,11 @@ async function pollHealth(): Promise<void> {
     if (model) {
       gatewayModel = model;
       refreshModelBadge();
+    }
+    // P615: one-shot reasoning-effort chip load once the gateway is up.
+    if (!state.reasoningLoaded) {
+      state.reasoningLoaded = true;
+      void loadReasoningState();
     }
     // P365: enrich the dot tooltip with the detailed open probe.
     const detailed = await state.client.healthDetailed();
@@ -3247,6 +3323,22 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     },
     () => void state.onboarding?.maybeOpen(true),
   );
+  el.reasoningBadge.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleReasoningPop();
+  });
+  el.reasoningPop.addEventListener("click", (event) => {
+    const item = (event.target as HTMLElement).closest(".slash-item") as HTMLElement | null;
+    if (!item) return;
+    const level = item.dataset.level ?? "";
+    void applyReasoningPick(level === "" ? null : level);
+  });
+  document.addEventListener("click", (event) => {
+    if (el.reasoningPop.hidden) return;
+    const target = event.target as Node;
+    if (el.reasoningPop.contains(target) || el.reasoningBadge.contains(target)) return;
+    el.reasoningPop.hidden = true;
+  });
   el.modelBadge.addEventListener("click", () => {
     if (!state.current || !state.picker) return;
     void state.picker.open();
