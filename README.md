@@ -92,7 +92,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # offline db recovery
 ./ulnclaw sessions repair          # repair malformed state.db schema (--check-only)
-./ulnclaw sessions browse          # interactive picker: filter + resume sessions (⌂ project badge, right-hand details pane with first-exchange + last-message preview + message count + end reason, Tab source filter, F2 sort toggle, / transcript FTS search, F4 show/hide archived, F6 rename, F7 fork, F8 archive/unarchive toggle, F9 delete, F10 model filter, Ctrl+U/D details-pane scrolling over a deepened two-round conversation preview)
+./ulnclaw sessions browse          # interactive picker: filter + resume sessions (⌂ project badge, end-reason row markers (✓/∞/⧉/⑂/■; P544), right-hand details pane with first-exchange + last-message preview + message count + end reason, Tab source filter, F2 sort toggle, / transcript FTS search, F4 show/hide archived, F6 rename, F7 fork, F8 archive/unarchive toggle, F9 delete, F10 model filter, Ctrl+U/D details-pane scrolling over a deepened two-round conversation preview)
 ./ulnclaw sessions retitle-skills  # fix titles that leaked /skill scaffolds (--apply)
 ./ulnclaw sessions delete|rename|optimize # per-session delete / rename / FTS-merge + VACUUM
 ./ulnclaw skills list
@@ -399,7 +399,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # 离线数据库恢复
 ./ulnclaw sessions repair          # 修复受损 state.db 库结构（--check-only）
-./ulnclaw sessions browse          # 交互式会话挑选：过滤并恢复会话（⌂ 项目徽章、右侧详情窗格含首轮对话 + 最近消息预览 + 消息数 + 结束原因、Tab 来源过滤、F2 排序切换、/ 转录 FTS 搜索、F4 显示/隐藏已归档、F6 重命名、F7 分叉、F8 归档/取消归档切换、F9 删除、F10 模型过滤、Ctrl+U/D 详情窗格滚动，预览加深至两轮对话）
+./ulnclaw sessions browse          # 交互式会话挑选：过滤并恢复会话（⌂ 项目徽章、行内结束原因标记（✓/∞/⧉/⑂/■；P544）、右侧详情窗格含首轮对话 + 最近消息预览 + 消息数 + 结束原因、Tab 来源过滤、F2 排序切换、/ 转录 FTS 搜索、F4 显示/隐藏已归档、F6 重命名、F7 分叉、F8 归档/取消归档切换、F9 删除、F10 模型过滤、Ctrl+U/D 详情窗格滚动，预览加深至两轮对话）
 ./ulnclaw sessions retitle-skills  # 修复泄漏 /skill 脚手架的会话标题（--apply）
 ./ulnclaw sessions delete|rename|optimize # 单会话删除/重命名；FTS 合并 + VACUUM 回收空间
 ./ulnclaw skills list

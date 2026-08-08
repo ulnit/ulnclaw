@@ -8644,6 +8644,16 @@ fn format_browse_row(
         Some(slug) => format!("\u{2302}{slug} {title}"),
         None => title,
     };
+    // P544: ended rows carry their end-reason marker (desktop END_BADGES
+    // parity — archived rows already get the ␡ marker below).
+    let label = match row.end_reason.as_deref() {
+        Some("complete") | Some("completed") => format!("\u{2713} {label}"),
+        Some("max_iterations") => format!("\u{221E} {label}"),
+        Some("compression") => format!("\u{29C9} {label}"),
+        Some("branched") => format!("\u{2442} {label}"),
+        Some("ended") => format!("\u{25A0} {label}"),
+        _ => label,
+    };
     // P513: archived rows carry a ␡ marker when surfaced (F4 toggle).
     let label = if row.archived {
         format!("\u{2421} {label}")
