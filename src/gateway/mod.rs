@@ -7442,7 +7442,15 @@ async fn delete_session(
 ) -> Response {
     match state.store.get_session_row(&id) {
         Ok(Some(_)) => match state.store.delete_session(&id) {
-            Ok(()) => Json(json!({"deleted": id})).into_response(),
+            Ok(()) => {
+                // P445: tell the desktop shell the session disappeared.
+                crate::desktop_bridge::publish(
+                    &id,
+                    "session.deleted",
+                    &json!({"session_id": id}),
+                );
+                Json(json!({"deleted": id})).into_response()
+            }
             Err(e) => server_error(&e.to_string()),
         },
         Ok(None) => not_found(&format!("session {} not found", id)),
@@ -8672,7 +8680,15 @@ async fn patch_session(
         _ => {}
     }
     match state.store.get_session_row(&id) {
-        Ok(Some(row)) => Json(json!({"object": "ulnclaw.session", "session": row})).into_response(),
+        Ok(Some(row)) => {
+            // P445: tell the desktop shell the session changed.
+            crate::desktop_bridge::publish(
+                &id,
+                "session.updated",
+                &json!({"session_id": id}),
+            );
+            Json(json!({"object": "ulnclaw.session", "session": row})).into_response()
+        }
         Ok(None) => not_found(&format!("session {} not found", id)),
         Err(e) => server_error(&e.to_string()),
     }
@@ -15593,6 +15609,52 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             }
         }
         assert!(found, "session.created not published on the desktop bus");
+    }
+
+    #[tokio::test]
+    async fn test_session_patch_and_delete_publish_desktop_events() {
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+        let mut rx = crate::desktop_bridge::subscribe();
+
+        let id = state.store.create_session("gateway", None, None).unwrap();
+
+        let (status, _) = send_json(
+            app.clone(), "PATCH", &format!("/api/sessions/{}", id), Some(token),
+            json!({"title": "renamed"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, _) = send_json(
+            app.clone(), "DELETE", &format!("/api/sessions/{}", id), Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The bus received both session.updated and session.deleted.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut saw_updated = false;
+        let mut saw_deleted = false;
+        while std::time::Instant::now() < deadline && !(saw_updated && saw_deleted) {
+            match rx.try_recv() {
+                Ok(envelope) if envelope.payload["session_id"] == json!(id) => {
+                    if envelope.event == "session.updated" {
+                        saw_updated = true;
+                    }
+                    if envelope.event == "session.deleted" {
+                        saw_deleted = true;
+                    }
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+        assert!(saw_updated, "session.updated not published");
+        assert!(saw_deleted, "session.deleted not published");
     }
 
     #[tokio::test]

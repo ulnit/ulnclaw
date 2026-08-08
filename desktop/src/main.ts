@@ -1832,9 +1832,12 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       }
       break;
     }
-    case "session.created": {
-      // P444: another client (CLI/API/cron) created a session — refresh
-      // the sidebar list and the sessions browser if it is mounted.
+    case "session.created":
+    case "session.updated":
+    case "session.deleted": {
+      // P444/P445: another client (CLI/API/cron) created/renamed/archived/
+      // deleted a session — refresh the sidebar list and the sessions
+      // browser if it is mounted.
       void refreshSessions();
       void state.sessionsBrowser?.refresh();
       break;
