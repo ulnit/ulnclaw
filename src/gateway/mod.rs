@@ -7466,6 +7466,23 @@ struct MessagesQuery {
     timestamps: Option<String>,
     /// P462: return only the trailing N messages (tail pagination).
     limit: Option<usize>,
+    /// P468: upward cursor — exclusive end index; returns messages ending
+    /// just before this position (combine with `limit` for windowed
+    /// load-earlier pagination).
+    before: Option<usize>,
+}
+
+/// P468: apply the upward `before` cursor, then the trailing `limit`.
+fn window_messages<T>(mut messages: Vec<T>, before: Option<usize>, limit: Option<usize>) -> Vec<T> {
+    if let Some(before) = before {
+        messages.truncate(before.min(messages.len()));
+    }
+    if let Some(limit) = limit {
+        if messages.len() > limit {
+            messages = messages.split_off(messages.len() - limit);
+        }
+    }
+    messages
 }
 
 async fn session_messages(
@@ -7476,7 +7493,8 @@ async fn session_messages(
     if query_flag(query.timestamps.as_ref()) {
         return match state.store.load_messages_with_timestamps(&id) {
             Ok(rows) => {
-                let mut data: Vec<Value> = rows
+                let total = rows.len();
+                let data: Vec<Value> = rows
                     .into_iter()
                     .map(|(timestamp, message)| {
                         let mut value = serde_json::to_value(&message).unwrap_or_else(|_| json!({}));
@@ -7486,26 +7504,19 @@ async fn session_messages(
                         value
                     })
                     .collect();
-                // P462: trailing-window pagination.
-                let data = match query.limit {
-                    Some(limit) if data.len() > limit => data.split_off(data.len() - limit),
-                    _ => data,
-                };
-                Json(json!({"object": "list", "session_id": id, "data": data})).into_response()
+                // P462/P468: trailing-window + upward-cursor pagination.
+                let data = window_messages(data, query.before, query.limit);
+                Json(json!({"object": "list", "session_id": id, "total": total, "data": data})).into_response()
             }
             Err(e) => server_error(&e.to_string()),
         };
     }
     match state.store.load_messages(&id) {
-        Ok(mut messages) => {
-            // P462: trailing-window pagination.
-            let messages = match query.limit {
-                Some(limit) if messages.len() > limit => {
-                    messages.split_off(messages.len() - limit)
-                }
-                _ => messages,
-            };
-            Json(json!({"object": "list", "session_id": id, "data": messages})).into_response()
+        Ok(messages) => {
+            let total = messages.len();
+            // P462/P468: trailing-window + upward-cursor pagination.
+            let messages = window_messages(messages, query.before, query.limit);
+            Json(json!({"object": "list", "session_id": id, "total": total, "data": messages})).into_response()
         }
         Err(e) => server_error(&e.to_string()),
     }
@@ -15840,6 +15851,74 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         )
         .await;
         assert_eq!(body["data"].as_array().expect("rows").len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_session_messages_before_cursor() {
+        use crate::provider::{Message, Role};
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+        let session_id = state.store.create_session("gateway", None, None).unwrap();
+        for i in 0..10 {
+            state
+                .store
+                .append_message(
+                    &session_id,
+                    &Message {
+                        role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                        content: Some(format!("m{i}")),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                )
+                .unwrap();
+        }
+        // `before` + `limit` yields the window ending just before the cursor.
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?before=6&limit=3", session_id),
+            Some(token),
+        )
+        .await;
+        let rows = body["data"].as_array().expect("rows");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["content"], json!("m3"));
+        assert_eq!(rows[2]["content"], json!("m5"));
+        assert_eq!(body["total"], json!(10));
+        // Cursor past the end clamps to the transcript length.
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?before=99&limit=2", session_id),
+            Some(token),
+        )
+        .await;
+        let rows = body["data"].as_array().expect("rows");
+        assert_eq!(rows[0]["content"], json!("m8"));
+        assert_eq!(rows[1]["content"], json!("m9"));
+        // `before=0` is empty; the timestamped branch honors the cursor too.
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?before=0&limit=5", session_id),
+            Some(token),
+        )
+        .await;
+        assert!(body["data"].as_array().expect("rows").is_empty());
+        let (_, body) = get_json(
+            app.clone(),
+            &format!(
+                "/api/sessions/{}/messages?before=4&limit=2&timestamps=true",
+                session_id
+            ),
+            Some(token),
+        )
+        .await;
+        let rows = body["data"].as_array().expect("rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["content"], json!("m2"));
+        assert!(rows[0]["timestamp"].as_f64().is_some());
+        assert_eq!(body["total"], json!(10));
     }
 
     #[test]

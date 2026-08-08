@@ -54,10 +54,11 @@ export class SessionsViewWidget {
   private restored = false;
   // P463: per-selection transcript pagination state.
   private transcriptSession: string | null = null;
-  private transcriptFull = false;
-  // P465: cached full transcript + index of the first rendered message.
+  // P465/P468: cached contiguous tail of the transcript, the index of the
+  // first rendered message, and the server-side total message count.
   private transcriptMessages: MessageRow[] = [];
   private transcriptStart = 0;
+  private transcriptTotal = 0;
   // P453: project drill-down set from the row chips.
   private projectFilter: string | null = localStorage.getItem(PROJECT_FILTER_KEY);
   // P450: activity-first or title-first list sorting.
@@ -695,43 +696,24 @@ export class SessionsViewWidget {
     // P463: reset the pagination window when the selection changes.
     if (this.transcriptSession !== sessionId) {
       this.transcriptSession = sessionId;
-      this.transcriptFull = false;
       this.transcriptMessages = [];
       this.transcriptStart = 0;
+      this.transcriptTotal = 0;
     }
     pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.loading)}</p>`;
     try {
-      const messages = this.transcriptFull
-        ? await client.messages(sessionId)
-        : await client.messages(sessionId, { limit: TRANSCRIPT_LIMIT });
+      const messages = await client.messages(sessionId, { limit: TRANSCRIPT_LIMIT });
       if (this.selected !== sessionId) return; // user moved on
-      // P465: cache the window and only render the most recent batch.
-      this.transcriptMessages = messages;
-      this.transcriptStart = this.transcriptFull
-        ? Math.max(0, messages.length - RENDER_WINDOW)
-        : 0;
       const session = this.all.find((candidate) => candidate.id === sessionId);
-      const renderedCount =
-        this.transcriptFull || !session?.message_count
-          ? messages.length
-          : session.message_count;
+      // P465/P468: cache the tail window, count the true total, and render
+      // only the most recent batch.
+      this.transcriptMessages = messages;
+      this.transcriptTotal = session?.message_count || messages.length;
+      this.transcriptStart = Math.max(0, messages.length - RENDER_WINDOW);
+      const renderedCount = this.transcriptTotal || messages.length;
       const meta = session ? this.renderTranscriptMeta(session, renderedCount) : "";
       pane.innerHTML = meta + this.renderMessages(messages.slice(this.transcriptStart));
-      if (this.transcriptStart > 0) this.insertEarlierBanner(sessionId);
-      // P463: tail window loaded — offer the full transcript.
-      if (!this.transcriptFull && messages.length === TRANSCRIPT_LIMIT) {
-        const banner = document.createElement("div");
-        banner.className = "sessions-view-trunc";
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = fmt(t.sessionsView.loadFull, { count: String(messages.length) });
-        button.addEventListener("click", () => {
-          this.transcriptFull = true;
-          this.loadTranscript(sessionId).catch(() => undefined);
-        });
-        banner.appendChild(button);
-        pane.insertBefore(banner, pane.querySelector(".sessions-view-msg"));
-      }
+      this.updateTranscriptBanner(sessionId);
       // P454: per-message copy actions.
       this.bindCopyButtons(pane);
       pane.scrollTop = 0;
@@ -762,15 +744,28 @@ export class SessionsViewWidget {
     }
   }
 
-  /** P465: top banner revealing older messages one window at a time. */
-  private insertEarlierBanner(sessionId: string): void {
+  /** P465/P468: single top banner — reveal cached messages first, then
+   * fetch older windows from the gateway via the `?before=` cursor. */
+  private updateTranscriptBanner(sessionId: string): void {
     const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    pane.querySelector(".sessions-view-trunc")?.remove();
+    let label = "";
+    let action: (() => void) | null = null;
+    if (this.transcriptStart > 0) {
+      label = fmt(t.sessionsView.showEarlier, { count: String(this.transcriptStart) });
+      action = () => this.revealEarlier(sessionId);
+    } else if (this.transcriptMessages.length < this.transcriptTotal) {
+      const remaining = this.transcriptTotal - this.transcriptMessages.length;
+      label = fmt(t.sessionsView.loadEarlier, { count: String(remaining) });
+      action = () => void this.loadEarlier(sessionId);
+    }
+    if (!action) return;
     const banner = document.createElement("div");
     banner.className = "sessions-view-trunc sessions-view-earlier";
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = fmt(t.sessionsView.showEarlier, { count: String(this.transcriptStart) });
-    button.addEventListener("click", () => this.revealEarlier(sessionId));
+    button.textContent = label;
+    button.addEventListener("click", action);
     banner.appendChild(button);
     pane.insertBefore(banner, pane.querySelector(".sessions-view-msg"));
   }
@@ -790,13 +785,40 @@ export class SessionsViewWidget {
     for (const node of Array.from(holder.children)) pane.insertBefore(node, anchor);
     this.transcriptStart = start;
     pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
-    const banner = pane.querySelector(".sessions-view-earlier");
-    if (banner) {
-      if (start === 0) banner.remove();
-      else {
-        const button = banner.querySelector("button");
-        if (button) button.textContent = fmt(t.sessionsView.showEarlier, { count: String(start) });
-      }
+    this.updateTranscriptBanner(sessionId);
+  }
+
+  /** P468: fetch the previous window from the gateway and prepend it. */
+  private async loadEarlier(sessionId: string): Promise<void> {
+    const client = this.client();
+    if (!client || this.selected !== sessionId) return;
+    const cursor = this.transcriptTotal - this.transcriptMessages.length;
+    if (cursor <= 0) return;
+    const button = this.root.querySelector<HTMLButtonElement>(".sessions-view-earlier button");
+    if (button) button.disabled = true;
+    try {
+      const older = await client.messages(sessionId, { before: cursor, limit: TRANSCRIPT_LIMIT });
+      if (this.selected !== sessionId) return;
+      this.transcriptMessages = [...older, ...this.transcriptMessages];
+      const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+      const holder = document.createElement("div");
+      holder.innerHTML = this.renderMessages(older);
+      this.bindCopyButtons(holder);
+      const prevHeight = pane.scrollHeight;
+      const prevTop = pane.scrollTop;
+      const anchor = pane.querySelector(".sessions-view-msg");
+      for (const node of Array.from(holder.children)) pane.insertBefore(node, anchor);
+      pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
+      this.updateTranscriptBanner(sessionId);
+    } catch (error) {
+      this.status(
+        t.sessionsView.transcriptFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+      if (button) button.disabled = false;
     }
   }
 

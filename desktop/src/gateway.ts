@@ -1129,11 +1129,12 @@ export class GatewayClient {
 
   async messages(
     sessionId: string,
-    options?: { timestamps?: boolean; limit?: number },
+    options?: { timestamps?: boolean; limit?: number; before?: number },
   ): Promise<MessageRow[]> {
     const params = new URLSearchParams();
     if (options?.timestamps) params.set("timestamps", "true");
     if (options?.limit) params.set("limit", String(options.limit));
+    if (options?.before != null) params.set("before", String(options.before));
     const query = params.toString();
     const suffix = query ? `?${query}` : "";
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/messages${suffix}`), {
