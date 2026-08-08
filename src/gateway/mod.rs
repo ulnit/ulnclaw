@@ -3432,6 +3432,109 @@ async fn archive_sessions(State(state): State<Arc<GatewayState>>, Json(body): Js
     apply_session_prune(state, filters, false, body.dry_run).await
 }
 
+/// P530 body: `POST /api/sessions/retitle-skills`.
+#[derive(Debug, Deserialize)]
+struct RetitleSkillsBody {
+    /// How many scaffolded sessions to scan (default 50).
+    #[serde(default = "default_retitle_limit")]
+    limit: usize,
+    /// Write the new titles; false (default) only proposes them.
+    #[serde(default)]
+    apply: bool,
+}
+
+fn default_retitle_limit() -> usize {
+    50
+}
+
+/// `POST /api/sessions/retitle-skills` — fix sessions whose titles were
+/// generated from a leaked `/skill` scaffold (the HTTP twin of `ulnclaw
+/// sessions retitle-skills`). Dry-run by default; `apply: true` writes,
+/// deduping unique-title collisions like the live auto-titler.
+async fn retitle_skills(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<RetitleSkillsBody>,
+) -> Response {
+    let rows = match state
+        .store
+        .list_skill_scaffolded_sessions(body.limit.max(1))
+    {
+        Ok(rows) => rows,
+        Err(e) => return bad_request(&e.to_string(), Some("store_error")),
+    };
+    let provider = state.agent.provider();
+    let context = state.agent.context();
+    let mut sessions: Vec<Value> = Vec::new();
+    let mut changed = 0usize;
+    let mut applied = 0usize;
+    for row in &rows {
+        let typed = crate::session::retitle::describe_skill_invocation(&row.content)
+            .unwrap_or_default();
+        let first_reply = state
+            .store
+            .get_first_assistant_text(&row.id)
+            .unwrap_or_default();
+        let Some(new_title) = crate::title_generator::generate_title_forced(
+            &context.config,
+            provider.clone(),
+            &typed,
+            &first_reply,
+        )
+        .await
+        else {
+            continue;
+        };
+        let old_title = row.title.clone().unwrap_or_default();
+        if new_title == old_title {
+            continue;
+        }
+        if !crate::session::retitle::is_titlelike(&new_title) {
+            sessions.push(json!({
+                "id": row.id,
+                "old_title": old_title,
+                "new_title": new_title,
+                "status": "rejected",
+            }));
+            continue;
+        }
+        changed += 1;
+        let mut status = "proposed";
+        let mut final_title = new_title.clone();
+        if body.apply {
+            match state.store.set_session_title(&row.id, &new_title) {
+                Ok(()) => {
+                    status = "applied";
+                    applied += 1;
+                }
+                Err(_) => {
+                    // Unique-title collision: dedupe (base #2, #3, …).
+                    if let Ok(deduped) = state.store.get_next_title_in_lineage(&new_title) {
+                        if state.store.set_session_title(&row.id, &deduped).is_ok() {
+                            status = "applied";
+                            applied += 1;
+                            final_title = deduped;
+                        }
+                    }
+                }
+            }
+        }
+        sessions.push(json!({
+            "id": row.id,
+            "old_title": old_title,
+            "new_title": final_title,
+            "status": status,
+        }));
+    }
+    Json(json!({
+        "scanned": rows.len(),
+        "changed": changed,
+        "applied": applied,
+        "apply": body.apply,
+        "sessions": sessions,
+    }))
+    .into_response()
+}
+
 /// Query parameters for `GET /api/insights`.
 #[derive(Debug, Deserialize)]
 struct InsightsQuery {
@@ -4763,6 +4866,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/search", get(search_sessions))
         .route("/api/sessions/prune", post(prune_sessions))
         .route("/api/sessions/archive", post(archive_sessions))
+        .route("/api/sessions/retitle-skills", post(retitle_skills))
         .route("/api/sessions/import", post(import_sessions))
         .route(
             "/api/sessions/:id",
@@ -11118,6 +11222,47 @@ mod tests {
         let (status, body) = get_json(app, "/v1/models", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"][0]["id"], "test-model");
+    }
+
+    #[tokio::test]
+    async fn test_retitle_skills_endpoint_reports_scaffolded_sessions() {
+        let state = test_state();
+        // A session opened from an expanded /skill scaffold whose title
+        // leaks the skill name — the P530 endpoint's target.
+        let sid = state
+            .store
+            .create_session("cli", Some("test-model"), None)
+            .expect("session created");
+        state.store.set_session_title(&sid, "work").expect("title set");
+        let scaffold = "[IMPORTANT: The user has invoked the \"/work\" skill. The user's request follows.";
+        state
+            .store
+            .append_message(
+                &sid,
+                &Message {
+                    role: Role::User,
+                    content: Some(scaffold.to_string()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .expect("user message");
+        let app = router(state.clone());
+        let (status, body) = send_json(
+            app,
+            "POST",
+            "/api/sessions/retitle-skills",
+            Some("sekret"),
+            json!({"limit": 10, "apply": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["scanned"], 1);
+        assert_eq!(body["apply"], false);
+        // The test provider is unreachable, so the titler proposes nothing.
+        assert_eq!(body["changed"], 0);
+        assert!(body["sessions"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
