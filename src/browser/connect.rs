@@ -766,7 +766,19 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         assert!(local_port_in_use(port, Duration::from_millis(500)).await);
         drop(listener);
-        assert!(!local_port_in_use(port, Duration::from_millis(500)).await);
+        // P461: under parallel test load the kernel can take a moment to
+        // release the socket — poll for the free state instead of betting
+        // on a single probe.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut freed = false;
+        while std::time::Instant::now() < deadline {
+            if !local_port_in_use(port, Duration::from_millis(200)).await {
+                freed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(freed, "port stayed in use after listener drop");
     }
 
     #[tokio::test]
