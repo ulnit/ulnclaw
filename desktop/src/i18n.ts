@@ -352,7 +352,7 @@ export interface Translations {
     needsEnv: string; notConfigured: string; needsEnvTitle: string;
   };
   language: { switchTo: string; searchPlaceholder: string; noResults: string; description: string };
-  sessionPicker: { title: string; searchPlaceholder: string; noResults: string; messages: string };
+  sessionPicker: { title: string; searchPlaceholder: string; noResults: string; messages: string; unreadOnly: string };
   intro: { headline1: string; body1: string; headline2: string; body2: string;
     headline3: string; body3: string; headline4: string; body4: string;
     headline5: string; body5: string };
@@ -842,7 +842,7 @@ const en: Translations = {
   },
   sessionPicker: {
     title: "Sessions", searchPlaceholder: "Search sessions and messages…",
-    noResults: "No matching sessions", messages: "{count} messages",
+    noResults: "No matching sessions", messages: "{count} messages", unreadOnly: "Unread",
   },
   intro: {
     headline1: "What are we moving today?",
@@ -1342,7 +1342,7 @@ const zh: Translations = {
   },
   sessionPicker: {
     title: "会话", searchPlaceholder: "搜索会话与消息…",
-    noResults: "没有匹配的会话", messages: "{count} 条消息",
+    noResults: "没有匹配的会话", messages: "{count} 条消息", unreadOnly: "未读",
   },
   intro: {
     headline1: "今天想推进什么？",
@@ -1842,7 +1842,7 @@ const zhHant: Translations = {
   },
   sessionPicker: {
     title: "工作階段", searchPlaceholder: "搜尋工作階段與訊息…",
-    noResults: "沒有符合的工作階段", messages: "{count} 則訊息",
+    noResults: "沒有符合的工作階段", messages: "{count} 則訊息", unreadOnly: "未讀",
   },
   intro: {
     headline1: "今天想推進什麼？",
@@ -2342,7 +2342,7 @@ const ja: Translations = {
   },
   sessionPicker: {
     title: "セッション", searchPlaceholder: "セッションとメッセージを検索…",
-    noResults: "一致するセッションがありません", messages: "{count} メッセージ",
+    noResults: "一致するセッションがありません", messages: "{count} メッセージ", unreadOnly: "未読",
   },
   intro: {
     headline1: "今日は何を動かしますか？",
@@ -2842,7 +2842,7 @@ const ar: Translations = {
   },
   sessionPicker: {
     title: "الجلسات", searchPlaceholder: "البحث في الجلسات والرسائل…",
-    noResults: "لا جلسات مطابقة", messages: "{count} رسائل",
+    noResults: "لا جلسات مطابقة", messages: "{count} رسائل", unreadOnly: "غير مقروءة",
   },
   intro: {
     headline1: "ماذا ننجز اليوم؟",

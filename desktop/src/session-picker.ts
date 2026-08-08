@@ -45,6 +45,8 @@ export class SessionPickerDialog {
   private filters: HTMLDivElement;
   private statusFilter: "all" | "open" | "ended" | "archived" = "all";
   private reasonFilter: string | null = null;
+  // P558: unread-only quick filter (sidebar P532 parity).
+  private unreadOnly = false;
 
   constructor(private hooks: SessionPickerHooks) {
     this.dialog = document.createElement("dialog");
@@ -92,6 +94,7 @@ export class SessionPickerDialog {
     this.kbIndex = -1;
     this.statusFilter = "all";
     this.reasonFilter = null;
+    this.unreadOnly = false;
     this.renderList();
     this.dialog.showModal();
     this.search.focus();
@@ -140,6 +143,8 @@ export class SessionPickerDialog {
         return b.last_activity_at - a.last_activity_at;
       })
       .filter((session) => this.matchesStatus(session))
+      // P558: narrow to sessions waiting on the user.
+      .filter((session) => !this.unreadOnly || (this.hooks.isUnread?.(session.id) ?? false))
       .slice(0, 200)
       .filter((session) => {
         if (!q) return true;
@@ -147,7 +152,7 @@ export class SessionPickerDialog {
         return `${title} ${session.id}`.toLowerCase().includes(q);
       });
     const seen = new Set(rows.map((session) => session.id));
-    const filtered = this.statusFilter !== "all" || this.reasonFilter !== null;
+    const filtered = this.statusFilter !== "all" || this.reasonFilter !== null || this.unreadOnly;
     const hits = q.length >= 2 && this.hitsQuery === q && !filtered
       ? this.hits.filter((hit) => !seen.has(hit.session_id))
       : [];
@@ -253,6 +258,18 @@ export class SessionPickerDialog {
   // end_reason, archived = end_reason "archived").
   private renderFilters(): void {
     this.filters.innerHTML = "";
+    // P558: unread-only chip first, when the shell provides unread state.
+    if (this.hooks.isUnread) {
+      const unreadChip = document.createElement("button");
+      unreadChip.type = "button";
+      unreadChip.className = "session-picker-chip" + (this.unreadOnly ? " active" : "");
+      unreadChip.textContent = t.sessionPicker.unreadOnly;
+      unreadChip.onclick = () => {
+        this.unreadOnly = !this.unreadOnly;
+        this.renderList();
+      };
+      this.filters.appendChild(unreadChip);
+    }
     const statuses: Array<{ id: "all" | "open" | "ended" | "archived"; label: string }> = [
       { id: "all", label: t.sessionsView.statusAll },
       { id: "open", label: t.sessionsView.statusOpen },
