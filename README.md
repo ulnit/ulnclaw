@@ -152,6 +152,8 @@ export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # or ws://.../devtools/brow
 
 # HTTP gateway (OpenAI-compatible API server, default 127.0.0.1:8642)
 ./ulnclaw gateway --host 127.0.0.1 --port 8642
+./ulnclaw dashboard status        # dashboard server status (run/stop; P581)
+./ulnclaw console                 # safe non-LLM command console REPL (P582)
 # messaging platforms run inside the gateway
 # ([messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex|buzz|photon],
 #  plus webhook platforms: whatsapp_cloud/msgraph/webhook/bluebubbles/feishu/sms/teams/line/google_chat/raft/a2a)
@@ -460,6 +462,8 @@ export ULNCLAW_BROWSER_CDP=http://127.0.0.1:9222     # 或 ws://.../devtools/bro
 
 # HTTP 网关（OpenAI 兼容 API 服务器，默认 127.0.0.1:8642）
 ./ulnclaw gateway --host 127.0.0.1 --port 8642
+./ulnclaw dashboard status        # 仪表盘服务状态（run/stop；P581）
+./ulnclaw console                 # 安全的无 LLM 命令行控制台 REPL（P582）
 # 消息平台随网关运行
 # （[messaging.telegram|discord|slack|signal|weixin|qq|yuanbao|email|mattermost|matrix|dingtalk|wecom|homeassistant|whatsapp|irc|ntfy|simplex|buzz|photon]，
 #  另有 webhook 平台：whatsapp_cloud/msgraph/webhook/bluebubbles/feishu/sms/teams/line/google_chat/raft/a2a）

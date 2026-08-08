@@ -609,6 +609,8 @@ enum Commands {
         #[arg(long)]
         component: Option<String>,
     },
+    /// Safe non-LLM command console — REPL over the CLI commands (hermes console)
+    Console,
 }
 
 #[derive(Subcommand)]
@@ -2305,6 +2307,88 @@ async fn dashboard_cmd(
     }
 }
 
+/// Quote-aware whitespace tokenizer for console lines.
+fn console_tokenize(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut quote_char = '"';
+    for ch in line.chars() {
+        if in_quotes {
+            if ch == quote_char {
+                in_quotes = false;
+            } else {
+                current.push(ch);
+            }
+        } else if ch == '"' || ch == '\'' {
+            in_quotes = true;
+            quote_char = ch;
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// `ulnclaw console` — safe non-LLM command console (hermes console
+/// parity): an interactive REPL that re-parses each line as CLI arguments
+/// and dispatches it through the normal command handlers.
+async fn console_cmd(config: &UlncLawConfig) -> Result<(), String> {
+    println!("ulnclaw console — safe command console (no LLM).");
+    println!(
+        "Type any subcommand without the 'ulnclaw' prefix (e.g. 'sessions list', 'status', 'tools')."
+    );
+    println!("'help' shows the command list; 'exit' or Ctrl-D leaves.");
+    let stdin = std::io::stdin();
+    loop {
+        use std::io::Write;
+        print!("> ");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if stdin.read_line(&mut line).unwrap_or(0) == 0 {
+            println!();
+            break;
+        }
+        let tokens = console_tokenize(line.trim());
+        if tokens.is_empty() {
+            continue;
+        }
+        match tokens[0].as_str() {
+            "exit" | "quit" => break,
+            "help" => {
+                if let Err(e) = Cli::try_parse_from(["ulnclaw", "--help"]) {
+                    print!("{e}");
+                }
+                continue;
+            }
+            "chat" | "console" => {
+                eprintln!("console: '{}' is not available inside the console.", tokens[0]);
+                continue;
+            }
+            _ => {}
+        }
+        let argv: Vec<String> = std::iter::once("ulnclaw".to_string())
+            .chain(tokens)
+            .collect();
+        match Cli::try_parse_from(&argv) {
+            Ok(cli) => {
+                if let Err(e) = dispatch(cli, config.clone()).await {
+                    eprintln!("error: {e}");
+                }
+            }
+            Err(e) => eprint!("{e}"),
+        }
+    }
+    Ok(())
+}
+
 async fn gateway_cmd(
     config: &UlncLawConfig,
     host: Option<String>,
@@ -2568,6 +2652,13 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Gateway { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
         Commands::Dashboard { action, host, port } => {
             dashboard_cmd(&config, action.as_deref().unwrap_or("run"), host, port).await
+        }
+        Commands::Console => {
+            // Boxed: console_cmd dispatches back into this function (async
+            // recursion needs an explicit boxed future).
+            let fut: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>> =
+                Box::pin(console_cmd(&config));
+            fut.await
         }
         Commands::Weixin { action } => weixin_cmd(action).await,
         Commands::Qq { action } => qq_cmd(action).await,
