@@ -133,6 +133,22 @@ const state = {
   view: "chat" as "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing",
 };
 
+/** P594: attach a file-tree file to the composer (data-URL round-trip like the fs picker). */
+async function attachFsTreeFile(path: string, name: string): Promise<void> {
+  if (!state.client) return;
+  try {
+    const dataUrl = await state.client.fsReadDataUrl(path);
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const file = new File([blob], name, { type: blob.type || "application/octet-stream" });
+    const upload = await state.client.uploadFile(file, name);
+    state.pendingUploads.push(upload);
+    renderAttachChips();
+  } catch (error) {
+    addMessage("system", fmt(t.session.uploadFailed, { error }));
+  }
+}
+
 /** P590: toggle the chat file-tree sidebar, rooted at the open session's cwd. */
 async function toggleFileTree(): Promise<void> {
   const panel = state.fileTree;
@@ -3214,7 +3230,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   // Learning view (hermes star-map parity): learned skills + memory
   // graph over /api/learning/*.
   state.learning = new LearningOverlay(() => state.client);
-  state.fileTree = new FileTreePanel(() => state.client);
+  state.fileTree = new FileTreePanel(() => state.client, (path, name) => void attachFsTreeFile(path, name));
   state.fileTree.mount(document.getElementById("chat-body")!);
   (document.getElementById("chat-file-tree") as HTMLButtonElement).addEventListener("click", () => {
     void toggleFileTree();

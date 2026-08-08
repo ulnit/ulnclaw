@@ -18,7 +18,11 @@ export class FileTreePanel {
   private rootLabel: HTMLElement;
   private rootPath: string | null = null;
 
-  constructor(private client: () => GatewayClient | null) {
+  constructor(
+    private client: () => GatewayClient | null,
+    /** P594: attach a file to the chat composer (path + display name). */
+    private attach: ((path: string, name: string) => void) | null = null,
+  ) {
     this.aside = document.createElement("aside");
     this.aside.id = "file-tree";
     this.aside.hidden = true;
@@ -187,14 +191,28 @@ export class FileTreePanel {
           details.append(summary, child);
           container.appendChild(details);
         } else {
-          const row = document.createElement("button");
-          row.className = "file-tree-file";
+          const row = document.createElement("div");
+          row.className = "file-tree-file-row";
           row.style.paddingLeft = `${depth * 14 + 8}px`;
-          row.textContent = `\u{1F4C4} ${entry.name}`;
-          row.title = entry.path;
-          row.addEventListener("click", () => {
+          const main = document.createElement("button");
+          main.className = "file-tree-file";
+          main.textContent = `\u{1F4C4} ${entry.name}`;
+          main.title = entry.path;
+          main.addEventListener("click", () => {
             void this.previewFile(entry.path);
           });
+          row.appendChild(main);
+          if (this.attach) {
+            const attachBtn = document.createElement("button");
+            attachBtn.className = "ghost file-tree-attach";
+            attachBtn.textContent = "\u{1F4CE}";
+            attachBtn.title = t.chrome.attachTitle;
+            attachBtn.addEventListener("click", (event) => {
+              event.stopPropagation();
+              this.attach!(entry.path, entry.name);
+            });
+            row.appendChild(attachBtn);
+          }
           container.appendChild(row);
         }
       }
