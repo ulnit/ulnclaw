@@ -34,6 +34,7 @@ import { OnboardingOverlay } from "./onboarding";
 import { SessionPickerDialog } from "./session-picker";
 import { clearIntro, renderIntro } from "./intro";
 import { ActivityTimer, formatElapsed } from "./activity-timer";
+import { initWakeIndicator } from "./wake";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -2295,6 +2296,10 @@ async function restartGateway(): Promise<boolean> {
   return false;
 }
 
+/** P537: gate for the wake indicator — armed after the first healthy
+ * boot so cold-start failures stay on the boot-failure surface. */
+let wakeArmed = false;
+
 async function start(): Promise<void> {
   // Translate the static chrome for any persisted non-en locale (P251).
   applyStatic();
@@ -2325,6 +2330,7 @@ async function start(): Promise<void> {
   // failure recovery card (P253, hermes boot-failure-overlay parity).
   const bootPoll = async (): Promise<void> => {
     if (await state.client!.health()) {
+      wakeArmed = true;
       hideConnecting();
       resolveBootFailure();
       void state.onboarding!.maybeOpen();
@@ -2334,6 +2340,7 @@ async function start(): Promise<void> {
     for (let attempt = 0; attempt < 40; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       if (await state.client!.health()) {
+        wakeArmed = true;
         hideConnecting();
         resolveBootFailure();
         void state.onboarding!.maybeOpen();
@@ -2344,6 +2351,20 @@ async function start(): Promise<void> {
     showBootFailure(() => void bootPoll(), () => el.settingsBtn.click());
   };
   void bootPoll();
+  // P537: wake indicator — after sleep/lid-close (30 s+ hidden) or a
+  // network return, probe the gateway, silently re-sync the session
+  // list, and toast outages until the gateway answers again.
+  initWakeIndicator(
+    () => state.client?.health() ?? Promise.resolve(false),
+    {
+      armed: () => wakeArmed,
+      onHealthy: (afterOutage) => {
+        if (afterOutage) notifySuccess(t.wake.reconnected);
+        void refreshSessions();
+      },
+      onUnreachable: () => notifyError(t.wake.unreachable),
+    },
+  );
   void loadAppearance();
 
   // P343: gateway restart affordance — only when the shell manages the

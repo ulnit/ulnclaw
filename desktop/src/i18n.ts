@@ -90,6 +90,7 @@ export interface Translations {
   slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; insights: string; compress: string; skillFallback: string; resume: string; doctor: string; runs: string; projects: string; config: string; webhooks: string; models: string; plugins: string; archive: string; unarchive: string; exportSession: string; forkSession: string; search: string; open: string; openNotFound: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
     failureTitle: string; retry: string; openSettings: string; dismiss: string };
+  wake: { unreachable: string; reconnected: string };
     bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string; runCompleted: string; runFailed: string; runOpenRuns: string; approvalNeeded: string; approvalReview: string; sessionCreated: string; sessionDeleted: string };
   kanban: {
     todo: string; doing: string; done: string; blocked: string;
@@ -416,6 +417,7 @@ const en: Translations = {
     usage: "this session's token usage", kanban: "add a kanban task (/kanban <title>)", newSession: "start a new session (desktop)", clear: "clear the screen and start a new session (desktop)", clearConfirm: "Clear the screen and start a new session? The current conversation stays in the session list.", insights: "usage analytics across sessions (/insights [N] [--days N] [--source S])", compress: "compress this session's context now", skillFallback: "skill", doctor: "open the Doctor view", runs: "open the Runs view", projects: "open the Projects view", config: "open the Config view", webhooks: "open the Webhooks view", models: "open the Models view", plugins: "open the Plugins view", archive: "archive the current session", unarchive: "restore (unarchive) the current session", exportSession: "export this session (/export [md|html|json])", forkSession: "fork this session and open the branch", search: "search session transcripts (/search <query>)", open: "open a session by id prefix (/open <prefix>)", openNotFound: "No session matches prefix {prefix}",
     resume: "resume a recent session (desktop)",
   },
+  wake: { unreachable: "Gateway unreachable — retrying in the background…", reconnected: "Gateway reconnected — sessions refreshed." },
   boot: {
     spawnFailed: "Gateway spawn failed: {error}",
     unreachable: "Gateway unreachable — check the gateway URL and API key in Settings.",
@@ -914,6 +916,7 @@ const zh: Translations = {
     usage: "本会话的 token 用量", kanban: "添加看板任务（/kanban <标题>）", newSession: "开始新会话（桌面）", clear: "清空屏幕并开始新会话（桌面）", clearConfirm: "清空屏幕并开始新会话？当前会话仍保留在会话列表中。", insights: "跨会话用量分析（/insights [N] [--days N] [--source S]）", compress: "立即压缩本会话上下文", skillFallback: "技能", doctor: "打开诊断视图", runs: "打开运行视图", projects: "打开项目视图", config: "打开配置视图", webhooks: "打开 Webhooks 视图", models: "打开模型视图", plugins: "打开插件视图", archive: "归档当前会话", unarchive: "恢复（取消归档）当前会话", exportSession: "导出当前会话（/export [md|html|json]）", forkSession: "分叉当前会话并打开分支", search: "全文搜索会话转录（/search <关键词>）", open: "按 ID 前缀打开会话（/open <前缀>）", openNotFound: "没有匹配前缀 {prefix} 的会话",
     resume: "恢复近期会话（桌面）",
   },
+  wake: { unreachable: "网关不可达——正在后台重试…", reconnected: "网关已重新连接——会话已刷新。" },
   boot: {
     spawnFailed: "网关拉起失败：{error}",
     unreachable: "网关不可达 — 请在设置中检查网关 URL 与 API 密钥。",
@@ -1412,6 +1415,7 @@ const zhHant: Translations = {
     usage: "本工作階段的 token 用量", kanban: "新增看板任務（/kanban <標題>）", newSession: "開始新工作階段（桌面）", clear: "清空螢幕並開始新工作階段（桌面）", clearConfirm: "清空螢幕並開始新工作階段？目前工作階段仍保留在工作階段清單中。", insights: "跨工作階段用量分析（/insights [N] [--days N] [--source S]）", compress: "立即壓縮本工作階段上下文", skillFallback: "技能", doctor: "開啟診斷檢視", runs: "開啟執行檢視", projects: "開啟專案檢視", config: "開啟設定檢視", webhooks: "開啟 Webhooks 檢視", models: "開啟模型檢視", plugins: "開啟外掛檢視", archive: "歸檔目前工作階段", unarchive: "恢復（取消歸檔）目前工作階段", exportSession: "匯出目前工作階段（/export [md|html|json]）", forkSession: "分叉目前工作階段並開啟分支", search: "全文搜尋工作階段轉錄（/search <關鍵字>）", open: "依 ID 前綴開啟工作階段（/open <前綴>）", openNotFound: "沒有匹配前綴 {prefix} 的工作階段",
     resume: "恢復近期工作階段（桌面）",
   },
+  wake: { unreachable: "閘道無法連線——正在背景重試…", reconnected: "閘道已重新連線——工作階段已重新整理。" },
   boot: {
     spawnFailed: "閘道啟動失敗：{error}",
     unreachable: "閘道不可達 — 請在設定中檢查閘道 URL 與 API 金鑰。",
@@ -1910,6 +1914,7 @@ const ja: Translations = {
     usage: "このセッションのトークン使用量", kanban: "カンバンタスクを追加（/kanban <タイトル>）", newSession: "新しいセッションを開始（デスクトップ）", clear: "画面をクリアして新しいセッションを開始（デスクトップ）", clearConfirm: "画面をクリアして新しいセッションを開始しますか？現在のセッションはセッション一覧に残ります。", insights: "セッション横断の使用量分析（/insights [N] [--days N] [--source S]）", compress: "このセッションのコンテキストを今すぐ圧縮", skillFallback: "スキル", doctor: "ドクタービューを開く", runs: "実行ビューを開く", projects: "プロジェクトビューを開く", config: "設定ビューを開く", webhooks: "Webhooks ビューを開く", models: "モデルビューを開く", plugins: "プラグインビューを開く", archive: "現在のセッションをアーカイブ", unarchive: "現在のセッションを復元（アーカイブ解除）", exportSession: "このセッションをエクスポート（/export [md|html|json]）", forkSession: "このセッションをフォークしてブランチを開く", search: "セッション記録を全文検索（/search <クエリ>）", open: "ID プレフィックスでセッションを開く（/open <プレフィックス>）", openNotFound: "プレフィックス {prefix} に一致するセッションがありません",
     resume: "最近のセッションを再開（デスクトップ）",
   },
+  wake: { unreachable: "ゲートウェイに到達できません — バックグラウンドで再試行中…", reconnected: "ゲートウェイが再接続されました — セッションを更新しました。" },
   boot: {
     spawnFailed: "ゲートウェイの起動に失敗：{error}",
     unreachable: "ゲートウェイに到達できません — 設定でゲートウェイ URL と API キーを確認してください。",
@@ -2408,6 +2413,7 @@ const ar: Translations = {
     usage: "استخدام الرموز لهذه الجلسة", kanban: "إضافة مهمة كانبان (/kanban <العنوان>)", newSession: "بدء جلسة جديدة (سطح المكتب)", clear: "مسح الشاشة وبدء جلسة جديدة (سطح المكتب)", clearConfirm: "مسح الشاشة وبدء جلسة جديدة؟ تبقى الجلسة الحالية في قائمة الجلسات.", insights: "تحليلات الاستخدام عبر الجلسات (/insights [N] [--days N] [--source S])", compress: "ضغط سياق هذه الجلسة الآن", skillFallback: "مهارة", doctor: "فتح عرض التشخيص", runs: "فتح عرض التشغيلات", projects: "فتح عرض المشاريع", config: "فتح عرض الإعدادات", webhooks: "فتح عرض الخطافات", models: "فتح عرض النماذج", plugins: "فتح عرض الإضافات", archive: "أرشفة الجلسة الحالية", unarchive: "استعادة الجلسة الحالية (إلغاء الأرشفة)", exportSession: "تصدير هذه الجلسة (/export [md|html|json])", forkSession: "تفريع هذه الجلسة وفتح الفرع", search: "البحث في نصوص الجلسات (/search <استعلام>)", open: "فتح جلسة حسب بادئ المعرف (/open <بادئة>)", openNotFound: "لا توجد جلسة تطابق البادئة {prefix}",
     resume: "استئناف جلسة حديثة (سطح المكتب)",
   },
+  wake: { unreachable: "البوابة غير متاحة — تجري إعادة المحاولة في الخلفية…", reconnected: "أعيد الاتصال بالبوابة — تم تحديث الجلسات." },
   boot: {
     spawnFailed: "فشل تشغيل البوابة: {error}",
     unreachable: "البوابة غير متاحة — تحقق من عنوان البوابة ومفتاح API في الإعدادات.",
