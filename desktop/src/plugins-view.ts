@@ -3,7 +3,7 @@
 // counts, disabled badge and enable/disable toggles, plus the `[hooks]`
 // config shell-hook listing. Install/update/remove stay in the CLI.
 
-import type { GatewayClient, PluginsPayload } from "./gateway";
+import type { GatewayClient, PluginsHubPayload, PluginsPayload } from "./gateway";
 import { t } from "./i18n";
 
 function escapeHtml(text: string): string {
@@ -15,6 +15,8 @@ function escapeHtml(text: string): string {
 }
 
 export class PluginsViewWidget {
+  private hub: PluginsHubPayload | null = null;
+
   constructor(
     private root: HTMLElement,
     private client: () => GatewayClient | null,
@@ -25,15 +27,23 @@ export class PluginsViewWidget {
       <header id="plugins-view-header">
         <span id="plugins-view-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <button id="plugins-view-rescan" class="ghost" data-i18n="pluginsView.rescan">Rescan</button>
         <button id="plugins-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="plugins-view-status" class="config-status" hidden></div>
       <div id="plugins-view-list" class="skills-list"></div>
+      <h3 class="config-section" data-i18n="pluginsView.hubTitle">Plugin hub</h3>
+      <div id="plugins-view-hub"></div>
+      <h3 class="config-section" data-i18n="pluginsView.providersTitle">Plugin providers</h3>
+      <div id="plugins-view-providers"></div>
       <h3 class="config-section" data-i18n="pluginsView.configHooksTitle">Config shell hooks</h3>
       <div id="plugins-view-hooks"></div>
     `;
     this.root.querySelector("#plugins-view-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
+    });
+    this.root.querySelector("#plugins-view-rescan")!.addEventListener("click", () => {
+      this.rescan().catch(() => undefined);
     });
   }
 
@@ -59,8 +69,13 @@ export class PluginsViewWidget {
       return;
     }
     try {
-      const payload = await client.pluginsInventory();
+      const [payload, hub] = await Promise.all([
+        client.pluginsInventory(),
+        client.pluginsHub().catch(() => null),
+      ]);
+      this.hub = hub;
       this.render(payload);
+      this.renderHub(hub);
       this.status("");
     } catch (error) {
       this.status(
@@ -95,11 +110,13 @@ export class PluginsViewWidget {
             ? `<span class="models-view-badge warn">${escapeHtml(v.disabledBadge)}</span>`
             : "";
           const toggleLabel = plugin.disabled ? v.enable : v.disable;
+          const isHidden = this.hub?.hidden.includes(plugin.name) ?? false;
           return `
             <div class="plugins-view-row" data-name="${escapeHtml(plugin.name)}">
               <div class="plugins-view-row-head">
                 <strong>${escapeHtml(plugin.name)}</strong> ${badges} ${disabledBadge}
                 <span class="spacer"></span>
+                <button class="ghost plugins-view-visibility">${escapeHtml(isHidden ? v.show : v.hide)}</button>
                 <button class="ghost plugins-view-toggle">${escapeHtml(toggleLabel)}</button>
               </div>
               ${plugin.description ? `<div class="plugins-view-desc">${escapeHtml(plugin.description)}</div>` : ""}
@@ -115,6 +132,10 @@ export class PluginsViewWidget {
         if (!plugin) continue;
         row.querySelector(".plugins-view-toggle")!.addEventListener("click", () => {
           this.toggle(plugin.name, plugin.disabled).catch(() => undefined);
+        });
+        row.querySelector(".plugins-view-visibility")!.addEventListener("click", () => {
+          const hidden = this.hub?.hidden.includes(plugin.name) ?? false;
+          this.setVisibility(plugin.name, !hidden).catch(() => undefined);
         });
       }
     }
@@ -211,6 +232,169 @@ export class PluginsViewWidget {
         ),
         true,
       );
+    }
+  }
+
+  private fail(error: unknown): void {
+    this.status(error instanceof Error ? error.message : String(error), true);
+  }
+
+  private renderHub(hub: PluginsHubPayload | null): void {
+    const el = this.root.querySelector("#plugins-view-hub") as HTMLElement;
+    const providers = this.root.querySelector("#plugins-view-providers") as HTMLElement;
+    const v = t.pluginsView;
+    if (!hub) {
+      el.innerHTML = "";
+      providers.innerHTML = "";
+      return;
+    }
+
+    if (hub.catalog.length === 0) {
+      el.innerHTML = `<p class="empty">${escapeHtml(v.hubNone)}</p>`;
+    } else {
+      el.innerHTML = hub.catalog
+        .map((entry) => {
+          const tags = entry.tags
+            .map((tag) => `<span class="models-view-badge">${escapeHtml(tag)}</span>`)
+            .join(" ");
+          const actions = entry.installed
+            ? `<span class="models-view-badge ok">${escapeHtml(v.hubInstalled)}</span>
+               <button class="ghost plugins-view-hub-update">${escapeHtml(v.hubUpdate)}</button>
+               <button class="ghost danger plugins-view-hub-remove">${escapeHtml(v.hubRemove)}</button>`
+            : `<button class="ghost plugins-view-hub-install">${escapeHtml(v.hubInstall)}</button>`;
+          return `
+            <div class="plugins-view-row" data-name="${escapeHtml(entry.name)}">
+              <div class="plugins-view-row-head">
+                <strong>${escapeHtml(entry.name)}</strong>
+                <span class="plugins-view-meta">${escapeHtml(entry.version || "—")}</span>
+                <span class="plugins-view-meta">${escapeHtml(entry.source)}</span> ${tags}
+                <span class="spacer"></span> ${actions}
+              </div>
+              ${entry.description ? `<div class="plugins-view-desc">${escapeHtml(entry.description)}</div>` : ""}
+              <div class="plugins-view-sub muted">${escapeHtml(entry.identifier)}</div>
+            </div>`;
+        })
+        .join("");
+      for (const row of Array.from(el.querySelectorAll<HTMLElement>(".plugins-view-row"))) {
+        const name = row.dataset.name || "";
+        const entry = hub.catalog.find((candidate) => candidate.name === name);
+        if (!entry) continue;
+        const install = row.querySelector<HTMLButtonElement>(".plugins-view-hub-install");
+        if (install) {
+          install.addEventListener("click", () => this.install(entry.identifier, install));
+        }
+        row.querySelector(".plugins-view-hub-update")?.addEventListener("click", () => {
+          this.updatePlugin(entry.name).catch(() => undefined);
+        });
+        row.querySelector(".plugins-view-hub-remove")?.addEventListener("click", () => {
+          this.removePlugin(entry.name).catch(() => undefined);
+        });
+      }
+    }
+
+    providers.innerHTML = "";
+    const memorySelect = this.providerSelect(hub.providers.memory, hub.selected.memory_provider);
+    const contextSelect = this.providerSelect(hub.providers.context, hub.selected.context_engine);
+    const rowOne = document.createElement("div");
+    rowOne.className = "monitoring-row";
+    rowOne.innerHTML = `<span class="monitoring-label">${escapeHtml(v.memoryProvider)}</span>`;
+    rowOne.appendChild(memorySelect);
+    const rowTwo = document.createElement("div");
+    rowTwo.className = "monitoring-row";
+    rowTwo.innerHTML = `<span class="monitoring-label">${escapeHtml(v.contextEngine)}</span>`;
+    rowTwo.appendChild(contextSelect);
+    const save = document.createElement("button");
+    save.className = "ghost";
+    save.textContent = v.providersSave;
+    save.addEventListener("click", () => {
+      const client = this.client();
+      if (!client) return;
+      client
+        .setPluginProviders(memorySelect.value, contextSelect.value)
+        .then(() => {
+          this.status(`${v.providersSave} ✓`);
+          return this.refresh();
+        })
+        .catch((error) => this.fail(error));
+    });
+    rowTwo.appendChild(save);
+    providers.appendChild(rowOne);
+    providers.appendChild(rowTwo);
+  }
+
+  private providerSelect(options: string[], selected: string): HTMLSelectElement {
+    const select = document.createElement("select");
+    for (const option of options) {
+      const el = document.createElement("option");
+      el.value = option;
+      el.textContent = option;
+      if (option === selected) el.selected = true;
+      select.appendChild(el);
+    }
+    return select;
+  }
+
+  private async rescan(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    try {
+      const count = await client.dashboardPluginsRescan();
+      this.status(`${t.pluginsView.rescan}: ${count}`);
+      await this.refresh();
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  private async install(identifier: string, button: HTMLButtonElement): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const v = t.pluginsView;
+    button.disabled = true;
+    button.textContent = v.hubInstalling;
+    try {
+      const name = await client.agentPluginInstall(identifier);
+      this.status(`${v.hubInstalled}: ${name}`);
+      await this.refresh();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = v.hubInstall;
+      this.fail(error);
+    }
+  }
+
+  private async updatePlugin(name: string): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    try {
+      await client.agentPluginUpdate(name);
+      this.status(`${t.pluginsView.hubUpdate}: ${name}`);
+      await this.refresh();
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  private async removePlugin(name: string): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    try {
+      await client.agentPluginRemove(name);
+      this.status(`${t.pluginsView.hubRemove}: ${name}`);
+      await this.refresh();
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  private async setVisibility(name: string, hidden: boolean): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    try {
+      await client.setPluginVisibility(name, hidden);
+      await this.refresh();
+    } catch (error) {
+      this.fail(error);
     }
   }
 }

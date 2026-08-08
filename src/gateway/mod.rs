@@ -4088,6 +4088,474 @@ async fn plugin_disable(
     }
 }
 
+/// hermes `_PLUGINS_HUB_CACHE_TTL_SECONDS` — memoize the assembled hub
+/// payload briefly to collapse the dashboard's bursty duplicate fetches.
+const PLUGINS_HUB_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+static PLUGINS_HUB_CACHE: std::sync::Mutex<Option<(std::time::Instant, Value)>> =
+    std::sync::Mutex::new(None);
+
+fn invalidate_plugins_hub_cache() {
+    *PLUGINS_HUB_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// Dashboard-plugin rows must reject path-traversal names (hermes
+/// `_validate_plugin_name`).
+fn validate_plugin_name(name: &str) -> std::result::Result<String, Response> {
+    let trimmed = name.trim_matches('/');
+    if trimmed.is_empty() || trimmed.contains("..") || trimmed.contains('\\') {
+        return Err(bad_request("Invalid plugin name.", None));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// `dashboard.hidden_plugins` list from the live config.toml (hermes
+/// per-request `load_config()` semantics).
+fn read_hidden_plugins() -> Vec<String> {
+    let path = crate::config_cmd::config_path();
+    let Ok(toml_value) = crate::config_cmd::load_toml(&path) else {
+        return Vec::new();
+    };
+    toml_value
+        .get("dashboard")
+        .and_then(|d| d.get("hidden_plugins"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn dashboard_plugin_row(plugin: &crate::plugins::LoadedPlugin) -> Value {
+    json!({
+        "name": plugin.manifest.name,
+        "version": plugin.manifest.version,
+        "description": plugin.manifest.description,
+        "source": "user",
+        "enabled": !plugin.disabled,
+        "hooks": plugin.manifest.hooks.len(),
+        "tools": plugin.manifest.tools.len(),
+        "provides": plugin.manifest.provides,
+    })
+}
+
+/// `GET /api/dashboard/plugins` — active dashboard plugins: disk-fresh
+/// discovery minus the config deny-list and `dashboard.hidden_plugins`
+/// (hermes parity).
+async fn dashboard_plugins(State(_state): State<Arc<GatewayState>>) -> Response {
+    let result = tokio::task::spawn_blocking(|| {
+        let home = crate::config::ulnclaw_home();
+        let disabled = crate::plugins::current_disabled(&home);
+        let hidden = read_hidden_plugins();
+        let (plugins, _) = crate::plugins::discover_dir_plugins(&home, &disabled);
+        plugins
+            .iter()
+            .filter(|p| !p.disabled && !hidden.contains(&p.manifest.name))
+            .map(dashboard_plugin_row)
+            .collect::<Vec<_>>()
+    })
+    .await;
+    match result {
+        Ok(rows) => Json(Value::Array(rows)).into_response(),
+        Err(e) => server_error(&format!("plugins task failed: {e}")),
+    }
+}
+
+/// `GET /api/dashboard/plugins/rescan` — force a fresh discovery pass;
+/// the hub payload is disk-fresh, so this only invalidates the cache
+/// and reports the count (hermes parity).
+async fn dashboard_plugins_rescan(State(_state): State<Arc<GatewayState>>) -> Response {
+    invalidate_plugins_hub_cache();
+    let count = tokio::task::spawn_blocking(|| {
+        let home = crate::config::ulnclaw_home();
+        let disabled = crate::plugins::current_disabled(&home);
+        crate::plugins::discover_dir_plugins(&home, &disabled).0.len()
+    })
+    .await
+    .unwrap_or(0);
+    Json(json!({"ok": true, "count": count})).into_response()
+}
+
+/// Assemble the merged hub payload (hermes `_merged_plugins_hub`):
+/// agent plugins + hub catalog + provider picker metadata. Read-only
+/// and cheap — disk scans of small manifest files only.
+fn build_plugins_hub_payload() -> Value {
+    let home = crate::config::ulnclaw_home();
+    let disabled = crate::plugins::current_disabled(&home);
+    let hidden = read_hidden_plugins();
+    let (plugins, _) = crate::plugins::discover_dir_plugins(&home, &disabled);
+    let installed_names: Vec<String> = plugins
+        .iter()
+        .map(|p| p.manifest.name.clone())
+        .collect();
+    let agent_plugins: Vec<Value> = plugins.iter().map(dashboard_plugin_row).collect();
+    let catalog: Vec<Value> = crate::plugins::load_hub_catalog(&home)
+        .into_iter()
+        .map(|entry| {
+            json!({
+                "name": entry.name,
+                "description": entry.description,
+                "identifier": entry.identifier,
+                "version": entry.version,
+                "homepage": entry.homepage,
+                "tags": entry.tags,
+                "source": entry.source,
+                "installed": installed_names.contains(&entry.name),
+            })
+        })
+        .collect();
+    let available = |kind: &str| -> Vec<String> {
+        let mut names = vec!["builtin".to_string()];
+        for plugin in &plugins {
+            if !plugin.disabled
+                && plugin.manifest.provides.iter().any(|v| v == kind)
+                && !names.contains(&plugin.manifest.name)
+            {
+                names.push(plugin.manifest.name.clone());
+            }
+        }
+        names
+    };
+    let selected_memory = read_dashboard_value("plugins.memory_provider")
+        .unwrap_or_else(|| "builtin".to_string());
+    let selected_context = read_dashboard_value("plugins.context_engine")
+        .unwrap_or_else(|| "builtin".to_string());
+    json!({
+        "agent_plugins": agent_plugins,
+        "catalog": catalog,
+        "providers": {
+            "memory": available("memory"),
+            "context": available("context"),
+        },
+        "selected": {
+            "memory_provider": selected_memory,
+            "context_engine": selected_context,
+        },
+        "hidden": hidden,
+        "generated_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    })
+}
+
+/// `GET /api/dashboard/plugins/hub` — unified agent plugins + hub
+/// catalog + provider picker metadata, memoized for 5 s (hermes
+/// parity).
+async fn dashboard_plugins_hub(State(_state): State<Arc<GatewayState>>) -> Response {
+    {
+        let cached = PLUGINS_HUB_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some((at, payload)) = cached {
+            if at.elapsed() < PLUGINS_HUB_CACHE_TTL {
+                return Json(payload).into_response();
+            }
+        }
+    }
+    let result = tokio::task::spawn_blocking(build_plugins_hub_payload).await;
+    match result {
+        Ok(payload) => {
+            *PLUGINS_HUB_CACHE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                Some((std::time::Instant::now(), payload.clone()));
+            Json(payload).into_response()
+        }
+        Err(e) => server_error(&format!("plugins hub task failed: {e}")),
+    }
+}
+
+/// `POST /api/dashboard/agent-plugins/install` body (hermes
+/// `_AgentPluginInstallBody`).
+#[derive(Debug, Deserialize)]
+struct AgentPluginInstallBody {
+    identifier: String,
+    #[serde(default)]
+    force: bool,
+    #[serde(default = "default_agent_plugin_enable")]
+    enable: bool,
+}
+
+fn default_agent_plugin_enable() -> bool {
+    true
+}
+
+/// `POST /api/dashboard/agent-plugins/install` — install from a hub
+/// catalog name or any git identifier (URL / `owner/repo` shorthand);
+/// local-dir candidates copy instead of cloning (hermes parity).
+async fn dashboard_agent_plugin_install(
+    State(_state): State<Arc<GatewayState>>,
+    Json(body): Json<AgentPluginInstallBody>,
+) -> Response {
+    let identifier = body.identifier.trim().to_string();
+    if identifier.is_empty() {
+        return bad_request("identifier is required", None);
+    }
+    let force = body.force;
+    let enable = body.enable;
+    let result = tokio::task::spawn_blocking(move || {
+        let home = crate::config::ulnclaw_home();
+        // Hub catalog names resolve to their recorded identifier.
+        let resolved = crate::plugins::load_hub_catalog(&home)
+            .into_iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(&identifier))
+            .map(|entry| entry.identifier)
+            .unwrap_or(identifier);
+        let local = std::path::PathBuf::from(&resolved);
+        let installed = if local.is_dir() {
+            crate::plugins::install_local_dir(&home, &local, force)?
+        } else {
+            crate::plugins::install_plugin(&home, &resolved, force)?
+        };
+        if enable {
+            let _ = crate::plugins::enable_plugin(&home, &installed.name);
+        }
+        Ok::<(String, bool), String>((installed.name, installed.has_manifest))
+    })
+    .await;
+    invalidate_plugins_hub_cache();
+    match result {
+        Ok(Ok((name, has_manifest))) => Json(json!({
+            "ok": true,
+            "name": name,
+            "has_manifest": has_manifest,
+            "enabled": enable,
+        }))
+        .into_response(),
+        Ok(Err(e)) => bad_request(&e, None),
+        Err(e) => server_error(&format!("install task failed: {e}")),
+    }
+}
+
+/// `POST /api/dashboard/agent-plugins/:name/enable` — deny-list
+/// removal, hermes agent-plugin path parity.
+async fn dashboard_agent_plugin_enable(
+    State(_state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> Response {
+    let Ok(name) = validate_plugin_name(&name) else {
+        return bad_request("Invalid plugin name.", None);
+    };
+    let result = tokio::task::spawn_blocking({
+        let name = name.clone();
+        move || {
+            let home = crate::config::ulnclaw_home();
+            crate::plugins::enable_plugin(&home, &name)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("enable task failed: {e}")));
+    invalidate_plugins_hub_cache();
+    match result {
+        Ok(message) => Json(json!({"ok": true, "name": name, "message": message})).into_response(),
+        Err(e) => bad_request(&e, None),
+    }
+}
+
+/// `POST /api/dashboard/agent-plugins/:name/disable` — deny-list
+/// addition, hermes agent-plugin path parity.
+async fn dashboard_agent_plugin_disable(
+    State(_state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> Response {
+    let Ok(name) = validate_plugin_name(&name) else {
+        return bad_request("Invalid plugin name.", None);
+    };
+    let result = tokio::task::spawn_blocking({
+        let name = name.clone();
+        move || {
+            let home = crate::config::ulnclaw_home();
+            crate::plugins::disable_plugin(&home, &name)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("disable task failed: {e}")));
+    invalidate_plugins_hub_cache();
+    match result {
+        Ok(message) => Json(json!({"ok": true, "name": name, "message": message})).into_response(),
+        Err(e) => bad_request(&e, None),
+    }
+}
+
+/// `POST /api/dashboard/agent-plugins/:name/update` — git-pull the
+/// installed plugin (hermes parity).
+async fn dashboard_agent_plugin_update(
+    State(_state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> Response {
+    let Ok(name) = validate_plugin_name(&name) else {
+        return bad_request("Invalid plugin name.", None);
+    };
+    let result = tokio::task::spawn_blocking({
+        let name = name.clone();
+        move || {
+            let home = crate::config::ulnclaw_home();
+            crate::plugins::update_plugin(&home, &name)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("update task failed: {e}")));
+    invalidate_plugins_hub_cache();
+    match result {
+        Ok(output) => Json(json!({"ok": true, "name": name, "output": output.trim()})).into_response(),
+        Err(e) => bad_request(&e, None),
+    }
+}
+
+/// `DELETE /api/dashboard/agent-plugins/:name` — remove the installed
+/// plugin directory (hermes parity).
+async fn dashboard_agent_plugin_remove(
+    State(_state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> Response {
+    let Ok(name) = validate_plugin_name(&name) else {
+        return bad_request("Invalid plugin name.", None);
+    };
+    let result = tokio::task::spawn_blocking({
+        let name = name.clone();
+        move || {
+            let home = crate::config::ulnclaw_home();
+            crate::plugins::remove_plugin(&home, &name)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("remove task failed: {e}")));
+    invalidate_plugins_hub_cache();
+    match result {
+        Ok(message) => Json(json!({"ok": true, "name": name, "message": message})).into_response(),
+        Err(e) => bad_request(&e, None),
+    }
+}
+
+/// `PUT /api/dashboard/plugin-providers` — persist the memory provider
+/// / context engine selection (hermes parity). Valid values: `builtin`
+/// plus installed plugins whose manifest declares the matching
+/// `provides` capability.
+async fn dashboard_plugin_providers_set(
+    State(_state): State<Arc<GatewayState>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let memory = body["memory_provider"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let context = body["context_engine"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    if memory.is_none() && context.is_none() {
+        return bad_request("memory_provider or context_engine is required", None);
+    }
+    let result = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        let home = crate::config::ulnclaw_home();
+        let disabled = crate::plugins::current_disabled(&home);
+        let (plugins, _) = crate::plugins::discover_dir_plugins(&home, &disabled);
+        let available = |kind: &str| -> Vec<String> {
+            let mut names = vec!["builtin".to_string()];
+            for plugin in &plugins {
+                if !plugin.disabled
+                    && plugin.manifest.provides.iter().any(|v| v == kind)
+                    && !names.contains(&plugin.manifest.name)
+                {
+                    names.push(plugin.manifest.name.clone());
+                }
+            }
+            names
+        };
+        let path = crate::config_cmd::config_path();
+        let mut toml_value = crate::config_cmd::load_toml(&path)?;
+        if let Some(value) = &memory {
+            let options = available("memory");
+            if !options.contains(value) {
+                return Err(format!(
+                    "Unknown memory provider '{value}'. Available: {}",
+                    options.join(", ")
+                ));
+            }
+            crate::config_cmd::set_nested(
+                &mut toml_value,
+                "plugins.memory_provider",
+                toml::Value::String(value.clone()),
+            )?;
+        }
+        if let Some(value) = &context {
+            let options = available("context");
+            if !options.contains(value) {
+                return Err(format!(
+                    "Unknown context engine '{value}'. Available: {}",
+                    options.join(", ")
+                ));
+            }
+            crate::config_cmd::set_nested(
+                &mut toml_value,
+                "plugins.context_engine",
+                toml::Value::String(value.clone()),
+            )?;
+        }
+        crate::config_cmd::save_toml(&path, &toml_value)?;
+        Ok(())
+    })
+    .await;
+    invalidate_plugins_hub_cache();
+    match result {
+        Ok(Ok(())) => Json(json!({"ok": true})).into_response(),
+        Ok(Err(e)) => bad_request(&e, None),
+        Err(e) => server_error(&format!("plugin-providers task failed: {e}")),
+    }
+}
+
+/// `POST /api/dashboard/plugins/:name/visibility` — toggle the
+/// sidebar-visibility entry in `dashboard.hidden_plugins` (hermes
+/// parity).
+async fn dashboard_plugin_visibility(
+    State(_state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let Ok(name) = validate_plugin_name(&name) else {
+        return bad_request("Invalid plugin name.", None);
+    };
+    let hidden = body["hidden"].as_bool().unwrap_or(false);
+    let result = tokio::task::spawn_blocking({
+        let name = name.clone();
+        move || -> std::result::Result<(), String> {
+            let path = crate::config_cmd::config_path();
+            let mut toml_value = crate::config_cmd::load_toml(&path)?;
+            let mut list = read_hidden_plugins();
+            if hidden {
+                if !list.contains(&name) {
+                    list.push(name.clone());
+                }
+            } else {
+                list.retain(|entry| entry != &name);
+            }
+            let array = toml::Value::Array(
+                list.into_iter().map(toml::Value::String).collect(),
+            );
+            crate::config_cmd::set_nested(
+                &mut toml_value,
+                "dashboard.hidden_plugins",
+                array,
+            )?;
+            crate::config_cmd::save_toml(&path, &toml_value)?;
+            Ok(())
+        }
+    })
+    .await;
+    invalidate_plugins_hub_cache();
+    match result {
+        Ok(Ok(())) => Json(json!({"ok": true, "name": name, "hidden": hidden})).into_response(),
+        Ok(Err(e)) => server_error(&e),
+        Err(e) => server_error(&format!("visibility task failed: {e}")),
+    }
+}
+
 /// `GET /api/storage` — session-store footprint: logical database size,
 /// WAL size, session/message counts and the on-disk path (desktop Doctor
 /// storage panel; ulnclaw extension).
@@ -4212,6 +4680,37 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/dashboard/themes", get(dashboard_themes))
         .route("/api/dashboard/theme", put(dashboard_theme_set))
         .route("/api/dashboard/font", get(dashboard_font_get).put(dashboard_font_set))
+        .route("/api/dashboard/plugins", get(dashboard_plugins))
+        .route("/api/dashboard/plugins/rescan", get(dashboard_plugins_rescan))
+        .route("/api/dashboard/plugins/hub", get(dashboard_plugins_hub))
+        .route(
+            "/api/dashboard/plugins/:name/visibility",
+            post(dashboard_plugin_visibility),
+        )
+        .route(
+            "/api/dashboard/agent-plugins/install",
+            post(dashboard_agent_plugin_install),
+        )
+        .route(
+            "/api/dashboard/agent-plugins/:name/enable",
+            post(dashboard_agent_plugin_enable),
+        )
+        .route(
+            "/api/dashboard/agent-plugins/:name/disable",
+            post(dashboard_agent_plugin_disable),
+        )
+        .route(
+            "/api/dashboard/agent-plugins/:name/update",
+            post(dashboard_agent_plugin_update),
+        )
+        .route(
+            "/api/dashboard/agent-plugins/:name",
+            delete(dashboard_agent_plugin_remove),
+        )
+        .route(
+            "/api/dashboard/plugin-providers",
+            put(dashboard_plugin_providers_set),
+        )
         .route("/api/doctor", get(doctor_report))
         .route("/api/ops/security-audit", get(ops_security_audit))
         .route("/api/ops/prompt-size", get(ops_prompt_size))
@@ -14394,6 +14893,189 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_plugin_hub_marketplace_pipeline() {
+        // P351: hub catalog, install (local-dir candidate), provider
+        // selection, visibility toggle, agent-plugin lifecycle.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        // Installed plugin `demo` (provides a memory backend).
+        let demo = dir.path().join("plugins").join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        std::fs::write(
+            demo.join("plugin.toml"),
+            "name = \"demo\"\nversion = \"0.1.0\"\ndescription = \"Demo plugin\"\nprovides = [\"memory\"]\n",
+        )
+        .unwrap();
+        // Hub: curated index entry + local-dir candidate.
+        let hub = dir.path().join("plugin-hub");
+        std::fs::create_dir_all(&hub).unwrap();
+        std::fs::write(
+            hub.join("index.json"),
+            "{\"plugins\":[{\"name\":\"indexed\",\"identifier\":\"example/plugin\",\"description\":\"From the index\",\"version\":\"1.0.0\",\"tags\":[\"test\"]}]}",
+        )
+        .unwrap();
+        let local = hub.join("localcand");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(
+            local.join("plugin.toml"),
+            "name = \"localcand\"\nversion = \"0.2.0\"\ndescription = \"Local candidate\"\n",
+        )
+        .unwrap();
+
+        let app = router(test_state());
+
+        // Hub is token-protected.
+        let (status, _) = get_json(app.clone(), "/api/dashboard/plugins/hub", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Active dashboard list contains demo.
+        let (status, body) = get_json(app.clone(), "/api/dashboard/plugins", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let names: Vec<String> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["name"].as_str().map(String::from))
+            .collect();
+        assert!(names.contains(&"demo".to_string()));
+
+        // Hub merges agent plugins + catalog + provider metadata.
+        let (status, body) =
+            get_json(app.clone(), "/api/dashboard/plugins/hub", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let agent_names: Vec<String> = body["agent_plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["name"].as_str().map(String::from))
+            .collect();
+        assert!(agent_names.contains(&"demo".to_string()));
+        let catalog_names: Vec<String> = body["catalog"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["name"].as_str().map(String::from))
+            .collect();
+        assert!(catalog_names.contains(&"indexed".to_string()));
+        assert!(catalog_names.contains(&"localcand".to_string()));
+        let memory = body["providers"]["memory"].as_array().unwrap();
+        assert!(memory.iter().any(|v| v.as_str() == Some("builtin")));
+        assert!(memory.iter().any(|v| v.as_str() == Some("demo")));
+        assert_eq!(body["selected"]["memory_provider"].as_str(), Some("builtin"));
+
+        // Install the local-dir candidate by catalog name.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/dashboard/agent-plugins/install",
+            "{\"identifier\":\"localcand\"}",
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["name"].as_str(), Some("localcand"));
+        assert!(dir
+            .path()
+            .join("plugins")
+            .join("localcand")
+            .join("plugin.toml")
+            .is_file());
+
+        // Provider selection validates then persists.
+        let (status, _) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/dashboard/plugin-providers",
+            Some("sekret"),
+            json!({"memory_provider": "bogus"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/dashboard/plugin-providers",
+            Some("sekret"),
+            json!({"memory_provider": "demo"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Visibility toggle hides demo from the active list.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/dashboard/plugins/demo/visibility",
+            "{\"hidden\":true}",
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = get_json(app.clone(), "/api/dashboard/plugins", Some("sekret")).await;
+        let names: Vec<String> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["name"].as_str().map(String::from))
+            .collect();
+        assert!(!names.contains(&"demo".to_string()));
+
+        // Rescan reports both installed plugins.
+        let (status, body) =
+            get_json(app.clone(), "/api/dashboard/plugins/rescan", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"].as_bool(), Some(true));
+        assert_eq!(body["count"].as_u64(), Some(2));
+
+        // Agent-plugin enable/disable alias routes.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/dashboard/agent-plugins/localcand/disable",
+            "{}",
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/dashboard/agent-plugins/localcand/enable",
+            "{}",
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Traversal names are rejected.
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/dashboard/agent-plugins/..%2F..%2Fevil/enable",
+            "{}",
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // DELETE removes the installed plugin directory.
+        let (status, body) = send_json(
+            app.clone(),
+            "DELETE",
+            "/api/dashboard/agent-plugins/localcand",
+            Some("sekret"),
+            json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"].as_bool(), Some(true));
+        assert!(!dir.path().join("plugins").join("localcand").exists());
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

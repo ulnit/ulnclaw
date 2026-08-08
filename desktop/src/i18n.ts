@@ -167,6 +167,10 @@ export interface Translations {
     disabledBadge: string; enable: string; disable: string; noConfigHooks: string;
     toggleFailed: string; configHooksTitle: string;
     hooksRevoke: string; hooksAcceptAll: string; hooksAllowlist: string;
+    hubTitle: string; hubNone: string; hubInstall: string; hubInstalled: string;
+    hubUpdate: string; hubRemove: string; hubInstalling: string; hubFailed: string;
+    providersTitle: string; memoryProvider: string; contextEngine: string; providersSave: string;
+    rescan: string; hide: string; show: string;
   };
   pairingView: {
     count: string; none: string; loadFailed: string; clearPending: string; lockedOut: string;
@@ -479,6 +483,11 @@ const en: Translations = {
     configHooksTitle: "Config shell hooks",
     hooksRevoke: "Revoke", hooksAcceptAll: "Accept all pending",
     hooksAllowlist: "Consent allowlist: {count} entries",
+    hubTitle: "Plugin hub", hubNone: "No hub entries — add plugins to plugin-hub/index.json or drop plugin directories under plugin-hub/.",
+    hubInstall: "Install", hubInstalled: "Installed", hubUpdate: "Update", hubRemove: "Remove",
+    hubInstalling: "Installing…", hubFailed: "Hub failed: {error}",
+    providersTitle: "Plugin providers", memoryProvider: "Memory provider", contextEngine: "Context engine",
+    providersSave: "Save", rescan: "Rescan", hide: "Hide", show: "Show",
   },
   pairingView: {
     count: "{platforms} platform(s) · {pending} pending", none: "No pairing activity yet — unknown senders who DM an enabled bot receive a pairing code.",
@@ -905,6 +914,11 @@ const zh: Translations = {
     configHooksTitle: "配置外壳钩子",
     hooksRevoke: "吹销", hooksAcceptAll: "批准全部待批",
     hooksAllowlist: "同意白名单：{count} 条",
+    hubTitle: "插件市场", hubNone: "暂无市场条目——请在 plugin-hub/index.json 添加插件，或将插件目录放入 plugin-hub/。",
+    hubInstall: "安装", hubInstalled: "已安装", hubUpdate: "更新", hubRemove: "移除",
+    hubInstalling: "安装中…", hubFailed: "市场加载失败:{error}",
+    providersTitle: "插件提供方", memoryProvider: "记忆提供方", contextEngine: "上下文引擎",
+    providersSave: "保存", rescan: "重新扫描", hide: "隐藏", show: "显示",
   },
   pairingView: {
     count: "{platforms} 个平台 · {pending} 个待批", none: "暂无配对活动——向已启用机器人私聊的陌生发送者会收到配对码。",
@@ -1331,6 +1345,11 @@ const zhHant: Translations = {
     configHooksTitle: "設定殼層掛鉤",
     hooksRevoke: "撤銷", hooksAcceptAll: "批准全部待批",
     hooksAllowlist: "同意白名單：{count} 條",
+    hubTitle: "外掛市集", hubNone: "尚無市集條目——請在 plugin-hub/index.json 新增外掛，或將外掛目錄放入 plugin-hub/。",
+    hubInstall: "安裝", hubInstalled: "已安裝", hubUpdate: "更新", hubRemove: "移除",
+    hubInstalling: "安裝中…", hubFailed: "市集載入失敗:{error}",
+    providersTitle: "外掛提供方", memoryProvider: "記憶提供方", contextEngine: "上下文引擎",
+    providersSave: "儲存", rescan: "重新掃描", hide: "隱藏", show: "顯示",
   },
   pairingView: {
     count: "{platforms} 個平台 · {pending} 個待批", none: "暫無配對活動——向已啟用機器人私訊的陌生傳送者會收到配對碼。",
@@ -1757,6 +1776,11 @@ const ja: Translations = {
     configHooksTitle: "設定シェルフック",
     hooksRevoke: "取り消し", hooksAcceptAll: "保留中をすべて承認",
     hooksAllowlist: "同意アローリスト: {count} 件",
+    hubTitle: "プラグインハブ", hubNone: "ハブのエントリーがありません — plugin-hub/index.json にプラグインを追加するか、plugin-hub/ にプラグインディレクトリを配置してください。",
+    hubInstall: "インストール", hubInstalled: "インストール済み", hubUpdate: "更新", hubRemove: "削除",
+    hubInstalling: "インストール中…", hubFailed: "ハブの読み込みに失敗しました: {error}",
+    providersTitle: "プラグインプロバイダー", memoryProvider: "メモリープロバイダー", contextEngine: "コンテキストエンジン",
+    providersSave: "保存", rescan: "再スキャン", hide: "非表示", show: "表示",
   },
   pairingView: {
     count: "{platforms} プラットフォーム · 保留 {pending} 件", none: "ペアリングはまだありません — 有効なボットに DM した未知の送信者にはペアリングコードが届きます。",
@@ -2183,6 +2207,11 @@ const ar: Translations = {
     configHooksTitle: "خطافات الصدفة المهيأة",
     hooksRevoke: "إلغاء", hooksAcceptAll: "قبول الكل المعلق",
     hooksAllowlist: "قائمة الموافقة: {count} إدخالات",
+    hubTitle: "مركز الإضافات", hubNone: "لا توجد إدخالات في المركز — أضف إضافات إلى plugin-hub/index.json أو ضع أدلة الإضافات تحت plugin-hub/.",
+    hubInstall: "تثبيت", hubInstalled: "مثبتة", hubUpdate: "تحديث", hubRemove: "إزالة",
+    hubInstalling: "جارٍ التثبيت…", hubFailed: "فشل المركز: {error}",
+    providersTitle: "موفرو الإضافات", memoryProvider: "موفر الذاكرة", contextEngine: "محرك السياق",
+    providersSave: "حفظ", rescan: "إعادة الفحص", hide: "إخفاء", show: "إظهار",
   },
   pairingView: {
     count: "{platforms} منصة · {pending} معلقة", none: "لا يوجد نشاط اقتران بعد — المرسلون غير المعروفين الذين يراسلون بوتًا مفعّلًا يتلقون رمز اقتران.",

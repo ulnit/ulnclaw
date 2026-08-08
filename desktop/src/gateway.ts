@@ -377,6 +377,40 @@ export interface PluginsPayload {
   disabled: string[];
 }
 
+/** One active dashboard plugin row (`GET /api/dashboard/plugins`; P351). */
+export interface DashboardPluginRow {
+  name: string;
+  version: string;
+  description: string;
+  source: string;
+  enabled: boolean;
+  hooks: number;
+  tools: number;
+  provides: string[];
+}
+
+/** One plugin-hub catalog entry (`GET /api/dashboard/plugins/hub`; P351). */
+export interface HubCatalogEntry {
+  name: string;
+  description: string;
+  identifier: string;
+  version: string;
+  homepage: string;
+  tags: string[];
+  source: string;
+  installed: boolean;
+}
+
+/** Merged plugin-hub payload (hermes `_merged_plugins_hub`; P351). */
+export interface PluginsHubPayload {
+  agent_plugins: DashboardPluginRow[];
+  catalog: HubCatalogEntry[];
+  providers: { memory: string[]; context: string[] };
+  selected: { memory_provider: string; context_engine: string };
+  hidden: string[];
+  generated_at: number;
+}
+
 export interface SessionSearchHit {
   session_id: string;
   title: string | null;
@@ -1398,6 +1432,102 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `disable HTTP ${response.status}`);
     return value.message || "";
+  }
+
+  /** GET /api/dashboard/plugins — active dashboard plugins (P351). */
+  async dashboardPlugins(): Promise<DashboardPluginRow[]> {
+    const response = await fetch(this.endpoint("/api/dashboard/plugins"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`dashboard plugins HTTP ${response.status}`);
+    return (await response.json()) as DashboardPluginRow[];
+  }
+
+  /** GET /api/dashboard/plugins/rescan — force discovery (P351). */
+  async dashboardPluginsRescan(): Promise<number> {
+    const response = await fetch(this.endpoint("/api/dashboard/plugins/rescan"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`rescan HTTP ${response.status}`);
+    const value = await response.json();
+    return Number(value.count || 0);
+  }
+
+  /** GET /api/dashboard/plugins/hub — merged hub payload (P351). */
+  async pluginsHub(): Promise<PluginsHubPayload> {
+    const response = await fetch(this.endpoint("/api/dashboard/plugins/hub"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`plugins hub HTTP ${response.status}`);
+    return (await response.json()) as PluginsHubPayload;
+  }
+
+  /** POST /api/dashboard/agent-plugins/install — hub install (P351). */
+  async agentPluginInstall(identifier: string, force = false, enable = true): Promise<string> {
+    const response = await fetch(this.endpoint("/api/dashboard/agent-plugins/install"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ identifier, force, enable }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(value.error?.message || `install HTTP ${response.status}`);
+    }
+    return value.name || "";
+  }
+
+  /** POST /api/dashboard/agent-plugins/:name/update — git pull (P351). */
+  async agentPluginUpdate(name: string): Promise<string> {
+    const response = await fetch(
+      this.endpoint(`/api/dashboard/agent-plugins/${encodeURIComponent(name)}/update`),
+      { method: "POST", headers: this.headers() },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(value.error?.message || `update HTTP ${response.status}`);
+    }
+    return value.output || "";
+  }
+
+  /** DELETE /api/dashboard/agent-plugins/:name — remove (P351). */
+  async agentPluginRemove(name: string): Promise<string> {
+    const response = await fetch(
+      this.endpoint(`/api/dashboard/agent-plugins/${encodeURIComponent(name)}`),
+      { method: "DELETE", headers: this.headers() },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(value.error?.message || `remove HTTP ${response.status}`);
+    }
+    return value.message || "";
+  }
+
+  /** PUT /api/dashboard/plugin-providers — persist selection (P351). */
+  async setPluginProviders(memory?: string, context?: string): Promise<void> {
+    const body: Record<string, string> = {};
+    if (memory) body.memory_provider = memory;
+    if (context) body.context_engine = context;
+    const response = await fetch(this.endpoint("/api/dashboard/plugin-providers"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(value.error?.message || `plugin-providers HTTP ${response.status}`);
+    }
+  }
+
+  /** POST /api/dashboard/plugins/:name/visibility — hide/show (P351). */
+  async setPluginVisibility(name: string, hidden: boolean): Promise<void> {
+    const response = await fetch(
+      this.endpoint(`/api/dashboard/plugins/${encodeURIComponent(name)}/visibility`),
+      { method: "POST", headers: this.headers(), body: JSON.stringify({ hidden }) },
+    );
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(value.error?.message || `visibility HTTP ${response.status}`);
+    }
   }
 
   /** GET /api/storage — session-store footprint for the Doctor panel. */

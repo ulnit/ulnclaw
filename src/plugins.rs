@@ -65,6 +65,18 @@ pub struct PluginsConfig {
     /// Plugins never loaded (hermes deny-list semantics).
     #[serde(default)]
     pub disabled: Vec<String>,
+    /// Selected memory provider (hermes plugin-providers): `builtin`
+    /// (the file MEMORY.md/USER.md pair) or the name of an installed
+    /// plugin whose manifest declares `provides = ["memory"]`.
+    #[serde(default = "default_provider_selection")]
+    pub memory_provider: String,
+    /// Selected context engine; same semantics as `memory_provider`.
+    #[serde(default = "default_provider_selection")]
+    pub context_engine: String,
+}
+
+fn default_provider_selection() -> String {
+    "builtin".to_string()
 }
 
 /// `[hooks]` config block: event → command lines (plus `auto_accept`).
@@ -109,6 +121,11 @@ pub struct PluginManifest {
     pub hooks: Vec<String>,
     #[serde(default)]
     pub tools: Vec<PluginToolSpec>,
+    /// Capability providers this plugin contributes (hermes plugin
+    /// providers: `memory`, `context`). Surfaced by the plugin hub so
+    /// `PUT /api/dashboard/plugin-providers` can select them.
+    #[serde(default)]
+    pub provides: Vec<String>,
 }
 
 /// A discovered plugin plus its directory.
@@ -147,6 +164,61 @@ pub async fn init(home: &Path, config: &crate::config::UlncLawConfig) -> Vec<Str
 
 fn plugins_dir(home: &Path) -> PathBuf {
     home.join("plugins")
+}
+
+/// `<home>/plugin-hub` — the curated marketplace index directory
+/// (ulnclaw extension; hermes serves a vendor hub). `index.json` holds
+/// `{"plugins": [{name, identifier, description, version, homepage,
+/// tags}]}` entries; each subdirectory holding a `plugin.toml` is a
+/// locally installable candidate.
+pub fn hub_dir(home: &Path) -> PathBuf {
+    home.join("plugin-hub")
+}
+
+/// Disk scan of `<home>/plugins` (hermes user-source discovery),
+/// shared by the boot-time runtime and the dashboard plugin endpoints
+/// (`GET /api/dashboard/plugins*`), which always reflect live disk
+/// state. Directories without a parseable manifest become warnings.
+pub fn discover_dir_plugins(home: &Path, disabled: &[String]) -> (Vec<LoadedPlugin>, Vec<String>) {
+    let mut plugins = Vec::new();
+    let mut warnings = Vec::new();
+    let dir = plugins_dir(home);
+    if dir.is_dir() {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default();
+        entries.sort();
+        for entry in entries {
+            let manifest_path = entry.join("plugin.toml");
+            if !manifest_path.is_file() {
+                warnings.push(format!(
+                    "plugins: {} skipped (no plugin.toml)",
+                    entry.display()
+                ));
+                continue;
+            }
+            match std::fs::read_to_string(&manifest_path)
+                .map_err(|e| e.to_string())
+                .and_then(|text| toml::from_str::<PluginManifest>(&text).map_err(|e| e.to_string()))
+            {
+                Ok(manifest) => {
+                    if manifest.name.trim().is_empty() {
+                        warnings.push(format!(
+                            "plugins: {} skipped (manifest has no name)",
+                            entry.display()
+                        ));
+                        continue;
+                    }
+                    let is_disabled = disabled.iter().any(|d| d == &manifest.name);
+                    plugins.push(LoadedPlugin { manifest, dir: entry, disabled: is_disabled });
+                }
+                Err(e) => {
+                    warnings.push(format!("plugins: {} manifest error: {e}", entry.display()));
+                }
+            }
+        }
+    }
+    (plugins, warnings)
 }
 
 fn allowlist_path(home: &Path) -> PathBuf {
@@ -219,68 +291,34 @@ pub fn split_command(command: &str) -> Vec<String> {
 
 async fn build_runtime(home: &Path, config: &crate::config::UlncLawConfig) -> PluginRuntime {
     let mut warnings = Vec::new();
-    let mut plugins = Vec::new();
     let mut hooks: Vec<HookCallback> = Vec::new();
 
     // 1. Directory plugins (hermes user-source discovery).
-    let dir = plugins_dir(home);
-    if dir.is_dir() {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-            .unwrap_or_default();
-        entries.sort();
-        for entry in entries {
-            let manifest_path = entry.join("plugin.toml");
-            if !manifest_path.is_file() {
+    let (plugins, mut dir_warnings) = discover_dir_plugins(home, &config.plugins.disabled);
+    warnings.append(&mut dir_warnings);
+    for plugin in &plugins {
+        if plugin.disabled {
+            continue;
+        }
+        for hook in &plugin.manifest.hooks {
+            if !VALID_HOOKS.contains(&hook.as_str()) {
                 warnings.push(format!(
-                    "plugins: {} skipped (no plugin.toml)",
-                    entry.display()
+                    "plugins: {} declares unknown hook {hook:?}",
+                    plugin.manifest.name
                 ));
                 continue;
             }
-            match std::fs::read_to_string(&manifest_path)
-                .map_err(|e| e.to_string())
-                .and_then(|text| toml::from_str::<PluginManifest>(&text).map_err(|e| e.to_string()))
-            {
-                Ok(manifest) => {
-                    if manifest.name.trim().is_empty() {
-                        warnings.push(format!(
-                            "plugins: {} skipped (manifest has no name)",
-                            entry.display()
-                        ));
-                        continue;
-                    }
-                    let disabled = config.plugins.disabled.iter().any(|d| d == &manifest.name);
-                    if disabled {
-                        plugins.push(LoadedPlugin { manifest, dir: entry, disabled: true });
-                        continue;
-                    }
-                    for hook in &manifest.hooks {
-                        if !VALID_HOOKS.contains(&hook.as_str()) {
-                            warnings.push(format!(
-                                "plugins: {} declares unknown hook {hook:?}",
-                                manifest.name
-                            ));
-                            continue;
-                        }
-                        let script = entry.join("hooks").join(hook);
-                        if script.is_file() {
-                            hooks.push(HookCallback {
-                                event: hook.clone(),
-                                command: script.display().to_string(),
-                            });
-                        } else {
-                            warnings.push(format!(
-                                "plugins: {} hook {hook:?} has no hooks/{hook} script",
-                                manifest.name
-                            ));
-                        }
-                    }
-                    plugins.push(LoadedPlugin { manifest, dir: entry, disabled: false });
-                }
-                Err(e) => {
-                    warnings.push(format!("plugins: {} manifest error: {e}", entry.display()));
-                }
+            let script = plugin.dir.join("hooks").join(hook);
+            if script.is_file() {
+                hooks.push(HookCallback {
+                    event: hook.clone(),
+                    command: script.display().to_string(),
+                });
+            } else {
+                warnings.push(format!(
+                    "plugins: {} hook {hook:?} has no hooks/{hook} script",
+                    plugin.manifest.name
+                ));
             }
         }
     }
@@ -1176,6 +1214,163 @@ pub fn remove_plugin(home: &Path, name: &str) -> Result<String, String> {
     }
     std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
     Ok(format!("✓ Removed plugin {name}."))
+}
+
+/// One entry in the plugin hub catalog (ulnclaw extension over hermes'
+/// vendor hub): a curated `index.json` record or a local-directory
+/// candidate discovered under `<home>/plugin-hub/`.
+#[derive(Debug, Clone, Serialize)]
+pub struct HubCatalogEntry {
+    pub name: String,
+    pub description: String,
+    /// Git URL / `owner/repo` shorthand (index entries) or an absolute
+    /// directory path (local-dir candidates).
+    pub identifier: String,
+    pub version: String,
+    pub homepage: String,
+    pub tags: Vec<String>,
+    /// `index` (curated `index.json`) or `local-dir`.
+    pub source: String,
+}
+
+/// Load the hub catalog: curated `<home>/plugin-hub/index.json`
+/// entries first, then local-directory candidates (a subdirectory
+/// holding `plugin.toml`). Deduplicated by name, index wins.
+pub fn load_hub_catalog(home: &Path) -> Vec<HubCatalogEntry> {
+    let hub = hub_dir(home);
+    let mut entries: Vec<HubCatalogEntry> = Vec::new();
+
+    let index_path = hub.join("index.json");
+    if let Ok(text) = std::fs::read_to_string(&index_path) {
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            let list = value
+                .get("plugins")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for item in list {
+                let name = item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let identifier = item
+                    .get("identifier")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let (Some(name), Some(identifier)) = (name, identifier) else {
+                    continue;
+                };
+                entries.push(HubCatalogEntry {
+                    name: name.to_string(),
+                    description: item
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    identifier: identifier.to_string(),
+                    version: item
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    homepage: item
+                        .get("homepage")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    tags: item
+                        .get("tags")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    source: "index".to_string(),
+                });
+            }
+        }
+    }
+
+    if hub.is_dir() {
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(&hub)
+            .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default();
+        dirs.sort();
+        for dir in dirs {
+            let manifest_path = dir.join("plugin.toml");
+            if !manifest_path.is_file() {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&manifest_path) else {
+                continue;
+            };
+            let Ok(manifest) = toml::from_str::<PluginManifest>(&text) else {
+                continue;
+            };
+            if manifest.name.trim().is_empty() {
+                continue;
+            }
+            if entries.iter().any(|e| e.name == manifest.name) {
+                continue;
+            }
+            entries.push(HubCatalogEntry {
+                name: manifest.name,
+                description: manifest.description,
+                identifier: dir.display().to_string(),
+                version: manifest.version,
+                homepage: String::new(),
+                tags: Vec::new(),
+                source: "local-dir".to_string(),
+            });
+        }
+    }
+
+    entries
+}
+
+/// Install a plugin from a local directory candidate (hub `local-dir`
+/// source): manifest-name discovery, sanitized target, recursive copy.
+/// Git-backed identifiers go through [`install_plugin`] instead.
+pub fn install_local_dir(home: &Path, source: &Path, force: bool) -> Result<InstalledPlugin, String> {
+    let source = source
+        .canonicalize()
+        .map_err(|e| format!("Plugin source directory '{}': {e}", source.display()))?;
+    if !source.is_dir() {
+        return Err(format!(
+            "Plugin source '{}' is not a directory.",
+            source.display()
+        ));
+    }
+    let (manifest_name, has_manifest) = read_manifest_name(&source);
+    let plugin_name = manifest_name
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Plugin source '{}' carries no readable manifest name.",
+                source.display()
+            )
+        })?;
+    let target = sanitize_plugin_target(home, &plugin_name)?;
+    if target.exists() {
+        if !force {
+            return Err(format!(
+                "Plugin '{plugin_name}' already exists. Use force to reinstall."
+            ));
+        }
+        std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(target.parent().unwrap_or(home)).map_err(|e| e.to_string())?;
+    copy_dir_recursive(&source, &target)?;
+    let final_name = read_manifest_name(&target).0.unwrap_or(plugin_name);
+    Ok(InstalledPlugin {
+        dir: target,
+        name: final_name,
+        has_manifest,
+    })
 }
 
 #[cfg(test)]
