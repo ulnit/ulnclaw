@@ -79,6 +79,11 @@ export class ConfigWidget {
         <div id="config-schema-rows" class="config-env-rows"></div>
         <p class="config-note" data-i18n="config.schemaNote"></p>
       </div>
+      <div id="config-tts" class="config-env" hidden>
+        <h3 data-i18n="config.ttsTitle">Text-to-speech</h3>
+        <div id="config-tts-rows" class="config-env-rows"></div>
+        <p class="config-note" data-i18n="config.ttsNote"></p>
+      </div>
       <div id="config-memory" class="config-env" hidden>
         <h3 data-i18n="config.memoryTitle">Persistent memory</h3>
         <div id="config-memory-rows" class="config-env-rows"></div>
@@ -255,6 +260,7 @@ export class ConfigWidget {
       this.renderOAuth().catch(() => undefined);
       this.renderSchema().catch(() => undefined);
       this.renderMessaging().catch(() => undefined);
+      this.renderTts().catch(() => undefined);
       this.status("");
       const fileEl = this.root.querySelector("#config-file") as HTMLElement;
       fileEl.textContent = this.configPath;
@@ -442,6 +448,115 @@ export class ConfigWidget {
     } catch {
       block.hidden = true;
     }
+  }
+
+  /** TTS section (P345): provider posture, ElevenLabs voice picker
+   * over GET /api/audio/elevenlabs/voices, save via PUT /api/config,
+   * and a preview button over POST /api/audio/speak. */
+  private async renderTts(): Promise<void> {
+    const client = this.client();
+    const block = this.root.querySelector("#config-tts") as HTMLElement;
+    const rows = this.root.querySelector("#config-tts-rows") as HTMLElement;
+    rows.innerHTML = "";
+    if (!client) {
+      block.hidden = true;
+      return;
+    }
+    const provider = String(this.base.get("tts.provider") ?? "openai");
+    block.hidden = false;
+
+    const providerRow = document.createElement("div");
+    providerRow.className = "config-env-row";
+    const providerChip = document.createElement("span");
+    providerChip.className = "config-env-chip";
+    providerChip.textContent = `tts.provider = ${provider}`;
+    providerRow.appendChild(providerChip);
+
+    const preview = document.createElement("button");
+    preview.className = "ghost";
+    preview.textContent = `\u{1F50A} ${t.config.ttsPreview}`;
+    preview.onclick = async () => {
+      preview.disabled = true;
+      try {
+        const dataUrl = await client.audioSpeak(t.config.ttsSample);
+        const audio = new Audio(dataUrl);
+        await audio.play();
+      } catch (error) {
+        this.status(
+          t.config.ttsPreviewFailed.replace(
+            "{error}",
+            error instanceof Error ? error.message : String(error),
+          ),
+          true,
+        );
+      } finally {
+        preview.disabled = false;
+      }
+    };
+    providerRow.appendChild(preview);
+    rows.appendChild(providerRow);
+
+    if (provider !== "elevenlabs") return;
+
+    const voiceRow = document.createElement("div");
+    voiceRow.className = "config-env-row";
+    const voiceLabel = document.createElement("span");
+    voiceLabel.className = "config-env-chip";
+    voiceLabel.textContent = "tts.elevenlabs.voice_id";
+    voiceRow.appendChild(voiceLabel);
+    try {
+      const result = await client.elevenlabsVoices();
+      if (!result.available) {
+        const note = document.createElement("span");
+        note.className = "jobs-counts";
+        note.textContent = result.error === "unauthorized"
+          ? t.config.ttsVoicesUnauthorized
+          : t.config.ttsVoicesUnavailable;
+        voiceRow.appendChild(note);
+        rows.appendChild(voiceRow);
+        return;
+      }
+      const select = document.createElement("select");
+      const current = String(this.base.get("tts.elevenlabs.voice_id") ?? "");
+      for (const voice of result.voices) {
+        const option = document.createElement("option");
+        option.value = voice.voice_id;
+        option.textContent = voice.label;
+        if (voice.voice_id === current) option.selected = true;
+        select.appendChild(option);
+      }
+      voiceRow.appendChild(select);
+      const save = document.createElement("button");
+      save.className = "ghost";
+      save.textContent = t.config.save;
+      save.disabled = true;
+      select.onchange = () => {
+        save.disabled = select.value === current;
+      };
+      save.onclick = async () => {
+        save.disabled = true;
+        try {
+          await client.configSave({ "tts.elevenlabs.voice_id": select.value }, []);
+          this.status(t.config.saved.replace("{count}", "1"));
+          await this.refresh();
+        } catch (error) {
+          this.status(
+            t.config.saveFailed.replace(
+              "{error}",
+              error instanceof Error ? error.message : String(error),
+            ),
+            true,
+          );
+        }
+      };
+      voiceRow.appendChild(save);
+    } catch {
+      const note = document.createElement("span");
+      note.className = "jobs-counts";
+      note.textContent = t.config.ttsVoicesUnavailable;
+      voiceRow.appendChild(note);
+    }
+    rows.appendChild(voiceRow);
   }
 
   /** Messaging-platform posture + enable toggle + test probe over
