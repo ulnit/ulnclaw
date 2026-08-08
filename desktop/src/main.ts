@@ -82,6 +82,8 @@ const state = {
     : "activity") as "activity" | "title",
   /** P414: hide archived sessions from the sidebar (persisted, on by default). */
   hideArchived: localStorage.getItem("ulnclaw.hideArchived") !== "0",
+  /** P532: show only unread sessions in the sidebar (persisted, off by default). */
+  unreadOnly: localStorage.getItem("ulnclaw.unreadOnly") === "1",
   /** P394: keyboard navigation over the visible sidebar rows. */
   sessionListVisible: [] as SessionRow[],
   sessionCursor: 0,
@@ -272,6 +274,18 @@ function toggleHideArchived(): void {
   renderSessions();
 }
 
+/** P532: flip the unread-only sidebar filter (palette action). */
+function toggleUnreadOnly(): void {
+  state.unreadOnly = !state.unreadOnly;
+  try {
+    localStorage.setItem("ulnclaw.unreadOnly", state.unreadOnly ? "1" : "0");
+  } catch {
+    /* storage unavailable */
+  }
+  renderSessions();
+  renderUnreadBadge();
+}
+
 function renderSessions(): void {
   el.sessionList.innerHTML = "";
   // P372: optional sidebar filter (title or id substring, case-insensitive).
@@ -285,6 +299,8 @@ function renderSessions(): void {
     )
     // P414: archived sessions stay out of the sidebar unless toggled in.
     .filter((session) => !state.hideArchived || session.end_reason !== "archived")
+    // P532: optional unread-only view for triaging fresh replies.
+    .filter((session) => !state.unreadOnly || unreadSessions.has(session.id))
     .filter((session) => {
       if (!filter) return true;
       const title = session.title || session.id.slice(0, 8);
@@ -2967,6 +2983,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     copyTranscript: () => runCopyTranscript(),
     forkSession: () => runForkSession(),
     retitleSkills: () => runRetitleSkills(),
+    toggleUnreadOnly: () => toggleUnreadOnly(),
     toggleHideArchived: () => toggleHideArchived(),
     // P498: clear every unread marker at once.
     markAllRead: () => {
