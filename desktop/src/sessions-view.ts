@@ -1437,6 +1437,9 @@ export class SessionsViewWidget {
       v.msgCount.replace("{count}", String(rendered)),
       session.project ? `${v.project}: ${escapeHtml(session.project)}` : "",
       session.source ? `${v.source}: ${escapeHtml(session.source)}` : "",
+      // P522: end-reason + archived markers in the transcript meta strip.
+      session.end_reason ? `${v.metaEnded}: ${escapeHtml(session.end_reason)}` : "",
+      session.archived ? `\u2421 ${escapeHtml(v.statusArchived)}` : "",
       fmtWhen(session.started_at),
     ].filter(Boolean);
     return `<div class="sessions-view-meta">${parts.join(" · ")}</div>`;
