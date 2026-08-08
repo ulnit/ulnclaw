@@ -2479,6 +2479,21 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     const step = el.messages.clientHeight * 0.9;
     el.messages.scrollTop += event.key === "PageDown" ? step : -step;
   });
+  // P408: End/Home jump straight to the newest / oldest chat message
+  // when the focus is not inside a text field.
+  window.addEventListener("keydown", (event) => {
+    if (state.view !== "chat") return;
+    if (event.key !== "End" && event.key !== "Home") return;
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+    event.preventDefault();
+    if (event.key === "End") {
+      el.messages.scrollTop = el.messages.scrollHeight;
+      el.scrollBottom.hidden = true;
+    } else {
+      el.messages.scrollTop = 0;
+    }
+  });
   // P398: reopen the last active view.
   const savedView = localStorage.getItem(ACTIVE_VIEW_KEY);
   if (
@@ -2658,6 +2673,7 @@ function shortcutRows(): [string, string][] {
     ["↑ / ↓", t.chrome.scRecall],
     ["↑ / ↓ + Enter", t.chrome.scSessionNav],
     ["Alt+↑ / Alt+↓", t.chrome.scDayJump],
+    ["End / Home", t.chrome.scEndHome],
   ];
 }
 
