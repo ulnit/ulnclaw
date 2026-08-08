@@ -1922,6 +1922,7 @@ async function start(): Promise<void> {
     shortcuts: () => openShortcuts(),
     notifications: () => openNotifyHistory(),
     updateCheck: () => runUpdateCheck(),
+    kanbanDispatch: () => runKanbanDispatch(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
@@ -2132,6 +2133,26 @@ async function runUpdateCheck(): Promise<void> {
         error instanceof Error ? error.message : String(error),
       ),
     );
+  }
+}
+
+/** P371: command-palette kanban dispatch — POST /api/kanban/dispatch
+ * and report spawn/promote/reclaim counts as a toast. */
+async function runKanbanDispatch(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const result = await state.client.kanbanDispatch(false);
+    if (!result) throw new Error("empty dispatch result");
+    notifySuccess(
+      fmt(t.palette.kanbanDispatched, {
+        spawned: result.spawned,
+        promoted: result.promoted,
+        reclaimed: result.reclaimed,
+      }),
+    );
+    state.kanban?.rerender();
+  } catch (error) {
+    notifyError(fmt(t.palette.kanbanDispatchFailed, { error: String(error) }));
   }
 }
 

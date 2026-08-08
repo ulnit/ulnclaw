@@ -35,6 +35,7 @@ export interface CommandPaletteHooks {
   shortcuts(): void;
   notifications(): void;
   updateCheck(): void | Promise<void>;
+  kanbanDispatch(): void | Promise<void>;
 }
 
 /** Subsequence fuzzy score (higher = better, null = no match). */
@@ -149,6 +150,7 @@ export class CommandPalette {
       { id: "update-check", label: t.palette.updateCheck, group: t.palette.gatewayGroup, run: () => hooks.updateCheck() },
       { id: "shortcuts", label: t.palette.shortcuts, group: t.palette.gatewayGroup, hint: "F1", run: () => hooks.shortcuts() },
       { id: "notifications", label: t.palette.notifications, group: t.palette.gatewayGroup, run: () => hooks.notifications() },
+      { id: "kanban-dispatch", label: t.palette.kanbanDispatch, group: t.palette.gatewayGroup, run: () => hooks.kanbanDispatch() },
     ];
     const current = hooks.currentSessionId();
     for (const session of hooks.sessions()) {
