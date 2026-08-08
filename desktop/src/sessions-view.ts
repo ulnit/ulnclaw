@@ -22,6 +22,16 @@ function fmtWhen(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
+/** P567: compact session duration (45s / 12m / 3h05m / 2d4h). */
+function formatDurationCompact(totalSecs: number): string {
+  if (totalSecs < 60) return `${totalSecs}s`;
+  const minutes = Math.floor(totalSecs / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h${String(minutes % 60).padStart(2, "0")}m`;
+  return `${Math.floor(hours / 24)}d${hours % 24}h`;
+}
+
 // P440: persistence keys for the list filters.
 const STATUS_FILTER_KEY = "ulnclaw.sessions.statusFilter";
 const REASON_FILTER_KEY = "ulnclaw.sessions.reasonFilter";
@@ -1454,6 +1464,10 @@ export class SessionsViewWidget {
 
   private renderTranscriptMeta(session: SessionRow, rendered: number): string {
     const v = t.sessionsView;
+    const durationSecs = Math.max(
+      0,
+      Math.floor((session.last_activity_at || session.started_at) - session.started_at),
+    );
     const parts = [
       session.model ? escapeHtml(session.model) : "",
       v.msgCount.replace("{count}", String(rendered)),
@@ -1463,6 +1477,8 @@ export class SessionsViewWidget {
       session.end_reason ? `${v.metaEnded}: ${escapeHtml(session.end_reason)}` : "",
       session.archived ? `\u2421 ${escapeHtml(v.statusArchived)}` : "",
       fmtWhen(session.started_at),
+      // P567: how long the session ran (started → last activity).
+      durationSecs > 0 ? `${v.metaDuration}: ${formatDurationCompact(durationSecs)}` : "",
     ].filter(Boolean);
     return `<div class="sessions-view-meta">${parts.join(" · ")}</div>`;
   }
