@@ -34,6 +34,8 @@ const SORT_KEY = "ulnclaw.sessions.sort";
 const PROJECT_FILTER_KEY = "ulnclaw.sessions.projectFilter";
 // P463: transcript tail window before the load-full banner appears.
 const TRANSCRIPT_LIMIT = 400;
+// P465: messages rendered per batch once the full transcript is loaded.
+const RENDER_WINDOW = 200;
 
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
@@ -53,6 +55,9 @@ export class SessionsViewWidget {
   // P463: per-selection transcript pagination state.
   private transcriptSession: string | null = null;
   private transcriptFull = false;
+  // P465: cached full transcript + index of the first rendered message.
+  private transcriptMessages: MessageRow[] = [];
+  private transcriptStart = 0;
   // P453: project drill-down set from the row chips.
   private projectFilter: string | null = localStorage.getItem(PROJECT_FILTER_KEY);
   // P450: activity-first or title-first list sorting.
@@ -684,6 +689,8 @@ export class SessionsViewWidget {
     if (this.transcriptSession !== sessionId) {
       this.transcriptSession = sessionId;
       this.transcriptFull = false;
+      this.transcriptMessages = [];
+      this.transcriptStart = 0;
     }
     pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.loading)}</p>`;
     try {
@@ -691,13 +698,19 @@ export class SessionsViewWidget {
         ? await client.messages(sessionId)
         : await client.messages(sessionId, { limit: TRANSCRIPT_LIMIT });
       if (this.selected !== sessionId) return; // user moved on
+      // P465: cache the window and only render the most recent batch.
+      this.transcriptMessages = messages;
+      this.transcriptStart = this.transcriptFull
+        ? Math.max(0, messages.length - RENDER_WINDOW)
+        : 0;
       const session = this.all.find((candidate) => candidate.id === sessionId);
       const renderedCount =
         this.transcriptFull || !session?.message_count
           ? messages.length
           : session.message_count;
       const meta = session ? this.renderTranscriptMeta(session, renderedCount) : "";
-      pane.innerHTML = meta + this.renderMessages(messages);
+      pane.innerHTML = meta + this.renderMessages(messages.slice(this.transcriptStart));
+      if (this.transcriptStart > 0) this.insertEarlierBanner(sessionId);
       // P463: tail window loaded — offer the full transcript.
       if (!this.transcriptFull && messages.length === TRANSCRIPT_LIMIT) {
         const banner = document.createElement("div");
@@ -713,18 +726,7 @@ export class SessionsViewWidget {
         pane.insertBefore(banner, pane.querySelector(".sessions-view-msg"));
       }
       // P454: per-message copy actions.
-      pane.querySelectorAll<HTMLElement>(".sessions-view-copy").forEach((button) => {
-        button.addEventListener("click", () => {
-          const content = button
-            .closest(".sessions-view-msg")
-            ?.querySelector(".sessions-view-content");
-          const text = content?.textContent ?? "";
-          void navigator.clipboard.writeText(text).then(
-            () => this.status(t.sessionsView.copied, false),
-            () => this.status(t.sessionsView.copyFailed, true),
-          );
-        });
-      });
+      this.bindCopyButtons(pane);
       pane.scrollTop = 0;
       exportBtn.hidden = false;
       (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = false;
@@ -751,6 +753,60 @@ export class SessionsViewWidget {
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-rename") as HTMLButtonElement).hidden = true;
     }
+  }
+
+  /** P465: top banner revealing older messages one window at a time. */
+  private insertEarlierBanner(sessionId: string): void {
+    const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    const banner = document.createElement("div");
+    banner.className = "sessions-view-trunc sessions-view-earlier";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = fmt(t.sessionsView.showEarlier, { count: String(this.transcriptStart) });
+    button.addEventListener("click", () => this.revealEarlier(sessionId));
+    banner.appendChild(button);
+    pane.insertBefore(banner, pane.querySelector(".sessions-view-msg"));
+  }
+
+  private revealEarlier(sessionId: string): void {
+    if (this.selected !== sessionId) return;
+    const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    const end = this.transcriptStart;
+    const start = Math.max(0, end - RENDER_WINDOW);
+    if (start >= end) return;
+    const holder = document.createElement("div");
+    holder.innerHTML = this.renderMessages(this.transcriptMessages.slice(start, end));
+    this.bindCopyButtons(holder);
+    const prevHeight = pane.scrollHeight;
+    const prevTop = pane.scrollTop;
+    const anchor = pane.querySelector(".sessions-view-msg");
+    for (const node of Array.from(holder.children)) pane.insertBefore(node, anchor);
+    this.transcriptStart = start;
+    pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
+    const banner = pane.querySelector(".sessions-view-earlier");
+    if (banner) {
+      if (start === 0) banner.remove();
+      else {
+        const button = banner.querySelector("button");
+        if (button) button.textContent = fmt(t.sessionsView.showEarlier, { count: String(start) });
+      }
+    }
+  }
+
+  /** P454/P465: per-message copy actions over rendered transcript nodes. */
+  private bindCopyButtons(scope: ParentNode): void {
+    scope.querySelectorAll<HTMLElement>(".sessions-view-copy").forEach((button) => {
+      button.addEventListener("click", () => {
+        const content = button
+          .closest(".sessions-view-msg")
+          ?.querySelector(".sessions-view-content");
+        const text = content?.textContent ?? "";
+        void navigator.clipboard.writeText(text).then(
+          () => this.status(t.sessionsView.copied, false),
+          () => this.status(t.sessionsView.copyFailed, true),
+        );
+      });
+    });
   }
 
   private renderTranscriptMeta(session: SessionRow, rendered: number): string {

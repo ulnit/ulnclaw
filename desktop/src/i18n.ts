@@ -151,6 +151,7 @@ export interface Translations {
     projectFilter: string;
     copyMessageTitle: string; copied: string; copyFailed: string;
     loadFull: string;
+    showEarlier: string;
     select: string; loading: string; loadFailed: string; transcriptFailed: string;
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
@@ -494,6 +495,7 @@ const en: Translations = {
     projectFilter: "Project: {project} — click to clear",
     copyMessageTitle: "Copy message", copied: "Message copied.", copyFailed: "Copy failed.",
     loadFull: "Showing the last {count} messages — click to load the full transcript",
+    showEarlier: "Show earlier messages ({count} more)",
     count: "{count} sessions",
     empty: "No sessions recorded yet.",
     noMatch: "No sessions match the filter.",
@@ -965,6 +967,7 @@ const zh: Translations = {
     projectFilter: "项目：{project}——点击清除",
     copyMessageTitle: "复制消息", copied: "消息已复制。", copyFailed: "复制失败。",
     loadFull: "当前仅显示最近 {count} 条消息——点击加载完整转录",
+    showEarlier: "显示更早的消息（还有 {count} 条）",
     count: "{count} 个会话",
     empty: "暂无会话记录。",
     noMatch: "没有匹配过滤条件的会话。",
@@ -1436,6 +1439,7 @@ const zhHant: Translations = {
     projectFilter: "專案：{project}——點選清除",
     copyMessageTitle: "複製訊息", copied: "訊息已複製。", copyFailed: "複製失敗。",
     loadFull: "目前僅顯示最近 {count} 則訊息——點選載入完整轉錄",
+    showEarlier: "顯示更早的訊息（還有 {count} 則）",
     count: "{count} 個會話",
     empty: "暫無會話記錄。",
     noMatch: "沒有符合過濾條件的會話。",
@@ -1907,6 +1911,7 @@ const ja: Translations = {
     projectFilter: "プロジェクト：{project} — クリックで解除",
     copyMessageTitle: "メッセージをコピー", copied: "メッセージをコピーしました。", copyFailed: "コピーに失敗しました。",
     loadFull: "直近 {count} メッセージのみ表示中 — クリックで全文を読み込む",
+    showEarlier: "以前のメッセージを表示（あと {count} 件）",
     count: "{count} 件のセッション",
     empty: "セッションはまだ記録されていません。",
     noMatch: "フィルタに一致するセッションはありません。",
@@ -2378,6 +2383,7 @@ const ar: Translations = {
     projectFilter: "المشروع: {project} — انقر للإزالة",
     copyMessageTitle: "نسخ الرسالة", copied: "تم نسخ الرسالة.", copyFailed: "فشل النسخ.",
     loadFull: "يتم عرض آخر {count} رسالة فقط — انقر لتحميل النسخة الكاملة",
+    showEarlier: "عرض الرسائل السابقة ({count} إضافية)",
     count: "{count} جلسة",
     empty: "لا توجد جلسات مسجلة بعد.",
     noMatch: "لا توجد جلسات مطابقة للتصفية.",
