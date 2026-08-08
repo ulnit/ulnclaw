@@ -969,6 +969,20 @@ async function sendTurn(): Promise<void> {
     activeSwitchView?.(view);
     return;
   }
+  // P491: /open <id-prefix> resumes a session by id prefix.
+  const openMatch = /^\/open\s+(\S+)\s*$/i.exec(text);
+  if (openMatch) {
+    el.input.value = "";
+    refreshCharCount();
+    const prefix = openMatch[1].toLowerCase();
+    const match = state.sessions.find((session) => session.id.toLowerCase().startsWith(prefix));
+    if (match) {
+      void openSession(match);
+    } else {
+      notifyError(fmt(t.slash.openNotFound, { prefix }));
+    }
+    return;
+  }
   // P490: /search <query> opens the Sessions view with an FTS search.
   const searchMatch = /^\/search\s+(.+)$/i.exec(text);
   if (searchMatch) {
@@ -1451,6 +1465,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/export", t.slash.exportSession],
     ["/fork", t.slash.forkSession],
     ["/search", t.slash.search],
+    ["/open", t.slash.open],
   ];
 }
 
