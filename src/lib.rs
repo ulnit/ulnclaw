@@ -153,6 +153,7 @@ pub mod messaging;
 pub mod oauth;
 pub mod pairing;
 pub mod profiles_cmd;
+pub mod mcp_catalog;
 pub mod pets;
 pub mod pets_atlas;
 pub mod pets_generate;

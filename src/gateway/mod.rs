@@ -3940,6 +3940,90 @@ async fn mcp_server_test(State(state): State<Arc<GatewayState>>, Path(name): Pat
     }
 }
 
+/// `GET /api/mcp/catalog` — curated catalog annotated with what is
+/// already installed/enabled (hermes `GET /api/mcp/catalog` parity).
+async fn mcp_catalog_list() -> Response {
+    let path = crate::config_cmd::config_path();
+    let config = crate::config::UlncLawConfig::load(Some(&path)).unwrap_or_default();
+    let entries: Vec<Value> = crate::mcp_catalog::CATALOG
+        .iter()
+        .map(|entry| {
+            let installed = config.mcp.servers.iter().find(|server| server.name == entry.name);
+            json!({
+                "name": entry.name,
+                "description": entry.description,
+                "command": entry.command,
+                "args": entry.args,
+                "required_env": entry.required_env.iter().map(|env| json!({
+                    "name": env.name,
+                    "prompt": env.prompt,
+                })).collect::<Vec<_>>(),
+                "installed": installed.is_some(),
+                "enabled": installed.map(|server| server.enabled).unwrap_or(false),
+            })
+        })
+        .collect();
+    Json(json!({ "entries": entries })).into_response()
+}
+
+/// Body for `POST /api/mcp/catalog/install`.
+#[derive(Debug, Deserialize)]
+struct McpCatalogInstallBody {
+    name: String,
+    #[serde(default)]
+    env: Option<std::collections::HashMap<String, String>>,
+}
+
+/// `POST /api/mcp/catalog/install` — append the catalog entry to
+/// `[[mcp.servers]]`, storing any supplied env vars with it (hermes
+/// `POST /api/mcp/catalog/install` parity, lean port).
+async fn mcp_catalog_install(Json(body): Json<McpCatalogInstallBody>) -> Response {
+    let name = body.name.trim().to_string();
+    let Some(entry) = crate::mcp_catalog::get_entry(&name) else {
+        return not_found(&format!("no catalog entry named '{name}'"));
+    };
+    let path = crate::config_cmd::config_path();
+    let mut root = match crate::config_cmd::load_toml(&path) {
+        Ok(value) => value,
+        Err(e) => return server_error(&e),
+    };
+    let mut table = toml::Table::new();
+    table.insert("name".into(), toml::Value::String(entry.name.to_string()));
+    table.insert("command".into(), toml::Value::String(entry.command.to_string()));
+    table.insert(
+        "args".into(),
+        toml::Value::Array(entry.args.iter().map(|arg| toml::Value::String((*arg).to_string())).collect()),
+    );
+    if let Some(env) = &body.env {
+        let mut env_table = toml::Table::new();
+        for (key, value) in env {
+            env_table.insert(key.clone(), toml::Value::String(value.clone()));
+        }
+        if !env_table.is_empty() {
+            table.insert("env".into(), toml::Value::Table(env_table));
+        }
+    }
+    {
+        let servers = match mcp_servers_array_mut(&mut root) {
+            Ok(servers) => servers,
+            Err(e) => return bad_request(&e, None),
+        };
+        if servers.iter().any(|existing| mcp_server_name(existing) == entry.name) {
+            return bad_request(&format!("server '{}' is already installed", entry.name), None);
+        }
+        servers.push(toml::Value::Table(table));
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &root) {
+        return server_error(&e);
+    }
+    Json(json!({
+        "ok": true,
+        "name": entry.name,
+        "note": "restart the gateway (or reload MCP) to connect",
+    }))
+    .into_response()
+}
+
 /// Query parameters for `GET /api/sessions/search`.
 #[derive(Debug, Deserialize)]
 struct SessionSearchQuery {
@@ -5643,6 +5727,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/mcp/servers/:name", delete(mcp_server_delete))
         .route("/api/mcp/servers/:name/enabled", put(mcp_server_set_enabled))
         .route("/api/mcp/servers/:name/test", post(mcp_server_test))
+        .route("/api/mcp/catalog", get(mcp_catalog_list))
+        .route("/api/mcp/catalog/install", post(mcp_catalog_install))
         .route("/api/insights", get(insights))
         .route("/api/channels", get(channels_status))
         .route("/api/messaging/platforms", get(messaging_platforms))
@@ -15506,6 +15592,73 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
 
         std::env::set_current_dir(saved_cwd).unwrap();
         match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_catalog_endpoints() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Catalog lists curated entries, none installed yet.
+        let (status, body) = get_json(app.clone(), "/api/mcp/catalog", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = body["entries"].as_array().unwrap().clone();
+        assert!(entries.len() >= 8);
+        let memory = entries.iter().find(|entry| entry["name"] == "memory").unwrap();
+        assert_eq!(memory["installed"], false);
+        let github = entries.iter().find(|entry| entry["name"] == "github").unwrap();
+        assert_eq!(github["required_env"][0]["name"], "GITHUB_TOKEN");
+
+        // Unknown entry 404s.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/mcp/catalog/install", Some(token),
+            json!({"name": "no-such"}),
+        ).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Install memory, then see it flagged installed.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/mcp/catalog/install", Some(token),
+            json!({"name": "memory"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(on_disk.contains("name = \"memory\""), "{on_disk}");
+        let (status, body) = get_json(app.clone(), "/api/mcp/catalog", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let memory = body["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "memory")
+            .cloned()
+            .unwrap();
+        assert_eq!(memory["installed"], true);
+        assert_eq!(memory["enabled"], true);
+
+        // Install with env vars stores them; duplicate install is rejected.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/mcp/catalog/install", Some(token),
+            json!({"name": "github", "env": {"GITHUB_TOKEN": "ghp-test-token"}}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(on_disk.contains("GITHUB_TOKEN"), "{on_disk}");
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/mcp/catalog/install", Some(token),
+            json!({"name": "github"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        match prev {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }

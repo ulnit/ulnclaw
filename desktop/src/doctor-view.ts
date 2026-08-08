@@ -3,7 +3,7 @@
 // grouped by section, with an issues panel up top. Online provider
 // probes are opt-in since they are slow.
 
-import type { BrowserStatus, CheckpointEntry, DoctorPayload, GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
+import type { BrowserStatus, CheckpointEntry, DoctorPayload, GatewayClient, DoctorCheck, McpCatalogEntry, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
 import { t } from "./i18n";
 
 const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
@@ -88,6 +88,10 @@ export class DoctorWidget {
             <button id="mcp-add-save" value="default" data-i18n="mcpPanel.saveBtn">Save</button>
           </menu>
         </dialog>
+        <details id="mcp-catalog" class="mcp-catalog">
+          <summary data-i18n="mcpPanel.catalogTitle">Catalog</summary>
+          <div id="mcp-catalog-rows"></div>
+        </details>
       </section>
       <section id="doctor-system" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="systemPanel.title">System</h3>
@@ -533,8 +537,82 @@ export class DoctorWidget {
         rows.appendChild(row);
       }
       section.hidden = false;
+      void this.loadMcpCatalog();
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** Render the curated MCP catalog with install buttons (hermes
+   * `optional-mcps` parity; P604). */
+  private async loadMcpCatalog(): Promise<void> {
+    const client = this.client();
+    const rows = this.root.querySelector("#mcp-catalog-rows") as HTMLElement | null;
+    if (!client || !rows) return;
+    try {
+      const entries = await client.mcpCatalog();
+      rows.innerHTML = "";
+      for (const entry of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row mcp-catalog-row";
+        const label = document.createElement("span");
+        label.className = "monitoring-label";
+        label.textContent = entry.name;
+        const value = document.createElement("span");
+        value.className = "monitoring-value mcp-catalog-desc";
+        value.textContent = entry.description;
+        value.title = `${entry.command} ${entry.args.join(" ")}`;
+        row.append(label, value);
+        if (entry.installed) {
+          const badge = document.createElement("span");
+          badge.className = entry.enabled ? "mcp-catalog-badge" : "mcp-catalog-badge off";
+          badge.textContent = entry.enabled ? t.mcpPanel.catalogInstalled : t.mcpPanel.catalogInstalledDisabled;
+          row.appendChild(badge);
+        } else {
+          const installBtn = document.createElement("button");
+          installBtn.className = "ghost mcp-install-btn";
+          installBtn.textContent = t.mcpPanel.catalogInstallBtn;
+          installBtn.addEventListener("click", () => {
+            void this.installCatalogEntry(entry, row, installBtn);
+          });
+          row.appendChild(installBtn);
+        }
+        rows.appendChild(row);
+      }
+    } catch {
+      rows.innerHTML = "";
+    }
+  }
+
+  /** Prompt for required env vars, install the entry, refresh (P604). */
+  private async installCatalogEntry(
+    entry: McpCatalogEntry,
+    row: HTMLElement,
+    button: HTMLButtonElement,
+  ): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const env: Record<string, string> = {};
+    for (const variable of entry.required_env) {
+      const answer = window.prompt(variable.prompt, "");
+      if (answer === null || answer.trim() === "") {
+        this.mcpFlowNote(row, t.mcpPanel.catalogEnvMissing.replace("{name}", variable.name), true);
+        return;
+      }
+      env[variable.name] = answer.trim();
+    }
+    button.disabled = true;
+    try {
+      await client.mcpCatalogInstall(entry.name, env);
+      this.mcpFlowNote(row, t.mcpPanel.catalogInstalledNote, false);
+      await this.loadMcp();
+    } catch (error) {
+      this.mcpFlowNote(
+        row,
+        t.mcpPanel.actionFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
+        true,
+      );
+      button.disabled = false;
     }
   }
 

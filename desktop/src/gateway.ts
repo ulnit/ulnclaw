@@ -697,6 +697,16 @@ export interface McpServerRow {
   cached_tools?: { name: string; description: string }[];
 }
 
+export interface McpCatalogEntry {
+  name: string;
+  description: string;
+  command: string;
+  args: string[];
+  required_env: { name: string; prompt: string }[];
+  installed: boolean;
+  enabled: boolean;
+}
+
 export interface McpOAuthFlow {
   flow_id: string;
   server_name: string;
@@ -1558,6 +1568,29 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `mcp HTTP ${response.status}`);
     return value as { ok: boolean; name: string; tools: string[]; count: number };
+  }
+
+  /** GET /api/mcp/catalog — curated catalog with install state (P604). */
+  async mcpCatalog(): Promise<McpCatalogEntry[]> {
+    const response = await fetch(this.endpoint("/api/mcp/catalog"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`mcp catalog HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.entries || []) as McpCatalogEntry[];
+  }
+
+  /** POST /api/mcp/catalog/install — append a catalog entry (P604). */
+  async mcpCatalogInstall(
+    name: string,
+    env?: Record<string, string>,
+  ): Promise<{ ok: boolean; name: string; note: string }> {
+    const response = await fetch(this.endpoint("/api/mcp/catalog/install"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ name, env: env ?? {} }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `mcp catalog HTTP ${response.status}`);
+    return value as { ok: boolean; name: string; note: string };
   }
 
   /** GET /metrics — raw Prometheus text exposition. */
