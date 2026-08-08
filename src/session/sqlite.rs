@@ -185,6 +185,9 @@ pub struct BrowseRow {
     /// P513: archived flag — rendered as a marker when the browser
     /// includes archived sessions (F4 toggle).
     pub archived: bool,
+    /// P524: stored message count — surfaced in the details pane so a
+    /// session's size is visible without opening it.
+    pub message_count: i64,
 }
 
 /// Maximum session title length in characters (hermes `MAX_TITLE_LENGTH`).
@@ -1533,7 +1536,8 @@ impl SqliteSessionStore {
                        AND m.content IS NOT NULL AND m.content != ''
                      ORDER BY m.id LIMIT 1),
                     s.cwd,
-                    s.archived
+                    s.archived,
+                    s.message_count
              FROM sessions s WHERE 1=1",
         );
         if !include_archived {
@@ -1564,6 +1568,7 @@ impl SqliteSessionStore {
                     preview: row.get(4)?,
                     cwd: row.get(5)?,
                     archived: row.get::<_, i64>(6)? != 0,
+                    message_count: row.get(7)?,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;
@@ -2673,6 +2678,8 @@ mod tests {
         assert_eq!(rows[0].preview, None);
         let cron_row = rows.iter().find(|r| r.id == second).unwrap();
         assert_eq!(cron_row.preview.as_deref(), Some("cron line"));
+        // P524: stored message counts ride along for the details pane.
+        assert_eq!(cron_row.message_count, 1);
 
         // Excluding tool sources (hermes default browse behavior).
         let rows = store.list_sessions_for_browse(100, None, &["tool"], false).unwrap();

@@ -9614,6 +9614,11 @@ fn browse_details_pane_lines(
             width,
         ));
     }
+    // P524: stored message count for a size cue without opening.
+    lines.extend(ulnclaw::tui_text::wrap_display_text(
+        &format!("messages: {}", row.message_count),
+        width,
+    ));
     if let Some(slug) = project {
         lines.extend(ulnclaw::tui_text::wrap_display_text(
             &format!("project: {slug}"),
