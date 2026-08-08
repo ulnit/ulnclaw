@@ -876,11 +876,13 @@ async function updateStatusBar(): Promise<void> {
     return;
   }
   try {
-    const [info, usage] = await Promise.all([
+    const [info, usage, tasks] = await Promise.all([
       state.client.systemInfo(),
       // P370: process token/tool census for the status bar; keep the
       // payload small — only the summary cards matter here.
       state.client.usage(1).catch(() => null),
+      // P382: kanban column census for the status bar.
+      state.client.kanbanTasks().catch(() => null),
     ]);
     const segs: string[] = [
       `v${info.version} · ${info.os}/${info.arch} · ${t.chrome.statusUp.replace("{duration}", formatUptime(info.uptime_secs))}`,
@@ -894,6 +896,19 @@ async function updateStatusBar(): Promise<void> {
         t.chrome.statusTokens
           .replace("{tokens}", formatTokens(usage.process.total_tokens))
           .replace("{calls}", String(usage.process.tool_calls)),
+      );
+    }
+    if (tasks) {
+      const todo = tasks.filter((task) =>
+        ["todo", "ready", "scheduled"].includes(task.status),
+      ).length;
+      const doing = tasks.filter((task) => task.status === "running").length;
+      const blocked = tasks.filter((task) => task.status === "blocked").length;
+      segs.push(
+        t.chrome.statusKanban
+          .replace("{todo}", String(todo))
+          .replace("{doing}", String(doing))
+          .replace("{blocked}", String(blocked)),
       );
     }
     el.statusbar.innerHTML = segs
