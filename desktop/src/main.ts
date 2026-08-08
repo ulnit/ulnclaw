@@ -59,6 +59,20 @@ async function loadBridge(): Promise<DesktopBridge | null> {
   }
 }
 
+/** P540: native app-menu events (Tauri only) — File › New Session
+ * drives the same flow as the sidebar button. */
+async function listenMenuEvents(): Promise<void> {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen("ulnclaw://menu-new-session", () => {
+      el.newSession.click();
+      el.input.focus();
+    });
+  } catch {
+    /* plain browser tab — no native menu */
+  }
+}
+
 const state = {
   settings: loadSettings(),
   client: null as GatewayClient | null,
@@ -2315,6 +2329,7 @@ async function start(): Promise<void> {
   applyStatic();
   state.bridge = await loadBridge();
   state.client = new GatewayClient(state.settings);
+  void listenMenuEvents();
 
   // Managed gateway: start one when unreachable and management is on.
   if (state.settings.manage && state.bridge && !(await state.client.health())) {

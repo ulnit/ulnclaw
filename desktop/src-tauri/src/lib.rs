@@ -3,9 +3,9 @@
 //! HTTP API from the webview (see ../src/gateway.ts).
 
 use std::sync::Mutex;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 /// Handle of the managed gateway child process.
 struct GatewayProcess(Mutex<Option<u32>>);
@@ -230,6 +230,38 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// P540: native app menu — File › New Session (CmdOrCtrl+N) emits an
+/// event the webview turns into the new-session flow; Edit carries the
+/// standard clipboard roles so the webview keeps them on every OS.
+fn setup_app_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let new_session = MenuItem::with_id(app, "new_session", "New Session", true, Some("CmdOrCtrl+N"))?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q"))?;
+    let file = Submenu::with_items(app, "File", true, &[&new_session, &quit])?;
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let menu = Menu::with_items(app, &[&file, &edit])?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|handle, event| match event.id.as_ref() {
+        "new_session" => {
+            let _ = handle.emit("ulnclaw://menu-new-session", ());
+        }
+        "quit" => handle.exit(0),
+        _ => {}
+    });
+    Ok(())
+}
+
 /// Build the system-tray icon: Show/Quit menu, left-click restores the
 /// window. Failure is non-fatal — the app keeps running windowed (e.g.
 /// environments without a status-notifier implementation).
@@ -272,6 +304,9 @@ pub fn run() {
         .setup(|app| {
             if let Err(err) = setup_tray(app) {
                 eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
+            }
+            if let Err(err) = setup_app_menu(app) {
+                eprintln!("ulnclaw desktop: app menu unavailable: {err}");
             }
             // P535: restore the persisted window geometry.
             if let Some(window) = app.get_webview_window("main") {
