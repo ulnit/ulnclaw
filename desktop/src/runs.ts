@@ -162,7 +162,7 @@ export class RunsWidget {
         </div>
         <div class="run-message">${escapeHtml(run.message)}</div>
         ${run.error ? `<div class="run-error">${escapeHtml(run.error)}</div>` : ""}
-        ${run.result ? `<details class="run-result"><summary>${escapeHtml(t.runs.result)}</summary><pre>${escapeHtml(run.result)}</pre></details>` : ""}
+        ${run.result ? `<details class="run-result"><summary>${escapeHtml(t.runs.result)}<button class="ghost run-copy-result">${escapeHtml(t.runs.copyResult)}</button></summary><pre>${escapeHtml(run.result)}</pre></details>` : ""}
         ${run.session_id ? `<div class="run-session">session: <button class="ghost run-session-link" title="${escapeHtml(t.runs.openSessionTitle)}"><code>${escapeHtml(run.session_id.slice(0, 12))}</code></button></div>` : ""}
       `;
       card.dataset.runId = run.run_id;
@@ -211,8 +211,29 @@ export class RunsWidget {
         const target = run.session_id;
         sessionLink.addEventListener("click", () => this.openSession!(target));
       }
+      const copyBtn = card.querySelector<HTMLButtonElement>(".run-copy-result");
+      if (copyBtn && run.result) {
+        const result = run.result;
+        copyBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void navigator.clipboard.writeText(result).then(
+            () => this.flashCopy(copyBtn, true),
+            () => this.flashCopy(copyBtn, false),
+          );
+        });
+      }
       list.appendChild(card);
     }
+  }
+
+  /** P504: transient copied/failed feedback on the run-result copy button. */
+  private flashCopy(button: HTMLButtonElement, ok: boolean): void {
+    const original = button.textContent ?? "";
+    button.textContent = ok ? t.runs.copiedResult : t.runs.copyFailed;
+    window.setTimeout(() => {
+      button.textContent = original;
+    }, 1200);
   }
 
   /** Keep one SSE subscription per active run; drop stale ones (P322). */
