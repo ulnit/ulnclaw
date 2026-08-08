@@ -3339,6 +3339,62 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       el.messages.scrollTop = 0;
     }
   });
+  // P552: F5 refreshes the active view in place (chat reloads the open
+  // transcript; widget views call their own refresh entry points).
+  const refreshActiveView = (): void => {
+    switch (state.view) {
+      case "chat":
+        renderSessions();
+        if (state.current && !state.busy) void openSession(state.current);
+        break;
+      case "kanban":
+        void state.kanban?.refresh();
+        break;
+      case "projects":
+        (document.querySelector("#projects-refresh") as HTMLButtonElement | null)?.click();
+        break;
+      case "jobs":
+        void state.jobs?.refresh();
+        break;
+      case "usage":
+        void state.usage?.refresh();
+        break;
+      case "config":
+        void state.config?.refresh();
+        break;
+      case "doctor":
+        (document.querySelector("#doctor-run") as HTMLButtonElement | null)?.click();
+        break;
+      case "webhooks":
+        void state.webhooks?.refresh();
+        break;
+      case "runs":
+        void state.runs?.refresh();
+        break;
+      case "skills":
+        void state.skillsView?.refresh();
+        break;
+      case "sessions":
+        void state.sessionsBrowser?.refresh();
+        break;
+      case "models":
+        void state.modelsView?.refresh();
+        break;
+      case "plugins":
+        void state.pluginsView?.refresh();
+        break;
+      case "pairing":
+        void state.pairingView?.refresh();
+        break;
+    }
+  };
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "F5") return;
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+    event.preventDefault();
+    refreshActiveView();
+  });
   // P398: reopen the last active view.
   const savedView = localStorage.getItem(ACTIVE_VIEW_KEY);
   if (
@@ -3525,6 +3581,7 @@ function shortcutRows(): [string, string][] {
     [`${mod}+F`, t.chrome.scFind],
     ["Enter", t.chrome.scFocus],
     ["F1", t.chrome.scShortcuts],
+    ["F5", t.chrome.scRefreshView],
     ["↑ / ↓", t.chrome.scRecall],
     ["↑ / ↓ + Enter", t.chrome.scSessionNav],
     ["Alt+↑ / Alt+↓", t.chrome.scDayJump],

@@ -72,7 +72,7 @@ export interface Translations {
     shortcuts: string; shortcutsTitle: string; shortcutsClose: string;
     scModelPicker: string; scNewSession: string; scCycle: string; scSessionPicker: string;
     scArchive: string; scExport: string;
-    scSettings: string; scSidebar: string; scPalette: string; scFind: string; scFocus: string; scShortcuts: string; scRecall: string; scSessionNav: string; scDayJump: string; scEndHome: string;
+    scSettings: string; scSidebar: string; scPalette: string; scFind: string; scFocus: string; scShortcuts: string; scRecall: string; scSessionNav: string; scDayJump: string; scEndHome: string; scRefreshView: string;
   };
   session: {
     titlePrompt: string; renamed: string; renameFailed: string; deleteConfirm: string;
@@ -388,7 +388,7 @@ const en: Translations = {
     scModelPicker: "Open the model picker", scNewSession: "New session", scCycle: "Cycle sessions", scArchive: "Archive / unarchive the current session", scExport: "Export the current session",
     scSessionPicker: "Open the session picker", scSettings: "Open settings", scSidebar: "Toggle sidebar",
     scPalette: "Command palette", scFind: "Find in chat", scFocus: "Focus the composer",
-    scShortcuts: "Show this dialog", scRecall: "Recall sent prompts (composer)", scSessionNav: "Navigate the session list (sidebar)", scDayJump: "Jump between day dividers (chat)", scEndHome: "Jump to newest / oldest message (chat)",
+    scShortcuts: "Show this dialog", scRefreshView: "Refresh the active view", scRecall: "Recall sent prompts (composer)", scSessionNav: "Navigate the session list (sidebar)", scDayJump: "Jump between day dividers (chat)", scEndHome: "Jump to newest / oldest message (chat)",
   },
   session: {
     titlePrompt: "Session title:", renamed: "Session renamed.",
@@ -888,7 +888,7 @@ const zh: Translations = {
     scModelPicker: "打开模型挑选器", scNewSession: "新建会话", scCycle: "循环切换会话", scArchive: "归档/恢复当前会话", scExport: "导出当前会话",
     scSessionPicker: "打开会话挑选器", scSettings: "打开设置", scSidebar: "切换侧栏",
     scPalette: "命令面板", scFind: "聊天内查找", scFocus: "聚焦输入框",
-    scShortcuts: "显示本对话框", scRecall: "回调已发送提示词（输入框）", scSessionNav: "键盘浏览会话列表（侧栏）", scDayJump: "在日期分隔线间跳转（聊天）", scEndHome: "跳到最新 / 最早消息（聊天）",
+    scShortcuts: "显示本对话框", scRefreshView: "刷新当前视图", scRecall: "回调已发送提示词（输入框）", scSessionNav: "键盘浏览会话列表（侧栏）", scDayJump: "在日期分隔线间跳转（聊天）", scEndHome: "跳到最新 / 最早消息（聊天）",
   },
   session: {
     titlePrompt: "会话标题：", renamed: "会话已重命名。",
@@ -1388,7 +1388,7 @@ const zhHant: Translations = {
     scModelPicker: "開啟模型挑選器", scNewSession: "新增工作階段", scCycle: "循環切換工作階段", scArchive: "歸檔/恢復目前工作階段", scExport: "匯出目前工作階段",
     scSessionPicker: "開啟工作階段挑選器", scSettings: "開啟設定", scSidebar: "切換側欄",
     scPalette: "命令面板", scFind: "聊天內尋找", scFocus: "聚焦輸入框",
-    scShortcuts: "顯示本對話框", scRecall: "回撥已傳送提示詞（輸入框）", scSessionNav: "鍵盤瀏覽工作階段清單（側欄）", scDayJump: "在日期分隔線間跳轉（聊天）", scEndHome: "跳到最新 / 最早訊息（聊天）",
+    scShortcuts: "顯示本對話框", scRefreshView: "重新整理目前視圖", scRecall: "回撥已傳送提示詞（輸入框）", scSessionNav: "鍵盤瀏覽工作階段清單（側欄）", scDayJump: "在日期分隔線間跳轉（聊天）", scEndHome: "跳到最新 / 最早訊息（聊天）",
   },
   session: {
     titlePrompt: "工作階段標題：", renamed: "已重新命名工作階段。",
@@ -1888,7 +1888,7 @@ const ja: Translations = {
     scModelPicker: "モデルピッカーを開く", scNewSession: "新規セッション", scCycle: "セッションを切り替え", scArchive: "現在のセッションをアーカイブ/復元", scExport: "現在のセッションをエクスポート",
     scSessionPicker: "セッションピッカーを開く", scSettings: "設定を開く", scSidebar: "サイドバーを切り替え",
     scPalette: "コマンドパレット", scFind: "チャット内検索", scFocus: "入力欄にフォーカス",
-    scShortcuts: "このダイアログを表示", scRecall: "送信済みプロンプトを呼び出し（入力欄）", scSessionNav: "セッション一覧をキー操作（サイドバー）", scDayJump: "日付区切り線間をジャンプ（チャット）", scEndHome: "最新 / 最古のメッセージへジャンプ（チャット）",
+    scShortcuts: "このダイアログを表示", scRefreshView: "アクティブなビューを更新", scRecall: "送信済みプロンプトを呼び出し（入力欄）", scSessionNav: "セッション一覧をキー操作（サイドバー）", scDayJump: "日付区切り線間をジャンプ（チャット）", scEndHome: "最新 / 最古のメッセージへジャンプ（チャット）",
   },
   session: {
     titlePrompt: "セッションタイトル：", renamed: "セッション名を変更しました。",
@@ -2388,7 +2388,7 @@ const ar: Translations = {
     scModelPicker: "فتح منتقي النماذج", scNewSession: "جلسة جديدة", scCycle: "التنقل بين الجلسات", scArchive: "أرشفة/استعادة الجلسة الحالية", scExport: "تصدير الجلسة الحالية",
     scSessionPicker: "فتح منتقي الجلسات", scSettings: "فتح الإعدادات", scSidebar: "تبديل الشريط الجانبي",
     scPalette: "لوحة الأوامر", scFind: "بحث في المحادثة", scFocus: "تركيز مربع الإدخال",
-    scShortcuts: "إظهار هذا الحوار", scRecall: "استدعاء المطالبات المرسلة (المؤلف)", scSessionNav: "التنقل في قائمة الجلسات (الشريط الجانبي)", scDayJump: "التنقل بين فواصل الأيام (الدردشة)", scEndHome: "القفز إلى أحدث / أقدم رسالة (الدردشة)",
+    scShortcuts: "إظهار هذا الحوار", scRefreshView: "تحديث العرض النشط", scRecall: "استدعاء المطالبات المرسلة (المؤلف)", scSessionNav: "التنقل في قائمة الجلسات (الشريط الجانبي)", scDayJump: "التنقل بين فواصل الأيام (الدردشة)", scEndHome: "القفز إلى أحدث / أقدم رسالة (الدردشة)",
   },
   session: {
     titlePrompt: "عنوان الجلسة:", renamed: "أُعيدت تسمية الجلسة.",
