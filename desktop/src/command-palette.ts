@@ -45,6 +45,7 @@ export interface CommandPaletteHooks {
   copyLastReply(): void | Promise<void>;
   copyTranscript(): void | Promise<void>;
   forkSession(): void | Promise<void>;
+  retitleSkills(): void | Promise<void>;
   toggleHideArchived(): void;
   markAllRead(): void;
   newSessionInProject(): void | Promise<void>;
@@ -177,6 +178,7 @@ export class CommandPalette {
       { id: "copy-last-reply", label: t.palette.copyLastReply, group: t.palette.gatewayGroup, run: () => hooks.copyLastReply() },
       { id: "copy-transcript", label: t.palette.copyTranscript, group: t.palette.sessionGroup, run: () => hooks.copyTranscript() },
       { id: "fork-session", label: t.palette.forkSession, group: t.palette.sessionGroup, run: () => hooks.forkSession() },
+      { id: "retitle-skills", label: t.palette.retitleSkills, group: t.palette.gatewayGroup, run: () => hooks.retitleSkills() },
       { id: "toggle-hide-archived", label: t.palette.toggleHideArchived, group: t.palette.sessionGroup, run: () => hooks.toggleHideArchived() },
       { id: "mark-all-read", label: t.palette.markAllRead, group: t.palette.sessionGroup, run: () => hooks.markAllRead() },
       { id: "new-session-in-project", label: t.palette.newSessionInProject, group: t.palette.sessionGroup, run: () => hooks.newSessionInProject() },

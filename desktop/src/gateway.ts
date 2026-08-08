@@ -229,6 +229,23 @@ export interface KanbanDispatchResult {
   skipped_unassigned: number;
 }
 
+/** P531: one scanned session from `POST /api/sessions/retitle-skills`. */
+export interface RetitleSkillsRow {
+  id: string;
+  old_title: string;
+  new_title: string;
+  status: "proposed" | "applied" | "rejected";
+}
+
+/** P531: report from `POST /api/sessions/retitle-skills` (P530). */
+export interface RetitleSkillsReport {
+  scanned: number;
+  changed: number;
+  applied: number;
+  apply: boolean;
+  sessions: RetitleSkillsRow[];
+}
+
 export interface KanbanComment {
   id: number;
   author: string;
@@ -2641,6 +2658,18 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`fork HTTP ${response.status}`);
     const value = await response.json();
     return value.session as SessionRow;
+  }
+
+  /** P531: preview (`apply: false`) or apply (`apply: true`) leaked
+   * `/skill` scaffold title fixes over the P530 gateway endpoint. */
+  async retitleSkills(limit: number, apply: boolean): Promise<RetitleSkillsReport> {
+    const response = await fetch(this.endpoint("/api/sessions/retitle-skills"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ limit, apply }),
+    });
+    if (!response.ok) throw new Error(`retitle HTTP ${response.status}`);
+    return (await response.json()) as RetitleSkillsReport;
   }
 
   /** GET /api/sessions/:id/recap — gateway-built session recap text. */

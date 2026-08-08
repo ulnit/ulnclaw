@@ -3,7 +3,7 @@
 // everything else is plain HTTP (gateway.ts).
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
-import type { DashboardTheme, FsEntry, GatewaySettings, Project, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
+import type { DashboardTheme, FsEntry, GatewaySettings, Project, RetitleSkillsReport, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import type { KanbanBoard } from "./gateway";
 import { KanbanWidget } from "./kanban";
 import { ProjectsWidget } from "./projects";
@@ -2966,6 +2966,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     copyLastReply: () => runCopyLastReply(),
     copyTranscript: () => runCopyTranscript(),
     forkSession: () => runForkSession(),
+    retitleSkills: () => runRetitleSkills(),
     toggleHideArchived: () => toggleHideArchived(),
     // P498: clear every unread marker at once.
     markAllRead: () => {
@@ -3483,6 +3484,77 @@ async function runForkSession(): Promise<void> {
   } catch (error) {
     notifyError(fmt(t.palette.forkFailed, { error: String(error) }));
   }
+}
+
+/** P531: palette action — preview leaked `/skill` scaffold titles
+ * (dry-run over POST /api/sessions/retitle-skills) and apply the
+ * regenerated ones from the review dialog. */
+async function runRetitleSkills(): Promise<void> {
+  if (!state.client) return;
+  let preview: RetitleSkillsReport;
+  try {
+    preview = await state.client.retitleSkills(50, false);
+  } catch (error) {
+    notifyError(fmt(t.palette.retitleFailed, { error: String(error) }));
+    return;
+  }
+  if (preview.sessions.length === 0) {
+    notifySuccess(t.palette.retitleNone);
+    return;
+  }
+  const dialog = document.createElement("dialog");
+  dialog.className = "theme-picker-dialog";
+  const heading = document.createElement("div");
+  heading.className = "theme-picker-title";
+  heading.textContent = fmt(t.palette.retitleTitle, { count: preview.scanned });
+  const list = document.createElement("div");
+  list.className = "theme-picker-list";
+  for (const row of preview.sessions) {
+    const item = document.createElement("div");
+    item.className = "theme-picker-item";
+    const old = row.old_title || row.id.slice(0, 8);
+    if (row.status === "rejected") {
+      item.style.opacity = "0.6";
+      item.textContent = `${old} \u{2192} ${row.new_title} (${t.palette.retitleRejected})`;
+    } else {
+      item.textContent = `${old} \u{2192} ${row.new_title}`;
+    }
+    list.appendChild(item);
+  }
+  const footer = document.createElement("div");
+  footer.style.display = "flex";
+  footer.style.gap = "8px";
+  footer.style.marginTop = "10px";
+  const applyBtn = document.createElement("button");
+  applyBtn.className = "primary";
+  applyBtn.textContent = t.palette.retitleApply;
+  applyBtn.disabled = preview.sessions.every((row) => row.status === "rejected");
+  applyBtn.onclick = () => {
+    applyBtn.disabled = true;
+    state.client
+      ?.retitleSkills(50, true)
+      .then((result) => {
+        notifySuccess(fmt(t.palette.retitleApplied, { count: result.applied }));
+        dialog.close();
+        void refreshSessions();
+      })
+      .catch((error) => {
+        applyBtn.disabled = false;
+        notifyError(fmt(t.palette.retitleFailed, { error: String(error) }));
+      });
+  };
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "ghost";
+  closeBtn.textContent = t.palette.retitleClose;
+  closeBtn.onclick = () => dialog.close();
+  footer.append(applyBtn, closeBtn);
+  dialog.append(heading, list, footer);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }
 
 /** P428: palette action — start a session rooted at the active
