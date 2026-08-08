@@ -8340,7 +8340,9 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                             _ => continue,
                         };
                         exchange.push((role.to_string(), message.content.clone()));
-                        if exchange.len() >= 2 {
+                        // P534: two full rounds (four messages) so the pane
+                        // has real transcript depth to scroll through.
+                        if exchange.len() >= 4 {
                             break;
                         }
                     }
@@ -9064,7 +9066,9 @@ fn run_session_browse_tui(
                             }
                         };
                         let text =
-                            ulnclaw::tui_text::browse_conversation_preview(&exchange, 160);
+                            // P534: deeper per-message budget — the scrollable
+                            // pane (P529) pages through the extra text.
+                            ulnclaw::tui_text::browse_conversation_preview(&exchange, 600);
                         if !text.is_empty() {
                             pane_lines.push(String::new());
                             pane_lines.push("\u{2500} conversation \u{2500}".to_string());
