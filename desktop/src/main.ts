@@ -99,6 +99,9 @@ const el = {
   newSession: document.getElementById("new-session") as HTMLButtonElement,
   messages: document.getElementById("messages")!,
   chatTitle: document.getElementById("chat-title")!,
+  sessionInfoDialog: document.getElementById("session-info-dialog") as HTMLDialogElement,
+  sessionInfoRows: document.getElementById("session-info-rows")!,
+  sessionInfoCopy: document.getElementById("session-info-copy") as HTMLButtonElement,
   modelBadge: document.getElementById("model-badge")!,
   contextMeter: document.getElementById("context-meter")!,
   contextMeterFill: document.getElementById("context-meter-fill")!,
@@ -1455,6 +1458,15 @@ async function start(): Promise<void> {
     el.settings.showModal();
   };
   el.notifyBell.onclick = () => openNotifyHistory();
+  el.chatTitle.addEventListener("click", () => openSessionInfo());
+  el.sessionInfoCopy.onclick = () => {
+    const id = state.current?.id;
+    if (!id) return;
+    void navigator.clipboard.writeText(id).then(
+      () => notifySuccess(t.session.infoCopied),
+      () => notifyError(t.session.infoCopyFailed),
+    );
+  };
   el.notifyHistoryClear.onclick = () => {
     clearNotificationHistory();
     renderNotifyBadge();
@@ -1794,6 +1806,32 @@ async function start(): Promise<void> {
   setInterval(() => void pollHealth(), 10000);
   setInterval(() => void refreshSessions(), 30000);
   startApprovalWatcher();
+}
+
+/** P360: session info popover — clicking the chat title shows the
+ * current session's metadata (id, source, model, project, activity,
+ * message census) with a copy-id action. */
+function formatWhen(ms: number | null | undefined): string {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleString();
+}
+
+function openSessionInfo(): void {
+  const session = state.current;
+  if (!session) return;
+  const rows: [string, string][] = [
+    [t.session.infoId, session.id],
+    [t.session.infoSource, session.source],
+    [t.session.infoModel, session.model || gatewayModel || "—"],
+    [t.session.infoProject, session.project || "—"],
+    [t.session.infoStarted, formatWhen(session.started_at)],
+    [t.session.infoActivity, formatWhen(session.last_activity_at)],
+    [t.session.infoMessages, String(session.message_count ?? "—")],
+  ];
+  el.sessionInfoRows.innerHTML = rows
+    .map(([label, value]) => `<div class="notify-history-row"><span class="monitoring-label">${label}</span><span>${value}</span></div>`)
+    .join("");
+  el.sessionInfoDialog.showModal();
 }
 
 function formatTokens(count: number): string {

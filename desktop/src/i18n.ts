@@ -78,6 +78,9 @@ export interface Translations {
     errorPrefix: string; modelLockTitle: string; gatewayModelTitle: string;
     reachable: string; unreachable: string; removeAttachment: string; uploadFailed: string; projectBadge: string;
     speakTitle: string; speakFailed: string;
+    infoTitle: string; infoId: string; infoSource: string; infoModel: string; infoProject: string;
+    infoStarted: string; infoActivity: string; infoMessages: string;
+    infoCopyId: string; infoCopied: string; infoCopyFailed: string;
   };
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
   slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; skillFallback: string; resume: string };
@@ -357,6 +360,9 @@ const en: Translations = {
     removeAttachment: "Remove attachment",
     uploadFailed: "Clipboard upload failed: {error}", speakTitle: "Read aloud (TTS)", speakFailed: "Speech synthesis failed: {error}",
     projectBadge: "Project: {project}",
+    infoTitle: "Session info", infoId: "ID", infoSource: "Source", infoModel: "Model", infoProject: "Project",
+    infoStarted: "Started", infoActivity: "Last activity", infoMessages: "Messages",
+    infoCopyId: "Copy ID", infoCopied: "Session ID copied", infoCopyFailed: "Copy failed",
   },
   tools: { running: "running…", done: "done", thinking: "thinking", arguments: "arguments", result: "result", fallbackName: "tool" },
   slash: {
@@ -804,6 +810,9 @@ const zh: Translations = {
     removeAttachment: "移除附件",
     uploadFailed: "剪贴板上传失败：{error}", speakTitle: "朗读（TTS）", speakFailed: "语音合成失败：{error}",
     projectBadge: "项目：{project}",
+    infoTitle: "会话信息", infoId: "标识", infoSource: "来源", infoModel: "模型", infoProject: "项目",
+    infoStarted: "开始时间", infoActivity: "最后活动", infoMessages: "消息数",
+    infoCopyId: "复制 ID", infoCopied: "已复制会话 ID", infoCopyFailed: "复制失败",
   },
   tools: { running: "运行中…", done: "完成", thinking: "思考中", arguments: "参数", result: "结果", fallbackName: "工具" },
   slash: {
@@ -1251,6 +1260,9 @@ const zhHant: Translations = {
     removeAttachment: "移除附件",
     uploadFailed: "剪貼簿上傳失敗：{error}", speakTitle: "朗讀（TTS）", speakFailed: "語音合成失敗：{error}",
     projectBadge: "專案：{project}",
+    infoTitle: "工作階段資訊", infoId: "識別碼", infoSource: "來源", infoModel: "模型", infoProject: "專案",
+    infoStarted: "開始時間", infoActivity: "最後活動", infoMessages: "訊息數",
+    infoCopyId: "複製 ID", infoCopied: "已複製工作階段 ID", infoCopyFailed: "複製失敗",
   },
   tools: { running: "執行中…", done: "完成", thinking: "思考中", arguments: "參數", result: "結果", fallbackName: "工具" },
   slash: {
@@ -1698,6 +1710,9 @@ const ja: Translations = {
     removeAttachment: "添付を削除",
     uploadFailed: "クリップボードのアップロードに失敗：{error}", speakTitle: "読み上げ（TTS）", speakFailed: "音声合成に失敗しました：{error}",
     projectBadge: "プロジェクト：{project}",
+    infoTitle: "セッション情報", infoId: "ID", infoSource: "ソース", infoModel: "モデル", infoProject: "プロジェクト",
+    infoStarted: "開始", infoActivity: "最終アクティビティ", infoMessages: "メッセージ数",
+    infoCopyId: "ID をコピー", infoCopied: "セッション ID をコピーしました", infoCopyFailed: "コピーに失敗しました",
   },
   tools: { running: "実行中…", done: "完了", thinking: "思考中", arguments: "引数", result: "結果", fallbackName: "ツール" },
   slash: {
@@ -2145,6 +2160,9 @@ const ar: Translations = {
     removeAttachment: "إزالة المرفق",
     uploadFailed: "فشل رفع الحافظة: {error}", speakTitle: "قراءة بصوت عالٍ (TTS)", speakFailed: "فشل تركيب الكلام: {error}",
     projectBadge: "المشروع: {project}",
+    infoTitle: "معلومات الجلسة", infoId: "المعرف", infoSource: "المصدر", infoModel: "النموذج", infoProject: "المشروع",
+    infoStarted: "بدأت", infoActivity: "آخر نشاط", infoMessages: "الرسائل",
+    infoCopyId: "نسخ المعرف", infoCopied: "تم نسخ معرف الجلسة", infoCopyFailed: "فشل النسخ",
   },
   tools: { running: "قيد التشغيل…", done: "تم", thinking: "يفكر", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },
   slash: {
