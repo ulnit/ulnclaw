@@ -2325,6 +2325,21 @@ function installHotkeys(): void {
       state.sessionPicker?.open();
       return;
     }
+    // P547: mod+shift+a — archive / unarchive the current session.
+    if (mod && event.shiftKey && key === "a") {
+      event.preventDefault();
+      if (state.current) {
+        if (state.current.end_reason === "archived") void runUnarchiveSession();
+        else void runArchiveSession();
+      }
+      return;
+    }
+    // P547: mod+shift+e — open the export format picker.
+    if (mod && event.shiftKey && key === "e") {
+      event.preventDefault();
+      if (state.current) openExportPicker();
+      return;
+    }
     // mod+, — settings (hermes nav.settings chord).
     if (mod && !event.shiftKey && event.key === ",") {
       event.preventDefault();
@@ -3431,6 +3446,8 @@ function shortcutRows(): [string, string][] {
     [`${mod}+N / Shift+N`, t.chrome.scNewSession],
     ["Ctrl+Tab / Ctrl+Shift+Tab", t.chrome.scCycle],
     [`${mod}+Shift+F`, t.chrome.scSessionPicker],
+    [`${mod}+Shift+A`, t.chrome.scArchive],
+    [`${mod}+Shift+E`, t.chrome.scExport],
     [`${mod}+,`, t.chrome.scSettings],
     [`${mod}+B`, t.chrome.scSidebar],
     [`${mod}+K`, t.chrome.scPalette],
