@@ -9863,6 +9863,9 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /profile         list configured profiles
   /model [P M]     show the model, or persist provider+model
   /reasoning [L]   show or persist the reasoning effort (none|minimal|low|medium|high|xhigh|max|ultra, or clear)
+  /memory          memory store status (files, entries, sizes)
+  /sessions [N]    list the N most recent sessions (default 10)
+  /stop            request a stop for this session's running run
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -10344,6 +10347,76 @@ async fn resolve_gateway_slash(
                 ),
                 None => "reasoning effort cleared \u{2014} the endpoint default applies to new runs"
                     .to_string(),
+            }))
+        }
+        "/memory" => {
+            let home = state.agent.context().home.clone();
+            Some(GatewaySlash::Direct(crate::memory_cmd::memory_status(&home)))
+        }
+        "/sessions" => {
+            let limit = rest
+                .split_whitespace()
+                .next()
+                .and_then(|token| token.parse::<usize>().ok())
+                .unwrap_or(10)
+                .clamp(1, 50);
+            let rows = match state.store.list_session_rows(limit) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!("sessions failed: {e}")))
+                }
+            };
+            if rows.is_empty() {
+                return Some(GatewaySlash::Direct("no sessions yet.".to_string()));
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
+            let mut lines = vec![format!("recent sessions ({limit} max):")];
+            for row in rows {
+                let age_secs = (now - row.last_activity_at).max(0.0) as i64;
+                let age = if age_secs < 60 {
+                    format!("{age_secs}s ago")
+                } else if age_secs < 3600 {
+                    format!("{}m ago", age_secs / 60)
+                } else if age_secs < 86_400 {
+                    format!("{}h ago", age_secs / 3600)
+                } else {
+                    format!("{}d ago", age_secs / 86_400)
+                };
+                let title = row
+                    .title
+                    .as_deref()
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or("(untitled)");
+                lines.push(format!(
+                    "  {} \u{2014} {} ({} msgs, {age})",
+                    row.id, title, row.message_count
+                ));
+            }
+            Some(GatewaySlash::Direct(lines.join("\n")))
+        }
+        "/stop" => {
+            // Best-effort twin of POST /v1/runs/:id/stop scoped to this
+            // session: mark any running/queued run for interruption.
+            let mut runs = state.runs.lock().await;
+            let mut stopped = 0usize;
+            for run in runs.values_mut() {
+                if run.session_id.as_deref() == Some(session_id)
+                    && (run.status == "running" || run.status == "queued")
+                    && !run.stop_requested
+                {
+                    run.stop_requested = true;
+                    stopped += 1;
+                }
+            }
+            Some(GatewaySlash::Direct(if stopped > 0 {
+                format!(
+                    "stop requested for {stopped} run(s); the agent finishes its current iteration"
+                )
+            } else {
+                "no running run found for this session.".to_string()
             }))
         }
         _ => {
@@ -13537,6 +13610,47 @@ mod tests {
             std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
         assert!(config_text.contains("openrouter"), "{config_text}");
         assert!(config_text.contains("moonshotai/kimi-k2"), "{config_text}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_memory_sessions_stop() {
+        // P613 slash wave 2: /memory, /sessions [N], /stop.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-wave2", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/memory").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("Memory store:"), "{text}");
+
+        let reply = post_chat(app.clone(), &sid, "/sessions").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("recent sessions"), "{text}");
+        assert!(text.contains(&sid), "{text}");
+
+        let reply = post_chat(app.clone(), &sid, "/sessions 1").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("recent sessions (1 max)"), "{text}");
+
+        // No run in flight for this session: /stop says so.
+        let reply = post_chat(app.clone(), &sid, "/stop").await;
+        assert_eq!(
+            reply["response"],
+            "no running run found for this session."
+        );
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
