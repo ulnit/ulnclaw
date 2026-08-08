@@ -8312,12 +8312,12 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     Ok((fresh, fresh_projects))
                 };
                 let archive_home = home.clone();
-                let archive = move |id: &str| {
+                let archive = move |id: &str, archived: bool| {
                     let archive_store =
                         SqliteSessionStore::open(archive_home.join("state.db"))
                             .map_err(|e| e.to_string())?;
                     archive_store
-                        .set_session_archived(id, true)
+                        .set_session_archived(id, archived)
                         .map_err(|e| e.to_string())
                 };
                 // P278: conversation preview callback — first user +
@@ -8697,11 +8697,11 @@ fn browse_row_matches(
 ///
 /// P224 interaction upgrades: `F1` opens a dismissible keybinding help
 /// overlay, `F5` reloads the session list from disk through `reload`
-/// (a live gateway may create sessions mid-browse), `F8` archives the
-/// highlighted session after an inline `y` confirmation (via
-/// `archive`, then auto-reloads), `Shift+Tab` cycles the source filter
-/// backwards, and transient footer notices report reload/archive
-/// outcomes until the next keypress.
+/// (a live gateway may create sessions mid-browse), `F8` toggles the
+/// highlighted session's archived state after an inline `y`
+/// confirmation (via `archive(id, archived)`, then auto-reloads; P520),
+/// `Shift+Tab` cycles the source filter backwards, and transient footer
+/// notices report reload/archive outcomes until the next keypress.
 ///
 /// P512 interaction upgrades: `F6` renames the highlighted session
 /// through an inline title prompt (Enter saves via `rename`, Esc
@@ -8712,7 +8712,7 @@ fn run_session_browse_tui(
     mut rows: Vec<ulnclaw::session::sqlite::BrowseRow>,
     mut projects: std::collections::HashMap<String, String>,
     reload: Option<&dyn Fn(bool) -> Result<(Vec<ulnclaw::session::sqlite::BrowseRow>, std::collections::HashMap<String, String>), String>>,
-    archive: Option<&dyn Fn(&str) -> Result<(), String>>,
+    archive: Option<&dyn Fn(&str, bool) -> Result<(), String>>,
     preview: Option<&dyn Fn(&str) -> Result<Vec<(String, Option<String>)>, String>>,
     transcript_search: Option<&dyn Fn(&str) -> Result<Vec<(String, String)>, String>>,
     delete: Option<&dyn Fn(&str) -> Result<(), String>>,
@@ -8839,6 +8839,11 @@ fn run_session_browse_tui(
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or_else(|| row.id.clone())
         });
+        // P520: whether the highlighted row is archived (F8 toggles).
+        let highlighted_archived: bool = filtered
+            .get(cursor_idx)
+            .map(|row| row.archived)
+            .unwrap_or(false);
 
         let (cols, rows_h) = terminal::size().map_err(|e| e.to_string())?;
         let (cols, rows_h) = (cols as usize, rows_h as usize);
@@ -9109,10 +9114,15 @@ fn run_session_browse_tui(
             out.flush().map_err(|e| e.to_string())?;
         } else if confirm_archive {
             let label = highlighted_label.clone().unwrap_or_default();
+            let prompt = if highlighted_archived {
+                ulnclaw::tui_text::browse_unarchive_confirm_text(&label)
+            } else {
+                ulnclaw::tui_text::browse_archive_confirm_text(&label)
+            };
             queue!(
                 out,
                 SetForegroundColor(Color::Yellow),
-                Print(ulnclaw::tui_text::browse_archive_confirm_text(&label)),
+                Print(prompt),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -9333,10 +9343,14 @@ fn run_session_browse_tui(
                     confirm_archive = false;
                     if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                         if let Some(id) = highlighted_id.clone() {
+                            // P520: F8 toggles — archived rows unarchive.
+                            let archiving = !highlighted_archived;
                             match archive {
-                                Some(archive_fn) => match archive_fn(&id) {
+                                Some(archive_fn) => match archive_fn(&id, archiving) {
                                     Ok(()) => {
-                                        rows.retain(|r| r.id != id);
+                                        if archiving && !show_archived {
+                                            rows.retain(|r| r.id != id);
+                                        }
                                         if let Some(reload_fn) = reload {
                                             if let Ok((fresh_rows, fresh_projects)) = reload_fn(show_archived) {
                                                 rows = fresh_rows;
@@ -9345,7 +9359,11 @@ fn run_session_browse_tui(
                                         }
                                         cursor_idx = 0;
                                         scroll_offset = 0;
-                                        notice = Some(format!("Archived {id}."));
+                                        notice = Some(if archiving {
+                                            format!("Archived {id}.")
+                                        } else {
+                                            format!("Unarchived {id}.")
+                                        });
                                     }
                                     Err(e) => {
                                         notice = Some(format!("Archive failed: {e}"));
@@ -9520,8 +9538,8 @@ fn run_session_browse_tui(
                         }
                     }
                     KeyCode::F(8) => {
-                        // P224: archive the highlighted session after an
-                        // inline confirmation.
+                        // P224/P520: toggle archive on the highlighted
+                        // session after an inline confirmation.
                         if highlighted_id.is_some() && archive.is_some() {
                             confirm_archive = true;
                         }

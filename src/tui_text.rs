@@ -179,7 +179,7 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("F5", "reload the session list from disk"),
         ("F6", "rename the highlighted session (Enter saves, Esc cancels)"),
         ("F7", "fork the highlighted session (y confirms)"),
-        ("F8", "archive the highlighted session (y confirms)"),
+        ("F8", "archive / unarchive the highlighted session (y confirms)"),
         ("F9", "delete the highlighted session forever (y confirms)"),
         ("/", "search message bodies (FTS) while no filter is typed \u{2014} Enter runs, Esc cancels"),
         ("F1", "toggle this help overlay"),
@@ -196,6 +196,16 @@ pub fn browse_archive_confirm_text(label: &str) -> String {
         label.push('\u{2026}');
     }
     format!("Archive \u{201C}{label}\u{201D}?  y = archive \u{00B7} any other key = cancel")
+}
+
+/// Footer confirmation prompt for restoring an archived session from
+/// the browser (P520). F8 toggles archive ↔ unarchive.
+pub fn browse_unarchive_confirm_text(label: &str) -> String {
+    let mut label: String = label.chars().take(40).collect();
+    if label.chars().count() == 40 {
+        label.push('\u{2026}');
+    }
+    format!("Unarchive \u{201C}{label}\u{201D}?  y = unarchive \u{00B7} any other key = cancel")
 }
 
 /// Footer confirmation prompt for deleting the highlighted session from
@@ -247,6 +257,15 @@ mod browse_tui_upgrade_tests {
         }
         // Every entry has a non-empty description.
         assert!(entries.iter().all(|(_, d)| !d.is_empty()));
+    }
+
+    #[test]
+    fn browse_unarchive_confirm_text_matches_archive_style() {
+        let text = super::browse_unarchive_confirm_text("Fix the build");
+        assert!(text.contains("Fix the build"));
+        assert!(text.contains("y = unarchive"));
+        let long = "x".repeat(80);
+        assert!(super::browse_unarchive_confirm_text(&long).contains('\u{2026}'));
     }
 
     #[test]
