@@ -28,9 +28,27 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function downloadText(filename: string, text: string, mime: string): void {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function csvCell(value: string | number | null): string {
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 export class UsageWidget {
   private timer: number | null = null;
   private busy = false;
+  private lastUsage: UsagePayload | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -42,6 +60,7 @@ export class UsageWidget {
       <header id="usage-header">
         <span id="usage-window" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <button id="usage-export" class="ghost" data-i18n="usage.exportCsv">CSV</button>
         <button id="usage-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="usage-cards" class="usage-cards"></div>
@@ -59,6 +78,9 @@ export class UsageWidget {
       </div>
       <div id="insights-body"></div>
     `;
+    this.root.querySelector("#usage-export")!.addEventListener("click", () => {
+      this.exportCsv();
+    });
     this.root.querySelector("#usage-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
       this.refreshInsights().catch(() => undefined);
@@ -96,12 +118,40 @@ export class UsageWidget {
     this.busy = true;
     try {
       const usage = await client.usage(50);
+      this.lastUsage = usage;
       this.render(usage);
     } catch {
       // Gateway offline or still booting — leave last render in place.
     } finally {
       this.busy = false;
     }
+  }
+
+  /** P366: download the per-session usage table as CSV. */
+  private exportCsv(): void {
+    const usage = this.lastUsage;
+    if (!usage) return;
+    const header = [
+      "id", "title", "source", "model", "started_at", "ended_at", "end_reason",
+      "message_count", "input_tokens", "output_tokens", "total_tokens",
+    ];
+    const lines = [header.join(",")];
+    for (const row of usage.sessions) {
+      lines.push([
+        csvCell(row.id),
+        csvCell(row.title),
+        csvCell(row.source),
+        csvCell(row.model),
+        csvCell(row.started_at),
+        csvCell(row.ended_at),
+        csvCell(row.end_reason),
+        csvCell(row.message_count),
+        csvCell(row.input_tokens),
+        csvCell(row.output_tokens),
+        csvCell(row.total_tokens),
+      ].join(","));
+    }
+    downloadText(`ulnclaw-usage-${Date.now()}.csv`, lines.join("\n"), "text/csv");
   }
 
   private async refreshInsights(): Promise<void> {

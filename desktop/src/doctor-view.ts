@@ -3,7 +3,7 @@
 // grouped by section, with an issues panel up top. Online provider
 // probes are opt-in since they are slow.
 
-import type { BrowserStatus, CheckpointEntry, GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
+import type { BrowserStatus, CheckpointEntry, DoctorPayload, GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
 import { t } from "./i18n";
 
 const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
@@ -26,6 +26,7 @@ function escapeHtmlDoctor(text: string): string {
 
 export class DoctorWidget {
   private busy = false;
+  private lastReport: DoctorPayload | null = null;
   private logsTimer: number | null = null;
   private mcpPollers: number[] = [];
 
@@ -42,6 +43,7 @@ export class DoctorWidget {
           <input id="doctor-online-check" type="checkbox" />
           <span data-i18n="doctor.online">Include provider connectivity probes (slow)</span>
         </label>
+        <button id="doctor-export" class="ghost" data-i18n="doctor.exportJson" hidden>JSON</button>
         <span class="spacer"></span>
         <span id="doctor-status" class="jobs-counts"></span>
       </header>
@@ -138,6 +140,9 @@ export class DoctorWidget {
         <pre id="logs-body" class="logs-body"></pre>
       </section>
     `;
+    this.root.querySelector("#doctor-export")!.addEventListener("click", () => {
+      this.exportJson();
+    });
     this.root.querySelector("#doctor-run")!.addEventListener("click", () => {
       this.run().catch(() => undefined);
     });
@@ -197,6 +202,22 @@ export class DoctorWidget {
     (this.root.querySelector("#doctor-status") as HTMLElement).textContent = message;
   }
 
+  /** P366: download the last doctor report as JSON for support filing. */
+  private exportJson(): void {
+    if (!this.lastReport) return;
+    const blob = new Blob([JSON.stringify(this.lastReport, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `ulnclaw-doctor-${Date.now()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
   private async run(): Promise<void> {
     const client = this.client();
     if (!client || this.busy) return;
@@ -208,8 +229,11 @@ export class DoctorWidget {
     const body = this.root.querySelector("#doctor-body") as HTMLElement;
     try {
       const payload = await client.doctor(online);
+      this.lastReport = payload;
       this.render(payload.report.sections, payload.report.issues);
       this.status("");
+      const exportBtn = this.root.querySelector("#doctor-export") as HTMLButtonElement;
+      exportBtn.hidden = false;
     } catch (error) {
       body.innerHTML = "";
       this.status(

@@ -132,7 +132,7 @@ export interface Translations {
     prompt: string; completion: string; toolCalls: string;
     requests: string; runs: string; completed: string; failed: string;
     colSession: string; colModel: string; colMessages: string;
-    colInput: string; colOutput: string; colTotal: string; colStarted: string;
+    colInput: string; colOutput: string; colTotal: string; colStarted: string; exportCsv: string;
   };
   insights: {
     title: string; days7: string; days30: string; days90: string; sourcePlaceholder: string;
@@ -216,7 +216,7 @@ export interface Translations {
   };
   doctor: {
     run: string; running: string; online: string; issues: string;
-    noIssues: string; failed: string; empty: string;
+    noIssues: string; failed: string; empty: string; exportJson: string;
   };
   webhooks: {
     count: string; empty: string; loadFailed: string; createTitle: string;
@@ -456,7 +456,7 @@ const en: Translations = {
     prompt: "prompt", completion: "completion", toolCalls: "Tool calls",
     requests: "API requests", runs: "Async runs", completed: "completed", failed: "failed",
     colSession: "Session", colModel: "Model", colMessages: "Msgs",
-    colInput: "Input", colOutput: "Output", colTotal: "Total", colStarted: "Started",
+    colInput: "Input", colOutput: "Output", colTotal: "Total", colStarted: "Started", exportCsv: "Export CSV",
   },
   insights: {
     title: "Insights",
@@ -573,7 +573,7 @@ const en: Translations = {
     run: "Run doctor", running: "Running checks…",
     online: "Include provider connectivity probes (slow)",
     issues: "Issues found", noIssues: "✓ No issues found.",
-    failed: "Doctor run failed: {error}", empty: "No checks reported.",
+    failed: "Doctor run failed: {error}", empty: "No checks reported.", exportJson: "Export JSON",
   },
   webhooks: {
     count: "{count} subscription(s)", empty: "No dynamic webhook subscriptions yet.",
@@ -910,7 +910,7 @@ const zh: Translations = {
     prompt: "提示", completion: "补全", toolCalls: "工具调用",
     requests: "API 请求", runs: "异步运行", completed: "完成", failed: "失败",
     colSession: "会话", colModel: "模型", colMessages: "消息",
-    colInput: "输入", colOutput: "输出", colTotal: "总计", colStarted: "开始时间",
+    colInput: "输入", colOutput: "输出", colTotal: "总计", colStarted: "开始时间", exportCsv: "导出 CSV",
   },
   insights: {
     title: "洞察",
@@ -1027,7 +1027,7 @@ const zh: Translations = {
     run: "运行诊断", running: "检查中…",
     online: "包含 provider 连通性探测（较慢）",
     issues: "发现的问题", noIssues: "✓ 未发现问题。",
-    failed: "诊断失败：{error}", empty: "没有检查项。",
+    failed: "诊断失败：{error}", empty: "没有检查项。", exportJson: "导出 JSON",
   },
   webhooks: {
     count: "{count} 个订阅", empty: "还没有动态 webhook 订阅。",
@@ -1364,7 +1364,7 @@ const zhHant: Translations = {
     prompt: "提示", completion: "補全", toolCalls: "工具呼叫",
     requests: "API 請求", runs: "非同步執行", completed: "完成", failed: "失敗",
     colSession: "工作階段", colModel: "模型", colMessages: "訊息",
-    colInput: "輸入", colOutput: "輸出", colTotal: "總計", colStarted: "開始時間",
+    colInput: "輸入", colOutput: "輸出", colTotal: "總計", colStarted: "開始時間", exportCsv: "匯出 CSV",
   },
   insights: {
     title: "洞察",
@@ -1481,7 +1481,7 @@ const zhHant: Translations = {
     run: "執行診斷", running: "檢查中…",
     online: "包含 provider 連通性探測（較慢）",
     issues: "發現的問題", noIssues: "✓ 未發現問題。",
-    failed: "診斷失敗：{error}", empty: "沒有檢查項。",
+    failed: "診斷失敗：{error}", empty: "沒有檢查項。", exportJson: "匯出 JSON",
   },
   webhooks: {
     count: "{count} 個訂閱", empty: "還沒有動態 webhook 訂閱。",
@@ -1818,7 +1818,7 @@ const ja: Translations = {
     prompt: "プロンプト", completion: "補完", toolCalls: "ツール呼び出し",
     requests: "API リクエスト", runs: "非同期実行", completed: "完了", failed: "失敗",
     colSession: "セッション", colModel: "モデル", colMessages: "件数",
-    colInput: "入力", colOutput: "出力", colTotal: "合計", colStarted: "開始",
+    colInput: "入力", colOutput: "出力", colTotal: "合計", colStarted: "開始", exportCsv: "CSV をエクスポート",
   },
   insights: {
     title: "インサイト",
@@ -1935,7 +1935,7 @@ const ja: Translations = {
     run: "ドクターを実行", running: "チェック中…",
     online: "プロバイダー接続Probeを含む（低速）",
     issues: "見つかった問題", noIssues: "✓ 問題は見つかりませんでした。",
-    failed: "ドクター実行に失敗：{error}", empty: "チェック項目がありません。",
+    failed: "ドクター実行に失敗：{error}", empty: "チェック項目がありません。", exportJson: "JSON をエクスポート",
   },
   webhooks: {
     count: "{count} 件の購読", empty: "動的 webhook 購読はまだありません。",
@@ -2272,7 +2272,7 @@ const ar: Translations = {
     prompt: "مطالبات", completion: "إكمالات", toolCalls: "استدعاءات الأدوات",
     requests: "طلبات API", runs: "تشغيلات غير متزامنة", completed: "اكتملت", failed: "فشلت",
     colSession: "الجلسة", colModel: "النموذج", colMessages: "رسائل",
-    colInput: "دخل", colOutput: "خرج", colTotal: "الإجمالي", colStarted: "البدء",
+    colInput: "دخل", colOutput: "خرج", colTotal: "الإجمالي", colStarted: "البدء", exportCsv: "تصدير CSV",
   },
   insights: {
     title: "الرؤى",
@@ -2389,7 +2389,7 @@ const ar: Translations = {
     run: "تشغيل الفحص", running: "جارٍ الفحص…",
     online: "تضمين اختبارات اتصال المزودين (بطيء)",
     issues: "المشاكل المكتشفة", noIssues: "✓ لم يتم العثور على مشاكل.",
-    failed: "فشل الفحص: {error}", empty: "لا توجد فحوصات.",
+    failed: "فشل الفحص: {error}", empty: "لا توجد فحوصات.", exportJson: "تصدير JSON",
   },
   webhooks: {
     count: "{count} اشتراك(ات)", empty: "لا توجد اشتراكات ويب هوك ديناميكية بعد.",
