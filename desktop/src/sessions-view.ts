@@ -37,6 +37,8 @@ const PROJECT_FILTER_KEY = "ulnclaw.sessions.projectFilter";
 const MODEL_FILTER_KEY = "ulnclaw.sessions.modelFilter";
 // P481: persisted source quick-filter selection.
 const SOURCE_FILTER_KEY = "ulnclaw.sessions.sourceFilter";
+// P511: persisted set of hidden transcript roles.
+const ROLE_VISIBILITY_KEY = "ulnclaw.sessions.hiddenRoles";
 // P463: transcript tail window before the load-full banner appears.
 const TRANSCRIPT_LIMIT = 400;
 // P465: messages rendered per batch once the full transcript is loaded.
@@ -78,6 +80,10 @@ export class SessionsViewWidget {
   private modelFilter: string | null = localStorage.getItem(MODEL_FILTER_KEY);
   // P481: source quick-filter selection.
   private sourceFilter: string | null = localStorage.getItem(SOURCE_FILTER_KEY);
+  // P511: transcript roles currently hidden from view.
+  private hiddenRoles = new Set<string>(
+    (localStorage.getItem(ROLE_VISIBILITY_KEY) || "").split(",").filter(Boolean),
+  );
   // P470: find-in-transcript bar scoped to this view.
   private findBar: FindBar | null = null;
   private active = false;
@@ -140,8 +146,17 @@ export class SessionsViewWidget {
           <button id="sessions-view-clear-filters" class="ghost" data-i18n="sessionsView.clearFilters" hidden></button>
           <div id="sessions-view-list" class="sessions-view-list" tabindex="0"></div>
         </div>
-        <div id="sessions-view-transcript" class="sessions-view-transcript" tabindex="0">
-          <p class="empty" data-i18n="sessionsView.select"></p>
+        <div class="sessions-view-transcriptcol">
+          <div id="sessions-view-rolebar" class="sessions-view-rolebar">
+            <span class="sessions-view-rolebar-label" data-i18n="sessionsView.roleShow">Show:</span>
+            <button class="sessions-view-roletoggle" data-role="user" data-i18n="sessionsView.roleUser">user</button>
+            <button class="sessions-view-roletoggle" data-role="assistant" data-i18n="sessionsView.roleAssistant">assistant</button>
+            <button class="sessions-view-roletoggle" data-role="tool" data-i18n="sessionsView.roleTool">tool</button>
+            <button class="sessions-view-roletoggle" data-role="system" data-i18n="sessionsView.roleSystem">system</button>
+          </div>
+          <div id="sessions-view-transcript" class="sessions-view-transcript" tabindex="0">
+            <p class="empty" data-i18n="sessionsView.select"></p>
+          </div>
         </div>
       </div>
       <dialog id="sessions-rename-dialog">
@@ -186,6 +201,18 @@ export class SessionsViewWidget {
     this.root.querySelector("#sessions-view-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
     });
+    // P511: transcript role-visibility toggles.
+    this.root.querySelectorAll<HTMLElement>(".sessions-view-roletoggle").forEach((button) => {
+      button.addEventListener("click", () => {
+        const role = button.dataset.role || "";
+        if (!role) return;
+        if (this.hiddenRoles.has(role)) this.hiddenRoles.delete(role);
+        else this.hiddenRoles.add(role);
+        localStorage.setItem(ROLE_VISIBILITY_KEY, Array.from(this.hiddenRoles).join(","));
+        this.applyRoleVisibility();
+      });
+    });
+    this.applyRoleVisibility();
     this.root.querySelector("#sessions-view-filter")!.addEventListener("input", () => {
       this.renderList();
     });
@@ -1362,6 +1389,20 @@ export class SessionsViewWidget {
 
   /** P477: ensure one day divider between messages on different calendar
    * days — re-run after any render/prepend/append pass. */
+  /** P511: mirror persisted role visibility onto the pane + toggles. */
+  private applyRoleVisibility(): void {
+    const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    for (const role of ["user", "assistant", "tool", "system"]) {
+      pane.classList.toggle(`hide-role-${role}`, this.hiddenRoles.has(role));
+    }
+    this.root.querySelectorAll<HTMLElement>(".sessions-view-roletoggle").forEach((button) => {
+      const role = button.dataset.role || "";
+      const active = role !== "" && !this.hiddenRoles.has(role);
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+  }
+
   private syncDayDividers(pane: HTMLElement): void {
     pane.querySelectorAll(".day-divider").forEach((divider) => divider.remove());
     const messages = Array.from(pane.querySelectorAll<HTMLElement>(".sessions-view-msg"));

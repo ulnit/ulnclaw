@@ -154,6 +154,7 @@ export interface Translations {
     modelFilterTitle: string; modelAll: string;
     sourceFilterTitle: string; sourceAll: string;
     clearFilters: string;
+    roleShow: string;
     listCsv: string; listCsvTitle: string; listCsvDone: string;
     unreadOnly: string;
     copyMessageTitle: string; copied: string; copyFailed: string;
@@ -514,6 +515,7 @@ const en: Translations = {
     modelFilterTitle: "Filter by model", modelAll: "All models",
     sourceFilterTitle: "Filter by source", sourceAll: "All sources",
     clearFilters: "Clear all filters",
+    roleShow: "Show:",
     listCsv: "⭳ CSV", listCsvTitle: "Download the filtered session list as CSV", listCsvDone: "Exported {count} sessions to CSV", unreadOnly: "Unread only",
     copyMessageTitle: "Copy message", copied: "Message copied.", copyFailed: "Copy failed.",
     loadFull: "Showing the last {count} messages — click to load the full transcript",
@@ -1002,6 +1004,7 @@ const zh: Translations = {
     modelFilterTitle: "按模型筛选", modelAll: "全部模型",
     sourceFilterTitle: "按来源筛选", sourceAll: "全部来源",
     clearFilters: "清除全部筛选",
+    roleShow: "显示：",
     listCsv: "⭳ CSV", listCsvTitle: "将过滤后的会话列表下载为 CSV", listCsvDone: "已导出 {count} 个会话到 CSV", unreadOnly: "仅看未读",
     copyMessageTitle: "复制消息", copied: "消息已复制。", copyFailed: "复制失败。",
     loadFull: "当前仅显示最近 {count} 条消息——点击加载完整转录",
@@ -1490,6 +1493,7 @@ const zhHant: Translations = {
     modelFilterTitle: "依模型篩選", modelAll: "全部模型",
     sourceFilterTitle: "依來源篩選", sourceAll: "全部來源",
     clearFilters: "清除全部篩選",
+    roleShow: "顯示：",
     listCsv: "⭳ CSV", listCsvTitle: "將過濾後的工作階段清單下載為 CSV", listCsvDone: "已匯出 {count} 個工作階段到 CSV", unreadOnly: "僅看未讀",
     copyMessageTitle: "複製訊息", copied: "訊息已複製。", copyFailed: "複製失敗。",
     loadFull: "目前僅顯示最近 {count} 則訊息——點選載入完整轉錄",
@@ -1978,6 +1982,7 @@ const ja: Translations = {
     modelFilterTitle: "モデルで絞り込み", modelAll: "すべてのモデル",
     sourceFilterTitle: "ソースで絞り込み", sourceAll: "すべてのソース",
     clearFilters: "すべてのフィルターを解除",
+    roleShow: "表示：",
     listCsv: "⭳ CSV", listCsvTitle: "絞り込んだセッション一覧を CSV でダウンロード", listCsvDone: "{count} 件のセッションを CSV にエクスポートしました", unreadOnly: "未読のみ",
     copyMessageTitle: "メッセージをコピー", copied: "メッセージをコピーしました。", copyFailed: "コピーに失敗しました。",
     loadFull: "直近 {count} メッセージのみ表示中 — クリックで全文を読み込む",
@@ -2466,6 +2471,7 @@ const ar: Translations = {
     modelFilterTitle: "تصفية حسب النموذج", modelAll: "جميع النماذج",
     sourceFilterTitle: "تصفية حسب المصدر", sourceAll: "جميع المصادر",
     clearFilters: "مسح جميع عوامل التصفية",
+    roleShow: "عرض:",
     listCsv: "⭳ CSV", listCsvTitle: "تنزيل قائمة الجلسات المصفاة بصيغة CSV", listCsvDone: "تم تصدير {count} جلسة إلى CSV", unreadOnly: "غير المقروءة فقط",
     copyMessageTitle: "نسخ الرسالة", copied: "تم نسخ الرسالة.", copyFailed: "فشل النسخ.",
     loadFull: "يتم عرض آخر {count} رسالة فقط — انقر لتحميل النسخة الكاملة",
