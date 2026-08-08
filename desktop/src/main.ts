@@ -556,6 +556,13 @@ async function sendTurn(): Promise<void> {
     state.sessionPicker?.open();
     return;
   }
+  // /new starts a fresh session straight from the composer (P374,
+  // hermes CLI /new parity).
+  if (/^\/new\b/i.test(text)) {
+    el.input.value = "";
+    el.newSession.click();
+    return;
+  }
   if ((!text && state.pendingUploads.length === 0) || state.busy || !state.client) return;
   if (!state.current) {
     try {
@@ -866,6 +873,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/title", t.slash.title],
     ["/usage", t.slash.usage],
     ["/kanban", t.slash.kanban],
+    ["/new", t.slash.newSession],
   ];
 }
 
