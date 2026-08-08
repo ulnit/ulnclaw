@@ -955,6 +955,10 @@ async function openSession(session: SessionRow): Promise<void> {
     persistDrafts();
   }
   state.current = session;
+  // P595: the file tree follows the session's working folder while visible.
+  if (state.fileTree?.visible) {
+    void state.fileTree.open(session.cwd ?? null);
+  }
   el.chatTitle.textContent = session.title || session.id.slice(0, 8);
   refreshWindowTitle();
   refreshModelBadge();
