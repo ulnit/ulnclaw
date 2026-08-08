@@ -151,6 +151,7 @@ export interface Translations {
     projectFilter: string;
     modelFilterTitle: string; modelAll: string;
     sourceFilterTitle: string; sourceAll: string;
+    clearFilters: string;
     copyMessageTitle: string; copied: string; copyFailed: string;
     loadFull: string;
     showEarlier: string;
@@ -501,6 +502,7 @@ const en: Translations = {
     projectFilter: "Project: {project} — click to clear",
     modelFilterTitle: "Filter by model", modelAll: "All models",
     sourceFilterTitle: "Filter by source", sourceAll: "All sources",
+    clearFilters: "Clear all filters",
     copyMessageTitle: "Copy message", copied: "Message copied.", copyFailed: "Copy failed.",
     loadFull: "Showing the last {count} messages — click to load the full transcript",
     showEarlier: "Show earlier messages ({count} more)",
@@ -979,6 +981,7 @@ const zh: Translations = {
     projectFilter: "项目：{project}——点击清除",
     modelFilterTitle: "按模型筛选", modelAll: "全部模型",
     sourceFilterTitle: "按来源筛选", sourceAll: "全部来源",
+    clearFilters: "清除全部筛选",
     copyMessageTitle: "复制消息", copied: "消息已复制。", copyFailed: "复制失败。",
     loadFull: "当前仅显示最近 {count} 条消息——点击加载完整转录",
     showEarlier: "显示更早的消息（还有 {count} 条）",
@@ -1457,6 +1460,7 @@ const zhHant: Translations = {
     projectFilter: "專案：{project}——點選清除",
     modelFilterTitle: "依模型篩選", modelAll: "全部模型",
     sourceFilterTitle: "依來源篩選", sourceAll: "全部來源",
+    clearFilters: "清除全部篩選",
     copyMessageTitle: "複製訊息", copied: "訊息已複製。", copyFailed: "複製失敗。",
     loadFull: "目前僅顯示最近 {count} 則訊息——點選載入完整轉錄",
     showEarlier: "顯示更早的訊息（還有 {count} 則）",
@@ -1935,6 +1939,7 @@ const ja: Translations = {
     projectFilter: "プロジェクト：{project} — クリックで解除",
     modelFilterTitle: "モデルで絞り込み", modelAll: "すべてのモデル",
     sourceFilterTitle: "ソースで絞り込み", sourceAll: "すべてのソース",
+    clearFilters: "すべてのフィルターを解除",
     copyMessageTitle: "メッセージをコピー", copied: "メッセージをコピーしました。", copyFailed: "コピーに失敗しました。",
     loadFull: "直近 {count} メッセージのみ表示中 — クリックで全文を読み込む",
     showEarlier: "以前のメッセージを表示（あと {count} 件）",
@@ -2413,6 +2418,7 @@ const ar: Translations = {
     projectFilter: "المشروع: {project} — انقر للإزالة",
     modelFilterTitle: "تصفية حسب النموذج", modelAll: "جميع النماذج",
     sourceFilterTitle: "تصفية حسب المصدر", sourceAll: "جميع المصادر",
+    clearFilters: "مسح جميع عوامل التصفية",
     copyMessageTitle: "نسخ الرسالة", copied: "تم نسخ الرسالة.", copyFailed: "فشل النسخ.",
     loadFull: "يتم عرض آخر {count} رسالة فقط — انقر لتحميل النسخة الكاملة",
     showEarlier: "عرض الرسائل السابقة ({count} إضافية)",

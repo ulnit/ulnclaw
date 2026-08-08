@@ -124,6 +124,7 @@ export class SessionsViewWidget {
           <button id="sessions-view-reason-pill" class="sessions-view-reason-pill" hidden></button>
           <button id="sessions-view-project-pill" class="sessions-view-reason-pill" hidden></button>
           <input id="sessions-view-search" type="search" data-i18n-ph="sessionsView.searchPlaceholder" />
+          <button id="sessions-view-clear-filters" class="ghost" data-i18n="sessionsView.clearFilters" hidden></button>
           <div id="sessions-view-list" class="sessions-view-list" tabindex="0"></div>
         </div>
         <div id="sessions-view-transcript" class="sessions-view-transcript" tabindex="0">
@@ -272,6 +273,19 @@ export class SessionsViewWidget {
     });
     this.applySortLabel();
     let searchDebounce: number | null = null;
+    // P482: one-click reset of every list filter.
+    this.root.querySelector("#sessions-view-clear-filters")!.addEventListener("click", () => {
+      (this.root.querySelector("#sessions-view-filter") as HTMLInputElement).value = "";
+      const searchInput = this.root.querySelector("#sessions-view-search") as HTMLInputElement;
+      searchInput.value = "";
+      localStorage.removeItem(SEARCH_KEY);
+      (this.root.querySelector("#sessions-view-status-filter") as HTMLSelectElement).value = "all";
+      this.modelFilter = null;
+      this.sourceFilter = null;
+      this.endReasonFilter = null;
+      this.projectFilter = null;
+      this.renderList();
+    });
     this.root.querySelector("#sessions-view-search")!.addEventListener("input", () => {
       if (searchDebounce !== null) window.clearTimeout(searchDebounce);
       searchDebounce = window.setTimeout(() => {
@@ -778,6 +792,12 @@ export class SessionsViewWidget {
     this.updateSourceOptions();
     if (this.sourceFilter) localStorage.setItem(SOURCE_FILTER_KEY, this.sourceFilter);
     else localStorage.removeItem(SOURCE_FILTER_KEY);
+    // P482: show the clear-filters action while any filter is active.
+    const searchValue = (this.root.querySelector("#sessions-view-search") as HTMLInputElement).value.trim();
+    const filtersActive = Boolean(filter) || status !== "all" || this.modelFilter !== null
+      || this.sourceFilter !== null || this.endReasonFilter !== null || this.projectFilter !== null
+      || Boolean(searchValue);
+    (this.root.querySelector("#sessions-view-clear-filters") as HTMLButtonElement).hidden = !filtersActive;
     this.visible = [];
     // P438: show/clear the end-reason drill-down pill.
     const reasonPill = this.root.querySelector("#sessions-view-reason-pill") as HTMLButtonElement;
