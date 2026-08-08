@@ -146,6 +146,7 @@ export interface Translations {
   sessionsView: {
     filterPlaceholder: string; count: string; empty: string; noMatch: string;
     statusFilterTitle: string; statusAll: string; statusOpen: string; statusEnded: string; statusArchived: string;
+    reasonFilter: string;
     select: string; loading: string; loadFailed: string; transcriptFailed: string;
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
@@ -481,6 +482,7 @@ const en: Translations = {
     statusOpen: "Open",
     statusEnded: "Ended",
     statusArchived: "Archived",
+    reasonFilter: "End reason: {reason} — click to clear",
     count: "{count} sessions",
     empty: "No sessions recorded yet.",
     noMatch: "No sessions match the filter.",
@@ -944,6 +946,7 @@ const zh: Translations = {
     statusOpen: "进行中",
     statusEnded: "已结束",
     statusArchived: "已归档",
+    reasonFilter: "结束原因：{reason}——点击清除",
     count: "{count} 个会话",
     empty: "暂无会话记录。",
     noMatch: "没有匹配过滤条件的会话。",
@@ -1407,6 +1410,7 @@ const zhHant: Translations = {
     statusOpen: "進行中",
     statusEnded: "已結束",
     statusArchived: "已歸檔",
+    reasonFilter: "結束原因：{reason}——點選清除",
     count: "{count} 個會話",
     empty: "暫無會話記錄。",
     noMatch: "沒有符合過濾條件的會話。",
@@ -1870,6 +1874,7 @@ const ja: Translations = {
     statusOpen: "進行中",
     statusEnded: "終了済み",
     statusArchived: "アーカイブ済み",
+    reasonFilter: "終了理由：{reason} — クリックで解除",
     count: "{count} 件のセッション",
     empty: "セッションはまだ記録されていません。",
     noMatch: "フィルタに一致するセッションはありません。",
@@ -2333,6 +2338,7 @@ const ar: Translations = {
     statusOpen: "مفتوحة",
     statusEnded: "منتهية",
     statusArchived: "مؤرشفة",
+    reasonFilter: "سبب الانتهاء: {reason} — انقر للإزالة",
     count: "{count} جلسة",
     empty: "لا توجد جلسات مسجلة بعد.",
     noMatch: "لا توجد جلسات مطابقة للتصفية.",

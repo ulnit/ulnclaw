@@ -6,7 +6,7 @@
 // sessions for continued conversation.
 
 import type { GatewayClient, MessageRow, SessionPruneOptions, SessionRow } from "./gateway";
-import { onLocaleChange, t } from "./i18n";
+import { fmt, onLocaleChange, t } from "./i18n";
 
 function escapeHtml(text: string): string {
   return text
@@ -25,6 +25,8 @@ export class SessionsViewWidget {
   private all: SessionRow[] = [];
   private selected: string | null = null;
   private pruneMode: "prune" | "archive" = "prune";
+  // P438: end-reason drill-down set from the row chips.
+  private endReasonFilter: string | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -62,6 +64,7 @@ export class SessionsViewWidget {
             <option value="ended" data-i18n="sessionsView.statusEnded">Ended</option>
             <option value="archived" data-i18n="sessionsView.statusArchived">Archived</option>
           </select>
+          <button id="sessions-view-reason-pill" class="sessions-view-reason-pill" hidden></button>
           <input id="sessions-view-search" type="search" data-i18n-ph="sessionsView.searchPlaceholder" />
           <div id="sessions-view-list" class="sessions-view-list"></div>
         </div>
@@ -104,6 +107,10 @@ export class SessionsViewWidget {
     for (const option of Array.from(statusSelect.options)) option.removeAttribute("data-i18n");
     this.updateStatusOptions();
     onLocaleChange(() => this.updateStatusOptions());
+    this.root.querySelector("#sessions-view-reason-pill")!.addEventListener("click", () => {
+      this.endReasonFilter = null;
+      this.renderList();
+    });
     let searchDebounce: number | null = null;
     this.root.querySelector("#sessions-view-search")!.addEventListener("input", () => {
       if (searchDebounce !== null) window.clearTimeout(searchDebounce);
@@ -366,7 +373,16 @@ export class SessionsViewWidget {
       ended: this.all.filter((s) => s.end_reason && s.end_reason !== "archived").length,
       archived: this.all.filter((s) => s.end_reason === "archived").length,
     });
+    // P438: show/clear the end-reason drill-down pill.
+    const reasonPill = this.root.querySelector("#sessions-view-reason-pill") as HTMLButtonElement;
+    if (this.endReasonFilter) {
+      reasonPill.hidden = false;
+      reasonPill.textContent = `${fmt(t.sessionsView.reasonFilter, { reason: this.endReasonFilter })} ✕`;
+    } else {
+      reasonPill.hidden = true;
+    }
     const rows = this.all.filter((session) => {
+      if (this.endReasonFilter && session.end_reason !== this.endReasonFilter) return false;
       if (status === "open" && session.end_reason) return false;
       if (status === "ended" && (!session.end_reason || session.end_reason === "archived")) return false;
       if (status === "archived" && session.end_reason !== "archived") return false;
@@ -388,7 +404,7 @@ export class SessionsViewWidget {
             <div class="sessions-view-row-meta">
               ${session.model ? `<span class="sessions-view-model">${escapeHtml(session.model)}</span>` : ""}
               ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
-              ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
+              ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" data-reason="${escapeHtml(session.end_reason)}" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
               <span>${fmtWhen(session.started_at)}</span>
             </div>
           </div>`;
@@ -399,6 +415,14 @@ export class SessionsViewWidget {
         this.selected = row.dataset.id || null;
         this.renderList();
         this.loadTranscript(row.dataset.id || "").catch(() => undefined);
+      });
+    }
+    // P438: end-reason chips drill the list down to that reason.
+    for (const chip of Array.from(list.querySelectorAll<HTMLElement>(".sessions-view-endreason"))) {
+      chip.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.endReasonFilter = chip.dataset.reason || null;
+        this.renderList();
       });
     }
   }

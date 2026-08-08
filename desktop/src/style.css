@@ -1212,6 +1212,18 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 }
 .sessions-view-chip.sessions-view-endreason {
   background: rgba(200, 150, 90, 0.22);
+  cursor: pointer;
+}
+/* P438: end-reason drill-down pill. */
+.sessions-view-reason-pill {
+  align-self: flex-start;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border, var(--hover));
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
 }
 .sessions-view-transcript {
   overflow-y: auto;
