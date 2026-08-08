@@ -8784,6 +8784,9 @@ fn run_session_browse_tui(
     // P513: F4 toggles archived sessions into the list (reloads via the
     // include_archived flag on the reload closure).
     let mut show_archived = false;
+    // P528: F10 cycles a model quick-filter — 0 shows every model, then
+    // each distinct model present in the loaded rows.
+    let mut model_idx: usize = 0;
 
     loop {
         // Tab cycles "all sources" plus each distinct source present in
@@ -8802,9 +8805,30 @@ fn run_session_browse_tui(
         } else {
             sources.get(source_idx - 1).map(String::as_str)
         };
+        // P528: distinct non-empty models across the loaded rows, in
+        // alphabetical order, cycled with F10 (Shift+F10 backwards).
+        let models: Vec<String> = rows
+            .iter()
+            .filter_map(|r| r.model.clone().filter(|m| !m.is_empty()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if model_idx > models.len() {
+            model_idx = 0;
+        }
+        let model_filter: Option<&str> = if model_idx == 0 {
+            None
+        } else {
+            models.get(model_idx - 1).map(String::as_str)
+        };
         let mut filtered: Vec<&ulnclaw::session::sqlite::BrowseRow> = rows
             .iter()
             .filter(|r| source_filter.map(|s| r.source == s).unwrap_or(true))
+            .filter(|r| {
+                model_filter
+                    .map(|m| r.model.as_deref() == Some(m))
+                    .unwrap_or(true)
+            })
             .filter(|r| {
                 browse_row_matches(r, projects.get(&r.id).map(String::as_str), &filter)
             })
@@ -8871,7 +8895,7 @@ fn run_session_browse_tui(
             queue!(
                 out,
                 SetForegroundColor(Color::Yellow),
-                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F2 sort  F3 preview  F1 help  F5 reload  F8 archive  Esc quit"),
+                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F10 model  F2 sort  F3 preview  F1 help  F5 reload  F8 archive  Esc quit"),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -8889,6 +8913,15 @@ fn run_session_browse_tui(
                 out,
                 SetForegroundColor(Color::Green),
                 Print(format!("  [source: {name}]")),
+                ResetColor
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(name) = model_filter {
+            queue!(
+                out,
+                SetForegroundColor(Color::Green),
+                Print(format!("  [model: {name}]")),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -9551,6 +9584,23 @@ fn run_session_browse_tui(
                             confirm_delete = true;
                         }
                     }
+                    KeyCode::F(10) => {
+                        // P528: cycle the model quick-filter; Shift+F10
+                        // cycles backwards (all → model → … → all).
+                        if !models.is_empty() {
+                            model_idx = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                if model_idx == 0 {
+                                    models.len()
+                                } else {
+                                    model_idx - 1
+                                }
+                            } else {
+                                (model_idx + 1) % (models.len() + 1)
+                            };
+                            cursor_idx = 0;
+                            scroll_offset = 0;
+                        }
+                    }
                     KeyCode::Char('/') if filter.is_empty() && search_hits.is_none() => {
                         // P340: open the transcript-search prompt. A `/`
                         // typed into an active filter still filters.
@@ -9608,6 +9658,13 @@ fn browse_details_pane_lines(
         &format!("source: {}", row.source),
         width,
     ));
+    // P528: the session's model, when recorded.
+    if let Some(model) = row.model.as_deref().filter(|m| !m.is_empty()) {
+        lines.extend(ulnclaw::tui_text::wrap_display_text(
+            &format!("model: {model}"),
+            width,
+        ));
+    }
     if row.archived {
         lines.extend(ulnclaw::tui_text::wrap_display_text(
             "status: archived",

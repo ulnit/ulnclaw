@@ -188,6 +188,9 @@ pub struct BrowseRow {
     /// P524: stored message count — surfaced in the details pane so a
     /// session's size is visible without opening it.
     pub message_count: i64,
+    /// P528: the session's model — shown in the details pane and used
+    /// by the TUI model quick-filter (F10 cycles distinct models).
+    pub model: Option<String>,
 }
 
 /// Maximum session title length in characters (hermes `MAX_TITLE_LENGTH`).
@@ -1537,7 +1540,8 @@ impl SqliteSessionStore {
                      ORDER BY m.id LIMIT 1),
                     s.cwd,
                     s.archived,
-                    s.message_count
+                    s.message_count,
+                    s.model
              FROM sessions s WHERE 1=1",
         );
         if !include_archived {
@@ -1569,6 +1573,7 @@ impl SqliteSessionStore {
                     cwd: row.get(5)?,
                     archived: row.get::<_, i64>(6)? != 0,
                     message_count: row.get(7)?,
+                    model: row.get(8)?,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;

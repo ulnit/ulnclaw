@@ -181,6 +181,7 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("F7", "fork the highlighted session (y confirms)"),
         ("F8", "archive / unarchive the highlighted session (y confirms)"),
         ("F9", "delete the highlighted session forever (y confirms)"),
+        ("F10", "cycle the model filter (all \u{2192} model \u{2192} \u{2026}; Shift cycles backwards)"),
         ("/", "search message bodies (FTS) while no filter is typed \u{2014} Enter runs, Esc cancels"),
         ("F1", "toggle this help overlay"),
         ("Ctrl+L", "redraw the screen"),
@@ -252,7 +253,7 @@ mod browse_tui_upgrade_tests {
     fn browse_help_entries_cover_core_keys() {
         let entries = super::browse_help_entries();
         let keys: Vec<&str> = entries.iter().map(|(k, _)| *k).collect();
-        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F4", "F5", "F6", "F7", "F8", "F9", "/", "Shift+Tab"] {
+        for expected in ["Enter", "Esc", "Tab", "F1", "F2", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "/", "Shift+Tab"] {
             assert!(keys.contains(&expected), "missing help row for {expected}");
         }
         // Every entry has a non-empty description.
