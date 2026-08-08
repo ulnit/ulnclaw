@@ -544,7 +544,10 @@ function refreshWindowTitle(): void {
   const title = state.current
     ? state.current.title || state.current.id.slice(0, 8)
     : null;
-  document.title = title ? `${title} — ulnclaw` : "ulnclaw";
+  const base = title ? `${title} — ulnclaw` : "ulnclaw";
+  // P404: unread notification count prefixes the title.
+  const unread = notificationUnread();
+  document.title = unread > 0 ? `(${unread > 99 ? "99+" : unread}) ${base}` : base;
 }
 
 async function openSession(session: SessionRow): Promise<void> {
@@ -2545,6 +2548,7 @@ function renderNotifyBadge(): void {
   const unread = notificationUnread();
   el.notifyBadge.hidden = unread === 0;
   el.notifyBadge.textContent = unread > 99 ? "99+" : String(unread);
+  refreshWindowTitle();
 }
 
 function notifyTimeAgo(ms: number): string {
