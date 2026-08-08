@@ -254,6 +254,9 @@ export interface Translations {
     delegationsTitle: string; noDelegations: string; loading: string; noResult: string;
     approvalWaitingTitle: string; approvalWaitingBody: string; viewRuns: string;
     timelineTitle: string; openSessionTitle: string;
+    statusFilterTitle: string; statusAll: string; statusRunning: string; statusQueued: string;
+    statusWaiting: string; statusCompleted: string; statusFailed: string; statusStopped: string;
+    filteredEmpty: string;
   };
   skillsView: {
     count: string; skillsTitle: string; toolsetsTitle: string; noSkills: string;
@@ -648,6 +651,10 @@ const en: Translations = {
     approvalWaitingTitle: "Approval needed", approvalWaitingBody: "Run {id} is waiting for approval: {command}", viewRuns: "Open Runs",
     timelineTitle: "Live status timeline (SSE)", openSessionTitle: "Open this run's session in the chat view",
     loading: "Loading…", noResult: "No result recorded.",
+    statusFilterTitle: "Filter runs by status", statusAll: "All statuses",
+    statusRunning: "Running", statusQueued: "Queued", statusWaiting: "Waiting for approval",
+    statusCompleted: "Completed", statusFailed: "Failed", statusStopped: "Stopped",
+    filteredEmpty: "No runs match the current status filter.",
   },
   skillsView: {
     count: "{skills} skills · toolsets enabled {toolsets}",
@@ -1128,6 +1135,10 @@ const zh: Translations = {
     approvalWaitingTitle: "需要批准", approvalWaitingBody: "运行 {id} 正在等待批准：{command}", viewRuns: "打开运行",
     timelineTitle: "实时状态时间线（SSE）", openSessionTitle: "在聊天视图打开该运行的会话",
     loading: "加载中…", noResult: "没有记录结果。",
+    statusFilterTitle: "按运行状态筛选", statusAll: "全部状态",
+    statusRunning: "运行中", statusQueued: "排队中", statusWaiting: "等待审批",
+    statusCompleted: "已完成", statusFailed: "已失败", statusStopped: "已停止",
+    filteredEmpty: "没有符合当前状态筛选的运行。",
   },
   skillsView: {
     count: "{skills} 个技能 · 已启用工具集 {toolsets}",
@@ -1608,6 +1619,10 @@ const zhHant: Translations = {
     approvalWaitingTitle: "需要核准", approvalWaitingBody: "執行 {id} 正在等待核准：{command}", viewRuns: "開啟執行",
     timelineTitle: "即時狀態時間軸（SSE）", openSessionTitle: "在聊天視圖開啟該執行的工作階段",
     loading: "載入中…", noResult: "沒有記錄結果。",
+    statusFilterTitle: "依執行狀態篩選", statusAll: "全部狀態",
+    statusRunning: "執行中", statusQueued: "排隊中", statusWaiting: "等待核准",
+    statusCompleted: "已完成", statusFailed: "已失敗", statusStopped: "已停止",
+    filteredEmpty: "沒有符合目前狀態篩選的執行。",
   },
   skillsView: {
     count: "{skills} 個技能 · 已啟用工具集 {toolsets}",
@@ -2088,6 +2103,10 @@ const ja: Translations = {
     approvalWaitingTitle: "承認が必要です", approvalWaitingBody: "実行 {id} が承認待ちです：{command}", viewRuns: "実行を開く",
     timelineTitle: "ライブ状態タイムライン（SSE）", openSessionTitle: "この実行のセッションをチャットビューで開く",
     loading: "読み込み中…", noResult: "結果は記録されていません。",
+    statusFilterTitle: "実行状態で絞り込み", statusAll: "すべての状態",
+    statusRunning: "実行中", statusQueued: "キュー待ち", statusWaiting: "承認待ち",
+    statusCompleted: "完了", statusFailed: "失敗", statusStopped: "停止済み",
+    filteredEmpty: "現在の状態フィルターに一致する実行はありません。",
   },
   skillsView: {
     count: "{skills} 件のスキル · 有効なツールセット {toolsets}",
@@ -2568,6 +2587,10 @@ const ar: Translations = {
     approvalWaitingTitle: "مطلوب موافقة", approvalWaitingBody: "التشغيل {id} بانتظار الموافقة: {command}", viewRuns: "فتح التشغيلات",
     timelineTitle: "الجدول الزمني المباشر للحالة (SSE)", openSessionTitle: "فتح جلسة هذا التشغيل في عرض الدردشة",
     loading: "جارٍ التحميل…", noResult: "لم تسجل نتيجة.",
+    statusFilterTitle: "تصفية التشغيلات حسب الحالة", statusAll: "كل الحالات",
+    statusRunning: "قيد التشغيل", statusQueued: "في قائمة الانتظار", statusWaiting: "بانتظار الموافقة",
+    statusCompleted: "مكتمل", statusFailed: "فشل", statusStopped: "متوقف",
+    filteredEmpty: "لا توجد تشغيلات تطابق مرشح الحالة الحالي.",
   },
   skillsView: {
     count: "{skills} مهارة · مجموعات الأدوات المفعلة {toolsets}",

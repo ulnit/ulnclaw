@@ -7,6 +7,7 @@ import type { GatewayClient, RunRow, DelegationRow } from "./gateway";
 import { t } from "./i18n";
 
 const REFRESH_MS = 5_000;
+const STATUS_FILTER_KEY = "ulnclaw.runs.statusFilter";
 
 function escapeHtml(text: string): string {
   return text
@@ -49,6 +50,15 @@ export class RunsWidget {
       <header id="runs-header">
         <span id="runs-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <select id="runs-status-filter" data-i18n-title="runs.statusFilterTitle">
+          <option value="all" data-i18n="runs.statusAll">All statuses</option>
+          <option value="running" data-i18n="runs.statusRunning">Running</option>
+          <option value="queued" data-i18n="runs.statusQueued">Queued</option>
+          <option value="waiting_for_approval" data-i18n="runs.statusWaiting">Waiting for approval</option>
+          <option value="completed" data-i18n="runs.statusCompleted">Completed</option>
+          <option value="failed" data-i18n="runs.statusFailed">Failed</option>
+          <option value="stopped" data-i18n="runs.statusStopped">Stopped</option>
+        </select>
         <button id="runs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="runs-status" class="config-status" hidden></div>
@@ -57,6 +67,12 @@ export class RunsWidget {
       <div id="delegations-list" class="runs-list"></div>
     `;
     this.root.querySelector("#runs-refresh")!.addEventListener("click", () => {
+      this.refresh().catch(() => undefined);
+    });
+    const statusSelect = this.root.querySelector("#runs-status-filter") as HTMLSelectElement;
+    statusSelect.value = this.statusFilter;
+    statusSelect.addEventListener("change", () => {
+      window.localStorage.setItem(STATUS_FILTER_KEY, statusSelect.value);
       this.refresh().catch(() => undefined);
     });
   }
@@ -82,6 +98,11 @@ export class RunsWidget {
     el.hidden = !message;
     el.textContent = message;
     el.classList.toggle("error", isError);
+  }
+
+  /** Persisted run-status filter (P502). */
+  private get statusFilter(): string {
+    return window.localStorage.getItem(STATUS_FILTER_KEY) ?? "all";
   }
 
   async refresh(): Promise<void> {
@@ -112,16 +133,19 @@ export class RunsWidget {
   }
 
   private render(runs: RunRow[]): void {
+    this.reconcileSubscriptions(runs);
     const list = this.root.querySelector("#runs-list") as HTMLElement;
     list.innerHTML = "";
-    if (runs.length === 0) {
+    const filter = this.statusFilter;
+    const visible = filter === "all" ? runs : runs.filter((run) => run.status === filter);
+    if (visible.length === 0) {
       const empty = document.createElement("p");
       empty.className = "config-note";
-      empty.textContent = t.runs.empty;
+      empty.textContent = runs.length === 0 ? t.runs.empty : t.runs.filteredEmpty;
       list.appendChild(empty);
       return;
     }
-    for (const run of runs) {
+    for (const run of visible) {
       const card = document.createElement("div");
       card.className = `run-card ${STATUS_CLASS[run.status] || ""}`;
       const stopping = run.stop_requested && run.status === "running";
@@ -189,7 +213,6 @@ export class RunsWidget {
       }
       list.appendChild(card);
     }
-    this.reconcileSubscriptions(runs);
   }
 
   /** Keep one SSE subscription per active run; drop stale ones (P322). */
