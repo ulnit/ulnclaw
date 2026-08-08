@@ -252,7 +252,8 @@ export interface Translations {
     events: string; eventsPh: string; deliver: string; deliverChat: string;
     deliverOnly: string; prompt: string; promptPh: string; skills: string;
     script: string; scriptPh: string; secret: string; create: string;
-    test: string; copy: string; delete: string; direct: string; allEvents: string;
+    test: string; copy: string; delete: string; duplicate: string; direct: string; allEvents: string;
+    duplicatePrefilled: string;
     filterPlaceholder: string; filterNoMatch: string;
     copied: string; copyFailed: string; removed: string; removeFailed: string;
     testing: string; testFailed: string; createFailed: string;
@@ -658,7 +659,8 @@ const en: Translations = {
     prompt: "Prompt / message", promptPh: "Summarize this event…",
     skills: "Skills (comma-separated)", script: "Script (optional)", scriptPh: "./handle.sh",
     secret: "Secret (blank = auto-mint)", create: "Create",
-    test: "Test", copy: "Copy URL", delete: "Delete", direct: "direct", allEvents: "(all)",
+    test: "Test", copy: "Copy URL", delete: "Delete", duplicate: "Duplicate", direct: "direct", allEvents: "(all)",
+    duplicatePrefilled: "Form prefilled from {name} — adjust the name, then Create.",
     filterPlaceholder: "Filter webhooks…", filterNoMatch: "No webhooks match the filter.",
     copied: "URL copied to clipboard.", copyFailed: "Clipboard copy failed.",
     removed: "Removed subscription {name}.", removeFailed: "Remove failed: {error}",
@@ -1158,7 +1160,8 @@ const zh: Translations = {
     prompt: "提示词 / 消息", promptPh: "总结这个事件…",
     skills: "技能（逗号分隔）", script: "脚本（可选）", scriptPh: "./handle.sh",
     secret: "密钥（留空自动生成）", create: "创建",
-    test: "测试", copy: "复制 URL", delete: "删除", direct: "直接", allEvents: "（全部）",
+    test: "测试", copy: "复制 URL", delete: "删除", duplicate: "复制", direct: "直接", allEvents: "（全部）",
+    duplicatePrefilled: "已根据 {name} 预填表单——请调整名称后点击创建。",
     filterPlaceholder: "筛选 webhook…", filterNoMatch: "没有符合筛选的 webhook。",
     copied: "URL 已复制到剪贴板。", copyFailed: "复制到剪贴板失败。",
     removed: "已删除订阅 {name}。", removeFailed: "删除失败：{error}",
@@ -1658,7 +1661,8 @@ const zhHant: Translations = {
     prompt: "提示詞 / 訊息", promptPh: "總結這個事件…",
     skills: "技能（逗號分隔）", script: "指令碼（可選）", scriptPh: "./handle.sh",
     secret: "金鑰（留空自動產生）", create: "建立",
-    test: "測試", copy: "複製 URL", delete: "刪除", direct: "直接", allEvents: "（全部）",
+    test: "測試", copy: "複製 URL", delete: "刪除", duplicate: "複製", direct: "直接", allEvents: "（全部）",
+    duplicatePrefilled: "已根據 {name} 預填表單——請調整名稱後點擊建立。",
     filterPlaceholder: "篩選 webhook…", filterNoMatch: "沒有符合篩選的 webhook。",
     copied: "URL 已複製到剪貼簿。", copyFailed: "複製到剪貼簿失敗。",
     removed: "已刪除訂閱 {name}。", removeFailed: "刪除失敗：{error}",
@@ -2158,7 +2162,8 @@ const ja: Translations = {
     prompt: "プロンプト / メッセージ", promptPh: "このイベントを要約…",
     skills: "スキル（カンマ区切り）", script: "スクリプト（任意）", scriptPh: "./handle.sh",
     secret: "シークレット（空欄 = 自動生成）", create: "作成",
-    test: "テスト", copy: "URL をコピー", delete: "削除", direct: "直接", allEvents: "（すべて）",
+    test: "テスト", copy: "URL をコピー", delete: "削除", duplicate: "複製", direct: "直接", allEvents: "（すべて）",
+    duplicatePrefilled: "{name} からフォームを事前入力しました。名前を調整して作成してください。",
     filterPlaceholder: "Webhook を絞り込み…", filterNoMatch: "フィルターに一致する webhook はありません。",
     copied: "URL をクリップボードにコピーしました。", copyFailed: "コピーに失敗しました。",
     removed: "購読 {name} を削除しました。", removeFailed: "削除に失敗：{error}",
@@ -2658,7 +2663,8 @@ const ar: Translations = {
     prompt: "الموجّه / الرسالة", promptPh: "لخّص هذا الحدث…",
     skills: "المهارات (مفصولة بفواصل)", script: "النص البرمجي (اختياري)", scriptPh: "./handle.sh",
     secret: "السر (فارغ = توليد تلقائي)", create: "إنشاء",
-    test: "اختبار", copy: "نسخ الرابط", delete: "حذف", direct: "مباشر", allEvents: "(الكل)",
+    test: "اختبار", copy: "نسخ الرابط", delete: "حذف", duplicate: "تكرار", direct: "مباشر", allEvents: "(الكل)",
+    duplicatePrefilled: "تمت تعبئة النموذج مسبقًا من {name} — عدّل الاسم ثم أنشئ.",
     filterPlaceholder: "تصفية خطافات الويب…", filterNoMatch: "لا توجد خطافات ويب تطابق المرشح.",
     copied: "تم نسخ الرابط إلى الحافظة.", copyFailed: "فشل النسخ إلى الحافظة.",
     removed: "تم حذف الاشتراك {name}.", removeFailed: "فشل الحذف: {error}",

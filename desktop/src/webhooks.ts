@@ -164,6 +164,7 @@ export class WebhooksWidget {
           <span class="spacer"></span>
           <button class="ghost webhook-test" data-i18n="webhooks.test">Test</button>
           <button class="ghost webhook-copy" data-i18n="webhooks.copy">Copy URL</button>
+          <button class="ghost webhook-duplicate" data-i18n="webhooks.duplicate">Duplicate</button>
           <button class="ghost danger webhook-delete" data-i18n="webhooks.delete">Delete</button>
         </div>
         ${sub.description ? `<div class="webhook-desc">${escapeHtml(sub.description)}</div>` : ""}
@@ -186,6 +187,9 @@ export class WebhooksWidget {
       card.querySelector(".webhook-delete")!.addEventListener("click", () => {
         this.remove(sub.name).catch(() => undefined);
       });
+      card.querySelector(".webhook-duplicate")!.addEventListener("click", () => {
+        this.prefillFrom(sub);
+      });
       list.appendChild(card);
     }
   }
@@ -206,6 +210,26 @@ export class WebhooksWidget {
   private resetForm(): void {
     (this.root.querySelector("#webhooks-form") as HTMLFormElement).reset();
     (this.root.querySelector("#webhooks-form [name=deliver]") as HTMLInputElement).value = "log";
+  }
+
+  /** P578: prefill the create form from an existing subscription (⧉ duplicate). */
+  private prefillFrom(sub: WebhookSubscription): void {
+    const form = this.root.querySelector("#webhooks-form") as HTMLFormElement;
+    form.reset();
+    const set = (name: string, value: string): void => {
+      (form.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement).value = value;
+    };
+    set("name", `${sub.name}-copy`);
+    set("description", sub.description);
+    set("events", sub.events.join(", "));
+    set("deliver", sub.deliver);
+    set("script", sub.script ?? "");
+    (form.elements.namedItem("deliver_only") as HTMLInputElement).checked = sub.deliver_only;
+    const wrap = this.root.querySelector("#webhooks-form-wrap") as HTMLDetailsElement;
+    wrap.open = true;
+    wrap.scrollIntoView({ block: "nearest" });
+    (form.elements.namedItem("name") as HTMLInputElement).focus();
+    this.status(t.webhooks.duplicatePrefilled.replace("{name}", sub.name));
   }
 
   private async create(): Promise<void> {
