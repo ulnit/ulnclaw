@@ -113,6 +113,10 @@ const el = {
   contextMeterFill: document.getElementById("context-meter-fill")!,
   contextMeterText: document.getElementById("context-meter-text")!,
   dayJump: document.getElementById("day-jump") as HTMLSelectElement,
+  chatActions: document.getElementById("chat-header-actions")!,
+  chatRename: document.getElementById("chat-rename") as HTMLButtonElement,
+  chatExport: document.getElementById("chat-export") as HTMLButtonElement,
+  chatDelete: document.getElementById("chat-delete") as HTMLButtonElement,
   input: document.getElementById("input") as HTMLTextAreaElement,
   send: document.getElementById("send") as HTMLButtonElement,
   mic: document.getElementById("mic") as HTMLButtonElement,
@@ -439,6 +443,7 @@ async function openSession(session: SessionRow): Promise<void> {
   refreshModelBadge();
   el.messages.innerHTML = "";
   el.dayJump.hidden = true;
+  el.chatActions.hidden = false;
   renderSessions();
   try {
     const messages = await state.client!.messages(session.id, { timestamps: true });
@@ -1569,6 +1574,7 @@ async function start(): Promise<void> {
     state.current = null;
     el.contextMeter.hidden = true;
     el.dayJump.hidden = true;
+    el.chatActions.hidden = true;
     el.chatTitle.textContent = t.session.newTitle;
     el.messages.innerHTML = "";
     renderIntro(el.messages, "new");
@@ -1588,6 +1594,17 @@ async function start(): Promise<void> {
     const divider = el.messages.querySelector<HTMLElement>(`.day-divider[data-day="${key}"]`);
     divider?.scrollIntoView({ block: "start" });
   });
+
+  // P377: chat-header session actions mirror the sidebar hover set.
+  el.chatRename.onclick = () => {
+    if (state.current) void renameSession(state.current);
+  };
+  el.chatExport.onclick = () => {
+    if (state.current) void exportSession(state.current, "md");
+  };
+  el.chatDelete.onclick = () => {
+    if (state.current) void deleteSession(state.current);
+  };
   el.send.onclick = () => void sendTurn();
   el.mic.onclick = () => void toggleMic();
   el.attachFile.onclick = () => void openFsPicker();
