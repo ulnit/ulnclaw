@@ -42,6 +42,7 @@ export interface CommandPaletteHooks {
   themePicker(): void | Promise<void>;
   fontPicker(): void | Promise<void>;
   copySessionId(): void | Promise<void>;
+  copyLastReply(): void | Promise<void>;
   archiveSession(): void | Promise<void>;
   unarchiveSession(): void | Promise<void>;
 }
@@ -167,6 +168,7 @@ export class CommandPalette {
       { id: "theme-picker", label: t.palette.themePicker, group: t.palette.gatewayGroup, run: () => hooks.themePicker() },
       { id: "font-picker", label: t.palette.fontPicker, group: t.palette.gatewayGroup, run: () => hooks.fontPicker() },
       { id: "copy-session-id", label: t.palette.copySessionId, group: t.palette.sessionGroup, run: () => hooks.copySessionId() },
+      { id: "copy-last-reply", label: t.palette.copyLastReply, group: t.palette.gatewayGroup, run: () => hooks.copyLastReply() },
     ];
     const current = hooks.currentSessionId();
     for (const session of hooks.sessions()) {

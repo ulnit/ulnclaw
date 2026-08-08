@@ -2511,6 +2511,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     themePicker: () => openThemePicker(),
     fontPicker: () => openFontPicker(),
     copySessionId: () => runCopySessionId(),
+    copyLastReply: () => runCopyLastReply(),
     archiveSession: () => runArchiveSession(),
     unarchiveSession: () => runUnarchiveSession(),
   });
@@ -2957,8 +2958,26 @@ async function runCopySessionId(): Promise<void> {
   }
 }
 
+/** P418: palette action — copy the last assistant reply in the
+ * open transcript (the same text the per-bubble ⧉ action copies). */
+async function runCopyLastReply(): Promise<void> {
+  const bubbles = el.messages.querySelectorAll(".message.assistant .bubble");
+  const last = bubbles[bubbles.length - 1];
+  const text = last?.textContent?.trim();
+  if (!text) {
+    notifyError(t.palette.lastReplyNone);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    notifySuccess(t.palette.lastReplyCopied);
+  } catch {
+    notifyError(t.session.copyFailed);
+  }
+}
+
 /** P414: palette action — archive the current session
- * (PATCH end_reason=archived; the row stays browseable). */
+* (PATCH end_reason=archived; the row stays browseable). */
 async function runArchiveSession(): Promise<void> {
   if (!state.client || !state.current) return;
   const label = state.current.title || state.current.id.slice(0, 8);
