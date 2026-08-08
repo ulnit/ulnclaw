@@ -9855,7 +9855,14 @@ enum GatewaySlash {
 }
 
 const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
-  /help            this list
+  /help            this list (/commands is an alias)
+  /status          session + agent status
+  /context         context-window usage for this session
+  /whoami          process identity (claimer id, home, provider, model)
+  /version         ulnclaw version
+  /profile         list configured profiles
+  /model [P M]     show the model, or persist provider+model
+  /reasoning [L]   show or persist the reasoning effort (none|minimal|low|medium|high|xhigh|max|ultra, or clear)
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -9882,7 +9889,9 @@ async fn resolve_gateway_slash(
     let rest = parts.next().unwrap_or("").trim();
     let skills_dir = state.agent.context().home.join("skills");
     match cmd {
-        "/help" => Some(GatewaySlash::Direct(GATEWAY_SLASH_HELP.to_string())),
+        "/help" | "/commands" => {
+            Some(GatewaySlash::Direct(GATEWAY_SLASH_HELP.to_string()))
+        }
         "/skills" => {
             let skills = crate::skills::list_skills(&skills_dir);
             if skills.is_empty() {
@@ -10138,6 +10147,204 @@ async fn resolve_gateway_slash(
             Some(GatewaySlash::Direct(format!(
                 "compressed session context: {before_messages} → {after_messages} messages, ~{before_tokens} → ~{after_tokens} tokens."
             )))
+        }
+        "/status" => {
+            // Cockpit-style status (hermes /status parity, lean): the
+            // session's persisted totals are the source of truth.
+            let row = state.store.get_session_row(session_id).ok().flatten();
+            let run_status = {
+                let runs = state.runs.lock().await;
+                runs.values()
+                    .find(|run| run.session_id.as_deref() == Some(session_id))
+                    .map(|run| run.status.clone())
+                    .unwrap_or_else(|| "idle".to_string())
+            };
+            let uptime = state.started_at.elapsed().as_secs();
+            let (hours, rem) = (uptime / 3600, uptime % 3600);
+            let (minutes, seconds) = (rem / 60, rem % 60);
+            let mut lines = vec![
+                format!("session: {session_id}"),
+                format!("run status: {run_status}"),
+                format!("model: {} ({})", state.model_name, state.provider_name),
+            ];
+            if let Some(row) = &row {
+                if let Some(title) = row.title.as_deref().filter(|t| !t.is_empty()) {
+                    lines.push(format!("title: {title}"));
+                }
+                lines.push(format!(
+                    "messages: {}  tokens: {} in / {} out",
+                    row.message_count, row.input_tokens, row.output_tokens
+                ));
+            }
+            lines.push(format!(
+                "context budget: {} tokens",
+                state.agent.context_budget_tokens()
+            ));
+            lines.push(format!(
+                "gateway uptime: {hours}h {minutes}m {seconds}s"
+            ));
+            Some(GatewaySlash::Direct(lines.join("\n")))
+        }
+        "/context" => {
+            let history: Vec<Message> = state
+                .store
+                .load_messages(session_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.role != Role::System)
+                .collect();
+            let used = crate::context::ContextCompressor::estimate_tokens(&history);
+            let budget = state.agent.context_budget_tokens();
+            let pct = if budget > 0 { used * 100 / budget } else { 0 };
+            Some(GatewaySlash::Direct(format!(
+                "~{used} of {budget} context tokens in use ({pct}%) across {} message(s); /compress summarizes older turns",
+                history.len()
+            )))
+        }
+        "/whoami" => {
+            let context = state.agent.context();
+            Some(GatewaySlash::Direct(format!(
+                "claimer: {}\nhome: {}\nprovider: {}\nmodel: {}",
+                crate::kanban::KanbanStore::claimer_id(),
+                context.home.display(),
+                state.provider_name,
+                state.model_name
+            )))
+        }
+        "/version" => Some(GatewaySlash::Direct(format!(
+            "ulnclaw {}",
+            env!("CARGO_PKG_VERSION")
+        ))),
+        "/profile" => {
+            // Hermes /profile switches profiles; the gateway process is
+            // pinned to its startup profile, so list + point at --profile.
+            match crate::profiles_cmd::list_profiles() {
+                Ok(profiles) if profiles.is_empty() => Some(GatewaySlash::Direct(
+                    "no profiles configured ([profiles.<name>] in config.toml)".to_string(),
+                )),
+                Ok(profiles) => {
+                    let mut lines = vec!["profiles:".to_string()];
+                    for (name, profile) in profiles {
+                        let model = profile
+                            .model
+                            .as_ref()
+                            .map(|m| format!(" \u{2014} {}/{}", m.provider, m.model))
+                            .unwrap_or_default();
+                        lines.push(format!("  - {name}{model}"));
+                    }
+                    lines.push(
+                        "restart the gateway with --profile <name> to switch".to_string(),
+                    );
+                    Some(GatewaySlash::Direct(lines.join("\n")))
+                }
+                Err(e) => Some(GatewaySlash::Direct(format!("profiles failed: {e}"))),
+            }
+        }
+        "/model" => {
+            if rest.is_empty() {
+                return Some(GatewaySlash::Direct(format!(
+                    "model: {} ({})",
+                    state.model_name, state.provider_name
+                )));
+            }
+            let mut tokens = rest.split_whitespace();
+            let (Some(provider), Some(model), extra) =
+                (tokens.next(), tokens.next(), tokens.next())
+            else {
+                return Some(GatewaySlash::Direct(
+                    "usage: /model <provider> <model>".to_string(),
+                ));
+            };
+            if extra.is_some() {
+                return Some(GatewaySlash::Direct(
+                    "usage: /model <provider> <model>".to_string(),
+                ));
+            }
+            let path = crate::config_cmd::config_path();
+            let mut doc = match crate::config_cmd::load_toml(&path) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
+                }
+            };
+            if let Err(e) = crate::model_cmd::apply_model_choice(&mut doc, provider, model) {
+                return Some(GatewaySlash::Direct(format!("model switch failed: {e}")));
+            }
+            if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+                return Some(GatewaySlash::Direct(format!("config save failed: {e}")));
+            }
+            Some(GatewaySlash::Direct(format!(
+                "model set to {provider}/{model} \u{2014} applies to new sessions; restart the gateway to change the running process"
+            )))
+        }
+        "/reasoning" => {
+            // Twin of hermes /reasoning: show or persist
+            // agent.reasoning_effort. clear/default/inherit remove the
+            // pin so the endpoint default applies.
+            let path = crate::config_cmd::config_path();
+            if rest.is_empty() {
+                let current = crate::config::UlncLawConfig::load(Some(&path))
+                    .map(|c| c.agent.reasoning_effort)
+                    .unwrap_or_default();
+                let shown = if current.trim().is_empty() {
+                    "endpoint default".to_string()
+                } else {
+                    current
+                };
+                return Some(GatewaySlash::Direct(format!(
+                    "reasoning effort: {shown}\nusage: /reasoning none|minimal|low|medium|high|xhigh|max|ultra | clear"
+                )));
+            }
+            let lower = rest.trim().to_ascii_lowercase();
+            let effort = if matches!(lower.as_str(), "clear" | "default" | "inherit") {
+                None
+            } else {
+                Some(rest.trim())
+            };
+            let normalized = match crate::kanban::normalize_reasoning_effort(effort) {
+                Ok(v) => v,
+                Err(e) => return Some(GatewaySlash::Direct(e.to_string())),
+            };
+            let mut doc = match crate::config_cmd::load_toml(&path) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
+                }
+            };
+            let Some(root) = doc.as_table_mut() else {
+                return Some(GatewaySlash::Direct(
+                    "config root is not a table".to_string(),
+                ));
+            };
+            let agent_entry = root
+                .entry("agent".to_string())
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+            let Some(agent_table) = agent_entry.as_table_mut() else {
+                return Some(GatewaySlash::Direct(
+                    "config [agent] is not a table".to_string(),
+                ));
+            };
+            match &normalized {
+                Some(level) => {
+                    agent_table.insert(
+                        "reasoning_effort".to_string(),
+                        toml::Value::String(level.clone()),
+                    );
+                }
+                None => {
+                    agent_table.remove("reasoning_effort");
+                }
+            }
+            if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+                return Some(GatewaySlash::Direct(format!("config save failed: {e}")));
+            }
+            Some(GatewaySlash::Direct(match &normalized {
+                Some(level) => format!(
+                    "reasoning effort set to {level} \u{2014} applies to new runs; restart the gateway to change this process"
+                ),
+                None => "reasoning effort cleared \u{2014} the endpoint default applies to new runs"
+                    .to_string(),
+            }))
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');
@@ -13208,6 +13415,133 @@ mod tests {
         assert!(messages
             .iter()
             .any(|m| m.content.as_deref() == Some("title set: Slash Session")));
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_status_wave() {
+        // P612 read-only slash wave: /status, /context, /whoami,
+        // /version, /commands, /profile, /model + /reasoning display.
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-wave", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/status").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains(&format!("session: {sid}")), "{text}");
+        assert!(text.contains("run status: "), "{text}");
+        assert!(text.contains("model: fake-stream (fake)"), "{text}");
+        assert!(text.contains("gateway uptime:"), "{text}");
+
+        let reply = post_chat(app.clone(), &sid, "/context").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("context tokens in use"), "{text}");
+
+        let reply = post_chat(app.clone(), &sid, "/whoami").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("claimer: "), "{text}");
+        assert!(text.contains("provider: fake"), "{text}");
+
+        let reply = post_chat(app.clone(), &sid, "/version").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .starts_with("ulnclaw "));
+
+        let reply = post_chat(app.clone(), &sid, "/commands").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .starts_with("Gateway slash commands:"));
+
+        let reply = post_chat(app.clone(), &sid, "/model").await;
+        assert_eq!(reply["response"], "model: fake-stream (fake)");
+
+        let reply = post_chat(app.clone(), &sid, "/profile").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(
+            text.contains("profiles:") || text.contains("no profiles configured"),
+            "{text}"
+        );
+
+        let reply = post_chat(app.clone(), &sid, "/reasoning").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.starts_with("reasoning effort: "), "{text}");
+
+        // Bad /model usage explains itself.
+        let reply = post_chat(app.clone(), &sid, "/model onlyone").await;
+        assert_eq!(reply["response"], "usage: /model <provider> <model>");
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_reasoning_model_persist() {
+        // P612 write path: /reasoning and /model persist into the
+        // home's config.toml (isolated ULNCLAW_HOME under the env lock).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-persist", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        // Set, verify on disk, then show.
+        let reply = post_chat(app.clone(), &sid, "/reasoning high").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("reasoning effort set to high"));
+        let config_text =
+            std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(
+            config_text.contains("reasoning_effort = \"high\""),
+            "{config_text}"
+        );
+        let reply = post_chat(app.clone(), &sid, "/reasoning").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .starts_with("reasoning effort: high"));
+
+        // Invalid level is rejected with the allowed list.
+        let reply = post_chat(app.clone(), &sid, "/reasoning extreme").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("reasoning_effort must be one of"));
+
+        // Clear removes the pin.
+        let reply = post_chat(app.clone(), &sid, "/reasoning clear").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("reasoning effort cleared"));
+        let config_text =
+            std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(!config_text.contains("reasoning_effort"), "{config_text}");
+
+        // /model persists provider+model.
+        let reply = post_chat(app.clone(), &sid, "/model openrouter moonshotai/kimi-k2").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("model set to openrouter/moonshotai/kimi-k2"));
+        let config_text =
+            std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(config_text.contains("openrouter"), "{config_text}");
+        assert!(config_text.contains("moonshotai/kimi-k2"), "{config_text}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]
