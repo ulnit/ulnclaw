@@ -21,6 +21,8 @@ function escapeHtml(text: string): string {
 
 export class WebhooksWidget {
   private busy = false;
+  /** P517: cached subscriptions so the live filter re-renders without refetching. */
+  private allSubs: WebhookSubscription[] = [];
 
   constructor(
     private root: HTMLElement,
@@ -32,6 +34,7 @@ export class WebhooksWidget {
       <header id="webhooks-header">
         <span id="webhooks-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <input id="webhooks-filter" type="search" data-i18n-ph="webhooks.filterPlaceholder" />
         <button id="webhooks-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="webhooks-status" class="config-status" hidden></div>
@@ -79,6 +82,9 @@ export class WebhooksWidget {
     this.root.querySelector("#webhooks-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
     });
+    this.root.querySelector("#webhooks-filter")!.addEventListener("input", () => {
+      this.applyFilter();
+    });
     (this.root.querySelector("#webhooks-form") as HTMLFormElement).addEventListener("submit", (event) => {
       event.preventDefault();
       this.create().catch(() => undefined);
@@ -109,7 +115,8 @@ export class WebhooksWidget {
     }
     try {
       const payload = await client.webhooksList();
-      this.render(payload.subscriptions);
+      this.allSubs = payload.subscriptions;
+      this.applyFilter();
       const count = this.root.querySelector("#webhooks-count") as HTMLElement;
       count.textContent = t.webhooks.count.replace("{count}", String(payload.subscriptions.length));
       this.status("");
@@ -122,13 +129,27 @@ export class WebhooksWidget {
     }
   }
 
-  private render(subs: WebhookSubscription[]): void {
+  /** P517: re-render the cached subscriptions through the live filter. */
+  private applyFilter(): void {
+    const input = this.root.querySelector("#webhooks-filter") as HTMLInputElement | null;
+    const query = (input?.value || "").trim().toLowerCase();
+    const subs = query
+      ? this.allSubs.filter((sub) =>
+          `${sub.name} ${sub.description || ""} ${sub.url} ${sub.deliver} ${sub.events.join(" ")}`
+            .toLowerCase()
+            .includes(query),
+        )
+      : this.allSubs;
+    this.render(subs, Boolean(query));
+  }
+
+  private render(subs: WebhookSubscription[], filtered = false): void {
     const list = this.root.querySelector("#webhooks-list") as HTMLElement;
     list.innerHTML = "";
     if (subs.length === 0) {
       const empty = document.createElement("p");
       empty.className = "config-note";
-      empty.textContent = t.webhooks.empty;
+      empty.textContent = filtered ? t.webhooks.filterNoMatch : t.webhooks.empty;
       list.appendChild(empty);
       return;
     }
