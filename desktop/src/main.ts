@@ -263,17 +263,35 @@ function addMessage(role: string, content: string): HTMLElement {
   bubble.className = "bubble";
   bubble.textContent = content;
   row.appendChild(bubble);
-  // P344: read-aloud action on assistant replies (TTS over
-  // POST /api/audio/speak).
-  if (role === "assistant" && content.trim()) {
+  // Message actions (P344 read-aloud on assistant replies; P361 copy
+  // on user + assistant bubbles).
+  if (content.trim() && (role === "assistant" || role === "user")) {
     const actions = document.createElement("div");
     actions.className = "msg-actions";
-    const speak = document.createElement("button");
-    speak.className = "ghost msg-speak";
-    speak.textContent = "\u{1F50A}";
-    speak.title = t.session.speakTitle;
-    speak.onclick = () => void speakMessage(content, speak);
-    actions.appendChild(speak);
+    const copy = document.createElement("button");
+    copy.className = "ghost msg-copy";
+    copy.textContent = "\u29C9";
+    copy.title = t.session.copyTitle;
+    copy.onclick = () => {
+      void navigator.clipboard.writeText(content).then(
+        () => {
+          copy.textContent = "\u2713";
+          window.setTimeout(() => {
+            copy.textContent = "\u29C9";
+          }, 1200);
+        },
+        () => notifyError(t.session.copyFailed),
+      );
+    };
+    actions.appendChild(copy);
+    if (role === "assistant") {
+      const speak = document.createElement("button");
+      speak.className = "ghost msg-speak";
+      speak.textContent = "\u{1F50A}";
+      speak.title = t.session.speakTitle;
+      speak.onclick = () => void speakMessage(content, speak);
+      actions.appendChild(speak);
+    }
     row.appendChild(actions);
   }
   el.messages.appendChild(row);
