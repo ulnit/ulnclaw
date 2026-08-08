@@ -80,6 +80,10 @@ button.ghost { background: none; border: none; color: var(--dim); }
 #model-badge { font-size: 12px; color: var(--dim); cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 /* P390: thinking indicator beside the chat title while a turn streams. */
 .chat-busy { font-size: 11px; color: var(--dim); margin-left: 8px; animation: blink 1.2s ease-in-out infinite; }
+/* P391: composer character counter. */
+.char-count { align-self: flex-end; font-size: 11px; color: var(--dim); padding: 0 2px 6px; font-variant-numeric: tabular-nums; }
+/* P391: composer character counter. */
+.char-count { align-self: flex-end; font-size: 11px; color: var(--dim); padding: 0 2px 6px; font-variant-numeric: tabular-nums; }
 #model-badge:hover { background: var(--panel-2); color: var(--text); }
 #model-badge.locked { color: var(--accent); }
 

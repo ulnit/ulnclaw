@@ -58,7 +58,7 @@ export interface Translations {
   chrome: {
     chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string; pluginsTab: string; pairingTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
-    selectOrStart: string; inputPlaceholder: string; send: string;
+    selectOrStart: string; inputPlaceholder: string; send: string; charCountTitle: string;
     micTitle: string; micRecording: string; micFailed: string;
     attachTitle: string; fsTitle: string; fsUpTitle: string; fsEmpty: string; fsFailed: string;
     fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
@@ -331,7 +331,7 @@ const en: Translations = {
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
-    inputPlaceholder: "Message ulnclaw… (Enter to send, Shift+Enter for newline)",
+    inputPlaceholder: "Message ulnclaw… (Enter to send, Shift+Enter for newline)", charCountTitle: "Character count",
     send: "Send",
     micTitle: "Voice input (record and transcribe)",
     micRecording: "Recording\u2026 click to stop",
@@ -785,7 +785,7 @@ const zh: Translations = {
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
-    inputPlaceholder: "给 ulnclaw 发消息…（Enter 发送，Shift+Enter 换行）",
+    inputPlaceholder: "给 ulnclaw 发消息…（Enter 发送，Shift+Enter 换行）", charCountTitle: "字符数",
     send: "发送",
     micTitle: "语音输入（录音并转写）",
     micRecording: "录音中…点击停止",
@@ -1239,7 +1239,7 @@ const zhHant: Translations = {
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
-    inputPlaceholder: "傳送訊息給 ulnclaw…（Enter 傳送，Shift+Enter 換行）",
+    inputPlaceholder: "傳送訊息給 ulnclaw…（Enter 傳送，Shift+Enter 換行）", charCountTitle: "字元數",
     send: "傳送",
     micTitle: "語音輸入（錄音並轉寫）",
     micRecording: "錄音中…點選停止",
@@ -1693,7 +1693,7 @@ const ja: Translations = {
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
-    inputPlaceholder: "ulnclaw にメッセージ…（Enter で送信、Shift+Enter で改行）",
+    inputPlaceholder: "ulnclaw にメッセージ…（Enter で送信、Shift+Enter で改行）", charCountTitle: "文字数",
     send: "送信",
     micTitle: "音声入力（録音して文字起こし）",
     micRecording: "録音中…クリックで停止",
@@ -2147,7 +2147,7 @@ const ar: Translations = {
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
-    inputPlaceholder: "راسل ulnclaw… (Enter للإرسال، Shift+Enter لسطر جديد)",
+    inputPlaceholder: "راسل ulnclaw… (Enter للإرسال، Shift+Enter لسطر جديد)", charCountTitle: "عدد الأحرف",
     send: "إرسال",
     micTitle: "إدخال صوتي (تسجيل وتحويل إلى نص)",
     micRecording: "جارٍ التسجيل… انقر للإيقاف",

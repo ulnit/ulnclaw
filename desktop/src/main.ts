@@ -126,6 +126,7 @@ const el = {
   chatDelete: document.getElementById("chat-delete") as HTMLButtonElement,
   input: document.getElementById("input") as HTMLTextAreaElement,
   send: document.getElementById("send") as HTMLButtonElement,
+  charCount: document.getElementById("char-count")!,
   mic: document.getElementById("mic") as HTMLButtonElement,
   toolProgress: document.getElementById("tool-progress")!,
   slashPop: document.getElementById("slash-pop")!,
@@ -643,11 +644,19 @@ async function transcribeRecording(mimeType: string): Promise<void> {
     const transcript = result.transcript.trim();
     if (transcript) {
       el.input.value = el.input.value ? `${el.input.value} ${transcript}` : transcript;
+      refreshCharCount();
       el.input.focus();
     }
   } catch (error) {
     notifyError(fmt(t.chrome.micFailed, { error: String(error) }));
   }
+}
+
+/** P391: live character counter for the composer draft. */
+function refreshCharCount(): void {
+  const length = el.input.value.length;
+  el.charCount.textContent = String(length);
+  el.charCount.hidden = length === 0;
 }
 
 async function sendTurn(): Promise<void> {
@@ -657,6 +666,7 @@ async function sendTurn(): Promise<void> {
   // gateway slash worker, which can't show the overlay.
   if (/^\/(resume|sessions|switch)\b/i.test(text)) {
     el.input.value = "";
+    refreshCharCount();
     state.sessionPicker?.open();
     return;
   }
@@ -664,6 +674,7 @@ async function sendTurn(): Promise<void> {
   // hermes CLI /new parity).
   if (/^\/new\b/i.test(text)) {
     el.input.value = "";
+    refreshCharCount();
     el.newSession.click();
     return;
   }
@@ -696,6 +707,7 @@ async function sendTurn(): Promise<void> {
   el.chatBusy.textContent = t.tools.thinking;
   el.chatBusy.hidden = false;
   el.input.value = "";
+  refreshCharCount();
   hideSlashPop();
   el.toolProgress.hidden = true;
   el.toolProgress.textContent = "";
@@ -1071,6 +1083,7 @@ function renderSlashPop(): void {
 
 function completeSlash(name: string): void {
   el.input.value = `${name} `;
+  refreshCharCount();
   hideSlashPop();
   el.input.focus();
 }
@@ -1777,6 +1790,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     }
     event.preventDefault();
     el.input.value = history[state.composerHistoryIndex];
+    refreshCharCount();
     return true;
   }
   if (event.key === "ArrowDown") {
@@ -1785,9 +1799,11 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     if (state.composerHistoryIndex < history.length - 1) {
       state.composerHistoryIndex += 1;
       el.input.value = history[state.composerHistoryIndex];
+      refreshCharCount();
     } else {
       state.composerHistoryIndex = null;
       el.input.value = state.composerDraft;
+      refreshCharCount();
     }
     return true;
   }
@@ -1828,7 +1844,10 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       void sendTurn();
     }
   });
-  el.input.addEventListener("input", () => renderSlashPop());
+  el.input.addEventListener("input", () => {
+    renderSlashPop();
+    refreshCharCount();
+  });
   el.input.addEventListener("paste", (event) => void handlePasteImages(event));
   el.settingsBtn.onclick = () => {
     el.settingUrl.value = state.settings.url;
