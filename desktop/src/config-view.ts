@@ -496,6 +496,49 @@ export class ConfigWidget {
     providerRow.appendChild(preview);
     rows.appendChild(providerRow);
 
+    if (provider === "edge") {
+      // P349: free Microsoft neural voices — a plain voice-name input
+      // (no API key, no catalog endpoint to feed a picker).
+      const edgeRow = document.createElement("div");
+      edgeRow.className = "config-env-row";
+      const edgeLabel = document.createElement("span");
+      edgeLabel.className = "config-env-chip";
+      edgeLabel.textContent = "tts.edge.voice";
+      edgeRow.appendChild(edgeLabel);
+      const input = document.createElement("input");
+      input.type = "text";
+      const current = String(this.base.get("tts.edge.voice") ?? "en-US-AriaNeural");
+      input.value = current;
+      input.placeholder = "en-US-AriaNeural";
+      edgeRow.appendChild(input);
+      const save = document.createElement("button");
+      save.className = "ghost";
+      save.textContent = t.config.save;
+      save.disabled = true;
+      input.oninput = () => {
+        save.disabled = input.value.trim() === current || input.value.trim() === "";
+      };
+      save.onclick = async () => {
+        save.disabled = true;
+        try {
+          await client.configSave({ "tts.edge.voice": input.value.trim() }, []);
+          this.status(t.config.saved.replace("{count}", "1"));
+          await this.refresh();
+        } catch (error) {
+          this.status(
+            t.config.saveFailed.replace(
+              "{error}",
+              error instanceof Error ? error.message : String(error),
+            ),
+            true,
+          );
+        }
+      };
+      edgeRow.appendChild(save);
+      rows.appendChild(edgeRow);
+      return;
+    }
+
     if (provider !== "elevenlabs") return;
 
     const voiceRow = document.createElement("div");

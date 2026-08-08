@@ -13863,7 +13863,7 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(body["error"]["message"].as_str().unwrap().contains("OPENAI_API_KEY"));
 
         // Unknown provider -> 400 naming the problem.
-        std::fs::write(dir.path().join("config.toml"), "[tts]\nprovider = \"edge\"\n").unwrap();
+        std::fs::write(dir.path().join("config.toml"), "[tts]\nprovider = \"piper\"\n").unwrap();
         let (status, body) = send_json(
             app.clone(), "POST", "/api/audio/speak", Some("sekret"),
             json!({ "text": "hello world" }),
