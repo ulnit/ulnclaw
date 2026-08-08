@@ -327,20 +327,34 @@ function renderSessions(): void {
         session.id.toLowerCase().includes(filter)
       );
     });
-  const visible = sorted.slice(0, state.sessionListLimit);
+  // P548: pinned sessions always float to the top of the list.
+  const pinnedRows = sorted.filter((session) => pinnedSessions.has(session.id));
+  const unpinnedRows = sorted.filter((session) => !pinnedSessions.has(session.id));
+  const visible = [...pinnedRows, ...unpinnedRows].slice(0, state.sessionListLimit);
   state.sessionListVisible = visible;
   state.sessionCursor = Math.min(state.sessionCursor, Math.max(0, visible.length - 1));
-  let lastGroup: "today" | "yesterday" | "week" | "older" | "" = "";
+  let lastGroup: "pinned" | "today" | "yesterday" | "week" | "older" | "" = "";
   let rowIndex = 0;
   for (const session of visible) {
-    // P392: relative-date group header when the age bucket changes.
-    const group = ageGroup(session.last_activity_at);
-    if (group !== lastGroup) {
-      const header = document.createElement("div");
-      header.className = "session-group-header";
-      header.textContent = ageGroupLabel(group);
-      el.sessionList.appendChild(header);
-      lastGroup = group;
+    // P548: pinned rows sit under a single 📌 header; the rest keep
+    // the P392 relative-date group headers.
+    if (pinnedSessions.has(session.id)) {
+      if (lastGroup !== "pinned") {
+        const header = document.createElement("div");
+        header.className = "session-group-header";
+        header.textContent = `\u{1F4CC} ${t.session.pinnedGroup}`;
+        el.sessionList.appendChild(header);
+        lastGroup = "pinned";
+      }
+    } else {
+      const group = ageGroup(session.last_activity_at);
+      if (group !== lastGroup) {
+        const header = document.createElement("div");
+        header.className = "session-group-header";
+        header.textContent = ageGroupLabel(group);
+        el.sessionList.appendChild(header);
+        lastGroup = group;
+      }
     }
     const item = document.createElement("div");
     item.className =
@@ -353,7 +367,9 @@ function renderSessions(): void {
     const main = document.createElement("div");
     main.className = "session-main";
     main.innerHTML = `<span class="title"></span><span class="when"></span>`;
-    main.querySelector(".title")!.textContent = title;
+    main.querySelector(".title")!.textContent = pinnedSessions.has(session.id)
+      ? `\u{1F4CC} ${title}`
+      : title;
     const whenEl = main.querySelector<HTMLSpanElement>(".when")!;
     whenEl.textContent = session.message_count
       ? `${sessionWhen(session.last_activity_at)} · ${session.message_count}`
@@ -394,6 +410,16 @@ function renderSessions(): void {
     }
     const actions = document.createElement("span");
     actions.className = "session-actions";
+    // P548: pin/unpin floats a session to the top of the list.
+    const pinBtn = document.createElement("button");
+    pinBtn.className = "icon";
+    const rowPinned = pinnedSessions.has(session.id);
+    pinBtn.title = rowPinned ? t.palette.unpinSession : t.palette.pinSession;
+    pinBtn.textContent = rowPinned ? "\u{1F4CC}" : "\u{1F4CD}";
+    pinBtn.onclick = (event) => {
+      event.stopPropagation();
+      togglePinSession(session);
+    };
     const renameBtn = document.createElement("button");
     renameBtn.className = "icon";
     renameBtn.title = t.palette.renameSession;
@@ -428,7 +454,7 @@ function renderSessions(): void {
       event.stopPropagation();
       void deleteSession(session);
     };
-    actions.append(renameBtn, exportBtn, archiveBtn, deleteBtn);
+    actions.append(pinBtn, renameBtn, exportBtn, archiveBtn, deleteBtn);
     item.appendChild(actions);
     item.onclick = () => openSession(session);
     el.sessionList.appendChild(item);
@@ -626,6 +652,45 @@ function persistUnread(): void {
     localStorage.setItem(UNREAD_KEY, JSON.stringify([...unreadSessions]));
   } catch {
     /* storage unavailable */
+  }
+}
+
+/** P548: pinned sessions float to the top of the sidebar (persisted). */
+const PINNED_KEY = "ulnclaw.pinnedSessions";
+const pinnedSessions = new Set<string>((() => {
+  try {
+    const raw = localStorage.getItem(PINNED_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((id): id is string => typeof id === "string");
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  return [];
+})());
+
+function persistPinned(): void {
+  try {
+    localStorage.setItem(PINNED_KEY, JSON.stringify([...pinnedSessions]));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** P548: toggle a session's pin (sidebar hover action + palette). */
+function togglePinSession(session: SessionRow): void {
+  const label = session.title || session.id.slice(0, 8);
+  if (pinnedSessions.has(session.id)) {
+    pinnedSessions.delete(session.id);
+    persistPinned();
+    renderSessions();
+    notifySuccess(fmt(t.palette.sessionUnpinned, { label }));
+  } else {
+    pinnedSessions.add(session.id);
+    persistPinned();
+    renderSessions();
+    notifySuccess(fmt(t.palette.sessionPinned, { label }));
   }
 }
 
@@ -3160,6 +3225,10 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     forkSession: () => runForkSession(),
     retitleSkills: () => runRetitleSkills(),
     toggleUnreadOnly: () => toggleUnreadOnly(),
+    // P548: pin the open session to the top of the sidebar list.
+    togglePinSession: () => {
+      if (state.current) togglePinSession(state.current);
+    },
     toggleHideArchived: () => toggleHideArchived(),
     // P498: clear every unread marker at once.
     markAllRead: () => {

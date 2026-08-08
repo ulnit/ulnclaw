@@ -48,6 +48,7 @@ export interface CommandPaletteHooks {
   retitleSkills(): void | Promise<void>;
   toggleHideArchived(): void;
   toggleUnreadOnly(): void;
+  togglePinSession(): void;
   markAllRead(): void;
   newSessionInProject(): void | Promise<void>;
   archiveSession(): void | Promise<void>;
@@ -182,6 +183,7 @@ export class CommandPalette {
       { id: "retitle-skills", label: t.palette.retitleSkills, group: t.palette.gatewayGroup, run: () => hooks.retitleSkills() },
       { id: "toggle-hide-archived", label: t.palette.toggleHideArchived, group: t.palette.sessionGroup, run: () => hooks.toggleHideArchived() },
       { id: "toggle-unread-only", label: t.palette.unreadOnly, group: t.palette.sessionGroup, run: () => hooks.toggleUnreadOnly() },
+      { id: "toggle-pin", label: t.palette.pinSession, group: t.palette.sessionGroup, run: () => hooks.togglePinSession() },
       { id: "mark-all-read", label: t.palette.markAllRead, group: t.palette.sessionGroup, run: () => hooks.markAllRead() },
       { id: "new-session-in-project", label: t.palette.newSessionInProject, group: t.palette.sessionGroup, run: () => hooks.newSessionInProject() },
       { id: "view-in-sessions", label: t.palette.viewInSessionsBrowser, group: t.palette.sessionGroup, run: () => hooks.openInSessionsBrowser() },
