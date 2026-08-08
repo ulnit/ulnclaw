@@ -24,7 +24,7 @@ import { FindBar } from "./find-bar";
 import { CommandPalette } from "./command-palette";
 import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
-import { notify, notifyError, notifySuccess, notificationHistory, notificationUnread, markNotificationsRead, clearNotificationHistory, onNotificationHistoryChange } from "./notifications";
+import { notify, notifyError, notifySuccess, notificationHistory, notificationUnread, markNotificationsRead, clearNotificationHistory, onNotificationHistoryChange, loadPersistedNotificationHistory } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
 import { resolveBootFailure, showBootFailure } from "./boot-failure";
 import { applyStatic, currentLocale, fmt, onLocaleChange, t } from "./i18n";
@@ -2407,6 +2407,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   }
   // P395: restore persisted composer drafts.
   loadPersistedDrafts();
+  // P403: restore persisted notification history.
+  loadPersistedNotificationHistory();
   // P396: restore persisted prompt-recall history.
   loadPersistedComposerHistory();
   // P397: restore the persisted sidebar session filter.

@@ -93,6 +93,7 @@ export function markNotificationsRead(): void {
 export function clearNotificationHistory(): void {
   historyItems.length = 0;
   unreadCount = 0;
+  persistHistory();
   historyListeners.forEach((listener) => listener());
 }
 
@@ -105,7 +106,48 @@ function recordHistory(note: AppNotification): void {
   historyItems.unshift(note);
   if (historyItems.length > HISTORY_CAP) historyItems.length = HISTORY_CAP;
   unreadCount += 1;
+  persistHistory();
   historyListeners.forEach((listener) => listener());
+}
+
+// P403: notification history persists across restarts.
+const HISTORY_KEY = "ulnclaw.notificationHistory";
+
+function persistHistory(): void {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(notificationHistory()));
+  } catch {
+    /* storage full/unavailable — history stays in-memory */
+  }
+}
+
+export function loadPersistedNotificationHistory(): void {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    for (const entry of parsed.slice(0, HISTORY_CAP)) {
+      if (!entry || typeof entry !== "object") continue;
+      const item = entry as Record<string, unknown>;
+      if (typeof item.message !== "string") continue;
+      const kind: NotificationKind =
+        item.kind === "error" || item.kind === "warning" || item.kind === "success"
+          ? item.kind
+          : "info";
+      historyItems.push({
+        id: typeof item.id === "string" ? item.id : `persisted-${historyItems.length}`,
+        kind,
+        title: typeof item.title === "string" ? item.title : undefined,
+        message: item.message,
+        detail: typeof item.detail === "string" ? item.detail : undefined,
+        createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
+        placement: "default",
+      });
+    }
+  } catch {
+    /* corrupt payload — start fresh */
+  }
 }
 
 function defaultDuration(kind: NotificationKind): number {
