@@ -891,6 +891,11 @@ export class SessionsViewWidget {
         this.renderList();
         this.loadTranscript(row.dataset.id || "").catch(() => undefined);
       });
+      // P487: double-click resumes the session in the chat view.
+      row.addEventListener("dblclick", () => {
+        const session = this.all.find((candidate) => candidate.id === row.dataset.id);
+        if (session && this.openInChat) this.openInChat(session);
+      });
     }
     // P438: end-reason chips drill the list down to that reason.
     for (const chip of Array.from(list.querySelectorAll<HTMLElement>(".sessions-view-endreason"))) {
