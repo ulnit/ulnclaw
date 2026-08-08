@@ -500,8 +500,29 @@ let sessionMessageListTimer: number | null = null;
 // P495: debounce timer for the chat view's live catch-up.
 let chatCatchupTimer: number | null = null;
 
-// P496: sessions that grew while not open (cleared on open/select).
-const unreadSessions = new Set<string>();
+// P496/P500: sessions that grew while not open (cleared on open/select),
+// persisted across restarts.
+const UNREAD_KEY = "ulnclaw.unreadSessions";
+const unreadSessions = new Set<string>((() => {
+  try {
+    const raw = localStorage.getItem(UNREAD_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((id): id is string => typeof id === "string");
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  return [];
+})());
+
+function persistUnread(): void {
+  try {
+    localStorage.setItem(UNREAD_KEY, JSON.stringify([...unreadSessions]));
+  } catch {
+    /* storage unavailable */
+  }
+}
 
 /** P497: badge the Sessions tab with the unread count. */
 function renderUnreadBadge(): void {
@@ -689,6 +710,7 @@ function refreshWindowTitle(): void {
 async function openSession(session: SessionRow): Promise<void> {
   // P496: opening a session reads it.
   if (unreadSessions.delete(session.id)) {
+    persistUnread();
     renderSessions();
     renderUnreadBadge();
   }
@@ -863,6 +885,19 @@ async function refreshSessions(): Promise<void> {
   try {
     state.sessions = await state.client.listSessions();
     await refreshSessionTokens();
+    // P500: drop unread markers for sessions that no longer exist.
+    const known = new Set(state.sessions.map((session) => session.id));
+    let changed = false;
+    for (const id of [...unreadSessions]) {
+      if (!known.has(id)) {
+        unreadSessions.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      persistUnread();
+      renderUnreadBadge();
+    }
     renderSessions();
   } catch {
     /* gateway offline — dot already reflects it */
@@ -2013,6 +2048,7 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
         !unreadSessions.has(envelope.session_id)
       ) {
         unreadSessions.add(envelope.session_id);
+        persistUnread();
         renderSessions();
         renderUnreadBadge();
       }
@@ -2569,6 +2605,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     startDesktopEvents();
     void pollHealth();
     void refreshSessions();
+    renderUnreadBadge();
     void loadAppearance();
     refreshCharCount();
   });
@@ -2677,6 +2714,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     (sessionId) => unreadSessions.has(sessionId),
     (sessionId) => {
       if (unreadSessions.delete(sessionId)) {
+        persistUnread();
         renderSessions();
         renderUnreadBadge();
       }
@@ -2932,6 +2970,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     markAllRead: () => {
       if (unreadSessions.size === 0) return;
       unreadSessions.clear();
+      persistUnread();
       renderSessions();
       renderUnreadBadge();
       void state.sessionsBrowser?.refresh();
