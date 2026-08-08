@@ -1366,6 +1366,15 @@ change unless --apply is passed.")]
         #[arg(long)]
         apply: bool,
     },
+    /// Import sessions from a portable JSON export
+    /// (`GET /api/sessions/:id/export?format=json`; P577)
+    Import {
+        /// Path to the export JSON file
+        file: std::path::PathBuf,
+        /// Preview what would be imported without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Repair a malformed state.db schema so hidden sessions reappear
     /// (hermes sessions repair)
     Repair {
@@ -8593,6 +8602,129 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                         .map_err(|e| e.to_string())?;
                     println!("\u{2713} Re-titled to {:?} (title was taken).", deduped);
                 }
+            }
+        }
+        SessionAction::Import { file, dry_run } => {
+            // P577: the CLI twin of POST /api/sessions/import — works
+            // straight against the store, no running gateway needed.
+            let text = std::fs::read_to_string(&file)
+                .map_err(|e| format!("read {}: {e}", file.display()))?;
+            let parsed: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| format!("parse {}: {e}", file.display()))?;
+            let sessions = match &parsed {
+                serde_json::Value::Array(list) => list.clone(),
+                obj => obj
+                    .get("sessions")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .ok_or_else(|| {
+                        "expected {\"sessions\": [...]} or a top-level array".to_string()
+                    })?,
+            };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
+            let mut imported = 0usize;
+            let mut skipped = 0usize;
+            let mut messages = 0usize;
+            for raw in &sessions {
+                let id = raw
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let msgs = raw
+                    .get("messages")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if dry_run {
+                    match store.get_session_row(&id) {
+                        Ok(Some(_)) => skipped += 1,
+                        Ok(None) => {
+                            imported += 1;
+                            messages += msgs.len();
+                        }
+                        Err(e) => return Err(e.to_string()),
+                    }
+                    continue;
+                }
+                let started_at = raw
+                    .get("started_at")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(now);
+                match store.insert_imported_session(
+                    &id,
+                    raw.get("source").and_then(|v| v.as_str()).unwrap_or("import"),
+                    raw.get("model").and_then(|v| v.as_str()),
+                    raw.get("title").and_then(|v| v.as_str()),
+                    raw.get("cwd").and_then(|v| v.as_str()),
+                    started_at,
+                    raw.get("ended_at").and_then(|v| v.as_f64()),
+                    raw.get("end_reason").and_then(|v| v.as_str()),
+                    raw.get("archived").and_then(|v| v.as_bool()).unwrap_or(false),
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        skipped += 1;
+                        continue;
+                    }
+                    Err(e) => return Err(e.to_string()),
+                }
+                for (offset, message) in msgs.iter().enumerate() {
+                    let role = match message.get("role").and_then(|v| v.as_str()).unwrap_or("") {
+                        "system" => ulnclaw::provider::Role::System,
+                        "user" => ulnclaw::provider::Role::User,
+                        "assistant" => ulnclaw::provider::Role::Assistant,
+                        "tool" => ulnclaw::provider::Role::Tool,
+                        other => {
+                            return Err(format!("session {id}: invalid message role: {other}"))
+                        }
+                    };
+                    let msg = ulnclaw::provider::Message {
+                        role,
+                        content: message
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        tool_calls: message
+                            .get("tool_calls")
+                            .cloned()
+                            .and_then(|v| serde_json::from_value(v).ok()),
+                        tool_call_id: message
+                            .get("tool_call_id")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        name: message
+                            .get("tool_name")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                    };
+                    let at = message
+                        .get("timestamp")
+                        .and_then(|v| v.as_f64())
+                        .filter(|t| *t > 0.0)
+                        .unwrap_or(started_at + offset as f64 * 0.001);
+                    store
+                        .append_message_at(&id, &msg, at)
+                        .map_err(|e| format!("session {id} message {offset}: {e}"))?;
+                    messages += 1;
+                }
+                imported += 1;
+            }
+            if dry_run {
+                println!(
+                    "Dry run: would import {} session(s), {} message(s); {} already present.",
+                    imported, messages, skipped
+                );
+            } else {
+                println!(
+                    "\u{2713} Imported {} session(s), {} message(s); skipped {}.",
+                    imported, messages, skipped
+                );
             }
         }
         SessionAction::Delete { id, yes } => {
