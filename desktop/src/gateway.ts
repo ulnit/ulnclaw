@@ -1145,6 +1145,17 @@ export class GatewayClient {
     return (value.data || value.messages || value || []) as MessageRow[];
   }
 
+  /** P471: cheap message-count probe over the `total` envelope field. */
+  async messagesTotal(sessionId: string): Promise<number> {
+    const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/messages?limit=1`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`messagesTotal: HTTP ${response.status}`);
+    const value = await response.json();
+    const total = Number(value.total);
+    return Number.isFinite(total) ? total : (value.data || []).length;
+  }
+
   /**
    * Subscribe to the desktop UI bridge event stream (P231). Fetch-based
    * SSE reader (EventSource can't carry the bearer header). Invokes

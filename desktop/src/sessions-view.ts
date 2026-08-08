@@ -69,6 +69,9 @@ export class SessionsViewWidget {
   // P470: find-in-transcript bar scoped to this view.
   private findBar: FindBar | null = null;
   private active = false;
+  // P471: background poll timer + whether the user expanded past the tail.
+  private pollTimer: number | null = null;
+  private transcriptExpanded = false;
   // P450: activity-first or title-first list sorting.
   private sortMode: "activity" | "title" =
     localStorage.getItem(SORT_KEY) === "title" ? "title" : "activity";
@@ -336,12 +339,52 @@ export class SessionsViewWidget {
   start(): void {
     this.active = true;
     this.refresh().catch(() => undefined);
+    // P471: light background polling while the view is shown.
+    if (this.pollTimer === null) {
+      this.pollTimer = window.setInterval(() => this.poll(), 10_000);
+    }
   }
 
   stop(): void {
     // P470: leaving the view closes any open find bar.
     this.active = false;
     this.findBar?.close();
+    if (this.pollTimer !== null) {
+      window.clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  /** P471: keep the list and the open transcript fresh in the background. */
+  private poll(): void {
+    if (!this.active || document.hidden) return;
+    this.refresh().catch(() => undefined);
+    void this.pollTranscriptTotal();
+  }
+
+  private async pollTranscriptTotal(): Promise<void> {
+    const client = this.client();
+    const sessionId = this.transcriptSession;
+    if (!client || !sessionId || sessionId !== this.selected) return;
+    try {
+      const total = await client.messagesTotal(sessionId);
+      if (this.selected !== sessionId || total === this.transcriptTotal) return;
+      if (!this.transcriptExpanded) {
+        this.loadTranscript(sessionId).catch(() => undefined);
+      } else {
+        // The user is reading history — only update the count + banner.
+        this.transcriptTotal = total;
+        const session = this.all.find((candidate) => candidate.id === sessionId);
+        const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+        const existing = pane?.querySelector(".sessions-view-meta");
+        if (session && existing) {
+          existing.outerHTML = this.renderTranscriptMeta(session, total);
+        }
+        this.updateTranscriptBanner(sessionId);
+      }
+    } catch {
+      // Probe is best-effort; the next poll retries.
+    }
   }
 
   private status(message: string, isError = false): void {
@@ -755,6 +798,7 @@ export class SessionsViewWidget {
       this.transcriptMessages = [];
       this.transcriptStart = 0;
       this.transcriptTotal = 0;
+      this.transcriptExpanded = false;
     }
     pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.loading)}</p>`;
     try {
@@ -841,6 +885,7 @@ export class SessionsViewWidget {
     const anchor = pane.querySelector(".sessions-view-msg");
     for (const node of Array.from(holder.children)) pane.insertBefore(node, anchor);
     this.transcriptStart = start;
+    this.transcriptExpanded = true;
     pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
     this.updateTranscriptBanner(sessionId);
     this.findBar?.refresh();
@@ -858,6 +903,7 @@ export class SessionsViewWidget {
       const older = await client.messages(sessionId, { before: cursor, limit: TRANSCRIPT_LIMIT });
       if (this.selected !== sessionId) return;
       this.transcriptMessages = [...older, ...this.transcriptMessages];
+      this.transcriptExpanded = true;
       const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
       const holder = document.createElement("div");
       holder.innerHTML = this.renderMessages(older);
