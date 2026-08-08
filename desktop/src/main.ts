@@ -2697,6 +2697,13 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     forkSession: () => runForkSession(),
     toggleHideArchived: () => toggleHideArchived(),
     newSessionInProject: () => runNewSessionInProject(),
+    // P448: jump into the sessions browser with the chat session selected.
+    openInSessionsBrowser: () => {
+      const id = state.current?.id;
+      if (!id) return;
+      switchView("sessions");
+      state.sessionsBrowser?.openSession(id);
+    },
     archiveSession: () => runArchiveSession(),
     unarchiveSession: () => runUnarchiveSession(),
   });

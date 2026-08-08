@@ -293,6 +293,14 @@ export class SessionsViewWidget {
     }
   }
 
+  /** P448: select a session from outside (command-palette bridge). */
+  openSession(sessionId: string): void {
+    this.selected = sessionId;
+    this.kbIndex = Math.max(0, this.visible.findIndex((session) => session.id === sessionId));
+    this.renderList();
+    this.loadTranscript(sessionId).catch(() => undefined);
+  }
+
   /** Prune/archive dialog (P314) — mirrors `ulnclaw sessions prune`
    * and `sessions archive` over POST /api/sessions/prune|archive. */
   private openPruneDialog(mode: "prune" | "archive"): void {
