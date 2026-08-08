@@ -2628,6 +2628,139 @@ async fn fs_git_diff(Query(query): Query<FsGitDiffQuery>) -> Response {
     }
 }
 
+/// Shared body for the `POST /api/git/*` review actions.
+#[derive(Debug, Default, Deserialize)]
+struct GitActionBody {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    paths: Option<Vec<String>>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    confirm: Option<bool>,
+}
+
+fn git_action_target(body: &GitActionBody) -> std::result::Result<PathBuf, Response> {
+    // Default to the gateway cwd so the review pane works without an
+    // explicit root.
+    let path = body.path.clone().or_else(|| Some(".".to_string()));
+    match fs_query_path(&FsPathQuery { path }) {
+        Ok(target) => Ok(target),
+        Err(response) => Err(response),
+    }
+}
+
+/// `GET /api/git/status` — branch, ahead/behind and per-area path
+/// lists (hermes `/api/git/status` parity, lean port).
+async fn git_status(Query(query): Query<FsPathQuery>) -> Response {
+    let query = FsPathQuery { path: query.path.or_else(|| Some(".".to_string())) };
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    match crate::git_diff::status_summary(&target) {
+        Ok(summary) => Json(json!({
+            "branch": summary.branch,
+            "upstream": summary.upstream,
+            "ahead": summary.ahead,
+            "behind": summary.behind,
+            "staged": summary.staged,
+            "unstaged": summary.unstaged,
+            "untracked": summary.untracked,
+        }))
+        .into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// `GET /api/git/branches` — local branches, current first (hermes
+/// `/api/git/branches` parity, lean port).
+async fn git_branches(Query(query): Query<FsPathQuery>) -> Response {
+    let query = FsPathQuery { path: query.path.or_else(|| Some(".".to_string())) };
+    let target = match fs_query_path(&query) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    match crate::git_diff::local_branches(&target) {
+        Ok(branches) => Json(json!({
+            "current": branches.first().cloned().unwrap_or_default(),
+            "branches": branches,
+        }))
+        .into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// `POST /api/git/stage` — stage the given paths (or everything when
+/// the list is empty).
+async fn git_stage(Json(body): Json<GitActionBody>) -> Response {
+    let target = match git_action_target(&body) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let paths = body.paths.clone().unwrap_or_default();
+    match crate::git_diff::stage(&target, &paths) {
+        Ok(output) => Json(json!({ "ok": true, "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// `POST /api/git/unstage` — unstage the given paths (or everything).
+async fn git_unstage(Json(body): Json<GitActionBody>) -> Response {
+    let target = match git_action_target(&body) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let paths = body.paths.clone().unwrap_or_default();
+    match crate::git_diff::unstage(&target, &paths) {
+        Ok(output) => Json(json!({ "ok": true, "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// `POST /api/git/revert` — discard working-tree changes for explicit
+/// tracked paths; requires `confirm: true` (destructive).
+async fn git_revert(Json(body): Json<GitActionBody>) -> Response {
+    if !body.confirm.unwrap_or(false) {
+        return bad_request("revert is destructive — pass confirm: true", None);
+    }
+    let target = match git_action_target(&body) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let paths = body.paths.clone().unwrap_or_default();
+    match crate::git_diff::revert_working(&target, &paths) {
+        Ok(output) => Json(json!({ "ok": true, "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// `POST /api/git/commit` — commit the staged index with `message`.
+async fn git_commit(Json(body): Json<GitActionBody>) -> Response {
+    let target = match git_action_target(&body) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let message = body.message.clone().unwrap_or_default();
+    match crate::git_diff::commit(&target, &message) {
+        Ok(output) => Json(json!({ "ok": true, "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// `POST /api/git/push` — push the current branch to its upstream.
+async fn git_push(Json(body): Json<GitActionBody>) -> Response {
+    let target = match git_action_target(&body) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    match crate::git_diff::push(&target) {
+        Ok(output) => Json(json!({ "ok": true, "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
 /// `GET /api/fs/default-cwd` — the gateway's working directory plus its
 /// git branch (hermes `/api/fs/default-cwd` parity; honors
 /// `[terminal] cwd`).
@@ -4992,6 +5125,13 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/mkdir", post(fs_mkdir))
         .route("/api/fs/git-root", get(fs_git_root))
         .route("/api/fs/git-diff", get(fs_git_diff))
+        .route("/api/git/status", get(git_status))
+        .route("/api/git/branches", get(git_branches))
+        .route("/api/git/stage", post(git_stage))
+        .route("/api/git/unstage", post(git_unstage))
+        .route("/api/git/revert", post(git_revert))
+        .route("/api/git/commit", post(git_commit))
+        .route("/api/git/push", post(git_push))
         .route("/api/fs/default-cwd", get(fs_default_cwd))
         .route("/api/model/info", get(model_info_api))
         .route("/api/model/set", post(model_set_api))
@@ -14937,6 +15077,130 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
 
         // Missing path errors are structured.
         let (status, _) = get_json(app.clone(), "/api/fs/list", Some("sekret")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        std::env::set_current_dir(saved_cwd).unwrap();
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_git_review_endpoints() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        let saved_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        std::fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_NAMESPACE")
+                .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .expect("spawn git");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "seed"]);
+        std::fs::write(dir.path().join("tracked.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.path().join("stray.txt"), "untracked\n").unwrap();
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/git/status?path=.", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Status sees both areas.
+        let (status, body) = get_json(app.clone(), "/api/git/status?path=.", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["unstaged"].as_array().unwrap().len(), 1);
+        assert_eq!(body["untracked"].as_array().unwrap().len(), 1);
+        assert!(body["branch"].as_str().unwrap().len() > 0);
+
+        // Branches list includes the current branch.
+        let (status, body) = get_json(app.clone(), "/api/git/branches?path=.", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["branches"].as_array().unwrap().iter().any(|b| b == &body["current"]));
+
+        // Stage everything, then commit.
+        let (status, _) = send_json(app.clone(), "POST", "/api/git/stage", Some("sekret"), json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = get_json(app.clone(), "/api/git/status?path=.", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["staged"].as_array().unwrap().len(), 2);
+
+        // Empty commit message is rejected.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/commit", Some("sekret"),
+            json!({"message": "  "}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/git/commit", Some("sekret"),
+            json!({"message": "second"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["output"].as_str().unwrap().contains("second"));
+
+        // Unstage round-trip.
+        std::fs::write(dir.path().join("tracked.txt"), "one\ntwo\nthree\n").unwrap();
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/stage", Some("sekret"),
+            json!({"paths": ["tracked.txt"]}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/unstage", Some("sekret"),
+            json!({"paths": ["tracked.txt"]}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Revert requires confirm and explicit paths.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/revert", Some("sekret"),
+            json!({"paths": ["tracked.txt"]}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/revert", Some("sekret"),
+            json!({"paths": ["tracked.txt"], "confirm": true}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = get_json(app.clone(), "/api/git/status?path=.", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["unstaged"].as_array().unwrap().is_empty());
+
+        // Push without an upstream is a structured error, not a panic.
+        let (status, _) = send_json(app.clone(), "POST", "/api/git/push", Some("sekret"), json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Non-repo path errors out.
+        let outside = tempfile::tempdir().expect("tempdir");
+        let (status, _) = get_json(
+            app.clone(),
+            &format!("/api/git/status?path={}", outside.path().display()),
+            Some("sekret"),
+        ).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
 
         std::env::set_current_dir(saved_cwd).unwrap();

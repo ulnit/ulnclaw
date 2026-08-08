@@ -2136,6 +2136,99 @@ export class GatewayClient {
     return value as { empty: boolean; stat: string; diff: string; untracked: string[] };
   }
 
+  /** GET /api/git/status — review-pane status summary (P598). */
+  async gitStatus(path: string): Promise<{
+    branch: string;
+    upstream: string | null;
+    ahead: number;
+    behind: number;
+    staged: string[];
+    unstaged: string[];
+    untracked: string[];
+  }> {
+    const params = new URLSearchParams({ path });
+    const response = await fetch(this.endpoint(`/api/git/status?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as {
+      branch: string; upstream: string | null; ahead: number; behind: number;
+      staged: string[]; unstaged: string[]; untracked: string[];
+    };
+  }
+
+  /** GET /api/git/branches — local branches, current first (P598). */
+  async gitBranches(path: string): Promise<{ current: string; branches: string[] }> {
+    const params = new URLSearchParams({ path });
+    const response = await fetch(this.endpoint(`/api/git/branches?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { current: string; branches: string[] };
+  }
+
+  /** POST /api/git/stage — stage paths (empty = everything) (P598). */
+  async gitStage(path: string, paths: string[] = []): Promise<{ ok: boolean; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/stage"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path, paths }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; output: string };
+  }
+
+  /** POST /api/git/unstage — unstage paths (empty = everything) (P598). */
+  async gitUnstage(path: string, paths: string[] = []): Promise<{ ok: boolean; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/unstage"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path, paths }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; output: string };
+  }
+
+  /** POST /api/git/revert — discard working changes (needs confirm) (P598). */
+  async gitRevert(path: string, paths: string[]): Promise<{ ok: boolean; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/revert"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path, paths, confirm: true }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; output: string };
+  }
+
+  /** POST /api/git/commit — commit the staged index (P598). */
+  async gitCommit(path: string, message: string): Promise<{ ok: boolean; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/commit"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path, message }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; output: string };
+  }
+
+  /** POST /api/git/push — push current branch upstream (P598). */
+  async gitPush(path: string): Promise<{ ok: boolean; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/push"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; output: string };
+  }
+
   /** GET /api/fs/git-root — nearest enclosing git checkout (P347). */
   async fsGitRoot(path: string): Promise<{ root: string | null }> {
     const params = new URLSearchParams({ path });

@@ -22,6 +22,7 @@ export class FileTreePanel {
   private rootPath: string | null = null;
   private tab: "files" | "changes" = "files";
   private diffMode: "working" | "staged" | "all" = "working";
+  private reviewNote: { text: string; error: boolean } | null = null;
 
   constructor(
     private client: () => GatewayClient | null,
@@ -219,6 +220,7 @@ export class FileTreePanel {
     });
     bar.appendChild(mode);
     this.body.appendChild(bar);
+    await this.renderReviewBar();
     const status = document.createElement("div");
     status.className = "config-note";
     status.textContent = t.learning.loading;
@@ -263,6 +265,159 @@ export class FileTreePanel {
         error instanceof Error ? error.message : String(error),
       );
     }
+  }
+
+  /**
+   * Git review action bar (P598) — branch/ahead-behind/counts plus
+   * stage/unstage/revert/commit/push over the `/api/git/*` endpoints
+   * (hermes right-sidebar review actions parity). Hidden when the root
+   * is not a git checkout.
+   */
+  private async renderReviewBar(): Promise<void> {
+    const client = this.client();
+    if (!client || !this.rootPath) return;
+    let summary: {
+      branch: string; upstream: string | null; ahead: number; behind: number;
+      staged: string[]; unstaged: string[]; untracked: string[];
+    };
+    try {
+      summary = await client.gitStatus(this.rootPath);
+    } catch {
+      return;
+    }
+    const review = document.createElement("div");
+    review.className = "file-tree-review";
+
+    const line = document.createElement("div");
+    line.className = "file-tree-review-status";
+    const aheadBehind = summary.upstream
+      ? ` \u2191${summary.ahead} \u2193${summary.behind}`
+      : "";
+    line.textContent = `\u2387 ${summary.branch}${aheadBehind}`;
+    const counts = document.createElement("span");
+    counts.className = "file-tree-review-counts";
+    counts.textContent =
+      " \u00b7 " +
+      t.gitReview.counts
+        .replace("{staged}", String(summary.staged.length))
+        .replace("{unstaged}", String(summary.unstaged.length))
+        .replace("{untracked}", String(summary.untracked.length));
+    line.appendChild(counts);
+    review.appendChild(line);
+
+    const feedback = document.createElement("div");
+    feedback.className = "file-tree-review-feedback";
+    feedback.hidden = true;
+    const note = (message: string, isError = false): void => {
+      feedback.hidden = false;
+      feedback.textContent = message;
+      feedback.classList.toggle("error", isError);
+    };
+    const run = async (action: () => Promise<void>): Promise<void> => {
+      try {
+        await action();
+        await this.renderChanges();
+      } catch (error) {
+        this.reviewNote = {
+          text: t.gitReview.failed.replace(
+            "{error}",
+            error instanceof Error ? error.message : String(error),
+          ),
+          error: true,
+        };
+        note(this.reviewNote.text, true);
+      }
+    };
+    const mkBtn = (label: string): HTMLButtonElement => {
+      const button = document.createElement("button");
+      button.className = "ghost";
+      button.textContent = label;
+      return button;
+    };
+
+    const actions = document.createElement("div");
+    actions.className = "file-tree-review-actions";
+    const stageBtn = mkBtn(t.gitReview.stageAll);
+    stageBtn.disabled = summary.unstaged.length === 0 && summary.untracked.length === 0;
+    stageBtn.addEventListener("click", () =>
+      void run(async () => {
+        await client.gitStage(this.rootPath!, []);
+        this.reviewNote = { text: t.gitReview.stagedNote, error: false };
+      }),
+    );
+    const unstageBtn = mkBtn(t.gitReview.unstageAll);
+    unstageBtn.disabled = summary.staged.length === 0;
+    unstageBtn.addEventListener("click", () =>
+      void run(async () => {
+        await client.gitUnstage(this.rootPath!, []);
+        this.reviewNote = { text: t.gitReview.unstagedNote, error: false };
+      }),
+    );
+    const revertBtn = mkBtn(t.gitReview.revert);
+    revertBtn.disabled = summary.unstaged.length === 0;
+    revertBtn.addEventListener("click", () => {
+      const targets = summary.unstaged.slice();
+      if (!window.confirm(t.gitReview.revertConfirm.replace("{count}", String(targets.length)))) {
+        return;
+      }
+      void run(async () => {
+        await client.gitRevert(this.rootPath!, targets);
+        this.reviewNote = {
+          text: t.gitReview.reverted.replace("{count}", String(targets.length)),
+          error: false,
+        };
+      });
+    });
+    actions.append(stageBtn, unstageBtn, revertBtn);
+    review.appendChild(actions);
+
+    const commitRow = document.createElement("div");
+    commitRow.className = "file-tree-review-commit";
+    const messageInput = document.createElement("input");
+    messageInput.type = "text";
+    messageInput.placeholder = t.gitReview.commitPlaceholder;
+    const commitBtn = mkBtn(t.gitReview.commit);
+    messageInput.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitBtn.click();
+      }
+    });
+    commitBtn.disabled = summary.staged.length === 0;
+    commitBtn.addEventListener("click", () => {
+      const message = messageInput.value.trim();
+      if (!message) {
+        messageInput.focus();
+        return;
+      }
+      void run(async () => {
+        await client.gitCommit(this.rootPath!, message);
+        this.reviewNote = { text: t.gitReview.committed, error: false };
+      });
+    });
+    commitRow.append(messageInput, commitBtn);
+    review.appendChild(commitRow);
+
+    const pushBtn = mkBtn(t.gitReview.push);
+    pushBtn.classList.add("file-tree-review-push");
+    pushBtn.disabled = !summary.upstream;
+    pushBtn.title = summary.upstream || "";
+    pushBtn.addEventListener("click", () => {
+      pushBtn.disabled = true;
+      pushBtn.textContent = t.gitReview.pushing;
+      void run(async () => {
+        await client.gitPush(this.rootPath!);
+        this.reviewNote = { text: t.gitReview.pushed, error: false };
+      });
+    });
+    review.appendChild(pushBtn);
+
+    if (this.reviewNote) {
+      note(this.reviewNote.text, this.reviewNote.error);
+    }
+    review.appendChild(feedback);
+    this.body.appendChild(review);
   }
 
   private async renderDir(container: HTMLElement, path: string, depth: number): Promise<void> {

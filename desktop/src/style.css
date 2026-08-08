@@ -1481,6 +1481,19 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .profiles-view-row-actions { margin-left: auto; display: flex; gap: 4px; }
 .profiles-view-row-actions button { font-size: 12px; padding: 2px 10px; }
 
+/* File-tree git review bar (P598) */
+.file-tree-review { border-top: 1px solid var(--hover); margin-top: 6px; padding-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.file-tree-review-status { font-size: 0.8em; opacity: 0.85; word-break: break-all; }
+.file-tree-review-counts { opacity: 0.7; }
+.file-tree-review-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.file-tree-review-actions button { font-size: 11px; padding: 2px 8px; }
+.file-tree-review-commit { display: flex; gap: 4px; }
+.file-tree-review-commit input { flex: 1; min-width: 0; background: var(--panel-2); color: var(--text); border: 1px solid var(--hover); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 11px; }
+.file-tree-review-commit button { font-size: 11px; padding: 2px 8px; }
+.file-tree-review-push { font-size: 11px; padding: 2px 8px; align-self: flex-start; }
+.file-tree-review-feedback { font-size: 0.78em; opacity: 0.8; word-break: break-all; }
+.file-tree-review-feedback.error { color: var(--bad, #f85149); }
+
 /* Kanban detail enrichments */
 .kanban-detail-meta { font-size: 0.8em; opacity: 0.7; margin: 4px 0 8px; }
 .kanban-detail-attachments { margin-top: 8px; }
