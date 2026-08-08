@@ -311,6 +311,7 @@ async function renameSession(session: SessionRow): Promise<void> {
     if (state.current?.id === session.id) {
       state.current.title = session.title;
       el.chatTitle.textContent = session.title;
+      refreshWindowTitle();
     }
     renderSessions();
     notifySuccess(t.session.renamed);
@@ -488,9 +489,18 @@ function addDayDivider(timestamp: number): void {
   el.messages.appendChild(divider);
 }
 
+/** P387: window title tracks the current session (webview title bar). */
+function refreshWindowTitle(): void {
+  const title = state.current
+    ? state.current.title || state.current.id.slice(0, 8)
+    : null;
+  document.title = title ? `${title} — ulnclaw` : "ulnclaw";
+}
+
 async function openSession(session: SessionRow): Promise<void> {
   state.current = session;
   el.chatTitle.textContent = session.title || session.id.slice(0, 8);
+  refreshWindowTitle();
   refreshModelBadge();
   el.messages.innerHTML = "";
   el.dayJump.hidden = true;
@@ -1660,6 +1670,7 @@ async function start(): Promise<void> {
     el.dayJump.hidden = true;
     el.chatActions.hidden = true;
     el.chatTitle.textContent = t.session.newTitle;
+    refreshWindowTitle();
     el.messages.innerHTML = "";
     renderIntro(el.messages, "new");
     renderSessions();
