@@ -24,6 +24,8 @@ export class JobsWidget {
   private timer: number | null = null;
   /** Known delivery-target ids for P507 edit-time validation. */
   private deliveryTargetIds = new Set<string>();
+  /** P536: live filter text over name/schedule/prompt/skills. */
+  private filterText = "";
 
   constructor(
     private root: HTMLElement,
@@ -36,6 +38,7 @@ export class JobsWidget {
       <header id="jobs-header">
         <span id="jobs-counts" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <input id="jobs-filter" type="search" data-i18n-ph="jobs.filterPlaceholder" />
         <select id="jobs-sort" data-i18n-title="jobs.sortTitle">
           <option value="default" data-i18n="jobs.sortDefault">Default order</option>
           <option value="next_run" data-i18n="jobs.sortNextRun">Next run first</option>
@@ -78,6 +81,15 @@ export class JobsWidget {
     sortSelect.value = this.sortMode;
     sortSelect.addEventListener("change", () => {
       window.localStorage.setItem(SORT_KEY, sortSelect.value);
+      this.render();
+    });
+    // P536: live job filter — re-renders the cached jobs client-side.
+    this.root.querySelector("#jobs-filter")!.addEventListener("input", () => {
+      this.filterText = (
+        (this.root.querySelector("#jobs-filter") as HTMLInputElement).value || ""
+      )
+        .trim()
+        .toLowerCase();
       this.render();
     });
     (this.root.querySelector("#jobs-new") as HTMLButtonElement).onclick = () => {
@@ -235,7 +247,23 @@ export class JobsWidget {
         return a.name.localeCompare(b.name);
       });
     }
-    for (const job of ordered) {
+    // P536: narrow by name, schedule, prompt, or skill as you type.
+    const query = this.filterText;
+    const visible = query
+      ? ordered.filter(
+          (job) =>
+            job.name.toLowerCase().includes(query) ||
+            job.schedule.toLowerCase().includes(query) ||
+            job.prompt.toLowerCase().includes(query) ||
+            job.skills.some((skill) => skill.toLowerCase().includes(query)),
+        )
+      : ordered;
+    if (!visible.length) {
+      list.innerHTML = '<p class="jobs-empty"></p>';
+      list.querySelector(".jobs-empty")!.textContent = t.jobs.filterNoMatch;
+      return;
+    }
+    for (const job of visible) {
       list.appendChild(this.renderRow(job));
     }
   }

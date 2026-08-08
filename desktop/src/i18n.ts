@@ -128,6 +128,7 @@ export interface Translations {
     runsLeft: string; deleteConfirm: string;
     deliverBadge: string; deliverTitle: string; deliveryError: string; deliverPrompt: string;
     sortTitle: string; sortDefault: string; sortNextRun: string;
+    filterPlaceholder: string; filterNoMatch: string;
     deliverUnknownConfirm: string;
   };
   usage: {
@@ -489,6 +490,7 @@ const en: Translations = {
     deliveryError: "last delivery failed (hover for details)",
     deliverPrompt: "Delivery target (local/origin/platform; empty clears):",
     sortTitle: "Sort jobs", sortDefault: "Default order", sortNextRun: "Next run first",
+    filterPlaceholder: "Filter jobs…", filterNoMatch: "No jobs match the filter.",
     deliverUnknownConfirm: "“{target}” is not a known delivery target (origin/all/local or a connected platform). Save anyway?",
   },
   usage: {
@@ -986,6 +988,7 @@ const zh: Translations = {
     deliveryError: "上次投递失败（悬停查看详情）",
     deliverPrompt: "投递目标（local/origin/平台名；留空清除）：",
     sortTitle: "任务排序", sortDefault: "默认顺序", sortNextRun: "下次运行优先",
+    filterPlaceholder: "筛选任务…", filterNoMatch: "没有匹配筛选条件的任务。",
     deliverUnknownConfirm: "“{target}”不是已知投递目标（origin/all/local 或已连接平台）。仍要保存吗？",
   },
   usage: {
@@ -1483,6 +1486,7 @@ const zhHant: Translations = {
     deliveryError: "上次投遞失敗（懸停檢視詳情）",
     deliverPrompt: "投遞目標（local/origin/平台名；留空清除）：",
     sortTitle: "任務排序", sortDefault: "預設順序", sortNextRun: "下次執行優先",
+    filterPlaceholder: "篩選排程任務…", filterNoMatch: "沒有匹配篩選條件的排程任務。",
     deliverUnknownConfirm: "「{target}」不是已知投遞目標（origin/all/local 或已連接平台）。仍要儲存嗎？",
   },
   usage: {
@@ -1980,6 +1984,7 @@ const ja: Translations = {
     deliveryError: "前回の配信に失敗（ホバーで詳細）",
     deliverPrompt: "配信先（local/origin/プラットフォーム名；空でクリア）:",
     sortTitle: "ジョブの並び替え", sortDefault: "既定の順序", sortNextRun: "次回実行が早い順",
+    filterPlaceholder: "ジョブを絞り込み…", filterNoMatch: "条件に一致するジョブがありません。",
     deliverUnknownConfirm: "「{target}」は既知の配信先ではありません（origin/all/local または接続済みプラットフォーム）。保存しますか？",
   },
   usage: {
@@ -2477,6 +2482,7 @@ const ar: Translations = {
     deliveryError: "فشل آخر تسليم (مرّر للتفاصيل)",
     deliverPrompt: "وجهة التسليم (local/origin/المنصة؛ فارغ للمسح):",
     sortTitle: "ترتيب المهام", sortDefault: "الترتيب الافتراضي", sortNextRun: "الأقرب تشغيلًا أولًا",
+    filterPlaceholder: "تصفية المهام المجدولة…", filterNoMatch: "لا توجد مهام مجدولة تطابق التصفية.",
     deliverUnknownConfirm: "الهدف “{target}” ليس وجهة تسليم معروفة (origin/all/local أو منصة متصلة). الحفظ على أي حال؟",
   },
   usage: {
