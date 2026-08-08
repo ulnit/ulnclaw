@@ -1450,3 +1450,22 @@ html[data-font="source-serif"] { --font-stack: "Source Serif 4", "Source Serif P
 html[data-font="jetbrains-mono"] { --font-stack: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; }
 html[data-font="ibm-plex-mono"] { --font-stack: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; }
 html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, Consolas, monospace; }
+
+/* P355: shell status bar — live gateway facts strip along the bottom. */
+#statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 3px 12px;
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  background: var(--panel, rgba(128, 128, 128, 0.06));
+  color: var(--muted, #888);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+#statusbar .statusbar-seg { display: inline-flex; gap: 4px; align-items: center; }
+#statusbar .statusbar-seg::before { content: "·"; margin-right: 10px; opacity: 0.6; }
+#statusbar .statusbar-seg:first-child::before { content: ""; margin: 0; }

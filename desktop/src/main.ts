@@ -94,6 +94,7 @@ const state = {
 
 const el = {
   dot: document.getElementById("gateway-dot")!,
+  statusbar: document.getElementById("statusbar")!,
   sessionList: document.getElementById("session-list")!,
   newSession: document.getElementById("new-session") as HTMLButtonElement,
   messages: document.getElementById("messages")!,
@@ -628,6 +629,45 @@ async function pollHealth(): Promise<void> {
       gatewayModel = model;
       refreshModelBadge();
     }
+    void updateStatusBar();
+  } else {
+    el.statusbar.hidden = true;
+  }
+}
+
+function formatUptime(secs: number): string {
+  const days = Math.floor(secs / 86400);
+  const hours = Math.floor((secs % 86400) / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  if (mins > 0) return `${mins}m`;
+  return `${secs}s`;
+}
+
+/** P355: shell status bar — live gateway facts along the bottom edge
+ * (version/os/uptime, gateway model, sessions/runs/plugins census).
+ * Clicking it opens the Doctor view. */
+async function updateStatusBar(): Promise<void> {
+  if (!state.client) {
+    el.statusbar.hidden = true;
+    return;
+  }
+  try {
+    const info = await state.client.systemInfo();
+    const segs: string[] = [
+      `v${info.version} · ${info.os}/${info.arch} · ${t.chrome.statusUp.replace("{duration}", formatUptime(info.uptime_secs))}`,
+    ];
+    if (gatewayModel) segs.push(gatewayModel);
+    segs.push(t.chrome.statusSessions.replace("{count}", String(info.sessions)));
+    segs.push(t.chrome.statusRuns.replace("{count}", String(info.active_runs)));
+    segs.push(t.chrome.statusPlugins.replace("{count}", String(info.plugins_loaded)));
+    el.statusbar.innerHTML = segs
+      .map((seg) => `<span class="statusbar-seg">${seg}</span>`)
+      .join("");
+    el.statusbar.hidden = false;
+  } catch {
+    el.statusbar.hidden = true;
   }
 }
 
@@ -1654,6 +1694,7 @@ async function start(): Promise<void> {
   onLocaleChange(() => {
     renderSessions();
     refreshModelBadge();
+    void updateStatusBar();
     hatchBtn.textContent = t.chrome.hatchPet;
     state.kanban?.rerender();
     state.projects?.rerender();
@@ -1664,6 +1705,7 @@ async function start(): Promise<void> {
   installHotkeys();
 
   await pollHealth();
+  el.statusbar.addEventListener("click", () => switchView("doctor"));
   await refreshSessions();
   state.skills = (await state.client.listSkills()) || [];
   setInterval(() => void pollHealth(), 10000);
