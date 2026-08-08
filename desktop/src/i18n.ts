@@ -100,7 +100,7 @@ export interface Translations {
     blockAction: string; unblockAction: string; doneAction: string; duplicateAction: string; duplicateSuffix: string;
     whyBlocked: string; refresh: string; switchBoard: string;
     counts: string; noDescription: string; resultPrefix: string; noComments: string;
-    claim: string; metaAssignee: string; metaPriority: string; metaCreated: string;
+    claim: string; metaAssignee: string; metaPriority: string; metaCreated: string; metaCreatedBy: string;
     metaStarted: string; metaCompleted: string; metaParents: string; metaChildren: string;
     attachmentsTitle: string;
     dispatch: string; dispatchResult: string; dispatchFailed: string; newTask: string; newTaskPrompt: string;
@@ -450,7 +450,7 @@ const en: Translations = {
     whyBlocked: "Why is it blocked?", refresh: "Refresh", switchBoard: "Switch board",
     counts: "{open} open · {total} total", noDescription: "(no description)",
     resultPrefix: "Result: {result}", noComments: "No comments yet.",
-    claim: "Claim", metaAssignee: "Assignee", metaPriority: "Priority", metaCreated: "Created",
+    claim: "Claim", metaAssignee: "Assignee", metaPriority: "Priority", metaCreated: "Created", metaCreatedBy: "Created by",
     metaStarted: "Started", metaCompleted: "Completed", metaParents: "Parents", metaChildren: "Children",
     attachmentsTitle: "Attachments",
     dispatch: "Dispatch", newTask: "New task", newTaskPrompt: "Task title:", dispatchResult: "Dispatched: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", dispatchFailed: "Dispatch failed: {error}",
@@ -955,7 +955,7 @@ const zh: Translations = {
     whyBlocked: "为什么受阻？", refresh: "刷新", switchBoard: "切换看板",
     counts: "{open} 进行中 · 共 {total}", noDescription: "（无描述）",
     resultPrefix: "结果：{result}", noComments: "暂无评论。",
-    claim: "认领", metaAssignee: "负责人", metaPriority: "优先级", metaCreated: "创建于",
+    claim: "认领", metaAssignee: "负责人", metaPriority: "优先级", metaCreated: "创建于", metaCreatedBy: "创建者",
     metaStarted: "开始于", metaCompleted: "完成于", metaParents: "父任务", metaChildren: "子任务",
     attachmentsTitle: "附件",
     dispatch: "派发", newTask: "新建任务", newTaskPrompt: "任务标题：", dispatchResult: "派发完成：生成 {spawned} · 提升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派发失败:{error}",
@@ -1460,7 +1460,7 @@ const zhHant: Translations = {
     whyBlocked: "為何受阻？", refresh: "重新整理", switchBoard: "切換看板",
     counts: "{open} 進行中 · 共 {total}", noDescription: "（無描述）",
     resultPrefix: "結果：{result}", noComments: "尚無留言。",
-    claim: "認領", metaAssignee: "負責人", metaPriority: "優先級", metaCreated: "建立於",
+    claim: "認領", metaAssignee: "負責人", metaPriority: "優先級", metaCreated: "建立於", metaCreatedBy: "建立者",
     metaStarted: "開始於", metaCompleted: "完成於", metaParents: "父工作", metaChildren: "子工作",
     attachmentsTitle: "附件",
     dispatch: "派發", newTask: "新建工作", newTaskPrompt: "工作標題：", dispatchResult: "派發完成：產生 {spawned} · 晉升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派發失敗:{error}",
@@ -1965,7 +1965,7 @@ const ja: Translations = {
     whyBlocked: "ブロックの理由は？", refresh: "更新", switchBoard: "ボードを切り替え",
     counts: "未完了 {open} · 合計 {total}", noDescription: "（説明なし）",
     resultPrefix: "結果：{result}", noComments: "まだコメントはありません。",
-    claim: "クレーム", metaAssignee: "担当者", metaPriority: "優先度", metaCreated: "作成",
+    claim: "クレーム", metaAssignee: "担当者", metaPriority: "優先度", metaCreated: "作成", metaCreatedBy: "作成者",
     metaStarted: "開始", metaCompleted: "完了", metaParents: "親タスク", metaChildren: "子タスク",
     attachmentsTitle: "添付",
     dispatch: "ディスパッチ", newTask: "新規タスク", newTaskPrompt: "タスクのタイトル：", dispatchResult: "ディスパッチ完了: 起動 {spawned} · 昇格 {promoted} · 回収 {reclaimed}", dispatchFailed: "ディスパッチに失敗しました: {error}",
@@ -2470,7 +2470,7 @@ const ar: Translations = {
     whyBlocked: "لماذا هي محجوبة؟", refresh: "تحديث", switchBoard: "تبديل اللوحة",
     counts: "{open} مفتوحة · {total} إجمالًا", noDescription: "(بدون وصف)",
     resultPrefix: "النتيجة: {result}", noComments: "لا تعليقات بعد.",
-    claim: "استلام", metaAssignee: "المسند إليه", metaPriority: "الأولوية", metaCreated: "أُنشئت",
+    claim: "استلام", metaAssignee: "المسند إليه", metaPriority: "الأولوية", metaCreated: "أُنشئت", metaCreatedBy: "أنشأها",
     metaStarted: "بدأت", metaCompleted: "اكتملت", metaParents: "المهام الأم", metaChildren: "المهام الفرعية",
     attachmentsTitle: "المرفقات",
     dispatch: "توزيع", newTask: "مهمة جديدة", newTaskPrompt: "عنوان المهمة:", dispatchResult: "تم التوزيع: {spawned} انطلاق · {promoted} ترقية · {reclaimed} استرداد", dispatchFailed: "فشل التوزيع: {error}",

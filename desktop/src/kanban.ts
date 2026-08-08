@@ -363,6 +363,7 @@ export class KanbanWidget {
       `${t.kanban.metaPriority}: P${task.priority}`,
       `${t.kanban.metaCreated}: ${fmtWhen(task.created_at)}`,
     ];
+    if (task.created_by) metaParts.push(`${t.kanban.metaCreatedBy}: ${task.created_by}`);
     if (task.started_at) metaParts.push(`${t.kanban.metaStarted}: ${fmtWhen(task.started_at)}`);
     if (task.completed_at) metaParts.push(`${t.kanban.metaCompleted}: ${fmtWhen(task.completed_at)}`);
     if (task.parents.length > 0) metaParts.push(`${t.kanban.metaParents}: ${task.parents.join(", ")}`);
