@@ -1408,6 +1408,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .models-view-aux-row button { font-size: 11px; padding: 1px 8px; }
 .models-view-aux-row .monitoring-value code { font-size: 0.95em; }
 .models-view-moa-editor { width: 100%; box-sizing: border-box; min-height: 140px; font-family: var(--mono, monospace); font-size: 12px; margin: 6px 0; }
+.curation-actions { display: flex; gap: 6px; margin: 4px 0; }
+.curation-actions button { font-size: 11px; padding: 1px 10px; }
 .models-view-current { font-size: 0.9em; opacity: 0.85; }
 .models-view-current code { font-family: var(--mono, monospace); font-size: 0.95em; }
 .models-view-provider {

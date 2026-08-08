@@ -559,9 +559,19 @@ export interface CuratorUsageRow {
 }
 
 export interface CuratorStatus {
+  paused?: boolean;
   status: { label: string; count: number }[];
   archived: string[];
   usage: CuratorUsageRow[];
+}
+
+export interface CuratorRunResult {
+  ok: boolean;
+  dry_run: boolean;
+  checked: number;
+  marked_stale: number;
+  archived: number;
+  reactivated: number;
 }
 
 /** GET /api/checkpoints/status payload (P317). */
@@ -3027,6 +3037,30 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `checkpoint restore HTTP ${response.status}`);
+  }
+
+  /** POST /api/curator/run — auto-transition pass (P607). */
+  async curatorRun(dryRun = false): Promise<CuratorRunResult> {
+    const response = await fetch(this.endpoint("/api/curator/run"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `curator run HTTP ${response.status}`);
+    return value as CuratorRunResult;
+  }
+
+  /** PUT /api/curator/paused — pause/resume the curator (P607). */
+  async curatorSetPaused(paused: boolean): Promise<{ ok: boolean; paused: boolean }> {
+    const response = await fetch(this.endpoint("/api/curator/paused"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ paused }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `curator pause HTTP ${response.status}`);
+    return value as { ok: boolean; paused: boolean };
   }
 
   /** GET /api/curator — curation overview (status/archived/usage; P316). */

@@ -1995,6 +1995,16 @@ enum ComputerUseAction {
 enum CuratorAction {
     /// Skill usage summary (states, provenance, pins, unmanaged)
     Status,
+    /// Run the deterministic auto-transition pass now (stale/archive/reactivate)
+    Run {
+        /// Preview without applying transitions
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Pause the curator (auto-transition passes refuse to apply)
+    Pause,
+    /// Resume a paused curator
+    Resume,
     /// Pin a skill so auto-transitions never touch it
     Pin { skill: String },
     /// Unpin a skill
@@ -10882,6 +10892,36 @@ fn curator_cmd(action: CuratorAction) -> Result<(), String> {
             for (label, count) in curator::status_summary(&home) {
                 println!("  {:<28} {}", label, count);
             }
+            println!(
+                "  {:<28} {}",
+                "paused",
+                if curator::is_paused(&home) { "yes" } else { "no" }
+            );
+            Ok(())
+        }
+        CuratorAction::Run { dry_run } => {
+            if curator::is_paused(&home) && !dry_run {
+                return Err("curator is paused — resume it first (`ulnclaw curator resume`)".to_string());
+            }
+            let counts = curator::apply_automatic_transitions(&home, dry_run);
+            println!(
+                "curator: checked={} stale={} archived={} reactivated={}{}",
+                counts.checked,
+                counts.marked_stale,
+                counts.archived,
+                counts.reactivated,
+                if dry_run { " (dry-run)" } else { "" }
+            );
+            Ok(())
+        }
+        CuratorAction::Pause => {
+            curator::set_paused(&home, true);
+            println!("curator: paused");
+            Ok(())
+        }
+        CuratorAction::Resume => {
+            curator::set_paused(&home, false);
+            println!("curator: resumed");
             Ok(())
         }
         CuratorAction::Pin { skill } => {

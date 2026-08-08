@@ -293,6 +293,7 @@ export interface Translations {
     noToolsets: string; loadFailed: string; enabled: string; disabled: string; tools: string;
     curationTitle: string; archivedTitle: string; pinSkill: string; unpinSkill: string;
     archiveSkill: string; restoreSkill: string; archiveConfirm: string; curationFailed: string;
+    curationRun: string; curationPause: string; curationResume: string; curationPausedBadge: string; curationResult: string;
   };
   browserPanel: {
     title: string; configured: string; backend: string; mode: string; source: string;
@@ -755,7 +756,7 @@ const en: Translations = {
     curationTitle: "Curation", archivedTitle: "Archived skills (recoverable):",
     pinSkill: "Pin", unpinSkill: "Unpin", archiveSkill: "Archive", restoreSkill: "Restore",
     archiveConfirm: "Archive skill {name}? It can be restored later.",
-    curationFailed: "Curation action failed: {error}",
+    curationFailed: "Curation action failed: {error}", curationRun: "Run pass", curationPause: "Pause", curationResume: "Resume", curationPausedBadge: "PAUSED", curationResult: "Curation pass: checked {checked}, marked stale {stale}, archived {archived}, reactivated {reactivated}",
     enabled: "enabled", disabled: "disabled", tools: "Tools",
   },
   browserPanel: {
@@ -1298,7 +1299,7 @@ const zh: Translations = {
     curationTitle: "策展", archivedTitle: "已归档技能（可恢复）：",
     pinSkill: "固定", unpinSkill: "取消固定", archiveSkill: "归档", restoreSkill: "恢复",
     archiveConfirm: "归档技能 {name}？之后可以恢复。",
-    curationFailed: "策展操作失败：{error}",
+    curationFailed: "策展操作失败：{error}", curationRun: "运行整理", curationPause: "暂停", curationResume: "恢复", curationPausedBadge: "已暂停", curationResult: "整理完成：检查 {checked}，标记过期 {stale}，归档 {archived}，重新激活 {reactivated}",
     enabled: "已启用", disabled: "未启用", tools: "工具",
   },
   browserPanel: {
@@ -1841,7 +1842,7 @@ const zhHant: Translations = {
     curationTitle: "策展", archivedTitle: "已封存技能（可復原）：",
     pinSkill: "釘選", unpinSkill: "取消釘選", archiveSkill: "封存", restoreSkill: "還原",
     archiveConfirm: "封存技能 {name}？之後可以還原。",
-    curationFailed: "策展操作失敗：{error}",
+    curationFailed: "策展操作失敗：{error}", curationRun: "執行整理", curationPause: "暫停", curationResume: "恢復", curationPausedBadge: "已暫停", curationResult: "整理完成：檢查 {checked}，標記過期 {stale}，歸檔 {archived}，重新啟用 {reactivated}",
     enabled: "已啟用", disabled: "未啟用", tools: "工具",
   },
   browserPanel: {
@@ -2384,7 +2385,7 @@ const ja: Translations = {
     curationTitle: "キュレーション", archivedTitle: "アーカイブ済みスキル（復元可能）:",
     pinSkill: "ピン留め", unpinSkill: "ピン解除", archiveSkill: "アーカイブ", restoreSkill: "復元",
     archiveConfirm: "スキル {name} をアーカイブしますか？後で復元できます。",
-    curationFailed: "キュレーション操作に失敗しました: {error}",
+    curationFailed: "キュレーション操作に失敗しました: {error}", curationRun: "パスを実行", curationPause: "一時停止", curationResume: "再開", curationPausedBadge: "停止中", curationResult: "キュレーション: {checked} 件確認、{stale} 件を stale 化、{archived} 件をアーカイブ、{reactivated} 件を再有効化",
     enabled: "有効", disabled: "無効", tools: "ツール",
   },
   browserPanel: {
@@ -2927,7 +2928,7 @@ const ar: Translations = {
     curationTitle: "التنسيق", archivedTitle: "مهارات مؤرشفة (قابلة للاستعادة):",
     pinSkill: "تثبيت", unpinSkill: "إلغاء التثبيت", archiveSkill: "أرشفة", restoreSkill: "استعادة",
     archiveConfirm: "أرشفة المهارة {name}؟ يمكن استعادتها لاحقاً.",
-    curationFailed: "فشلت عملية التنسيق: {error}",
+    curationFailed: "فشلت عملية التنسيق: {error}", curationRun: "تشغيل الجولة", curationPause: "إيقاف مؤقت", curationResume: "استئناف", curationPausedBadge: "متوقف", curationResult: "جولة التنسيق: فُحص {checked}، عُلّم {stale} قديماً، أُرشف {archived}، أُعيد تفعيل {reactivated}",
     enabled: "مفعلة", disabled: "معطلة", tools: "الأدوات",
   },
   browserPanel: {

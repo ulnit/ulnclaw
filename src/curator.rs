@@ -8,9 +8,9 @@
 //! consolidation stays desktop-side; ulnclaw exposes the same lifecycle
 //! verbs as explicit CLI actions.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::skill_usage::{self, STATE_ARCHIVED};
+use crate::skill_usage::{self, STATE_ACTIVE, STATE_ARCHIVED, STATE_STALE};
 
 /// Days since the skill's last activity (view / use / patch) — hermes
 /// `_idle_days`.
@@ -118,6 +118,92 @@ pub fn status_summary(home: &Path) -> Vec<(String, usize)> {
         out.push((format!("state: {}", state), count));
     }
     out
+}
+
+/// Window before an unused skill is marked stale (hermes
+/// `DEFAULT_STALE_AFTER_DAYS`).
+pub const DEFAULT_STALE_AFTER_DAYS: i64 = 30;
+/// Window before a stale skill is archived (hermes
+/// `DEFAULT_ARCHIVE_AFTER_DAYS`).
+pub const DEFAULT_ARCHIVE_AFTER_DAYS: i64 = 90;
+
+/// Counters for one auto-transition pass (hermes
+/// `apply_automatic_transitions` return shape, lean subset).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AutoTransitionCounts {
+    pub checked: u64,
+    pub marked_stale: u64,
+    pub archived: u64,
+    pub reactivated: u64,
+}
+
+/// Deterministic stale/archive/reactivate pass over curated skills —
+/// lean port of hermes `apply_automatic_transitions` (no cron-reference
+/// exemption, no builtin seeding). Pinned skills are never touched;
+/// skills without a parseable activity timestamp are left alone.
+/// `dry_run` counts the would-be transitions without mutating anything.
+pub fn apply_automatic_transitions(home: &Path, dry_run: bool) -> AutoTransitionCounts {
+    let now = chrono::Utc::now();
+    let stale_cutoff = now - chrono::Duration::days(DEFAULT_STALE_AFTER_DAYS);
+    let archive_cutoff = now - chrono::Duration::days(DEFAULT_ARCHIVE_AFTER_DAYS);
+    let mut counts = AutoTransitionCounts::default();
+    for row in skill_usage::usage_report(home) {
+        counts.checked += 1;
+        if row.pinned {
+            continue;
+        }
+        let Some(raw) = row.last_activity_at.as_deref() else {
+            continue;
+        };
+        let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(raw) else {
+            continue;
+        };
+        let anchor = parsed.with_timezone(&chrono::Utc);
+        if anchor <= archive_cutoff && row.state != STATE_ARCHIVED {
+            counts.archived += 1;
+            if !dry_run {
+                skill_usage::archive_skill(home, &row.name);
+            }
+        } else if anchor <= stale_cutoff && row.state == STATE_ACTIVE {
+            counts.marked_stale += 1;
+            if !dry_run {
+                skill_usage::set_state(home, &row.name, STATE_STALE);
+            }
+        } else if anchor > stale_cutoff && row.state == STATE_STALE {
+            counts.reactivated += 1;
+            if !dry_run {
+                skill_usage::set_state(home, &row.name, STATE_ACTIVE);
+            }
+        }
+    }
+    counts
+}
+
+/// Curator runtime state file (pause flag; hermes curator state parity).
+pub fn state_file(home: &Path) -> PathBuf {
+    home.join("curator-state.json")
+}
+
+/// Whether the curator is paused (`ulnclaw curator pause`).
+pub fn is_paused(home: &Path) -> bool {
+    std::fs::read_to_string(state_file(home))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.get("paused").and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
+/// Persist the curator pause flag.
+pub fn set_paused(home: &Path, paused: bool) {
+    let mut value = std::fs::read_to_string(state_file(home))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    value["paused"] = serde_json::json!(paused);
+    if let Ok(text) = serde_json::to_string_pretty(&value) {
+        let _ = std::fs::write(state_file(home), text);
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +341,80 @@ mod tests {
         assert_eq!(row.activity_count, 3);
         assert_eq!(row.provenance, "user");
         assert!(row.last_activity_at.is_some());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    fn set_last_used(home: &Path, name: &str, days_ago: i64) {
+        let ts = (chrono::Utc::now() - chrono::Duration::days(days_ago)).to_rfc3339();
+        let path = skill_usage::usage_file(home);
+        let mut data: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| json!({}));
+        data[name]["last_used_at"] = json!(ts);
+        data[name]["use_count"] = json!(1);
+        std::fs::write(&path, serde_json::to_string_pretty(&data).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn auto_transitions_stale_archive_reactivate() {
+        let home = temp_home();
+        make_skill(&home, "old-skill");
+        make_skill(&home, "stale-skill");
+        make_skill(&home, "revived-skill");
+        make_skill(&home, "fresh-skill");
+        make_skill(&home, "pinned-old");
+        set_last_used(&home, "old-skill", DEFAULT_ARCHIVE_AFTER_DAYS + 5);
+        set_last_used(&home, "stale-skill", DEFAULT_STALE_AFTER_DAYS + 5);
+        set_last_used(&home, "revived-skill", 2);
+        set_last_used(&home, "fresh-skill", 2);
+        set_last_used(&home, "pinned-old", DEFAULT_ARCHIVE_AFTER_DAYS + 5);
+        skill_usage::set_pinned(&home, "pinned-old", true);
+        skill_usage::set_state(&home, "revived-skill", STATE_STALE);
+
+        // Dry run counts but does not mutate.
+        let counts = apply_automatic_transitions(&home, true);
+        assert_eq!(counts.checked, 5);
+        assert_eq!(counts.archived, 1);
+        assert_eq!(counts.marked_stale, 1);
+        assert_eq!(counts.reactivated, 1);
+        assert_eq!(
+            skill_usage::get_record(&home, "old-skill")["state"],
+            STATE_ACTIVE
+        );
+
+        // Real pass applies.
+        let counts = apply_automatic_transitions(&home, false);
+        assert_eq!(counts.archived, 1);
+        assert_eq!(counts.marked_stale, 1);
+        assert_eq!(counts.reactivated, 1);
+        assert_eq!(
+            skill_usage::get_record(&home, "old-skill")["state"],
+            STATE_ARCHIVED
+        );
+        assert_eq!(
+            skill_usage::get_record(&home, "stale-skill")["state"],
+            STATE_STALE
+        );
+        assert_eq!(
+            skill_usage::get_record(&home, "revived-skill")["state"],
+            STATE_ACTIVE
+        );
+        assert_eq!(
+            skill_usage::get_record(&home, "pinned-old")["state"],
+            STATE_ACTIVE
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn paused_flag_roundtrip() {
+        let home = temp_home();
+        assert!(!is_paused(&home));
+        set_paused(&home, true);
+        assert!(is_paused(&home));
+        set_paused(&home, false);
+        assert!(!is_paused(&home));
         std::fs::remove_dir_all(&home).unwrap();
     }
 

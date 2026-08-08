@@ -5958,6 +5958,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/backups/prune", post(prune_backups))
         .route("/api/backups/:id/restore", post(restore_backup))
         .route("/api/curator", get(curator_status))
+        .route("/api/curator/run", post(curator_run))
+        .route("/api/curator/paused", put(curator_set_paused))
         .route("/api/curator/pin", post(curator_pin))
         .route("/api/curator/unpin", post(curator_unpin))
         .route("/api/curator/archive", post(curator_archive))
@@ -9282,8 +9284,10 @@ async fn curator_status(State(state): State<Arc<GatewayState>>) -> Response {
                 })
             })
             .collect::<Vec<_>>();
+        let paused = crate::curator::is_paused(&home);
         json!({
             "object": "ulnclaw.curator",
+            "paused": paused,
             "status": status,
             "archived": archived,
             "usage": usage,
@@ -9292,6 +9296,62 @@ async fn curator_status(State(state): State<Arc<GatewayState>>) -> Response {
     .await
     .unwrap_or_else(|e| json!({"error": format!("curator task failed: {e}")}));
     axum::Json(payload).into_response()
+}
+
+/// Body for `POST /api/curator/run`.
+#[derive(serde::Deserialize, Default)]
+struct CuratorRunBody {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// `POST /api/curator/run` — run the deterministic auto-transition pass
+/// now (hermes `POST /api/curator/run` parity over the skill curator:
+/// stale/archive/reactivate, no LLM consolidation). Refuses while paused.
+async fn curator_run(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CuratorRunBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    let dry_run = body.dry_run;
+    let result = tokio::task::spawn_blocking(move || -> std::result::Result<Value, String> {
+        if crate::curator::is_paused(&home) && !dry_run {
+            return Err("curator is paused — resume it first".to_string());
+        }
+        let counts = crate::curator::apply_automatic_transitions(&home, dry_run);
+        Ok(json!({
+            "ok": true,
+            "dry_run": dry_run,
+            "checked": counts.checked,
+            "marked_stale": counts.marked_stale,
+            "archived": counts.archived,
+            "reactivated": counts.reactivated,
+        }))
+    })
+    .await;
+    match result {
+        Ok(Ok(payload)) => Json(payload).into_response(),
+        Ok(Err(message)) => (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response(),
+        Err(e) => server_error(&format!("curator task failed: {e}")),
+    }
+}
+
+/// Body for `PUT /api/curator/paused`.
+#[derive(serde::Deserialize)]
+struct CuratorPauseBody {
+    paused: bool,
+}
+
+/// `PUT /api/curator/paused` — pause/resume the curator (hermes parity).
+async fn curator_set_paused(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<CuratorPauseBody>,
+) -> Response {
+    let home = state.agent.context().home.clone();
+    tokio::task::spawn_blocking(move || crate::curator::set_paused(&home, body.paused))
+        .await
+        .unwrap_or_default();
+    Json(json!({ "ok": true, "paused": body.paused })).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -15939,6 +15999,84 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["reset"], true);
         let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
         assert!(!on_disk.contains("[auxiliary.compression]"), "{on_disk}");
+
+        match prev {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_curator_run_pause_endpoints() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        // Seed one idle skill (120 days) so the pass has work to do.
+        let skill_dir = tmp.path().join("skills").join("idle-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: idle-skill\ndescription: test\n---\n\nbody\n",
+        )
+        .unwrap();
+        let old_ts = (chrono::Utc::now() - chrono::Duration::days(120)).to_rfc3339();
+        std::fs::write(
+            tmp.path().join("skills").join(".usage.json"),
+            format!(
+                r#"{{"idle-skill": {{"use_count": 1, "view_count": 0, "patch_count": 0, "last_used_at": "{}", "created_at": "{}", "state": "active", "pinned": false}}}}"#,
+                old_ts, old_ts
+            ),
+        )
+        .unwrap();
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Dry run previews without mutating.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/curator/run", Some(token),
+            json!({"dry_run": true}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["archived"], 1);
+        assert_eq!(body["dry_run"], true);
+        assert!(skill_dir.exists());
+
+        // Real pass archives the idle skill.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/curator/run", Some(token),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["archived"], 1);
+        assert!(!skill_dir.exists());
+
+        // Pause blocks runs; resume unblocks; GET reports the flag.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/curator/paused", Some(token),
+            json!({"paused": true}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/curator/run", Some(token),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let (status, body) = get_json(app.clone(), "/api/curator", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paused"], true);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/curator/paused", Some(token),
+            json!({"paused": false}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/curator/run", Some(token),
+            json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
 
         match prev {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

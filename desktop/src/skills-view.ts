@@ -38,11 +38,21 @@ export class SkillsWidget {
       <h3 class="config-section" data-i18n="skillsView.toolsetsTitle">Toolsets</h3>
       <div id="toolsets-list" class="skills-list"></div>
       <h3 class="config-section" data-i18n="skillsView.curationTitle">Curation</h3>
+      <div id="curation-actions" class="curation-actions">
+        <button id="curation-run" class="ghost" data-i18n="skillsView.curationRun">Run pass</button>
+        <button id="curation-pause" class="ghost" data-i18n="skillsView.curationPause">Pause</button>
+      </div>
       <div id="curation-summary" class="config-note"></div>
       <div id="curation-list" class="skills-list"></div>
     `;
     this.root.querySelector("#skills-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
+    });
+    this.root.querySelector("#curation-run")!.addEventListener("click", () => {
+      void this.runCurationPass();
+    });
+    this.root.querySelector("#curation-pause")!.addEventListener("click", () => {
+      void this.toggleCurationPause();
     });
     this.root.querySelector("#skills-filter")!.addEventListener("input", () => {
       this.applyFilter();
@@ -125,9 +135,12 @@ export class SkillsWidget {
     if (!client) return;
     try {
       const data = await client.curatorStatus();
-      summary.textContent = data.status
-        .map((row) => `${row.label}: ${row.count}`)
-        .join(" \u00b7 ");
+      summary.textContent =
+        data.status.map((row) => `${row.label}: ${row.count}`).join(" \u00b7 ") +
+        (data.paused ? ` \u00b7 ${t.skillsView.curationPausedBadge}` : "");
+      const pauseBtn = this.root.querySelector("#curation-pause") as HTMLButtonElement;
+      pauseBtn.dataset.paused = String(Boolean(data.paused));
+      pauseBtn.textContent = data.paused ? t.skillsView.curationResume : t.skillsView.curationPause;
       list.innerHTML = "";
       if (data.archived.length) {
         const header = document.createElement("div");
@@ -185,6 +198,57 @@ export class SkillsWidget {
     } catch {
       summary.textContent = "";
       list.innerHTML = "";
+    }
+  }
+
+  /** Run the auto-transition pass and report the counters (P607). */
+  private async runCurationPass(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const button = this.root.querySelector("#curation-run") as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      const result = await client.curatorRun(false);
+      this.status(
+        t.skillsView.curationResult
+          .replace("{checked}", String(result.checked))
+          .replace("{stale}", String(result.marked_stale))
+          .replace("{archived}", String(result.archived))
+          .replace("{reactivated}", String(result.reactivated)),
+      );
+      await this.loadCuration();
+    } catch (error) {
+      this.status(
+        t.skillsView.curationFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  /** Pause/resume the curator (P607). */
+  private async toggleCurationPause(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const button = this.root.querySelector("#curation-pause") as HTMLButtonElement;
+    const paused = button.dataset.paused === "true";
+    try {
+      const result = await client.curatorSetPaused(!paused);
+      button.dataset.paused = String(result.paused);
+      button.textContent = result.paused ? t.skillsView.curationResume : t.skillsView.curationPause;
+      await this.loadCuration();
+    } catch (error) {
+      this.status(
+        t.skillsView.curationFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
     }
   }
 
