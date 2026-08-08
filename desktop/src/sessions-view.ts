@@ -813,7 +813,7 @@ export class SessionsViewWidget {
     }
     pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.loading)}</p>`;
     try {
-      const messages = await client.messages(sessionId, { limit: TRANSCRIPT_LIMIT });
+      const messages = await client.messages(sessionId, { timestamps: true, limit: TRANSCRIPT_LIMIT });
       if (this.selected !== sessionId) return; // user moved on
       const session = this.all.find((candidate) => candidate.id === sessionId);
       // P465/P468: cache the tail window, count the true total, and render
@@ -911,7 +911,7 @@ export class SessionsViewWidget {
     const button = this.root.querySelector<HTMLButtonElement>(".sessions-view-earlier button");
     if (button) button.disabled = true;
     try {
-      const older = await client.messages(sessionId, { before: cursor, limit: TRANSCRIPT_LIMIT });
+      const older = await client.messages(sessionId, { timestamps: true, before: cursor, limit: TRANSCRIPT_LIMIT });
       if (this.selected !== sessionId) return;
       this.transcriptMessages = [...older, ...this.transcriptMessages];
       this.transcriptExpanded = true;
@@ -1004,9 +1004,13 @@ export class SessionsViewWidget {
           : "";
         const nameTag = message.name ? ` · ${escapeHtml(message.name)}` : "";
         if (!content && !toolCalls) return "";
+        // P475: per-message stored timestamp as a hover tooltip.
+        const whenAttr = message.timestamp
+          ? ` title="${escapeHtml(new Date(message.timestamp * 1000).toLocaleString())}"`
+          : "";
         return `
           <div class="sessions-view-msg sessions-view-msg-${escapeHtml(message.role)}">
-            <div class="sessions-view-role">${escapeHtml(this.roleLabel(message.role))}${nameTag}${message.content ? `<button class="sessions-view-copy" title="${escapeHtml(t.sessionsView.copyMessageTitle)}">⧉</button>` : ""}</div>
+            <div class="sessions-view-role"${whenAttr}>${escapeHtml(this.roleLabel(message.role))}${nameTag}${message.content ? `<button class="sessions-view-copy" title="${escapeHtml(t.sessionsView.copyMessageTitle)}">⧉</button>` : ""}</div>
             ${content}
             ${toolCalls}
           </div>`;
