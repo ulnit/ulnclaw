@@ -751,6 +751,14 @@ let gatewayModel = "";
 
 /// Badge shows the session lock (🔒) when it differs from the gateway
 /// default, else the gateway model; clicking opens the model picker.
+/** P383: composer placeholder carries the active session's model so
+ * the user always knows which model they are talking to. */
+function refreshComposerPlaceholder(): void {
+  const base = t.chrome.inputPlaceholder;
+  const model = state.current?.model;
+  el.input.placeholder = model ? `${base} — ${model}` : base;
+}
+
 function refreshModelBadge(): void {
   const locked =
     state.current?.model && state.current.model !== gatewayModel
@@ -764,6 +772,7 @@ function refreshModelBadge(): void {
     el.modelBadge.title = t.session.gatewayModelTitle;
   }
   el.modelBadge.classList.toggle("locked", !!locked);
+  refreshComposerPlaceholder();
 }
 
 // P283: background watcher — polls `/v1/runs` and raises a sticky
@@ -1612,6 +1621,7 @@ async function start(): Promise<void> {
     el.messages.innerHTML = "";
     renderIntro(el.messages, "new");
     renderSessions();
+    refreshComposerPlaceholder();
     el.input.focus();
   };
 
