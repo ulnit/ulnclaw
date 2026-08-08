@@ -9946,6 +9946,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /undo [N]        drop the last N user turns (default 1), echoing what was removed
   /verbose [on|off] show or persist agent.verbose
   /yolo [on|off]   show or persist approvals.mode=off (auto-approve; deny rules still bind)
+  /personality [name|none]  list or activate a personality (agent.personalities)
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -10655,6 +10656,98 @@ async fn resolve_gateway_slash(
                 "yolo ON \u{2014} approvals.mode=\"off\" persisted: dangerous commands auto-approve except approvals.deny rules; applies to new runs".to_string()
             } else {
                 "yolo OFF \u{2014} approvals.mode=\"manual\" persisted; applies to new runs".to_string()
+            }))
+        }
+        "/personality" => {
+            // Hermes /personality parity: list the configured
+            // personalities or activate one by resolving its prompt
+            // into agent.system_prompt.
+            let path = crate::config_cmd::config_path();
+            let config = match crate::config::UlncLawConfig::load(Some(&path)) {
+                Ok(c) => c,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
+                }
+            };
+            if config.agent.personalities.is_empty() {
+                return Some(GatewaySlash::Direct(
+                    "no personalities configured ([agent.personalities] in config.toml)"
+                        .to_string(),
+                ));
+            }
+            let arg = rest.trim();
+            if arg.is_empty() {
+                let mut lines = vec![
+                    "personalities:".to_string(),
+                    "  none \u{2014} the default persona".to_string(),
+                ];
+                let mut names: Vec<&String> = config.agent.personalities.keys().collect();
+                names.sort();
+                for name in names {
+                    let preview = config.agent.personalities[name].preview();
+                    lines.push(format!("  {name} \u{2014} {preview}"));
+                }
+                lines.push("usage: /personality <name> | none".to_string());
+                return Some(GatewaySlash::Direct(lines.join("\n")));
+            }
+            let lower = arg.to_ascii_lowercase();
+            let prompt = if matches!(lower.as_str(), "none" | "default" | "neutral") {
+                None
+            } else {
+                match config.agent.personalities.get(&lower) {
+                    Some(def) => Some(def.resolve_prompt()),
+                    None => {
+                        let mut names: Vec<String> = vec!["none".to_string()];
+                        let mut keys: Vec<&String> =
+                            config.agent.personalities.keys().collect();
+                        keys.sort();
+                        names.extend(keys.iter().map(|k| k.to_string()));
+                        return Some(GatewaySlash::Direct(format!(
+                            "unknown personality: {arg} \u{2014} available: {}",
+                            names.join(", ")
+                        )));
+                    }
+                }
+            };
+            let mut doc = match crate::config_cmd::load_toml(&path) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
+                }
+            };
+            let Some(root) = doc.as_table_mut() else {
+                return Some(GatewaySlash::Direct(
+                    "config root is not a table".to_string(),
+                ));
+            };
+            let agent_entry = root
+                .entry("agent".to_string())
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+            let Some(agent_table) = agent_entry.as_table_mut() else {
+                return Some(GatewaySlash::Direct(
+                    "config [agent] is not a table".to_string(),
+                ));
+            };
+            match &prompt {
+                Some(resolved) => {
+                    agent_table.insert(
+                        "system_prompt".to_string(),
+                        toml::Value::String(resolved.clone()),
+                    );
+                }
+                None => {
+                    agent_table.remove("system_prompt");
+                }
+            }
+            if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+                return Some(GatewaySlash::Direct(format!("config save failed: {e}")));
+            }
+            Some(GatewaySlash::Direct(match &prompt {
+                Some(_) => format!(
+                    "personality set to {lower} \u{2014} applies to new runs; restart the gateway to change this process"
+                ),
+                None => "personality cleared \u{2014} the default persona applies to new runs"
+                    .to_string(),
             }))
         }
         _ => {
@@ -14033,6 +14126,74 @@ mod tests {
         assert!(reply["response"].as_str().unwrap().contains("yolo OFF"));
         let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
         assert!(text.contains("mode = \"manual\""), "{text}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_personality_lifecycle() {
+        // P619: /personality lists, activates, and clears personas by
+        // writing agent.system_prompt.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[agent.personalities]\npirate = \"Talk like a grizzled pirate.\"\n\n[agent.personalities.poet]\nsystem_prompt = \"Answer in verse.\"\ntone = \"lyrical\"\n",
+        ).unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-personality", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        // Listing shows both names + the none option.
+        let reply = post_chat(app.clone(), &sid, "/personality").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("pirate"), "{text}");
+        assert!(text.contains("poet"), "{text}");
+        assert!(text.contains("none"), "{text}");
+
+        // Activate the table personality: prompt is resolved + persisted.
+        let reply = post_chat(app.clone(), &sid, "/personality poet").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("personality set to poet"));
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        let doc: toml::Value = toml::from_str(&text).expect("config parses");
+        let pinned = doc
+            .get("agent")
+            .and_then(|agent| agent.get("system_prompt"))
+            .and_then(|v| v.as_str());
+        assert_eq!(pinned, Some("Answer in verse.\nTone: lyrical"), "{text}");
+
+        // Unknown names list the available set.
+        let reply = post_chat(app.clone(), &sid, "/personality wizard").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("unknown personality: wizard"), "{text}");
+        assert!(text.contains("pirate"), "{text}");
+
+        // Clearing removes the system_prompt pin.
+        let reply = post_chat(app.clone(), &sid, "/personality none").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("personality cleared"));
+        // The personalities table still defines a system_prompt key;
+        // only the agent-level pin must be gone.
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        let doc: toml::Value = toml::from_str(&text).expect("config parses");
+        assert!(
+            doc.get("agent").and_then(|agent| agent.get("system_prompt")).is_none(),
+            "{text}"
+        );
 
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

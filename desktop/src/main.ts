@@ -1895,6 +1895,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/undo", t.slash.undo],
     ["/verbose", t.slash.verbose],
     ["/yolo", t.slash.yolo],
+    ["/personality", t.slash.personality],
   ];
 }
 

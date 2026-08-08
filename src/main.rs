@@ -3423,7 +3423,16 @@ async fn make_agent_in(
     context.set_tool_definitions(registry.definitions());
     let agent = Agent::new(provider.clone(), registry).with_config(AgentConfig {
         max_iterations: config.agent.max_iterations,
-        system_prompt: None,
+        // P619: agent.system_prompt (written by /personality) replaces
+        // the built-in prompt when non-empty (hermes semantics).
+        system_prompt: {
+            let prompt = config.agent.system_prompt.trim();
+            if prompt.is_empty() {
+                None
+            } else {
+                Some(prompt.to_string())
+            }
+        },
         concurrent_tool_execution: config.agent.concurrent_tool_execution,
         max_concurrent_tools: config.agent.max_concurrent_tools,
         approval: config.agent.approval,

@@ -269,6 +269,91 @@ pub struct AgentSettings {
     /// workers pin it per task via the `reasoning_effort` column.
     #[serde(default)]
     pub reasoning_effort: String,
+    /// System-prompt override (hermes `agent.system_prompt`): replaces
+    /// the built-in system prompt when non-empty. The `/personality`
+    /// slash command writes the active personality's resolved prompt
+    /// here.
+    #[serde(default)]
+    pub system_prompt: String,
+    /// Named personalities for `/personality` (hermes
+    /// `agent.personalities`): bare prompt strings or tables with
+    /// system_prompt/tone/style/description.
+    #[serde(default)]
+    pub personalities: HashMap<String, PersonalityDef>,
+}
+
+/// One `/personality` entry (hermes `agent.personalities.<name>`):
+/// either a bare prompt string or a table with system_prompt/tone/
+/// style/description keys.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PersonalityDef {
+    Prompt(String),
+    Detailed {
+        #[serde(default)]
+        system_prompt: String,
+        #[serde(default)]
+        tone: String,
+        #[serde(default)]
+        style: String,
+        #[serde(default)]
+        description: String,
+    },
+}
+
+impl PersonalityDef {
+    /// The full prompt injected into `agent.system_prompt` when this
+    /// personality is activated (hermes `_resolve_prompt`).
+    pub fn resolve_prompt(&self) -> String {
+        match self {
+            PersonalityDef::Prompt(prompt) => prompt.clone(),
+            PersonalityDef::Detailed {
+                system_prompt,
+                tone,
+                style,
+                ..
+            } => {
+                let mut parts = vec![system_prompt.clone()];
+                if !tone.trim().is_empty() {
+                    parts.push(format!("Tone: {}", tone.trim()));
+                }
+                if !style.trim().is_empty() {
+                    parts.push(format!("Style: {}", style.trim()));
+                }
+                parts
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
+    }
+
+    /// Short listing preview (hermes personality list): the description
+    /// when present, else the clipped prompt head.
+    pub fn preview(&self) -> String {
+        let raw = match self {
+            PersonalityDef::Prompt(prompt) => prompt.clone(),
+            PersonalityDef::Detailed {
+                description,
+                system_prompt,
+                ..
+            } => {
+                if !description.trim().is_empty() {
+                    description.clone()
+                } else {
+                    system_prompt.clone()
+                }
+            }
+        };
+        let first_line = raw.lines().next().unwrap_or("").trim();
+        let clipped: String = first_line.chars().take(50).collect();
+        if clipped.is_empty() {
+            "(empty prompt)".to_string()
+        } else {
+            clipped
+        }
+    }
 }
 
 fn default_max_iterations() -> usize {
@@ -295,6 +380,8 @@ impl Default for AgentSettings {
             verbose: false,
             environment_probe: true,
             reasoning_effort: String::new(),
+            system_prompt: String::new(),
+            personalities: HashMap::new(),
         }
     }
 }
@@ -1466,6 +1553,42 @@ mod tests {
         assert_eq!((r.max_bytes, r.max_lines, r.max_line_length), (500, 10, 80));
     }
     use super::*;
+
+    #[test]
+    fn test_personality_defs_parse_and_resolve() {
+        // P619: bare-string and table personalities (hermes
+        // agent.personalities), resolution + preview semantics.
+        let raw = r#"
+[agent.personalities]
+pirate = "Talk like a grizzled pirate. Sprinkle nautical slang."
+
+[agent.personalities.poet]
+system_prompt = "Answer in verse."
+tone = "lyrical"
+style = "haiku-first"
+description = "Speaks in poems"
+"#;
+        let config: UlncLawConfig = toml::from_str(raw).unwrap();
+        assert_eq!(config.agent.personalities.len(), 2);
+
+        let pirate = &config.agent.personalities["pirate"];
+        assert_eq!(
+            pirate.resolve_prompt(),
+            "Talk like a grizzled pirate. Sprinkle nautical slang."
+        );
+        // Previews clip to 50 chars (hermes list semantics).
+        assert_eq!(
+            pirate.preview(),
+            "Talk like a grizzled pirate. Sprinkle nautical sla"
+        );
+
+        let poet = &config.agent.personalities["poet"];
+        assert_eq!(
+            poet.resolve_prompt(),
+            "Answer in verse.\nTone: lyrical\nStyle: haiku-first"
+        );
+        assert_eq!(poet.preview(), "Speaks in poems");
+    }
 
     #[test]
     fn test_default_config_roundtrip() {
