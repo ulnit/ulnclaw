@@ -503,6 +503,26 @@ let chatCatchupTimer: number | null = null;
 // P496: sessions that grew while not open (cleared on open/select).
 const unreadSessions = new Set<string>();
 
+/** P497: badge the Sessions tab with the unread count. */
+function renderUnreadBadge(): void {
+  const tab = document.getElementById("tab-sessions-view");
+  if (!tab) return;
+  const count = unreadSessions.size;
+  let badge = tab.querySelector<HTMLSpanElement>(".tab-badge");
+  if (count === 0) {
+    badge?.remove();
+    tab.title = "";
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement("span");
+    badge.className = "tab-badge";
+    tab.appendChild(badge);
+  }
+  badge.textContent = String(count);
+  tab.title = fmt(t.session.unreadTitle, { count: String(count) });
+}
+
 async function deleteSession(session: SessionRow): Promise<void> {
   if (!state.client) return;
   const label = session.title || session.id.slice(0, 8);
@@ -668,7 +688,10 @@ function refreshWindowTitle(): void {
 
 async function openSession(session: SessionRow): Promise<void> {
   // P496: opening a session reads it.
-  if (unreadSessions.delete(session.id)) renderSessions();
+  if (unreadSessions.delete(session.id)) {
+    renderSessions();
+    renderUnreadBadge();
+  }
   // P393: stash the outgoing session's draft, restore the target's.
   if (state.current && state.current.id !== session.id) {
     state.drafts.set(state.current.id, el.input.value);
@@ -1991,6 +2014,7 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       ) {
         unreadSessions.add(envelope.session_id);
         renderSessions();
+        renderUnreadBadge();
       }
       // P494: message counts + activity follow along in the sidebar and
       // the sessions-browser list (debounced to coalesce bursts).
@@ -2652,7 +2676,10 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     // P496: unread tracking hooks.
     (sessionId) => unreadSessions.has(sessionId),
     (sessionId) => {
-      if (unreadSessions.delete(sessionId)) renderSessions();
+      if (unreadSessions.delete(sessionId)) {
+        renderSessions();
+        renderUnreadBadge();
+      }
     },
   );
   state.sessionsBrowser.mount();
