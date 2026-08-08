@@ -236,6 +236,8 @@ export interface Translations {
   browserPanel: {
     title: string; configured: string; backend: string; mode: string; source: string;
     endpoint: string; available: string; vnc: string; managedRunning: string;
+    urlPlaceholder: string; connect: string; connecting: string; disconnect: string;
+    connected: string; connectFailed: string; disconnected: string;
   };
   logsPanel: { title: string; allLevels: string; searchPlaceholder: string; };
   mcpPanel: { title: string; none: string; oauthTokens: string; oauthPending: string; connect: string; connecting: string; openAuth: string; approved: string; failed: string; toolsCached: string; };
@@ -587,6 +589,9 @@ const en: Translations = {
     title: "Browser (CDP)", configured: "Configured", backend: "Backend",
     mode: "Mode", source: "Source", endpoint: "Endpoint",
     available: "Available", vnc: "VNC URL", managedRunning: "Managed browser running",
+    urlPlaceholder: "ws://host:9222 or auto", connect: "Connect", connecting: "Connecting…",
+    disconnect: "Disconnect", connected: "Connected: {endpoint}",
+    connectFailed: "Connect failed: {error}", disconnected: "Live override cleared",
   },
   logsPanel: { title: "Gateway log", allLevels: "All levels", searchPlaceholder: "search\u2026" },
   mcpPanel: { title: "MCP servers", none: "No MCP servers configured ([mcp] section).", oauthTokens: "oauth (tokens stored)", oauthPending: "oauth (not authorized)", connect: "Connect", connecting: "Starting…", openAuth: "Open authorization page", approved: "Authorized ✓", failed: "OAuth flow failed.", toolsCached: "{count} cached tools" },
@@ -1018,6 +1023,9 @@ const zh: Translations = {
     title: "浏览器（CDP）", configured: "已配置", backend: "后端",
     mode: "模式", source: "来源", endpoint: "端点",
     available: "可用", vnc: "VNC 地址", managedRunning: "托管浏览器运行中",
+    urlPlaceholder: "ws://主机:9222 或 auto", connect: "连接", connecting: "连接中…",
+    disconnect: "断开", connected: "已连接:{endpoint}",
+    connectFailed: "连接失败:{error}", disconnected: "已清除运行时覆盖",
   },
   logsPanel: { title: "网关日志", allLevels: "全部级别", searchPlaceholder: "搜索…" },
   mcpPanel: { title: "MCP 服务器", none: "未配置 MCP 服务器（[mcp] 段）。", oauthTokens: "oauth（已存令牌）", oauthPending: "oauth（未授权）", connect: "连接", connecting: "启动中…", openAuth: "打开授权页面", approved: "已授权 ✓", failed: "OAuth 流程失败。", toolsCached: "{count} 个缓存工具" },
@@ -1449,6 +1457,9 @@ const zhHant: Translations = {
     title: "瀏覽器（CDP）", configured: "已設定", backend: "後端",
     mode: "模式", source: "來源", endpoint: "端點",
     available: "可用", vnc: "VNC 位址", managedRunning: "託管瀏覽器執行中",
+    urlPlaceholder: "ws://主機:9222 或 auto", connect: "連線", connecting: "連線中…",
+    disconnect: "斷線", connected: "已連線:{endpoint}",
+    connectFailed: "連線失敗:{error}", disconnected: "已清除執行期覆寫",
   },
   logsPanel: { title: "閘道日誌", allLevels: "全部層級", searchPlaceholder: "搜尋…" },
   mcpPanel: { title: "MCP 伺服器", none: "未設定 MCP 伺服器（[mcp] 段）。", oauthTokens: "oauth（已存權杖）", oauthPending: "oauth（未授權）", connect: "連線", connecting: "啟動中…", openAuth: "開啟授權頁面", approved: "已授權 ✓", failed: "OAuth 流程失敗。", toolsCached: "{count} 個快取工具" },
@@ -1880,6 +1891,9 @@ const ja: Translations = {
     title: "ブラウザ（CDP）", configured: "設定済み", backend: "バックエンド",
     mode: "モード", source: "ソース", endpoint: "エンドポイント",
     available: "利用可能", vnc: "VNC URL", managedRunning: "管理ブラウザ実行中",
+    urlPlaceholder: "ws://ホスト:9222 または auto", connect: "接続", connecting: "接続中…",
+    disconnect: "切断", connected: "接続しました: {endpoint}",
+    connectFailed: "接続に失敗しました: {error}", disconnected: "ライブオーバーライドを解除しました",
   },
   logsPanel: { title: "ゲートウェイログ", allLevels: "全レベル", searchPlaceholder: "検索…" },
   mcpPanel: { title: "MCP サーバー", none: "MCP サーバーは未設定です（[mcp] セクション）。", oauthTokens: "oauth（トークン保存済み）", oauthPending: "oauth（未承認）", connect: "接続", connecting: "開始中…", openAuth: "認証ページを開く", approved: "承認済み ✓", failed: "OAuth フローが失敗しました。", toolsCached: "キャッシュ済みツール {count} 件" },
@@ -2311,6 +2325,9 @@ const ar: Translations = {
     title: "المتصفح (CDP)", configured: "مهيأ", backend: "الخلفية",
     mode: "الوضع", source: "المصدر", endpoint: "نقطة النهاية",
     available: "متاح", vnc: "عنوان VNC", managedRunning: "المتصفح المُدار يعمل",
+    urlPlaceholder: "ws://host:9222 أو auto", connect: "اتصال", connecting: "جارٍ الاتصال…",
+    disconnect: "قطع الاتصال", connected: "متصل: {endpoint}",
+    connectFailed: "فشل الاتصال: {error}", disconnected: "تمت إزالة التجاوز الحي",
   },
   logsPanel: { title: "سجل البوابة", allLevels: "كل المستويات", searchPlaceholder: "بحث…" },
   mcpPanel: { title: "خوادم MCP", none: "لا توجد خوادم MCP مهيأة (قسم [mcp]).", oauthTokens: "oauth (الرموز محفوظة)", oauthPending: "oauth (غير مصرح)", connect: "اتصال", connecting: "جارٍ البدء…", openAuth: "فتح صفحة التفويض", approved: "تم التفويض ✓", failed: "فشل تدفق OAuth.", toolsCached: "{count} أداة مخزنة" },

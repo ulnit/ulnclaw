@@ -1644,6 +1644,31 @@ export class GatewayClient {
     return (await response.json()) as BrowserStatus;
   }
 
+  /** POST /v1/browser/connect — point browser tools at a CDP endpoint
+   * for the process lifetime (hermes `/browser connect`; P352). */
+  async browserConnect(url: string): Promise<string> {
+    const response = await fetch(this.endpoint("/v1/browser/connect"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ url }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(value.error?.message || `browser connect HTTP ${response.status}`);
+    }
+    return value.endpoint || url;
+  }
+
+  /** POST /v1/browser/disconnect — clear the live CDP override
+   * (hermes `/browser disconnect`; P352). */
+  async browserDisconnect(): Promise<void> {
+    const response = await fetch(this.endpoint("/v1/browser/disconnect"), {
+      method: "POST",
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`browser disconnect HTTP ${response.status}`);
+  }
+
   /** GET /v1/delegations — async delegations (live + persisted history). */
   async listDelegations(): Promise<DelegationRow[]> {
     const response = await fetch(this.endpoint("/v1/delegations"), { headers: this.headers() });

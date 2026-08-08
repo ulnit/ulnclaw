@@ -3,7 +3,7 @@
 // grouped by section, with an issues panel up top. Online provider
 // probes are opt-in since they are slow.
 
-import type { CheckpointEntry, GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
+import type { BrowserStatus, CheckpointEntry, GatewayClient, DoctorCheck, McpOAuthFlow, McpServerRow, MonitoringPayload, MessagingPlatform } from "./gateway";
 import { t } from "./i18n";
 
 const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
@@ -1393,10 +1393,75 @@ export class DoctorWidget {
         row.append(labelEl, valueEl);
         rows.appendChild(row);
       }
+      rows.appendChild(this.browserControls(status));
       section.hidden = false;
     } catch {
       section.hidden = true;
     }
+  }
+
+  /** P352: live CDP override controls (hermes `/browser connect|disconnect`). */
+  private browserControls(status: BrowserStatus): HTMLElement {
+    const controls = document.createElement("div");
+    controls.className = "monitoring-row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "config-input";
+    input.placeholder = t.browserPanel.urlPlaceholder;
+    const connect = document.createElement("button");
+    connect.className = "ghost";
+    connect.textContent = t.browserPanel.connect;
+    const disconnect = document.createElement("button");
+    disconnect.className = "ghost danger";
+    disconnect.textContent = t.browserPanel.disconnect;
+    disconnect.disabled = status.source !== "override";
+    const note = document.createElement("span");
+    note.className = "config-status";
+    note.hidden = true;
+    connect.addEventListener("click", () => {
+      const client = this.client();
+      const url = input.value.trim();
+      if (!client || !url) return;
+      connect.disabled = true;
+      connect.textContent = t.browserPanel.connecting;
+      client
+        .browserConnect(url)
+        .then((endpoint) => {
+          note.textContent = t.browserPanel.connected.replace("{endpoint}", endpoint);
+          note.classList.remove("error");
+          note.hidden = false;
+          return this.loadBrowser();
+        })
+        .catch((error) => {
+          note.textContent = t.browserPanel.connectFailed.replace(
+            "{error}",
+            error instanceof Error ? error.message : String(error),
+          );
+          note.classList.add("error");
+          note.hidden = false;
+          connect.disabled = false;
+          connect.textContent = t.browserPanel.connect;
+        });
+    });
+    disconnect.addEventListener("click", () => {
+      const client = this.client();
+      if (!client) return;
+      client
+        .browserDisconnect()
+        .then(() => {
+          note.textContent = t.browserPanel.disconnected;
+          note.classList.remove("error");
+          note.hidden = false;
+          return this.loadBrowser();
+        })
+        .catch((error) => {
+          note.textContent = error instanceof Error ? error.message : String(error);
+          note.classList.add("error");
+          note.hidden = false;
+        });
+    });
+    controls.append(input, connect, disconnect, note);
+    return controls;
   }
 
   private render(sections: { title: string; checks: DoctorCheck[] }[], issues: string[]): void {
