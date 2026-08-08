@@ -21,6 +21,10 @@ function fmtWhen(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
+// P440: persistence keys for the list filters.
+const STATUS_FILTER_KEY = "ulnclaw.sessions.statusFilter";
+const REASON_FILTER_KEY = "ulnclaw.sessions.reasonFilter";
+
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
   private selected: string | null = null;
@@ -118,6 +122,12 @@ export class SessionsViewWidget {
     // strip data-i18n so applyStatic doesn't fight the count suffixes.
     const statusSelect = this.root.querySelector("#sessions-view-status-filter") as HTMLSelectElement;
     for (const option of Array.from(statusSelect.options)) option.removeAttribute("data-i18n");
+    // P440: restore persisted filter state.
+    const savedStatus = localStorage.getItem(STATUS_FILTER_KEY);
+    if (savedStatus && ["all", "open", "ended", "archived"].includes(savedStatus)) {
+      statusSelect.value = savedStatus;
+    }
+    this.endReasonFilter = localStorage.getItem(REASON_FILTER_KEY);
     this.updateStatusOptions();
     onLocaleChange(() => this.updateStatusOptions());
     this.root.querySelector("#sessions-view-reason-pill")!.addEventListener("click", () => {
@@ -391,6 +401,8 @@ export class SessionsViewWidget {
       .trim()
       .toLowerCase();
     const status = (this.root.querySelector("#sessions-view-status-filter") as HTMLSelectElement).value;
+    // P440: persist the status filter selection.
+    localStorage.setItem(STATUS_FILTER_KEY, status);
     // P436: live per-status counts on the filter options.
     this.updateStatusOptions({
       all: this.all.length,
@@ -403,8 +415,10 @@ export class SessionsViewWidget {
     if (this.endReasonFilter) {
       reasonPill.hidden = false;
       reasonPill.textContent = `${fmt(t.sessionsView.reasonFilter, { reason: this.endReasonFilter })} ✕`;
+      localStorage.setItem(REASON_FILTER_KEY, this.endReasonFilter);
     } else {
       reasonPill.hidden = true;
+      localStorage.removeItem(REASON_FILTER_KEY);
     }
     const rows = this.all.filter((session) => {
       if (this.endReasonFilter && session.end_reason !== this.endReasonFilter) return false;
