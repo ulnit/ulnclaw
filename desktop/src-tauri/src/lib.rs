@@ -10,6 +10,50 @@ use tauri::{Manager, State};
 /// Handle of the managed gateway child process.
 struct GatewayProcess(Mutex<Option<u32>>);
 
+/// P535: last normal (unmaximized) window geometry, persisted to
+/// `~/.ulnclaw/desktop-window.json` on close and restored on start.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct WindowState {
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    #[serde(default)]
+    maximized: bool,
+}
+
+/// Managed copy of the last normal geometry (updated on resize/move).
+struct WindowGeometry(Mutex<Option<WindowState>>);
+
+fn window_state_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .map(|home| home.join(".ulnclaw").join("desktop-window.json"))
+}
+
+fn load_window_state() -> Option<WindowState> {
+    let path = window_state_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let saved: WindowState = serde_json::from_str(&text).ok()?;
+    // Ignore corrupt/implausible values; the config defaults apply.
+    if saved.width < 200 || saved.height < 150 {
+        return None;
+    }
+    Some(saved)
+}
+
+fn persist_window_state(state: &WindowState) {
+    let Some(path) = window_state_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(state) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
 /// Locate the `ulnclaw` binary: PATH first, then common install spots.
 #[tauri::command]
 fn find_ulnclaw_binary() -> Option<String> {
@@ -224,11 +268,82 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 pub fn run() {
     tauri::Builder::default()
         .manage(GatewayProcess(Mutex::new(None)))
+        .manage(WindowGeometry(Mutex::new(None)))
         .setup(|app| {
             if let Err(err) = setup_tray(app) {
                 eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
             }
+            // P535: restore the persisted window geometry.
+            if let Some(window) = app.get_webview_window("main") {
+                if let Some(saved) = load_window_state() {
+                    let _ = window.set_size(tauri::PhysicalSize::new(
+                        saved.width,
+                        saved.height,
+                    ));
+                    let _ = window.set_position(tauri::PhysicalPosition::new(
+                        saved.x,
+                        saved.y,
+                    ));
+                    if saved.maximized {
+                        let _ = window.maximize();
+                    }
+                    if let Some(geometry) = window.try_state::<WindowGeometry>() {
+                        if let Ok(mut guard) = geometry.0.lock() {
+                            *guard = Some(WindowState {
+                                maximized: false,
+                                ..saved
+                            });
+                        }
+                    }
+                }
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // P535: track the normal geometry live; write it on close.
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_) => {
+                    let Ok(maximized) = window.is_maximized() else {
+                        return;
+                    };
+                    if maximized {
+                        return;
+                    }
+                    let Ok(size) = window.outer_size() else {
+                        return;
+                    };
+                    let Ok(position) = window.outer_position() else {
+                        return;
+                    };
+                    if let Some(geometry) = window.try_state::<WindowGeometry>() {
+                        if let Ok(mut guard) = geometry.0.lock() {
+                            *guard = Some(WindowState {
+                                width: size.width,
+                                height: size.height,
+                                x: position.x,
+                                y: position.y,
+                                maximized: false,
+                            });
+                        }
+                    }
+                }
+                tauri::WindowEvent::CloseRequested => {
+                    let maximized = window.is_maximized().unwrap_or(false);
+                    if let Some(geometry) = window.try_state::<WindowGeometry>() {
+                        if let Ok(guard) = geometry.0.lock() {
+                            if let Some(normal) = guard.as_ref() {
+                                let mut saved = normal.clone();
+                                saved.maximized = maximized;
+                                persist_window_state(&saved);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
         })
         .invoke_handler(tauri::generate_handler![
             find_ulnclaw_binary,
