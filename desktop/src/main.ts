@@ -131,6 +131,7 @@ const el = {
   sessionInfoCopy: document.getElementById("session-info-copy") as HTMLButtonElement,
   modelBadge: document.getElementById("model-badge")!,
   projectBadge: document.getElementById("project-badge")!,
+  endBadge: document.getElementById("end-badge")!,
   contextMeter: document.getElementById("context-meter")!,
   contextMeterFill: document.getElementById("context-meter-fill")!,
   contextMeterText: document.getElementById("context-meter-text")!,
@@ -1136,7 +1137,21 @@ function refreshModelBadge(): void {
   }
   el.modelBadge.classList.toggle("locked", !!locked);
   refreshProjectBadge();
+  refreshEndBadge();
   refreshComposerPlaceholder();
+}
+
+/** P458: end-reason badge beside the project badge (if ended/archived). */
+function refreshEndBadge(): void {
+  const reason = state.current?.end_reason;
+  if (reason) {
+    el.endBadge.textContent = `${END_BADGES[reason] ?? "■"} ${reason}`;
+    el.endBadge.title = reason;
+    el.endBadge.hidden = false;
+  } else {
+    el.endBadge.hidden = true;
+    el.endBadge.textContent = "";
+  }
 }
 
 /** P429: owning-project badge beside the model badge (if any). */
@@ -3245,6 +3260,8 @@ async function runArchiveSession(): Promise<void> {
   const label = state.current.title || state.current.id.slice(0, 8);
   try {
     await state.client.setSessionEndReason(state.current.id, "archived");
+    state.current.end_reason = "archived";
+    refreshEndBadge();
     notifySuccess(fmt(t.palette.sessionArchived, { label }));
     await refreshSessions();
   } catch (error) {
@@ -3259,6 +3276,8 @@ async function runUnarchiveSession(): Promise<void> {
   const label = state.current.title || state.current.id.slice(0, 8);
   try {
     await state.client.setSessionEndReason(state.current.id, null);
+    state.current.end_reason = undefined;
+    refreshEndBadge();
     notifySuccess(fmt(t.palette.sessionUnarchived, { label }));
     await refreshSessions();
   } catch (error) {
