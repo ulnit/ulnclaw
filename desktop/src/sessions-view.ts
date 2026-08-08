@@ -355,6 +355,8 @@ export class SessionsViewWidget {
             <div class="sessions-view-row-title">${escapeHtml(title)}</div>
             <div class="sessions-view-row-meta">
               ${session.model ? `<span class="sessions-view-model">${escapeHtml(session.model)}</span>` : ""}
+              ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
+              ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
               <span>${fmtWhen(session.started_at)}</span>
             </div>
           </div>`;

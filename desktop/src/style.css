@@ -1198,6 +1198,17 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   border-radius: 4px;
   padding: 0 5px;
 }
+/* P419: source / end-reason chips in the sessions-view row meta. */
+.sessions-view-chip {
+  background: rgba(120, 140, 200, 0.22);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 0.9em;
+  opacity: 0.9;
+}
+.sessions-view-chip.sessions-view-endreason {
+  background: rgba(200, 150, 90, 0.22);
+}
 .sessions-view-transcript {
   overflow-y: auto;
   min-height: 0;
