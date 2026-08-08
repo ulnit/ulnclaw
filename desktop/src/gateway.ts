@@ -6,6 +6,8 @@ export interface GatewaySettings {
   url: string;
   key: string;
   manage: boolean;
+  /** P431: reopen the last session at launch (default on). */
+  reopenLast: boolean;
 }
 
 export interface SessionRow {
@@ -957,12 +959,13 @@ export function loadSettings(): GatewaySettings {
         url: parsed.url || "http://127.0.0.1:8642",
         key: parsed.key || "",
         manage: Boolean(parsed.manage),
+        reopenLast: parsed.reopenLast !== false,
       };
     }
   } catch {
     /* fall through */
   }
-  return { url: "http://127.0.0.1:8642", key: "", manage: true };
+  return { url: "http://127.0.0.1:8642", key: "", manage: true, reopenLast: true };
 }
 
 export function saveSettings(settings: GatewaySettings): void {

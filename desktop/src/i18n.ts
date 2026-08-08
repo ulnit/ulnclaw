@@ -64,7 +64,7 @@ export interface Translations {
     fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
     fsGitRootTitle: string; fsGitRootNone: string; fsPreviewOpen: string; fsPreviewTitle: string; fsPreviewLoading: string; fsPreviewBinary: string; fsPreviewTruncated: string; fsPreviewFailed: string; fsPreviewSave: string; fsPreviewSaved: string; fsPreviewSaveFailed: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
-    manageProcess: string; replayOnboarding: string; cancel: string; save: string;
+    manageProcess: string; reopenLast: string; replayOnboarding: string; cancel: string; save: string;
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string; statusTokens: string; statusKanban: string;
@@ -339,7 +339,7 @@ const en: Translations = {
     attachTitle: "Attach a file from the gateway filesystem", fsTitle: "Attach a file", fsUpTitle: "Up one directory", fsEmpty: "Empty directory", fsFailed: "File browser failed: {error}", fsDownloadTitle: "Download this file", fsMkdirTitle: "New folder", fsMkdirPrompt: "New folder name:", fsGitRootTitle: "Jump to the nearest git repository root", fsGitRootNone: "No git repository found above this path.", fsPreviewOpen: "Preview or edit this text file", fsPreviewTitle: "Preview", fsPreviewLoading: "Loading preview…", fsPreviewBinary: "Binary file — no text preview.", fsPreviewTruncated: "Preview truncated — file too large to edit here.", fsPreviewFailed: "Preview failed: {error}", fsPreviewSave: "Save", fsPreviewSaved: "Saved.", fsPreviewSaveFailed: "Save failed: {error}",
     settingsTitle: "Gateway settings", gatewayUrl: "Gateway URL",
     apiKey: "API key (optional, [gateway] key)", bearerToken: "bearer token",
-    manageProcess: "Manage the gateway process (start/stop with the app)",
+    manageProcess: "Manage the gateway process (start/stop with the app)", reopenLast: "Reopen the last session at launch",
     replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save", restartGateway: "Restart gateway", restartDone: "Gateway restarted.", restartFailed: "Gateway restart timed out.", restartUnavailable: "The gateway is not managed here — restart it where it runs.",
     settingsTheme: "Theme", settingsFont: "Font",
     statusUp: "up {duration}", statusSessions: "{count} sessions", statusRuns: "{count} runs", statusPlugins: "{count} plugins", statusTokens: "{tokens} tok · {calls} tool calls", statusKanban: "kanban {todo} todo · {doing} doing · {blocked} blocked",
@@ -793,7 +793,7 @@ const zh: Translations = {
     attachTitle: "从网关文件系统附加文件", fsTitle: "附加文件", fsUpTitle: "上一级目录", fsEmpty: "空目录", fsFailed: "文件浏览失败：{error}", fsDownloadTitle: "下载此文件", fsMkdirTitle: "新建文件夹", fsMkdirPrompt: "新文件夹名称：", fsGitRootTitle: "跳转到最近的 Git 仓库根目录", fsGitRootNone: "该路径上方未找到 Git 仓库。", fsPreviewOpen: "预览/编辑此文本文件", fsPreviewTitle: "预览", fsPreviewLoading: "加载预览中…", fsPreviewBinary: "二进制文件——无文本预览。", fsPreviewTruncated: "预览已截断——文件过大，无法在此编辑。", fsPreviewFailed: "预览失败：{error}", fsPreviewSave: "保存", fsPreviewSaved: "已保存。", fsPreviewSaveFailed: "保存失败：{error}",
     settingsTitle: "网关设置", gatewayUrl: "网关 URL",
     apiKey: "API 密钥（可选，[gateway] key）", bearerToken: "bearer 令牌",
-    manageProcess: "管理网关进程（随应用启动/停止）",
+    manageProcess: "管理网关进程（随应用启动/停止）", reopenLast: "启动时重新打开上次会话",
     replayOnboarding: "重放引导", cancel: "取消", save: "保存", restartGateway: "重启网关", restartDone: "网关已重启。", restartFailed: "网关重启超时。", restartUnavailable: "此环境不管理网关——请在网关运行处重启。",
     settingsTheme: "主题", settingsFont: "字体",
     statusUp: "运行 {duration}", statusSessions: "{count} 会话", statusRuns: "{count} 运行", statusPlugins: "{count} 插件", statusTokens: "{tokens} tok · {calls} 次工具调用", statusKanban: "看板 {todo} 待办 · {doing} 进行 · {blocked} 受阻",
@@ -1247,7 +1247,7 @@ const zhHant: Translations = {
     attachTitle: "從閘道檔案系統附加檔案", fsTitle: "附加檔案", fsUpTitle: "上一層目錄", fsEmpty: "空目錄", fsFailed: "檔案瀏覽失敗：{error}", fsDownloadTitle: "下載此檔案", fsMkdirTitle: "新增資料夾", fsMkdirPrompt: "新資料夾名稱：", fsGitRootTitle: "跳轉到最近的 Git 倉庫根目錄", fsGitRootNone: "該路徑上方未找到 Git 倉庫。", fsPreviewOpen: "預覽/編輯此文字檔案", fsPreviewTitle: "預覽", fsPreviewLoading: "載入預覽中…", fsPreviewBinary: "二進位檔案——無文字預覽。", fsPreviewTruncated: "預覽已截斷——檔案過大，無法在此編輯。", fsPreviewFailed: "預覽失敗：{error}", fsPreviewSave: "儲存", fsPreviewSaved: "已儲存。", fsPreviewSaveFailed: "儲存失敗：{error}",
     settingsTitle: "閘道設定", gatewayUrl: "閘道 URL",
     apiKey: "API 金鑰（選填，[gateway] key）", bearerToken: "bearer 權杖",
-    manageProcess: "管理閘道程序（隨應用程式啟動/停止）",
+    manageProcess: "管理閘道程序（隨應用程式啟動/停止）", reopenLast: "啟動時重新開啟上次工作階段",
     replayOnboarding: "重播引導", cancel: "取消", save: "儲存", restartGateway: "重啟閘道", restartDone: "閘道已重啟。", restartFailed: "閘道重啟逾時。", restartUnavailable: "此環境不管理閘道——請在閘道執行處重啟。",
     settingsTheme: "主題", settingsFont: "字型",
     statusUp: "執行 {duration}", statusSessions: "{count} 工作階段", statusRuns: "{count} 執行", statusPlugins: "{count} 外掛", statusTokens: "{tokens} tok · {calls} 次工具呼叫", statusKanban: "看板 {todo} 待辦 · {doing} 進行 · {blocked} 受阻",
@@ -1701,7 +1701,7 @@ const ja: Translations = {
     attachTitle: "ゲートウェイのファイルシステムからファイルを添付", fsTitle: "ファイルを添付", fsUpTitle: "一つ上のディレクトリへ", fsEmpty: "空のディレクトリ", fsFailed: "ファイルブラウザーに失敗しました: {error}", fsDownloadTitle: "このファイルをダウンロード", fsMkdirTitle: "新しいフォルダー", fsMkdirPrompt: "新しいフォルダー名:", fsGitRootTitle: "最も近い Git リポジトリのルートへ移動", fsGitRootNone: "このパスの上位に Git リポジトリが見つかりません。", fsPreviewOpen: "このテキストファイルをプレビュー/編集", fsPreviewTitle: "プレビュー", fsPreviewLoading: "プレビューを読み込み中…", fsPreviewBinary: "バイナリファイル — テキストプレビューなし。", fsPreviewTruncated: "プレビューは切り詰められました — ファイルが大きすぎてここでは編集できません。", fsPreviewFailed: "プレビューに失敗しました: {error}", fsPreviewSave: "保存", fsPreviewSaved: "保存しました。", fsPreviewSaveFailed: "保存に失敗しました: {error}",
     settingsTitle: "ゲートウェイ設定", gatewayUrl: "ゲートウェイ URL",
     apiKey: "API キー（任意、[gateway] key）", bearerToken: "bearer トークン",
-    manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）",
+    manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）", reopenLast: "起動時に最後のセッションを再び開く",
     replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存", restartGateway: "ゲートウェイを再起動", restartDone: "ゲートウェイを再起動しました。", restartFailed: "ゲートウェイの再起動がタイムアウトしました。", restartUnavailable: "この環境はゲートウェイを管理していません — 実行場所で再起動してください。",
     settingsTheme: "テーマ", settingsFont: "フォント",
     statusUp: "稼働 {duration}", statusSessions: "{count} セッション", statusRuns: "{count} 実行", statusPlugins: "{count} プラグイン", statusTokens: "{tokens} tok · {calls} ツール呼び出し", statusKanban: "カンバン {todo} 未着手 · {doing} 進行中 · {blocked} ブロック",
@@ -2155,7 +2155,7 @@ const ar: Translations = {
     attachTitle: "إرفاق ملف من نظام ملفات البوابة", fsTitle: "إرفاق ملف", fsUpTitle: "مجلد واحد للأعلى", fsEmpty: "مجلد فارغ", fsFailed: "فشل متصفح الملفات: {error}", fsDownloadTitle: "تنزيل هذا الملف", fsMkdirTitle: "مجلد جديد", fsMkdirPrompt: "اسم المجلد الجديد:", fsGitRootTitle: "الانتقال إلى أقرب جذر مستودع Git", fsGitRootNone: "لم يُعثر على مستودع Git فوق هذا المسار.", fsPreviewOpen: "معاينة/تحرير هذا الملف النصي", fsPreviewTitle: "معاينة", fsPreviewLoading: "جارٍ تحميل المعاينة…", fsPreviewBinary: "ملف ثنائي — لا معاينة نصية.", fsPreviewTruncated: "المعاينة مبتورة — الملف أكبر من أن يُحرَّر هنا.", fsPreviewFailed: "فشلت المعاينة: {error}", fsPreviewSave: "حفظ", fsPreviewSaved: "تم الحفظ.", fsPreviewSaveFailed: "فشل الحفظ: {error}",
     settingsTitle: "إعدادات البوابة", gatewayUrl: "عنوان البوابة",
     apiKey: "مفتاح API (اختياري، [gateway] key)", bearerToken: "رمز bearer",
-    manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)",
+    manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)", reopenLast: "إعادة فتح آخر جلسة عند التشغيل",
     replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ", restartGateway: "إعادة تشغيل البوابة", restartDone: "تمت إعادة تشغيل البوابة.", restartFailed: "انتهت مهلة إعادة تشغيل البوابة.", restartUnavailable: "البوابة غير مُدارة هنا — أعد تشغيلها حيث تعمل.",
     settingsTheme: "السمة", settingsFont: "الخط",
     statusUp: "يعمل منذ {duration}", statusSessions: "{count} جلسة", statusRuns: "{count} تشغيل", statusPlugins: "{count} إضافة", statusTokens: "{tokens} رمز · {calls} استدعاء أداة", statusKanban: "كانبان {todo} منتظرة · {doing} قيد التنفيذ · {blocked} محظورة",

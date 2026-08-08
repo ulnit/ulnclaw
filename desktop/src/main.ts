@@ -156,6 +156,7 @@ const el = {
   settingUrl: document.getElementById("setting-url") as HTMLInputElement,
   settingKey: document.getElementById("setting-key") as HTMLInputElement,
   settingManage: document.getElementById("setting-manage") as HTMLInputElement,
+  settingReopen: document.getElementById("setting-reopen") as HTMLInputElement,
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
   settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
@@ -2194,6 +2195,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     el.settingUrl.value = state.settings.url;
     el.settingKey.value = state.settings.key;
     el.settingManage.checked = state.settings.manage;
+    // P431: the reopen-last-session launch toggle.
+    el.settingReopen.checked = state.settings.reopenLast;
     el.settings.showModal();
   };
   el.notifyBell.onclick = () => openNotifyHistory();
@@ -2219,6 +2222,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       url: el.settingUrl.value.trim() || "http://127.0.0.1:8642",
       key: el.settingKey.value.trim(),
       manage: el.settingManage.checked,
+      reopenLast: el.settingReopen.checked,
     };
     saveSettings(next);
     state.settings = next;
@@ -2692,9 +2696,10 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     );
   });
   await refreshSessions();
-  // P399: reopen the last open session (when it still exists).
+  // P399: reopen the last open session (when it still exists) —
+  // P431: gated by the settings toggle.
   const lastSessionId = localStorage.getItem(LAST_SESSION_KEY);
-  if (lastSessionId) {
+  if (state.settings.reopenLast && lastSessionId) {
     const last = state.sessions.find((row) => row.id === lastSessionId);
     if (last) await openSession(last);
   }
