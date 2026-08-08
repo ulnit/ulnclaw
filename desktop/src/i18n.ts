@@ -171,6 +171,7 @@ export interface Translations {
     hubUpdate: string; hubRemove: string; hubInstalling: string; hubFailed: string;
     providersTitle: string; memoryProvider: string; contextEngine: string; providersSave: string;
     rescan: string; hide: string; show: string;
+    toolsetsTitle: string; toolsetsNone: string;
   };
   pairingView: {
     count: string; none: string; loadFailed: string; clearPending: string; lockedOut: string;
@@ -493,6 +494,7 @@ const en: Translations = {
     hubInstalling: "Installing…", hubFailed: "Hub failed: {error}",
     providersTitle: "Plugin providers", memoryProvider: "Memory provider", contextEngine: "Context engine",
     providersSave: "Save", rescan: "Rescan", hide: "Hide", show: "Show",
+    toolsetsTitle: "Toolsets", toolsetsNone: "No toolsets registered.",
   },
   pairingView: {
     count: "{platforms} platform(s) · {pending} pending", none: "No pairing activity yet — unknown senders who DM an enabled bot receive a pairing code.",
@@ -933,6 +935,7 @@ const zh: Translations = {
     hubInstalling: "安装中…", hubFailed: "市场加载失败:{error}",
     providersTitle: "插件提供方", memoryProvider: "记忆提供方", contextEngine: "上下文引擎",
     providersSave: "保存", rescan: "重新扫描", hide: "隐藏", show: "显示",
+    toolsetsTitle: "工具集", toolsetsNone: "未注册工具集。",
   },
   pairingView: {
     count: "{platforms} 个平台 · {pending} 个待批", none: "暂无配对活动——向已启用机器人私聊的陌生发送者会收到配对码。",
@@ -1373,6 +1376,7 @@ const zhHant: Translations = {
     hubInstalling: "安裝中…", hubFailed: "市集載入失敗:{error}",
     providersTitle: "外掛提供方", memoryProvider: "記憶提供方", contextEngine: "上下文引擎",
     providersSave: "儲存", rescan: "重新掃描", hide: "隱藏", show: "顯示",
+    toolsetsTitle: "工具集", toolsetsNone: "未註冊工具集。",
   },
   pairingView: {
     count: "{platforms} 個平台 · {pending} 個待批", none: "暫無配對活動——向已啟用機器人私訊的陌生傳送者會收到配對碼。",
@@ -1813,6 +1817,7 @@ const ja: Translations = {
     hubInstalling: "インストール中…", hubFailed: "ハブの読み込みに失敗しました: {error}",
     providersTitle: "プラグインプロバイダー", memoryProvider: "メモリープロバイダー", contextEngine: "コンテキストエンジン",
     providersSave: "保存", rescan: "再スキャン", hide: "非表示", show: "表示",
+    toolsetsTitle: "ツールセット", toolsetsNone: "ツールセットは登録されていません。",
   },
   pairingView: {
     count: "{platforms} プラットフォーム · 保留 {pending} 件", none: "ペアリングはまだありません — 有効なボットに DM した未知の送信者にはペアリングコードが届きます。",
@@ -2253,6 +2258,7 @@ const ar: Translations = {
     hubInstalling: "جارٍ التثبيت…", hubFailed: "فشل المركز: {error}",
     providersTitle: "موفرو الإضافات", memoryProvider: "موفر الذاكرة", contextEngine: "محرك السياق",
     providersSave: "حفظ", rescan: "إعادة الفحص", hide: "إخفاء", show: "إظهار",
+    toolsetsTitle: "حزم الأدوات", toolsetsNone: "لا توجد حزم أدوات مسجلة.",
   },
   pairingView: {
     count: "{platforms} منصة · {pending} معلقة", none: "لا يوجد نشاط اقتران بعد — المرسلون غير المعروفين الذين يراسلون بوتًا مفعّلًا يتلقون رمز اقتران.",

@@ -3,7 +3,7 @@
 // counts, disabled badge and enable/disable toggles, plus the `[hooks]`
 // config shell-hook listing. Install/update/remove stay in the CLI.
 
-import type { GatewayClient, PluginsHubPayload, PluginsPayload } from "./gateway";
+import type { GatewayClient, PluginsHubPayload, PluginsPayload, ToolsetRow } from "./gateway";
 import { t } from "./i18n";
 
 function escapeHtml(text: string): string {
@@ -38,6 +38,8 @@ export class PluginsViewWidget {
       <div id="plugins-view-providers"></div>
       <h3 class="config-section" data-i18n="pluginsView.configHooksTitle">Config shell hooks</h3>
       <div id="plugins-view-hooks"></div>
+      <h3 class="config-section" data-i18n="pluginsView.toolsetsTitle">Toolsets</h3>
+      <div id="plugins-view-toolsets"></div>
     `;
     this.root.querySelector("#plugins-view-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
@@ -76,6 +78,7 @@ export class PluginsViewWidget {
       this.hub = hub;
       this.render(payload);
       this.renderHub(hub);
+      this.renderToolsets().catch(() => undefined);
       this.status("");
     } catch (error) {
       this.status(
@@ -332,6 +335,44 @@ export class PluginsViewWidget {
       select.appendChild(el);
     }
     return select;
+  }
+
+  /** Toolsets panel (P354): /v1/toolsets groups with enablement posture. */
+  private async renderToolsets(): Promise<void> {
+    const client = this.client();
+    const el = this.root.querySelector("#plugins-view-toolsets") as HTMLElement;
+    const v = t.pluginsView;
+    if (!client) {
+      el.innerHTML = "";
+      return;
+    }
+    let toolsets: ToolsetRow[];
+    try {
+      toolsets = await client.toolsetsList();
+    } catch {
+      el.innerHTML = "";
+      return;
+    }
+    if (toolsets.length === 0) {
+      el.innerHTML = `<p class="empty">${escapeHtml(v.toolsetsNone)}</p>`;
+      return;
+    }
+    el.innerHTML = toolsets
+      .map((toolset) => {
+        const badge = toolset.enabled
+          ? ""
+          : `<span class="models-view-badge warn">${escapeHtml(v.disabledBadge)}</span>`;
+        return `
+          <details class="plugins-view-row">
+            <summary>
+              <strong>${escapeHtml(toolset.name)}</strong>
+              <span class="plugins-view-meta">${toolset.tools.length} ${escapeHtml(v.toolsWord)}</span> ${badge}
+              ${toolset.description ? `<span class="plugins-view-desc">${escapeHtml(toolset.description)}</span>` : ""}
+            </summary>
+            <div class="plugins-view-sub muted">${escapeHtml(toolset.tools.join(", "))}</div>
+          </details>`;
+      })
+      .join("");
   }
 
   private async rescan(): Promise<void> {

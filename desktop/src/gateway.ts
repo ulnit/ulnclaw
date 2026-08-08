@@ -401,6 +401,14 @@ export interface HubCatalogEntry {
   installed: boolean;
 }
 
+/** One toolset row from GET /v1/toolsets (P354). */
+export interface ToolsetRow {
+  name: string;
+  description: string;
+  enabled: boolean;
+  tools: string[];
+}
+
 /** Merged plugin-hub payload (hermes `_merged_plugins_hub`; P351). */
 export interface PluginsHubPayload {
   agent_plugins: DashboardPluginRow[];
@@ -1528,6 +1536,14 @@ export class GatewayClient {
     if (!response.ok) {
       throw new Error(value.error?.message || `visibility HTTP ${response.status}`);
     }
+  }
+
+  /** GET /v1/toolsets — tool groups with enablement posture (P354). */
+  async toolsetsList(): Promise<ToolsetRow[]> {
+    const response = await fetch(this.endpoint("/v1/toolsets"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`toolsets HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.data || []) as ToolsetRow[];
   }
 
   /** GET /api/storage — session-store footprint for the Doctor panel. */
