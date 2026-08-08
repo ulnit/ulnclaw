@@ -209,6 +209,10 @@ function renderSessions(): void {
       whenEl.textContent += ` · ${formatTokens(tokens)} tok`;
       whenEl.title = `${whenFull} · ${fmt(t.session.tokensTitle, { tokens: tokens.toLocaleString() })}`;
     }
+    // P380: per-session model badge in the sidebar row.
+    if (session.model) {
+      whenEl.textContent += ` · ${session.model}`;
+    }
     item.appendChild(main);
     if (session.project) {
       const badge = document.createElement("span");

@@ -50,7 +50,7 @@ body { background: var(--bg); color: var(--text); }
 .session-item.active { border-color: var(--accent); }
 .session-item .session-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .session-item .title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-item .when { font-size: 11px; color: var(--dim); }
+.session-item .when { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-item .session-actions { display: none; gap: 2px; }
 .session-item:hover .session-actions { display: inline-flex; }
 .session-actions button.icon {
