@@ -56,6 +56,12 @@ export class SessionsViewWidget {
       <div class="sessions-view-body">
         <div class="sessions-view-listcol">
           <input id="sessions-view-filter" type="search" data-i18n-ph="sessionsView.filterPlaceholder" />
+          <select id="sessions-view-status-filter" data-i18n-title="sessionsView.statusFilterTitle">
+            <option value="all" data-i18n="sessionsView.statusAll">All statuses</option>
+            <option value="open" data-i18n="sessionsView.statusOpen">Open</option>
+            <option value="ended" data-i18n="sessionsView.statusEnded">Ended</option>
+            <option value="archived" data-i18n="sessionsView.statusArchived">Archived</option>
+          </select>
           <input id="sessions-view-search" type="search" data-i18n-ph="sessionsView.searchPlaceholder" />
           <div id="sessions-view-list" class="sessions-view-list"></div>
         </div>
@@ -87,6 +93,9 @@ export class SessionsViewWidget {
       this.refresh().catch(() => undefined);
     });
     this.root.querySelector("#sessions-view-filter")!.addEventListener("input", () => {
+      this.renderList();
+    });
+    this.root.querySelector("#sessions-view-status-filter")!.addEventListener("change", () => {
       this.renderList();
     });
     let searchDebounce: number | null = null;
@@ -343,7 +352,11 @@ export class SessionsViewWidget {
     const filter = (this.root.querySelector("#sessions-view-filter") as HTMLInputElement).value
       .trim()
       .toLowerCase();
+    const status = (this.root.querySelector("#sessions-view-status-filter") as HTMLSelectElement).value;
     const rows = this.all.filter((session) => {
+      if (status === "open" && session.end_reason) return false;
+      if (status === "ended" && (!session.end_reason || session.end_reason === "archived")) return false;
+      if (status === "archived" && session.end_reason !== "archived") return false;
       if (!filter) return true;
       const haystack = `${session.title || ""} ${session.id} ${session.model || ""} ${session.source || ""}`;
       return haystack.toLowerCase().includes(filter);

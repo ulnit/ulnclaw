@@ -1152,7 +1152,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   .sessions-view-body { grid-template-columns: 1fr; height: auto; }
 }
 .sessions-view-listcol { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.sessions-view-listcol input[type="search"] {
+.sessions-view-listcol input[type="search"],
+.sessions-view-listcol select {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border, var(--hover));

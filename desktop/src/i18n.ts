@@ -145,6 +145,7 @@ export interface Translations {
   };
   sessionsView: {
     filterPlaceholder: string; count: string; empty: string; noMatch: string;
+    statusFilterTitle: string; statusAll: string; statusOpen: string; statusEnded: string; statusArchived: string;
     select: string; loading: string; loadFailed: string; transcriptFailed: string;
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
@@ -471,6 +472,11 @@ const en: Translations = {
   },
   sessionsView: {
     filterPlaceholder: "Filter sessions…",
+    statusFilterTitle: "Filter by session status",
+    statusAll: "All statuses",
+    statusOpen: "Open",
+    statusEnded: "Ended",
+    statusArchived: "Archived",
     count: "{count} sessions",
     empty: "No sessions recorded yet.",
     noMatch: "No sessions match the filter.",
@@ -925,6 +931,11 @@ const zh: Translations = {
   },
   sessionsView: {
     filterPlaceholder: "过滤会话…",
+    statusFilterTitle: "按会话状态筛选",
+    statusAll: "全部状态",
+    statusOpen: "进行中",
+    statusEnded: "已结束",
+    statusArchived: "已归档",
     count: "{count} 个会话",
     empty: "暂无会话记录。",
     noMatch: "没有匹配过滤条件的会话。",
@@ -1379,6 +1390,11 @@ const zhHant: Translations = {
   },
   sessionsView: {
     filterPlaceholder: "過濾會話…",
+    statusFilterTitle: "依工作階段狀態篩選",
+    statusAll: "全部狀態",
+    statusOpen: "進行中",
+    statusEnded: "已結束",
+    statusArchived: "已歸檔",
     count: "{count} 個會話",
     empty: "暫無會話記錄。",
     noMatch: "沒有符合過濾條件的會話。",
@@ -1833,6 +1849,11 @@ const ja: Translations = {
   },
   sessionsView: {
     filterPlaceholder: "セッションを絞り込み…",
+    statusFilterTitle: "セッション状態で絞り込み",
+    statusAll: "すべての状態",
+    statusOpen: "進行中",
+    statusEnded: "終了済み",
+    statusArchived: "アーカイブ済み",
     count: "{count} 件のセッション",
     empty: "セッションはまだ記録されていません。",
     noMatch: "フィルタに一致するセッションはありません。",
@@ -2287,6 +2308,11 @@ const ar: Translations = {
   },
   sessionsView: {
     filterPlaceholder: "تصفية الجلسات…",
+    statusFilterTitle: "تصفية حسب حالة الجلسة",
+    statusAll: "كل الحالات",
+    statusOpen: "مفتوحة",
+    statusEnded: "منتهية",
+    statusArchived: "مؤرشفة",
     count: "{count} جلسة",
     empty: "لا توجد جلسات مسجلة بعد.",
     noMatch: "لا توجد جلسات مطابقة للتصفية.",
