@@ -295,7 +295,7 @@ export interface Translations {
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string; restartGateway: string;
-    updateCheck: string; shortcuts: string; notifications: string; kanbanDispatch: string; kanbanDispatched: string; kanbanDispatchFailed: string;
+    updateCheck: string; shortcuts: string; notifications: string; kanbanDispatch: string; kanbanDispatched: string; kanbanDispatchFailed: string; kanbanQuickAdd: string; kanbanQuickAddPrompt: string; kanbanQuickAdded: string; kanbanQuickAddFailed: string;
     hintFreshChat: string; hintArtifacts: string; hintLearning: string; switchTo: string;
   };
   artifacts: {
@@ -723,7 +723,7 @@ const en: Translations = {
     exportMd: "Export session (Markdown)", exportHtml: "Export session (HTML)",
     browseArtifacts: "Browse artifacts…", learningGraph: "Learning graph…",
     openSettings: "Open gateway settings…", refreshSessions: "Refresh session list", restartGateway: "Restart gateway",
-    updateCheck: "Check for updates", shortcuts: "Keyboard shortcuts", notifications: "Notification history", kanbanDispatch: "Dispatch kanban tasks", kanbanDispatched: "Kanban dispatch: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", kanbanDispatchFailed: "Kanban dispatch failed: {error}",
+    updateCheck: "Check for updates", shortcuts: "Keyboard shortcuts", notifications: "Notification history", kanbanDispatch: "Dispatch kanban tasks", kanbanDispatched: "Kanban dispatch: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", kanbanDispatchFailed: "Kanban dispatch failed: {error}", kanbanQuickAdd: "New kanban task…", kanbanQuickAddPrompt: "Task title:", kanbanQuickAdded: "Kanban task created: {id} — {title}", kanbanQuickAddFailed: "Kanban task creation failed: {error}",
         hintFreshChat: "start a fresh chat", hintArtifacts: "links, files, images",
     hintLearning: "learned skills + memory", switchTo: "Switch to: {title}",
   },
@@ -1177,7 +1177,7 @@ const zh: Translations = {
     exportMd: "导出会话（Markdown）", exportHtml: "导出会话（HTML）",
     browseArtifacts: "浏览工件…", learningGraph: "学习图谱…",
     openSettings: "打开网关设置…", refreshSessions: "刷新会话列表", restartGateway: "重启网关",
-    updateCheck: "检查更新", shortcuts: "键盘快捷键", notifications: "通知历史", kanbanDispatch: "派发看板任务", kanbanDispatched: "看板派发：{spawned} 派生 · {promoted} 晋升 · {reclaimed} 回收", kanbanDispatchFailed: "看板派发失败：{error}",
+    updateCheck: "检查更新", shortcuts: "键盘快捷键", notifications: "通知历史", kanbanDispatch: "派发看板任务", kanbanDispatched: "看板派发：{spawned} 派生 · {promoted} 晋升 · {reclaimed} 回收", kanbanDispatchFailed: "看板派发失败：{error}", kanbanQuickAdd: "新建看板任务…", kanbanQuickAddPrompt: "任务标题：", kanbanQuickAdded: "已创建看板任务：{id} —— {title}", kanbanQuickAddFailed: "看板任务创建失败：{error}",
         hintFreshChat: "开始全新聊天", hintArtifacts: "链接、文件、图片",
     hintLearning: "已学技能 + 记忆", switchTo: "切换到：{title}",
   },
@@ -1631,7 +1631,7 @@ const zhHant: Translations = {
     exportMd: "匯出工作階段（Markdown）", exportHtml: "匯出工作階段（HTML）",
     browseArtifacts: "瀏覽工件…", learningGraph: "學習圖譜…",
     openSettings: "開啟閘道設定…", refreshSessions: "重新整理工作階段清單", restartGateway: "重啟閘道",
-    updateCheck: "檢查更新", shortcuts: "鍵盤快捷鍵", notifications: "通知歷史", kanbanDispatch: "派發看板任務", kanbanDispatched: "看板派發：{spawned} 派生 · {promoted} 晉升 · {reclaimed} 回收", kanbanDispatchFailed: "看板派發失敗：{error}",
+    updateCheck: "檢查更新", shortcuts: "鍵盤快捷鍵", notifications: "通知歷史", kanbanDispatch: "派發看板任務", kanbanDispatched: "看板派發：{spawned} 派生 · {promoted} 晉升 · {reclaimed} 回收", kanbanDispatchFailed: "看板派發失敗：{error}", kanbanQuickAdd: "新增看板任務…", kanbanQuickAddPrompt: "任務標題：", kanbanQuickAdded: "已建立看板任務：{id} —— {title}", kanbanQuickAddFailed: "看板任務建立失敗：{error}",
         hintFreshChat: "開始全新聊天", hintArtifacts: "連結、檔案、圖片",
     hintLearning: "已學技能 + 記憶", switchTo: "切換至：{title}",
   },
@@ -2085,7 +2085,7 @@ const ja: Translations = {
     exportMd: "セッションをエクスポート（Markdown）", exportHtml: "セッションをエクスポート（HTML）",
     browseArtifacts: "成果物を閲覧…", learningGraph: "学習グラフ…",
     openSettings: "ゲートウェイ設定を開く…", refreshSessions: "セッション一覧を更新", restartGateway: "ゲートウェイを再起動",
-    updateCheck: "更新を確認", shortcuts: "キーボードショートカット", notifications: "通知履歴", kanbanDispatch: "カンバンタスクをディスパッチ", kanbanDispatched: "ディスパッチ結果：{spawned} 起動 · {promoted} 昇格 · {reclaimed} 回収", kanbanDispatchFailed: "ディスパッチに失敗：{error}",
+    updateCheck: "更新を確認", shortcuts: "キーボードショートカット", notifications: "通知履歴", kanbanDispatch: "カンバンタスクをディスパッチ", kanbanDispatched: "ディスパッチ結果：{spawned} 起動 · {promoted} 昇格 · {reclaimed} 回収", kanbanDispatchFailed: "ディスパッチに失敗：{error}", kanbanQuickAdd: "新しいカンバンタスク…", kanbanQuickAddPrompt: "タスクタイトル：", kanbanQuickAdded: "カンバンタスクを作成しました：{id} — {title}", kanbanQuickAddFailed: "カンバンタスクの作成に失敗：{error}",
         hintFreshChat: "新しいチャットを開始", hintArtifacts: "リンク、ファイル、画像",
     hintLearning: "学習済みスキル + メモリ", switchTo: "切り替え先：{title}",
   },
@@ -2539,7 +2539,7 @@ const ar: Translations = {
     exportMd: "تصدير الجلسة (Markdown)", exportHtml: "تصدير الجلسة (HTML)",
     browseArtifacts: "تصفح المخرجات…", learningGraph: "رسم التعلم…",
     openSettings: "فتح إعدادات البوابة…", refreshSessions: "تحديث قائمة الجلسات", restartGateway: "إعادة تشغيل البوابة",
-    updateCheck: "فحص التحديثات", shortcuts: "اختصارات لوحة المفاتيح", notifications: "سجل الإشعارات", kanbanDispatch: "توزيع مهام كانبان", kanbanDispatched: "توزيع كانبان: {spawned} إطلاق · {promoted} ترقية · {reclaimed} استرداد", kanbanDispatchFailed: "فشل التوزيع: {error}",
+    updateCheck: "فحص التحديثات", shortcuts: "اختصارات لوحة المفاتيح", notifications: "سجل الإشعارات", kanbanDispatch: "توزيع مهام كانبان", kanbanDispatched: "توزيع كانبان: {spawned} إطلاق · {promoted} ترقية · {reclaimed} استرداد", kanbanDispatchFailed: "فشل التوزيع: {error}", kanbanQuickAdd: "مهمة كانبان جديدة…", kanbanQuickAddPrompt: "عنوان المهمة:", kanbanQuickAdded: "تم إنشاء مهمة كانبان: {id} — {title}", kanbanQuickAddFailed: "فشل إنشاء مهمة كانبان: {error}",
         hintFreshChat: "بدء دردشة جديدة", hintArtifacts: "روابط وملفات وصور",
     hintLearning: "مهارات متعلَّمة + ذاكرة", switchTo: "التبديل إلى: {title}",
   },

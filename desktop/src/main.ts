@@ -1991,6 +1991,7 @@ async function start(): Promise<void> {
     notifications: () => openNotifyHistory(),
     updateCheck: () => runUpdateCheck(),
     kanbanDispatch: () => runKanbanDispatch(),
+    kanbanQuickAdd: () => runKanbanQuickAdd(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
@@ -2180,6 +2181,22 @@ function renderShortcuts(): void {
 function openShortcuts(): void {
   renderShortcuts();
   el.shortcutsDialog.showModal();
+}
+
+/** P376: command-palette kanban quick-add — prompt for a title and
+ * create the card via POST /api/kanban/tasks. */
+async function runKanbanQuickAdd(): Promise<void> {
+  if (!state.client) return;
+  const title = window.prompt(t.palette.kanbanQuickAddPrompt);
+  if (!title || !title.trim()) return;
+  try {
+    const task = await state.client.kanbanCreateTask(title.trim());
+    if (!task) throw new Error("empty task response");
+    notifySuccess(fmt(t.palette.kanbanQuickAdded, { id: task.id, title: task.title }));
+    state.kanban?.rerender();
+  } catch (error) {
+    notifyError(fmt(t.palette.kanbanQuickAddFailed, { error: String(error) }));
+  }
 }
 
 /** P362: command-palette update check — probe /api/update/check and
