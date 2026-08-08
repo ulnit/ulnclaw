@@ -9707,6 +9707,23 @@ fn run_session_browse_tui(
     }
 }
 
+/// P562: compact duration (45s / 12m / 3h05m / 2d4h) for the browse
+/// details pane.
+fn browse_format_duration(total_secs: u64) -> String {
+    if total_secs < 60 {
+        return format!("{total_secs}s");
+    }
+    let minutes = total_secs / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 48 {
+        return format!("{}h{:02}m", hours, minutes % 60);
+    }
+    format!("{}d{}h", hours / 24, hours % 24)
+}
+
 /// Content lines for the browse details pane: full title, id, source,
 /// project, cwd, last-active (relative + absolute local time), and the
 /// wrapped first-user-message preview. All lines are pre-truncated to
@@ -9761,6 +9778,14 @@ fn browse_details_pane_lines(
     if row.total_tokens > 0 {
         lines.extend(ulnclaw::tui_text::wrap_display_text(
             &format!("tokens: {}", row.total_tokens),
+            width,
+        ));
+    }
+    // P562: session duration (started → last activity).
+    let duration_secs = (row.last_active - row.started_at).max(0.0) as u64;
+    if duration_secs > 0 {
+        lines.extend(ulnclaw::tui_text::wrap_display_text(
+            &format!("duration: {}", browse_format_duration(duration_secs)),
             width,
         ));
     }

@@ -179,6 +179,9 @@ pub struct BrowseRow {
     pub preview: Option<String>,
     pub source: String,
     pub last_active: f64,
+    /// P562: session start — the details pane derives the duration from
+    /// `last_active - started_at`.
+    pub started_at: f64,
     /// Working directory of the session — the browse surfaces resolve it
     /// against `projects.db` to show the owning project (P165).
     pub cwd: Option<String>,
@@ -1567,7 +1570,8 @@ impl SqliteSessionStore {
                     s.message_count,
                     s.model,
                     s.end_reason,
-                    COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)
+                    COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0),
+                    s.started_at
              FROM sessions s WHERE 1=1",
         );
         if !include_archived {
@@ -1602,6 +1606,7 @@ impl SqliteSessionStore {
                     model: row.get(8)?,
                     end_reason: row.get(9)?,
                     total_tokens: row.get(10)?,
+                    started_at: row.get(11)?,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;
