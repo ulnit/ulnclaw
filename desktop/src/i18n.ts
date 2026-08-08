@@ -208,7 +208,7 @@ export interface Translations {
     reload: string; saving: string; saved: string; saveFailed: string;
     addKey: string; keyPlaceholder: string; valuePlaceholder: string; add: string;
     removeTitle: string; redactedNote: string; envKeys: string; envKeysNote: string;
-    restartNote: string; noKeys: string; noChanges: string; pending: string;
+    restartNote: string; noKeys: string; noChanges: string; pending: string; filterKeysPlaceholder: string;
     rawButton: string; rawTitle: string; rawSave: string; rawConfirm: string; rawSaved: string; rawFailed: string;
     envAddLabel: string; envValuePlaceholder: string; envEmpty: string; envFile: string;
     envProcess: string; envBoth: string; envRemoveTitle: string; envRemoveConfirm: string; envRevealTitle: string;
@@ -580,7 +580,7 @@ const en: Translations = {
     redactedNote: "Masked values are secrets; saving an unchanged masked value keeps the original.",
     envKeys: "Environment keys (.env)", envKeysNote: "Names only — edit the .env file to change values.",
     restartNote: "Edits apply to new processes; restart the gateway to apply them here.",
-    noKeys: "config.toml is empty.", noChanges: "Nothing to save.",
+    noKeys: "config.toml is empty.", noChanges: "Nothing to save.", filterKeysPlaceholder: "Filter keys (path or value)…",
     pending: "{count} unsaved change(s)",
     rawButton: "Raw TOML\u2026", rawTitle: "Raw config.toml", rawSave: "Save raw",
     rawConfirm: "Replace config.toml with this exact text? Restart the gateway to apply.",
@@ -1060,7 +1060,7 @@ const zh: Translations = {
     redactedNote: "打码的值是密钥；保存未改动的打码值将保留原密钥。",
     envKeys: "环境变量键（.env）", envKeysNote: "仅显示名称——修改 .env 文件才能改值。",
     restartNote: "修改对新进程生效；重启网关后在此生效。",
-    noKeys: "config.toml 为空。", noChanges: "没有可保存的更改。",
+    noKeys: "config.toml 为空。", noChanges: "没有可保存的更改。", filterKeysPlaceholder: "筛选配置键（路径或值）…",
     pending: "{count} 项未保存更改",
     rawButton: "原始 TOML\u2026", rawTitle: "原始 config.toml", rawSave: "保存原文",
     rawConfirm: "用此原文替换 config.toml？重启网关后生效。",
@@ -1540,7 +1540,7 @@ const zhHant: Translations = {
     redactedNote: "遮罩的值是金鑰；儲存未改動的遮罩值將保留原金鑰。",
     envKeys: "環境變數鍵（.env）", envKeysNote: "僅顯示名稱——修改 .env 檔案才能改值。",
     restartNote: "修改對新程序生效；重啟閘道後在此生效。",
-    noKeys: "config.toml 為空。", noChanges: "沒有可儲存的變更。",
+    noKeys: "config.toml 為空。", noChanges: "沒有可儲存的變更。", filterKeysPlaceholder: "篩選設定鍵（路徑或值）…",
     pending: "{count} 項未儲存變更",
     rawButton: "原始 TOML\u2026", rawTitle: "原始 config.toml", rawSave: "儲存原文",
     rawConfirm: "用此原文取代 config.toml？重啟閘道後生效。",
@@ -2020,7 +2020,7 @@ const ja: Translations = {
     redactedNote: "マスクされた値は秘密です。未変更のマスク値を保存しても元の値は保持されます。",
     envKeys: "環境キー（.env）", envKeysNote: "名前のみの表示です。値は .env ファイルを編集してください。",
     restartNote: "変更は新しいプロセスに適用されます。反映にはゲートウェイを再起動してください。",
-    noKeys: "config.toml は空です。", noChanges: "保存する変更がありません。",
+    noKeys: "config.toml は空です。", noChanges: "保存する変更がありません。", filterKeysPlaceholder: "キーを絞り込み（パスまたは値）…",
     pending: "未保存の変更 {count} 件",
     rawButton: "生 TOML\u2026", rawTitle: "生 config.toml", rawSave: "生文を保存",
     rawConfirm: "config.toml をこのテキストで置き換えますか？反映にはゲートウェイの再起動が必要です。",
@@ -2500,7 +2500,7 @@ const ar: Translations = {
     redactedNote: "القيم المموهة أسرار؛ حفظ قيمة مموهة دون تغيير يحافظ على الأصل.",
     envKeys: "مفاتيح البيئة (.env)", envKeysNote: "الأسماء فقط — حرّر ملف .env لتغيير القيم.",
     restartNote: "تسري التعديلات على العمليات الجديدة؛ أعد تشغيل البوابة لتطبيقها هنا.",
-    noKeys: "config.toml فارغ.", noChanges: "لا شيء للحفظ.",
+    noKeys: "config.toml فارغ.", noChanges: "لا شيء للحفظ.", filterKeysPlaceholder: "تصفية المفاتيح (المسار أو القيمة)…",
     pending: "{count} تغيير(ات) غير محفوظة",
     rawButton: "TOML الخام\u2026", rawTitle: "config.toml الخام", rawSave: "حفظ النص",
     rawConfirm: "استبدال config.toml بهذا النص حرفياً؟ أعد تشغيل البوابة للتطبيق.",

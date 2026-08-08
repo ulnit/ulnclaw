@@ -56,6 +56,7 @@ export class ConfigWidget {
         <button id="config-save" class="primary" data-i18n="config.save">Save</button>
       </header>
       <div id="config-status" class="config-status" hidden></div>
+      <input id="config-filter" type="search" data-i18n-ph="config.filterKeysPlaceholder" />
       <div id="config-rows" class="config-rows"></div>
       <div id="config-add" class="config-add">
         <span class="config-add-label" data-i18n="config.addKey">Add key</span>
@@ -153,6 +154,10 @@ export class ConfigWidget {
     });
     this.root.querySelector("#config-raw-save")!.addEventListener("click", () => {
       this.saveRaw().catch(() => undefined);
+    });
+    // P501: filter config keys by path or value substring.
+    this.root.querySelector("#config-filter")!.addEventListener("input", () => {
+      this.renderRows();
     });
     this.root.querySelector("#config-reload")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
@@ -283,6 +288,8 @@ export class ConfigWidget {
   private renderRows(): void {
     const container = this.root.querySelector("#config-rows") as HTMLElement;
     container.innerHTML = "";
+    // P501: optional key/value substring filter.
+    const filter = (this.root.querySelector("#config-filter") as HTMLInputElement | null)?.value.trim().toLowerCase() ?? "";
     const paths = [...this.base.keys()].sort();
     if (paths.length === 0) {
       const empty = document.createElement("p");
@@ -294,6 +301,10 @@ export class ConfigWidget {
     }
     let section = "";
     for (const path of paths) {
+      if (filter) {
+        const value = this.base.get(path) ?? "";
+        if (!path.toLowerCase().includes(filter) && !value.toLowerCase().includes(filter)) continue;
+      }
       const top = path.split(".")[0];
       if (top !== section) {
         section = top;
