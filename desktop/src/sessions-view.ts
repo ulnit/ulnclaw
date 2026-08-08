@@ -394,6 +394,7 @@ export class SessionsViewWidget {
         holder.innerHTML = this.renderMessages(fresh);
         this.bindCopyButtons(holder);
         for (const node of Array.from(holder.children)) pane.appendChild(node);
+        this.syncDayDividers(pane);
         const session = this.all.find((candidate) => candidate.id === sessionId);
         const existing = pane.querySelector(".sessions-view-meta");
         if (session && existing) {
@@ -852,6 +853,7 @@ export class SessionsViewWidget {
       const meta = session ? this.renderTranscriptMeta(session, renderedCount) : "";
       pane.innerHTML = meta + this.renderMessages(messages.slice(this.transcriptStart));
       this.updateTranscriptBanner(sessionId);
+      this.syncDayDividers(pane);
       // P454: per-message copy actions.
       this.bindCopyButtons(pane);
       pane.scrollTop = 0;
@@ -926,6 +928,7 @@ export class SessionsViewWidget {
     this.transcriptExpanded = true;
     pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
     this.updateTranscriptBanner(sessionId);
+    this.syncDayDividers(pane);
     this.findBar?.refresh();
   }
 
@@ -952,6 +955,7 @@ export class SessionsViewWidget {
       for (const node of Array.from(holder.children)) pane.insertBefore(node, anchor);
       pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
       this.updateTranscriptBanner(sessionId);
+      this.syncDayDividers(pane);
       this.findBar?.refresh();
     } catch (error) {
       this.status(
@@ -979,6 +983,47 @@ export class SessionsViewWidget {
         );
       });
     });
+  }
+
+  /** P477: localized calendar-day label for transcript day dividers. */
+  private dayLabel(timestamp: number): string {
+    const date = new Date(timestamp * 1000);
+    const now = new Date();
+    if (
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() === now.getDate()
+    ) {
+      return t.session.dayToday;
+    }
+    return date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  }
+
+  /** P477: ensure one day divider between messages on different calendar
+   * days — re-run after any render/prepend/append pass. */
+  private syncDayDividers(pane: HTMLElement): void {
+    pane.querySelectorAll(".day-divider").forEach((divider) => divider.remove());
+    const messages = Array.from(pane.querySelectorAll<HTMLElement>(".sessions-view-msg"));
+    let prev: HTMLElement | null = null;
+    for (const msg of messages) {
+      const ts = msg.dataset.ts ? Number(msg.dataset.ts) : Number.NaN;
+      if (prev !== null && Number.isFinite(ts)) {
+        const prevTs = prev.dataset.ts ? Number(prev.dataset.ts) : Number.NaN;
+        if (
+          Number.isFinite(prevTs) &&
+          new Date(prevTs * 1000).toDateString() !== new Date(ts * 1000).toDateString()
+        ) {
+          const divider = document.createElement("div");
+          divider.className = "day-divider";
+          const label = document.createElement("span");
+          label.className = "day-divider-label";
+          label.textContent = this.dayLabel(ts);
+          divider.appendChild(label);
+          msg.before(divider);
+        }
+      }
+      if (Number.isFinite(ts)) prev = msg;
+    }
   }
 
   private renderTranscriptMeta(session: SessionRow, rendered: number): string {
@@ -1035,8 +1080,9 @@ export class SessionsViewWidget {
         const whenAttr = message.timestamp
           ? ` title="${escapeHtml(new Date(message.timestamp * 1000).toLocaleString())}"`
           : "";
+        const tsAttr = message.timestamp ? ` data-ts="${message.timestamp}"` : "";
         return `
-          <div class="sessions-view-msg sessions-view-msg-${escapeHtml(message.role)}">
+          <div class="sessions-view-msg sessions-view-msg-${escapeHtml(message.role)}"${tsAttr}>
             <div class="sessions-view-role"${whenAttr}>${escapeHtml(this.roleLabel(message.role))}${nameTag}${message.content ? `<button class="sessions-view-copy" title="${escapeHtml(t.sessionsView.copyMessageTitle)}">⧉</button>` : ""}</div>
             ${content}
             ${toolCalls}
