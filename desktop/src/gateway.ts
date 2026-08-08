@@ -1124,8 +1124,15 @@ export class GatewayClient {
     }
   }
 
-  async messages(sessionId: string, options?: { timestamps?: boolean }): Promise<MessageRow[]> {
-    const suffix = options?.timestamps ? "?timestamps=true" : "";
+  async messages(
+    sessionId: string,
+    options?: { timestamps?: boolean; limit?: number },
+  ): Promise<MessageRow[]> {
+    const params = new URLSearchParams();
+    if (options?.timestamps) params.set("timestamps", "true");
+    if (options?.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    const suffix = query ? `?${query}` : "";
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/messages${suffix}`), {
       headers: this.headers(),
     });

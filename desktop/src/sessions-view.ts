@@ -32,6 +32,8 @@ const SEARCH_KEY = "ulnclaw.sessions.search";
 const SORT_KEY = "ulnclaw.sessions.sort";
 // P453: persistence key for the project drill-down.
 const PROJECT_FILTER_KEY = "ulnclaw.sessions.projectFilter";
+// P463: transcript tail window before the load-full banner appears.
+const TRANSCRIPT_LIMIT = 400;
 
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
@@ -48,6 +50,9 @@ export class SessionsViewWidget {
   private kbIndex = 0;
   // P446: whether the persisted selection has been restored this mount.
   private restored = false;
+  // P463: per-selection transcript pagination state.
+  private transcriptSession: string | null = null;
+  private transcriptFull = false;
   // P453: project drill-down set from the row chips.
   private projectFilter: string | null = localStorage.getItem(PROJECT_FILTER_KEY);
   // P450: activity-first or title-first list sorting.
@@ -675,13 +680,38 @@ export class SessionsViewWidget {
     const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
     const exportBtn = this.root.querySelector("#sessions-view-export") as HTMLButtonElement;
     if (!client) return;
+    // P463: reset the pagination window when the selection changes.
+    if (this.transcriptSession !== sessionId) {
+      this.transcriptSession = sessionId;
+      this.transcriptFull = false;
+    }
     pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.loading)}</p>`;
     try {
-      const messages = await client.messages(sessionId);
+      const messages = this.transcriptFull
+        ? await client.messages(sessionId)
+        : await client.messages(sessionId, { limit: TRANSCRIPT_LIMIT });
       if (this.selected !== sessionId) return; // user moved on
       const session = this.all.find((candidate) => candidate.id === sessionId);
-      const meta = session ? this.renderTranscriptMeta(session, messages.length) : "";
+      const renderedCount =
+        this.transcriptFull || !session?.message_count
+          ? messages.length
+          : session.message_count;
+      const meta = session ? this.renderTranscriptMeta(session, renderedCount) : "";
       pane.innerHTML = meta + this.renderMessages(messages);
+      // P463: tail window loaded — offer the full transcript.
+      if (!this.transcriptFull && messages.length === TRANSCRIPT_LIMIT) {
+        const banner = document.createElement("div");
+        banner.className = "sessions-view-trunc";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = fmt(t.sessionsView.loadFull, { count: String(messages.length) });
+        button.addEventListener("click", () => {
+          this.transcriptFull = true;
+          this.loadTranscript(sessionId).catch(() => undefined);
+        });
+        banner.appendChild(button);
+        pane.insertBefore(banner, pane.querySelector(".sessions-view-msg"));
+      }
       // P454: per-message copy actions.
       pane.querySelectorAll<HTMLElement>(".sessions-view-copy").forEach((button) => {
         button.addEventListener("click", () => {
