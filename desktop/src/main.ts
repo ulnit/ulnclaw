@@ -2267,7 +2267,25 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   state.doctor.mount();
   state.webhooks = new WebhooksWidget(webhooksMain, () => state.client);
   state.webhooks.mount();
-  state.runs = new RunsWidget(runsMain, () => state.client);
+  state.runs = new RunsWidget(
+    runsMain,
+    () => state.client,
+    // P425: run cards jump into their session in the chat view.
+    (sessionId) => {
+      const known = state.sessions.find((session) => session.id === sessionId);
+      const done = known
+        ? Promise.resolve(known)
+        : state.client!.getSession(sessionId).catch(() => null);
+      void done.then((session) => {
+        if (!session) return;
+        if (!state.sessions.some((candidate) => candidate.id === session.id)) {
+          state.sessions.unshift(session);
+        }
+        void openSession(session);
+        switchView("chat");
+      });
+    },
+  );
   state.runs.mount();
   state.skillsView = new SkillsWidget(skillsMain, () => state.client);
   state.skillsView.mount();

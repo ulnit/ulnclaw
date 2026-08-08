@@ -40,6 +40,8 @@ export class RunsWidget {
   constructor(
     private root: HTMLElement,
     private client: () => GatewayClient | null,
+    // P425: jump from a run card into its session in the chat view.
+    private openSession: ((sessionId: string) => void) | null = null,
   ) {}
 
   mount(): void {
@@ -137,7 +139,7 @@ export class RunsWidget {
         <div class="run-message">${escapeHtml(run.message)}</div>
         ${run.error ? `<div class="run-error">${escapeHtml(run.error)}</div>` : ""}
         ${run.result ? `<details class="run-result"><summary>${escapeHtml(t.runs.result)}</summary><pre>${escapeHtml(run.result)}</pre></details>` : ""}
-        ${run.session_id ? `<div class="run-session">session: <code>${escapeHtml(run.session_id.slice(0, 12))}</code></div>` : ""}
+        ${run.session_id ? `<div class="run-session">session: <button class="ghost run-session-link" title="${escapeHtml(t.runs.openSessionTitle)}"><code>${escapeHtml(run.session_id.slice(0, 12))}</code></button></div>` : ""}
       `;
       card.dataset.runId = run.run_id;
       const chips = this.timelineChips(run.run_id);
@@ -179,6 +181,11 @@ export class RunsWidget {
         stopBtn.addEventListener("click", () => {
           this.stopRun(run.run_id).catch(() => undefined);
         });
+      }
+      const sessionLink = card.querySelector(".run-session-link");
+      if (sessionLink && run.session_id && this.openSession) {
+        const target = run.session_id;
+        sessionLink.addEventListener("click", () => this.openSession!(target));
       }
       list.appendChild(card);
     }

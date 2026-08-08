@@ -1038,6 +1038,16 @@ export class GatewayClient {
     return (value.data || value.sessions || value || []) as SessionRow[];
   }
 
+  /** P425: fetch one session row (GET /api/sessions/:id). */
+  async getSession(sessionId: string): Promise<SessionRow | null> {
+    const response = await fetch(this.endpoint(`/api/sessions/${encodeURIComponent(sessionId)}`), {
+      headers: this.headers(),
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`session: HTTP ${response.status}`);
+    return (await response.json()) as SessionRow;
+  }
+
   async createSession(): Promise<SessionRow> {
     const response = await fetch(this.endpoint("/api/sessions"), {
       method: "POST",
