@@ -320,6 +320,18 @@ export class SessionsViewWidget {
     }
   }
 
+  /** P451: date group label for a row timestamp (activity sort only). */
+  private dateGroup(ts: number | null | undefined): string {
+    if (!ts) return t.session.groupOlder;
+    const now = new Date();
+    const startOfToday =
+      new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+    if (ts >= startOfToday) return t.session.dayToday;
+    if (ts >= startOfToday - 86400) return t.session.groupYesterday;
+    if (ts >= startOfToday - 7 * 86400) return t.session.groupWeek;
+    return t.session.groupOlder;
+  }
+
   /** P450: sort the loaded rows per the active sort mode. */
   private sortSessions(): void {
     if (this.sortMode === "title") {
@@ -549,12 +561,23 @@ export class SessionsViewWidget {
     }
     this.visible = rows;
     if (this.kbIndex >= rows.length) this.kbIndex = Math.max(0, rows.length - 1);
+    // P451: date group headers while sorted by activity.
+    const showGroups = this.sortMode === "activity";
+    let lastGroup = "";
     list.innerHTML = rows
       .map((session, index) => {
         const title = session.title || session.id.slice(0, 8);
         const active = session.id === this.selected ? " active" : "";
         const kb = index === this.kbIndex ? " kb-focus" : "";
-        return `
+        let header = "";
+        if (showGroups) {
+          const group = this.dateGroup(session.last_activity_at || session.started_at);
+          if (group !== lastGroup) {
+            lastGroup = group;
+            header = `<div class="sessions-view-group">${escapeHtml(group)}</div>`;
+          }
+        }
+        return header + `
           <div class="sessions-view-row${active}${kb}" data-id="${escapeHtml(session.id)}">
             <div class="sessions-view-row-title">${escapeHtml(title)}</div>
             <div class="sessions-view-row-meta">

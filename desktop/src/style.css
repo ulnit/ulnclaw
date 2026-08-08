@@ -1221,6 +1221,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 /* P450: sortable count header. */
 #sessions-view-count.clickable { cursor: pointer; }
 #sessions-view-count.clickable:hover { color: var(--text); }
+/* P451: date group headers in the sessions browser. */
+.sessions-view-group { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 6px; }
 /* P438: end-reason drill-down pill. */
 .sessions-view-reason-pill {
   align-self: flex-start;
