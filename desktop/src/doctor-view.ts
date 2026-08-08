@@ -51,6 +51,8 @@ export class DoctorWidget {
           <option value="fail" data-i18n="doctor.levelFail">Failures only</option>
         </select>
         <button id="doctor-export" class="ghost" data-i18n="doctor.exportJson" hidden>JSON</button>
+        <button id="doctor-gateway-restart" class="ghost" data-i18n="doctor.gatewayRestart">Restart gateway</button>
+        <button id="doctor-gateway-stop" class="ghost" data-i18n="doctor.gatewayStop">Stop gateway</button>
         <span class="spacer"></span>
         <span id="doctor-status" class="jobs-counts"></span>
       </header>
@@ -173,6 +175,13 @@ export class DoctorWidget {
         <pre id="logs-body" class="logs-body"></pre>
       </section>
     `;
+    this.root.querySelector("#doctor-gateway-restart")!.addEventListener("click", () => {
+      void this.restartGateway();
+    });
+    this.root.querySelector("#doctor-gateway-stop")!.addEventListener("click", () => {
+      void this.stopGateway();
+    });
+
     this.root.querySelector("#doctor-export")!.addEventListener("click", () => {
       this.exportJson();
     });
@@ -613,6 +622,40 @@ export class DoctorWidget {
         true,
       );
       button.disabled = false;
+    }
+  }
+
+  /** Restart the gateway over POST /api/gateway/restart (P609). */
+  private async restartGateway(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (!window.confirm(t.doctor.restartConfirm)) return;
+    const statusEl = this.root.querySelector("#doctor-status") as HTMLElement;
+    try {
+      await client.gatewayRestart();
+      statusEl.textContent = t.doctor.restarting;
+    } catch (error) {
+      statusEl.textContent = t.doctor.lifecycleFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  /** Stop the gateway over POST /api/gateway/stop (P609). */
+  private async stopGateway(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    if (!window.confirm(t.doctor.stopConfirm)) return;
+    const statusEl = this.root.querySelector("#doctor-status") as HTMLElement;
+    try {
+      await client.gatewayStop();
+      statusEl.textContent = t.doctor.stopping;
+    } catch (error) {
+      statusEl.textContent = t.doctor.lifecycleFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 

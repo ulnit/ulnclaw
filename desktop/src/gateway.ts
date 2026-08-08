@@ -1622,6 +1622,30 @@ export class GatewayClient {
     return value as { ok: boolean; name: string; note: string };
   }
 
+  /** POST /api/gateway/restart — spawn a --replace takeover (P609). */
+  async gatewayRestart(): Promise<{ ok: boolean; pid: number }> {
+    const response = await fetch(this.endpoint("/api/gateway/restart"), {
+      method: "POST",
+      headers: this.headers(),
+      body: "{}",
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `gateway restart HTTP ${response.status}`);
+    return value as { ok: boolean; pid: number };
+  }
+
+  /** POST /api/gateway/stop — terminate the gateway process (P609). */
+  async gatewayStop(): Promise<{ ok: boolean }> {
+    const response = await fetch(this.endpoint("/api/gateway/stop"), {
+      method: "POST",
+      headers: this.headers(),
+      body: "{}",
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `gateway stop HTTP ${response.status}`);
+    return value as { ok: boolean };
+  }
+
   /** GET /metrics — raw Prometheus text exposition. */
   async metricsRaw(): Promise<string> {
     const response = await fetch(this.endpoint("/metrics"), { headers: this.headers() });

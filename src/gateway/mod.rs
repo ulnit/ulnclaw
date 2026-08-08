@@ -1432,6 +1432,53 @@ async fn model_set_api(Json(body): Json<Value>) -> Response {
     .into_response()
 }
 
+/// `POST /api/gateway/restart` — spawn a detached `ulnclaw gateway
+/// --replace` on the same host/port; the replacement terminates this
+/// instance through the pidfile takeover (hermes `/api/gateway/restart`
+/// parity). The desktop child is not respawned automatically.
+async fn gateway_restart(State(state): State<Arc<GatewayState>>) -> Response {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => return server_error(&format!("current exe: {e}")),
+    };
+    let gateway = state.agent.context().config.gateway.resolved();
+    let child = std::process::Command::new(&exe)
+        .args([
+            "gateway",
+            "--replace",
+            "--host",
+            &gateway.host,
+            "--port",
+            &gateway.port.to_string(),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match child {
+        Ok(child) => {
+            let pid = child.id();
+            std::mem::forget(child);
+            Json(json!({ "ok": true, "pid": pid, "name": "gateway-restart" })).into_response()
+        }
+        Err(e) => server_error(&format!("failed to spawn replacement gateway: {e}")),
+    }
+}
+
+/// `POST /api/gateway/stop` — acknowledge, then terminate this process
+/// (SIGTERM after a short flush delay; hermes `/api/gateway/stop`
+/// parity). The pidfile liveness check self-heals the record.
+async fn gateway_stop() -> Response {
+    let pid = std::process::id();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+    });
+    Json(json!({ "ok": true, "note": "gateway shutting down" })).into_response()
+}
+
 /// `GET /api/model/auxiliary` — per-task auxiliary provider assignments
 /// plus the main slot (hermes `/api/model/auxiliary` parity, lean:
 /// ulnclaw task slots only).
@@ -5961,6 +6008,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/memory/reset", post(memory_reset_api))
         .route("/api/update/check", get(update_check_api))
         .route("/api/update", post(update_apply_api))
+        .route("/api/gateway/restart", post(gateway_restart))
+        .route("/api/gateway/stop", post(gateway_stop))
         .route("/api/health", get(api_health))
         .route("/api/ssh/ownership", get(ssh_ownership))
         .route("/api/oauth/status", get(oauth_status))
@@ -16081,6 +16130,17 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_lifecycle_endpoints_auth_gate() {
+        let app = router(test_state());
+        // Restart/stop terminate the process — tests only verify the
+        // auth gate keeps unauthenticated callers out.
+        let (status, _) = send_json(app.clone(), "POST", "/api/gateway/restart", None, json!({})).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = send_json(app.clone(), "POST", "/api/gateway/stop", None, json!({})).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
