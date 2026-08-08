@@ -111,6 +111,7 @@ const el = {
   messages: document.getElementById("messages")!,
   scrollBottom: document.getElementById("scroll-bottom") as HTMLButtonElement,
   chatTitle: document.getElementById("chat-title")!,
+  chatBusy: document.getElementById("chat-busy")!,
   sessionInfoDialog: document.getElementById("session-info-dialog") as HTMLDialogElement,
   sessionInfoRows: document.getElementById("session-info-rows")!,
   sessionInfoCopy: document.getElementById("session-info-copy") as HTMLButtonElement,
@@ -691,6 +692,9 @@ async function sendTurn(): Promise<void> {
   state.composerHistoryIndex = null;
   state.busy = true;
   el.send.disabled = true;
+  // P390: thinking indicator while the turn streams.
+  el.chatBusy.textContent = t.tools.thinking;
+  el.chatBusy.hidden = false;
   el.input.value = "";
   hideSlashPop();
   el.toolProgress.hidden = true;
@@ -799,6 +803,7 @@ async function sendTurn(): Promise<void> {
     turnTimer.stop();
     state.busy = false;
     el.send.disabled = false;
+    el.chatBusy.hidden = true;
     el.toolProgress.hidden = true;
     el.toolProgress.textContent = "";
     state.findBar?.refresh();
