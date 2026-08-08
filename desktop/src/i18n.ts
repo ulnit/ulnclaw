@@ -139,7 +139,7 @@ export interface Translations {
     title: string; days7: string; days30: string; days90: string; sourcePlaceholder: string;
     sessions: string; messages: string; toolCalls: string; tokens: string;
     estCost: string; avgSession: string; activeDays: string;
-    topModels: string; topTools: string; topSessions: string;
+    topModels: string; topTools: string; topSessions: string; activityTitle: string; byHour: string; byWeekday: string; peakNote: string;
     colModel: string; colTool: string; colSession: string; calls: string;
     empty: string; loadFailed: string;
   };
@@ -464,7 +464,7 @@ const en: Translations = {
     days7: "Last 7 days", days30: "Last 30 days", days90: "Last 90 days", sourcePlaceholder: "Filter by source (cli, gateway, …)",
     sessions: "Sessions", messages: "Messages", toolCalls: "Tool calls", tokens: "Tokens",
     estCost: "Est. cost", avgSession: "Avg session", activeDays: "active days:",
-    topModels: "Top models", topTools: "Top tools", topSessions: "Top sessions",
+    topModels: "Top models", topTools: "Top tools", topSessions: "Top sessions", activityTitle: "Activity patterns", byHour: "Session starts by hour", byWeekday: "Session starts by weekday", peakNote: "peak: {peak}",
     colModel: "Model", colTool: "Tool", colSession: "Session", calls: "Calls",
     empty: "No activity recorded for this window.",
     loadFailed: "Failed to load insights: {error}",
@@ -918,7 +918,7 @@ const zh: Translations = {
     days7: "最近 7 天", days30: "最近 30 天", days90: "最近 90 天", sourcePlaceholder: "按来源过滤（cli、gateway…）",
     sessions: "会话数", messages: "消息数", toolCalls: "工具调用", tokens: "令牌数",
     estCost: "估算费用", avgSession: "平均会话时长", activeDays: "活跃天数:",
-    topModels: "热门模型", topTools: "热门工具", topSessions: "热门会话",
+    topModels: "热门模型", topTools: "热门工具", topSessions: "热门会话", activityTitle: "活动规律", byHour: "按小时会话启动", byWeekday: "按星期会话启动", peakNote: "峰值：{peak}",
     colModel: "模型", colTool: "工具", colSession: "会话", calls: "调用次数",
     empty: "该时间段内暂无活动记录。",
     loadFailed: "加载洞察失败:{error}",
@@ -1372,7 +1372,7 @@ const zhHant: Translations = {
     days7: "最近 7 天", days30: "最近 30 天", days90: "最近 90 天", sourcePlaceholder: "按來源過濾（cli、gateway…）",
     sessions: "會話數", messages: "訊息數", toolCalls: "工具呼叫", tokens: "權杖數",
     estCost: "估算費用", avgSession: "平均會話時長", activeDays: "活躍天數:",
-    topModels: "熱門模型", topTools: "熱門工具", topSessions: "熱門會話",
+    topModels: "熱門模型", topTools: "熱門工具", topSessions: "熱門會話", activityTitle: "活動規律", byHour: "按小時工作階段啟動", byWeekday: "按星期工作階段啟動", peakNote: "尖峰：{peak}",
     colModel: "模型", colTool: "工具", colSession: "會話", calls: "呼叫次數",
     empty: "該時間段內暫無活動記錄。",
     loadFailed: "載入洞察失敗:{error}",
@@ -1826,7 +1826,7 @@ const ja: Translations = {
     days7: "過去 7 日間", days30: "過去 30 日間", days90: "過去 90 日間", sourcePlaceholder: "ソースで絞り込み（cli、gateway…）",
     sessions: "セッション", messages: "メッセージ", toolCalls: "ツール呼び出し", tokens: "トークン",
     estCost: "推定コスト", avgSession: "平均セッション時間", activeDays: "アクティブ日数:",
-    topModels: "上位モデル", topTools: "上位ツール", topSessions: "上位セッション",
+    topModels: "上位モデル", topTools: "上位ツール", topSessions: "上位セッション", activityTitle: "アクティビティパターン", byHour: "時間帯別のセッション開始", byWeekday: "曜日別のセッション開始", peakNote: "ピーク：{peak}",
     colModel: "モデル", colTool: "ツール", colSession: "セッション", calls: "呼び出し回数",
     empty: "この期間のアクティビティはありません。",
     loadFailed: "インサイトの読み込みに失敗しました: {error}",
@@ -2280,7 +2280,7 @@ const ar: Translations = {
     days7: "آخر 7 أيام", days30: "آخر 30 يومًا", days90: "آخر 90 يومًا", sourcePlaceholder: "تصفية حسب المصدر (cli، gateway…)",
     sessions: "الجلسات", messages: "الرسائل", toolCalls: "استدعاءات الأدوات", tokens: "الرموز",
     estCost: "التكلفة التقديرية", avgSession: "متوسط مدة الجلسة", activeDays: "أيام النشاط:",
-    topModels: "أكثر النماذج استخدامًا", topTools: "أكثر الأدوات استخدامًا", topSessions: "أكثر الجلسات نشاطًا",
+    topModels: "أكثر النماذج استخدامًا", topTools: "أكثر الأدوات استخدامًا", topSessions: "أكثر الجلسات نشاطًا", activityTitle: "أنماط النشاط", byHour: "بدء الجلسات حسب الساعة", byWeekday: "بدء الجلسات حسب اليوم", peakNote: "الذروة: {peak}",
     colModel: "النموذج", colTool: "الأداة", colSession: "الجلسة", calls: "الاستدعاءات",
     empty: "لا يوجد نشاط مسجل في هذه الفترة.",
     loadFailed: "فشل تحميل الرؤى: {error}",

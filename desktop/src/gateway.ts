@@ -337,7 +337,12 @@ export interface InsightsReport {
   sources: { source: string; sessions: number }[];
   tools: { tool: string; calls: number }[];
   top_sessions: { id: string; title: string | null; model: string; started_at: number; messages: number; tool_calls: number; total_tokens: number }[];
-  activity: { peak_hour: number | null; peak_weekday: number | null };
+  activity: {
+    by_hour: number[];
+    by_weekday: number[];
+    peak_hour: number | null;
+    peak_weekday: number | null;
+  };
 }
 
 /** GET /health/detailed payload (open probe; P365). */

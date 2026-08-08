@@ -45,6 +45,18 @@ function csvCell(value: string | number | null): string {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+/** P413: "14:00" label for a 0-23 peak hour. */
+function hourLabel(hour: number): string {
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
+/** P413: localized short weekday for Mon=0 … Sun=6. */
+function weekdayLabel(index: number): string {
+  // 2024-01-01 was a Monday; offset by the weekday index.
+  const date = new Date(2024, 0, 1 + (index % 7));
+  return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date);
+}
+
 export class UsageWidget {
   private timer: number | null = null;
   private busy = false;
@@ -223,8 +235,37 @@ export class UsageWidget {
       )
       .join("");
 
+    // P413: activity sparklines (session starts by hour / weekday).
+    const activity = report.activity;
+    const byHour = activity.by_hour || [];
+    const byWeekday = activity.by_weekday || [];
+    const hasActivity = byHour.some((v) => v > 0) || byWeekday.some((v) => v > 0);
+    const activityHtml = hasActivity
+      ? `
+      <h4 class="config-section">${escapeHtml(u.activityTitle)}</h4>
+      <div class="usage-activity">
+        <div class="usage-activity-row">
+          <span class="usage-activity-label">${escapeHtml(u.byHour)}${
+            activity.peak_hour != null
+              ? ` \u00b7 ${escapeHtml(fmt(u.peakNote, { peak: hourLabel(activity.peak_hour) }))}`
+              : ""
+          }</span>
+          ${this.sparkline(byHour)}
+        </div>
+        <div class="usage-activity-row">
+          <span class="usage-activity-label">${escapeHtml(u.byWeekday)}${
+            activity.peak_weekday != null
+              ? ` \u00b7 ${escapeHtml(fmt(u.peakNote, { peak: weekdayLabel(activity.peak_weekday) }))}`
+              : ""
+          }</span>
+          ${this.sparkline(byWeekday)}
+        </div>
+      </div>`
+      : "";
+
     body.innerHTML = `
       <div class="usage-cards">${cards}</div>
+      ${activityHtml}
       <div class="insights-tables">
         <div>
           <h4 class="config-section">${escapeHtml(u.topModels)}</h4>
@@ -249,6 +290,25 @@ export class UsageWidget {
         <div class="usage-card-label">${escapeHtml(label)}</div>
         ${detail ? `<div class="usage-card-detail">${escapeHtml(detail)}</div>` : ""}
       </div>`;
+  }
+
+  /** P413: inline SVG sparkline (session starts by hour / weekday). */
+  private sparkline(values: number[], width = 280, height = 44): string {
+    if (!values.length) return "";
+    const max = Math.max(1, ...values);
+    const stepX = values.length > 1 ? width / (values.length - 1) : width;
+    const points = values
+      .map((value, index) => {
+        const x = (index * stepX).toFixed(1);
+        const y = (height - 3 - (value / max) * (height - 8)).toFixed(1);
+        return `${x},${y}`;
+      })
+      .join(" ");
+    return (
+      `<svg class="usage-sparkline" viewBox="0 0 ${width} ${height}" ` +
+      `width="${width}" height="${height}" preserveAspectRatio="none">` +
+      `<polyline points="${points}" /></svg>`
+    );
   }
 
   private render(usage: UsagePayload): void {
