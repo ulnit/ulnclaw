@@ -621,6 +621,9 @@ const COMPOSER_HISTORY_KEY = "ulnclaw.composerHistory";
 /** P397: sidebar session filter persists across restarts. */
 const SESSION_FILTER_KEY = "ulnclaw.sessionFilter";
 
+/** P398: the active view persists across restarts. */
+const ACTIVE_VIEW_KEY = "ulnclaw.activeView";
+
 function persistComposerHistory(): void {
   try {
     localStorage.setItem(COMPOSER_HISTORY_KEY, JSON.stringify(state.composerHistory));
@@ -2106,6 +2109,11 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing") => {
     if (view !== "chat") state.findBar?.close();
     state.view = view;
+    try {
+      localStorage.setItem(ACTIVE_VIEW_KEY, view);
+    } catch {
+      /* storage unavailable — view stays session-scoped */
+    }
     chatMain.hidden = view !== "chat";
     kanbanMain.hidden = view !== "kanban";
     projectsMain.hidden = view !== "projects";
@@ -2375,6 +2383,17 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   if (savedFilter) {
     state.sessionFilterText = savedFilter;
     el.sessionFilter.value = savedFilter;
+  }
+  // P398: reopen the last active view.
+  const savedView = localStorage.getItem(ACTIVE_VIEW_KEY);
+  if (
+    savedView === "chat" || savedView === "kanban" || savedView === "projects" ||
+    savedView === "jobs" || savedView === "usage" || savedView === "config" ||
+    savedView === "doctor" || savedView === "webhooks" || savedView === "runs" ||
+    savedView === "skills" || savedView === "sessions" || savedView === "models" ||
+    savedView === "plugins" || savedView === "pairing"
+  ) {
+    switchView(savedView);
   }
   el.statusbar.addEventListener("click", (event) => {
     const seg = (event.target as HTMLElement).closest<HTMLElement>(".statusbar-seg");
