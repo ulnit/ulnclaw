@@ -2740,17 +2740,18 @@ export class GatewayClient {
 
   /** POST /api/sessions/import — import portable session JSON exports
    * (hermes `/api/sessions/import` parity; P348). */
-  async sessionsImport(sessions: unknown[]): Promise<{
+  async sessionsImport(sessions: unknown[], dryRun = false): Promise<{
     ok: boolean;
     imported: number;
     skipped: number;
     messages: number;
     errors: { index: number; id: string | null; error: string }[];
+    dry_run?: boolean;
   }> {
     const response = await fetch(this.endpoint("/api/sessions/import"), {
       method: "POST",
       headers: { ...this.headers(), "content-type": "application/json" },
-      body: JSON.stringify({ sessions }),
+      body: JSON.stringify({ sessions, dry_run: dryRun }),
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) {

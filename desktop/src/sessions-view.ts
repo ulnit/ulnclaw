@@ -1746,6 +1746,16 @@ export class SessionsViewWidget {
         this.status(t.sessionsView.importParseFailed, true);
         return;
       }
+      // P576: dry-run preview first — confirm before writing anything.
+      const preview = await client.sessionsImport(sessions, true);
+      const question = t.sessionsView.importPreview
+        .replace("{imported}", String(preview.imported))
+        .replace("{skipped}", String(preview.skipped))
+        .replace("{messages}", String(preview.messages));
+      if (!window.confirm(question)) {
+        this.status(t.sessionsView.importCancelled, false);
+        return;
+      }
       const result = await client.sessionsImport(sessions);
       const summary = t.sessionsView.imported
         .replace("{imported}", String(result.imported))
