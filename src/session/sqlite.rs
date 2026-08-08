@@ -191,6 +191,9 @@ pub struct BrowseRow {
     /// P528: the session's model — shown in the details pane and used
     /// by the TUI model quick-filter (F10 cycles distinct models).
     pub model: Option<String>,
+    /// P542: recorded end reason (complete/branched/archived/…) for
+    /// the TUI details pane; `None` while the session is open.
+    pub end_reason: Option<String>,
 }
 
 /// Maximum session title length in characters (hermes `MAX_TITLE_LENGTH`).
@@ -1541,7 +1544,8 @@ impl SqliteSessionStore {
                     s.cwd,
                     s.archived,
                     s.message_count,
-                    s.model
+                    s.model,
+                    s.end_reason
              FROM sessions s WHERE 1=1",
         );
         if !include_archived {
@@ -1574,6 +1578,7 @@ impl SqliteSessionStore {
                     archived: row.get::<_, i64>(6)? != 0,
                     message_count: row.get(7)?,
                     model: row.get(8)?,
+                    end_reason: row.get(9)?,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;

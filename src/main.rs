@@ -9711,6 +9711,13 @@ fn browse_details_pane_lines(
             width,
         ));
     }
+    // P542: how the session ended (when it has).
+    if let Some(reason) = row.end_reason.as_deref().filter(|r| !r.is_empty()) {
+        lines.extend(ulnclaw::tui_text::wrap_display_text(
+            &format!("ended: {reason}"),
+            width,
+        ));
+    }
     if row.archived {
         lines.extend(ulnclaw::tui_text::wrap_display_text(
             "status: archived",
