@@ -16,6 +16,8 @@ export interface SessionRow {
   started_at: number;
   last_activity_at: number;
   message_count?: number;
+  /** End reason stored on the session (complete/branched/compression…; P409). */
+  end_reason?: string | null;
   /** Owning project slug (longest-prefix cwd match in projects.db). */
   project?: string | null;
 }

@@ -199,6 +199,16 @@ const SOURCE_BADGES: Record<string, string> = {
   "gateway-run": "⚙",
 };
 
+/** P409: short glyphs for session end reasons (complete, branched…). */
+const END_BADGES: Record<string, string> = {
+  complete: "✓",
+  completed: "✓",
+  max_iterations: "∞",
+  compression: "⧉",
+  branched: "⑂",
+  ended: "■",
+};
+
 /** P392: sidebar session rows group by relative age. */
 function ageGroup(timestamp: number): "today" | "yesterday" | "week" | "older" {
   const now = new Date();
@@ -306,6 +316,14 @@ function renderSessions(): void {
       sourceBadge.title = session.source;
       sourceBadge.textContent = SOURCE_BADGES[session.source] ?? session.source;
       item.appendChild(sourceBadge);
+    }
+    // P409: badge sessions that carry an end reason.
+    if (session.end_reason) {
+      const endBadge = document.createElement("span");
+      endBadge.className = "session-end-badge";
+      endBadge.title = fmt(t.session.endReasonTitle, { reason: session.end_reason });
+      endBadge.textContent = END_BADGES[session.end_reason] ?? session.end_reason;
+      item.appendChild(endBadge);
     }
     const actions = document.createElement("span");
     actions.className = "session-actions";

@@ -379,6 +379,12 @@ dialog menu button[value="default"] { background: var(--accent); border-color: v
   font-size: 0.68em; border-radius: 9px; background: rgba(120,140,200,0.22);
   color: var(--text); opacity: 0.9;
 }
+/* P409: session end-reason badge (complete, branched, compression…). */
+.session-end-badge {
+  display: inline-block; margin: 2px 0 0 4px; padding: 1px 6px;
+  font-size: 0.68em; border-radius: 9px; background: rgba(200,150,90,0.22);
+  color: var(--text); opacity: 0.9;
+}
 
 /* Jobs widget (P166) */
 #jobs { display: flex; flex-direction: column; overflow: hidden; }
