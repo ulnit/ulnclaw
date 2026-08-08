@@ -34,6 +34,8 @@ export interface SessionRow {
   first_user_message?: string | null;
   /** P519: sessions-table archived flag (TUI F8 flow). */
   archived?: boolean;
+  /** Session working directory (drives the file-tree sidebar root; P590). */
+  cwd?: string | null;
   /** P553/P554: fork lineage + token sum (single-session fetches only). */
   child_session_ids?: string[];
   total_tokens?: number;

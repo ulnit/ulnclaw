@@ -25,6 +25,7 @@ import { FindBar } from "./find-bar";
 import { CommandPalette } from "./command-palette";
 import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
+import { FileTreePanel } from "./file-tree";
 import { notify, notifyError, notifySuccess, notificationHistory, notificationUnread, markNotificationsRead, clearNotificationHistory, onNotificationHistoryChange, loadPersistedNotificationHistory } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
 import { resolveBootFailure, showBootFailure } from "./boot-failure";
@@ -126,10 +127,32 @@ const state = {
   palette: null as CommandPalette | null,
   artifacts: null as ArtifactsOverlay | null,
   learning: null as LearningOverlay | null,
+  fileTree: null as FileTreePanel | null,
   onboarding: null as OnboardingOverlay | null,
   sessionPicker: null as SessionPickerDialog | null,
   view: "chat" as "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing",
 };
+
+/** P590: toggle the chat file-tree sidebar, rooted at the open session's cwd. */
+async function toggleFileTree(): Promise<void> {
+  const panel = state.fileTree;
+  if (!panel) return;
+  if (panel.visible) {
+    panel.hide();
+    return;
+  }
+  let cwd: string | null = null;
+  const currentId = state.current?.id ?? null;
+  if (currentId && state.client) {
+    try {
+      const row = await state.client.getSession(currentId);
+      cwd = row?.cwd ?? null;
+    } catch {
+      cwd = null;
+    }
+  }
+  await panel.toggle(cwd);
+}
 
 const el = {
   dot: document.getElementById("gateway-dot")!,
@@ -2434,6 +2457,12 @@ function installHotkeys(): void {
       if (state.current) openExportPicker();
       return;
     }
+    // P590: mod+shift+t — toggle the chat file-tree sidebar.
+    if (mod && event.shiftKey && key === "t") {
+      event.preventDefault();
+      void toggleFileTree();
+      return;
+    }
     // mod+, — settings (hermes nav.settings chord).
     if (mod && !event.shiftKey && event.key === ",") {
       event.preventDefault();
@@ -3185,6 +3214,11 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   // Learning view (hermes star-map parity): learned skills + memory
   // graph over /api/learning/*.
   state.learning = new LearningOverlay(() => state.client);
+  state.fileTree = new FileTreePanel(() => state.client);
+  state.fileTree.mount(document.getElementById("chat-body")!);
+  (document.getElementById("chat-file-tree") as HTMLButtonElement).addEventListener("click", () => {
+    void toggleFileTree();
+  });
 
   // Artifacts browser (hermes artifacts-view parity): scans recent
   // transcripts for links/files/images.
@@ -3285,6 +3319,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     },
     archiveSession: () => runArchiveSession(),
     unarchiveSession: () => runUnarchiveSession(),
+    toggleFileTree: () => toggleFileTree(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
