@@ -9944,6 +9944,8 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /stop            request a stop for this session's running run
   /retry           truncate the transcript to the last user turn and re-run it
   /undo [N]        drop the last N user turns (default 1), echoing what was removed
+  /verbose [on|off] show or persist agent.verbose
+  /yolo [on|off]   show or persist approvals.mode=off (auto-approve; deny rules still bind)
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -10552,6 +10554,108 @@ async fn resolve_gateway_slash(
                 reply.push_str(&echo);
             }
             Some(GatewaySlash::Direct(reply))
+        }
+        "/verbose" => {
+            // Show or persist agent.verbose (takes effect for new runs).
+            let path = crate::config_cmd::config_path();
+            let current = crate::config::UlncLawConfig::load(Some(&path))
+                .map(|c| c.agent.verbose)
+                .unwrap_or(false);
+            let arg = rest.trim().to_ascii_lowercase();
+            if arg.is_empty() {
+                return Some(GatewaySlash::Direct(format!(
+                    "verbose logging: {}\nusage: /verbose on|off",
+                    if current { "on" } else { "off" }
+                )));
+            }
+            let value = match arg.as_str() {
+                "on" | "true" | "1" => true,
+                "off" | "false" | "0" => false,
+                _ => {
+                    return Some(GatewaySlash::Direct(
+                        "usage: /verbose on|off".to_string(),
+                    ))
+                }
+            };
+            let mut doc = match crate::config_cmd::load_toml(&path) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
+                }
+            };
+            let Some(root) = doc.as_table_mut() else {
+                return Some(GatewaySlash::Direct(
+                    "config root is not a table".to_string(),
+                ));
+            };
+            let agent_entry = root
+                .entry("agent".to_string())
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+            let Some(agent_table) = agent_entry.as_table_mut() else {
+                return Some(GatewaySlash::Direct(
+                    "config [agent] is not a table".to_string(),
+                ));
+            };
+            agent_table.insert("verbose".to_string(), toml::Value::Boolean(value));
+            if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+                return Some(GatewaySlash::Direct(format!("config save failed: {e}")));
+            }
+            Some(GatewaySlash::Direct(format!(
+                "verbose logging set to {} \u{2014} applies to new runs; restart the gateway to change this process",
+                if value { "on" } else { "off" }
+            )))
+        }
+        "/yolo" => {
+            // Show or persist approvals.mode=off (hermes /yolo parity,
+            // config-persisted adaptation). Deny rules still bind.
+            let path = crate::config_cmd::config_path();
+            let current_mode = crate::config::UlncLawConfig::load(Some(&path))
+                .map(|c| c.approvals.mode)
+                .unwrap_or_else(|_| "manual".to_string());
+            let arg = rest.trim().to_ascii_lowercase();
+            if arg.is_empty() {
+                let state = if current_mode == "off" { "on" } else { "off" };
+                return Some(GatewaySlash::Direct(format!(
+                    "yolo (approvals.mode=off): {state} (current mode: {current_mode})\nusage: /yolo on|off"
+                )));
+            }
+            let mode = match arg.as_str() {
+                "on" | "true" | "1" => "off",
+                "off" | "false" | "0" => "manual",
+                _ => {
+                    return Some(GatewaySlash::Direct(
+                        "usage: /yolo on|off".to_string(),
+                    ))
+                }
+            };
+            let mut doc = match crate::config_cmd::load_toml(&path) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
+                }
+            };
+            let Some(root) = doc.as_table_mut() else {
+                return Some(GatewaySlash::Direct(
+                    "config root is not a table".to_string(),
+                ));
+            };
+            let approvals_entry = root
+                .entry("approvals".to_string())
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+            let Some(approvals_table) = approvals_entry.as_table_mut() else {
+                return Some(GatewaySlash::Direct(
+                    "config [approvals] is not a table".to_string(),
+                ));
+            };
+            approvals_table.insert("mode".to_string(), toml::Value::String(mode.to_string()));
+            if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+                return Some(GatewaySlash::Direct(format!("config save failed: {e}")));
+            }
+            Some(GatewaySlash::Direct(if mode == "off" {
+                "yolo ON \u{2014} approvals.mode=\"off\" persisted: dangerous commands auto-approve except approvals.deny rules; applies to new runs".to_string()
+            } else {
+                "yolo OFF \u{2014} approvals.mode=\"manual\" persisted; applies to new runs".to_string()
+            }))
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');
@@ -13880,6 +13984,60 @@ mod tests {
         assert_eq!(reply["response"], "nothing to undo.");
         let reply = post_chat(app.clone(), &sid, "/undo abc").await;
         assert_eq!(reply["response"], "invalid turn count: abc");
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_verbose_yolo_persist() {
+        // P618: /verbose + /yolo persist agent.verbose / approvals.mode.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-toggles", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/verbose").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("verbose logging: off"));
+        let reply = post_chat(app.clone(), &sid, "/verbose on").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("verbose logging set to on"));
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(text.contains("verbose = true"), "{text}");
+        let reply = post_chat(app.clone(), &sid, "/verbose banana").await;
+        assert_eq!(reply["response"], "usage: /verbose on|off");
+
+        let reply = post_chat(app.clone(), &sid, "/yolo").await;
+        let shown = reply["response"].as_str().unwrap();
+        assert!(shown.contains("yolo (approvals.mode=off): off"), "{shown}");
+        let reply = post_chat(app.clone(), &sid, "/yolo on").await;
+        assert!(reply["response"].as_str().unwrap().contains("yolo ON"));
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(text.contains("mode = \"off\""), "{text}");
+        let reply = post_chat(app.clone(), &sid, "/yolo").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("yolo (approvals.mode=off): on"));
+        let reply = post_chat(app.clone(), &sid, "/yolo off").await;
+        assert!(reply["response"].as_str().unwrap().contains("yolo OFF"));
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(text.contains("mode = \"manual\""), "{text}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

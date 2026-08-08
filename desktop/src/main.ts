@@ -1893,6 +1893,8 @@ function gatewaySlashCommands(): [string, string][] {
     ["/stop", t.slash.stop],
     ["/retry", t.slash.retry],
     ["/undo", t.slash.undo],
+    ["/verbose", t.slash.verbose],
+    ["/yolo", t.slash.yolo],
   ];
 }
 
