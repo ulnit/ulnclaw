@@ -3,7 +3,7 @@
 // `projects.db` as the `ulnclaw project` CLI. Projects anchor kanban
 // worktrees (`kanban create --project`) and group desktop sessions.
 
-import type { DiscoveredRepo, GatewayClient, Project } from "./gateway";
+import type { DiscoveredRepo, GatewayClient, Project, SessionRow } from "./gateway";
 import { fmt, t } from "./i18n";
 
 export class ProjectsWidget {
@@ -11,6 +11,8 @@ export class ProjectsWidget {
   private activeId: string | null = null;
   private repos: DiscoveredRepo[] = [];
   private showArchived = false;
+  /** P430: session census per project slug (from /api/sessions). */
+  private sessionCounts = new Map<string, number>();
 
   constructor(
     private root: HTMLElement,
@@ -97,13 +99,22 @@ export class ProjectsWidget {
   private async refresh(): Promise<void> {
     const client = this.client();
     if (!client) return;
-    const [listing, repos] = await Promise.all([
+    const [listing, repos, sessions] = await Promise.all([
       client.projectsList(this.showArchived),
       client.projectsRepos(),
+      // P430: count sessions per owning-project slug; a gateway hiccup
+      // must not break the projects view.
+      client.listSessions().catch(() => [] as SessionRow[]),
     ]);
     this.projects = listing.projects;
     this.activeId = listing.active_id;
     this.repos = repos;
+    const counts = new Map<string, number>();
+    for (const session of sessions) {
+      if (!session.project) continue;
+      counts.set(session.project, (counts.get(session.project) ?? 0) + 1);
+    }
+    this.sessionCounts = counts;
     this.render();
   }
 
@@ -214,6 +225,13 @@ export class ProjectsWidget {
     slug.className = "project-slug";
     slug.textContent = project.slug;
     header.appendChild(slug);
+    const census = this.sessionCounts.get(project.slug) ?? 0;
+    if (census > 0) {
+      const count = document.createElement("span");
+      count.className = "badge project-session-count";
+      count.textContent = fmt(t.projects.sessionCount, { count: String(census) });
+      header.appendChild(count);
+    }
     if (project.board_slug) {
       const board = document.createElement("span");
       board.className = "badge";
