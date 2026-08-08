@@ -26,6 +26,8 @@ const STATUS_FILTER_KEY = "ulnclaw.sessions.statusFilter";
 const REASON_FILTER_KEY = "ulnclaw.sessions.reasonFilter";
 // P446: persistence key for the selected session.
 const SELECTED_KEY = "ulnclaw.sessions.selected";
+// P449: persistence key for the transcript search text.
+const SEARCH_KEY = "ulnclaw.sessions.search";
 
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
@@ -158,6 +160,15 @@ export class SessionsViewWidget {
         this.runSearch().catch(() => undefined);
       }, 350);
     });
+    // P449: persist the search text and restore it (re-running if set).
+    const searchInput = this.root.querySelector("#sessions-view-search") as HTMLInputElement;
+    searchInput.value = localStorage.getItem(SEARCH_KEY) || "";
+    searchInput.addEventListener("input", () => {
+      localStorage.setItem(SEARCH_KEY, searchInput.value);
+    });
+    if (searchInput.value.trim()) {
+      this.runSearch().catch(() => undefined);
+    }
     this.root.querySelector("#sessions-view-export")!.addEventListener("click", () => {
       this.exportSelected("md");
     });
