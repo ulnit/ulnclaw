@@ -40,6 +40,7 @@ export interface CommandPaletteHooks {
   toggleSidebar(): void;
   themePicker(): void | Promise<void>;
   fontPicker(): void | Promise<void>;
+  copySessionId(): void | Promise<void>;
 }
 
 /** Subsequence fuzzy score (higher = better, null = no match). */
@@ -159,6 +160,7 @@ export class CommandPalette {
       { id: "toggle-sidebar", label: t.palette.toggleSidebar, group: t.palette.gatewayGroup, hint: "Ctrl/Cmd+B", run: () => hooks.toggleSidebar() },
       { id: "theme-picker", label: t.palette.themePicker, group: t.palette.gatewayGroup, run: () => hooks.themePicker() },
       { id: "font-picker", label: t.palette.fontPicker, group: t.palette.gatewayGroup, run: () => hooks.fontPicker() },
+      { id: "copy-session-id", label: t.palette.copySessionId, group: t.palette.sessionGroup, run: () => hooks.copySessionId() },
     ];
     const current = hooks.currentSessionId();
     for (const session of hooks.sessions()) {

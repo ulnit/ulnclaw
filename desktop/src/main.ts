@@ -2372,6 +2372,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     toggleSidebar: () => toggleSidebar(),
     themePicker: () => openThemePicker(),
     fontPicker: () => openFontPicker(),
+    copySessionId: () => runCopySessionId(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
@@ -2717,6 +2718,17 @@ async function runKanbanQuickAdd(): Promise<void> {
     state.kanban?.rerender();
   } catch (error) {
     notifyError(fmt(t.palette.kanbanQuickAddFailed, { error: String(error) }));
+  }
+}
+
+/** P405: palette action — copy the current session's ID. */
+async function runCopySessionId(): Promise<void> {
+  if (!state.current) return;
+  try {
+    await navigator.clipboard.writeText(state.current.id);
+    notifySuccess(t.session.infoCopied);
+  } catch {
+    notifyError(t.session.infoCopyFailed);
   }
 }
 
