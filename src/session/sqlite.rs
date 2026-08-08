@@ -8,6 +8,7 @@ use crate::error::{AgentError, Result};
 use crate::provider::{Message, Role, ToolCall};
 use crate::session::{Session, SessionMetadata, SessionStore};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -1269,6 +1270,55 @@ impl SqliteSessionStore {
             sessions.push(row.map_err(|e| AgentError::session(e.to_string()))?);
         }
         Ok(sessions)
+    }
+
+    /// P509: last non-empty active message preview per session, batched
+    /// in one query for list-row snippets. Previews are whitespace-
+    /// trimmed, newline-collapsed and truncated to `max_chars` with an
+    /// ellipsis; sessions without messages are omitted.
+    pub fn last_message_previews(
+        &self,
+        session_ids: &[String],
+        max_chars: usize,
+    ) -> Result<HashMap<String, String>> {
+        let mut previews = HashMap::new();
+        if session_ids.is_empty() || max_chars == 0 {
+            return Ok(previews);
+        }
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let placeholders = vec!["?"; session_ids.len()].join(",");
+        let sql = format!(
+            "SELECT m.session_id, m.content FROM messages m
+             JOIN (SELECT session_id, MAX(id) AS max_id FROM messages
+                   WHERE session_id IN ({placeholders}) AND active = 1
+                         AND content IS NOT NULL AND TRIM(content) <> ''
+                   GROUP BY session_id) latest
+             ON m.session_id = latest.session_id AND m.id = latest.max_id"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            session_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        for row in rows {
+            let (session_id, content) = row.map_err(|e| AgentError::session(e.to_string()))?;
+            let collapsed: String = content
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let char_count = collapsed.chars().count();
+            let mut preview: String = collapsed.chars().take(max_chars).collect();
+            if char_count > max_chars {
+                preview.push('…');
+            }
+            previews.insert(session_id, preview);
+        }
+        Ok(previews)
     }
 
     /// Per-model usage aggregation since a UNIX cutoff (hermes

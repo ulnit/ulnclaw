@@ -7318,6 +7318,9 @@ async fn delete_response(
 #[derive(Deserialize)]
 struct SessionsQuery {
     limit: Option<usize>,
+    /// P509: `?preview=true` attaches a `last_message` snippet to each
+    /// row for UI list rendering.
+    preview: Option<bool>,
 }
 
 /// Attach the owning project slug (longest-prefix folder match on the
@@ -7362,7 +7365,29 @@ async fn list_sessions(
     let limit = query.limit.unwrap_or(50).min(500);
     match state.store.list_session_rows(limit) {
         Ok(rows) => {
-            let data = enrich_sessions_with_projects(rows);
+            let mut data = enrich_sessions_with_projects(rows);
+            if query.preview.unwrap_or(false) {
+                let ids: Vec<String> = data
+                    .iter()
+                    .filter_map(|row| row.get("id").and_then(Value::as_str).map(str::to_string))
+                    .collect();
+                if let Ok(previews) = state.store.last_message_previews(&ids, 80) {
+                    for row in data.iter_mut() {
+                        let preview = row
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .and_then(|id| previews.get(id));
+                        if let Some(object) = row.as_object_mut() {
+                            object.insert(
+                                "last_message".to_string(),
+                                preview
+                                    .map(|text| Value::String(text.clone()))
+                                    .unwrap_or(Value::Null),
+                            );
+                        }
+                    }
+                }
+            }
             Json(json!({"object": "list", "data": data})).into_response()
         }
         Err(e) => server_error(&e.to_string()),
@@ -11127,6 +11152,79 @@ mod tests {
 
         let (status, _) = get_json(app, &format!("/api/sessions/{}", session_id), Some(token)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_sessions_list_last_message_preview() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Two sessions: one with messages, one empty.
+        let with_messages = state
+            .store
+            .create_session("gateway", Some("test-model"), None)
+            .unwrap();
+        let empty = state
+            .store
+            .create_session("gateway", Some("test-model"), None)
+            .unwrap();
+        let user_msg = Message {
+            role: Role::User,
+            content: Some("first question".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        let assistant_msg = Message {
+            role: Role::Assistant,
+            content: Some("  final  answer\nover   two lines ".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        state.store.append_message(&with_messages, &user_msg).unwrap();
+        state.store.append_message(&with_messages, &assistant_msg).unwrap();
+
+        // Default listing carries no preview field.
+        let (status, body) = get_json(app.clone(), "/api/sessions?limit=10", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = body["data"].as_array().unwrap();
+        let plain = rows.iter().find(|row| row["id"] == with_messages).unwrap();
+        assert!(plain.get("last_message").is_none());
+
+        // preview=true attaches a whitespace-collapsed snippet of the
+        // last message; empty sessions get null.
+        let (status, body) =
+            get_json(app.clone(), "/api/sessions?limit=10&preview=true", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = body["data"].as_array().unwrap();
+        let with_row = rows.iter().find(|row| row["id"] == with_messages).unwrap();
+        assert_eq!(with_row["last_message"], "final answer over two lines");
+        let empty_row = rows.iter().find(|row| row["id"] == empty).unwrap();
+        assert_eq!(empty_row["last_message"], Value::Null);
+
+        // Long last messages are capped at 80 chars plus an ellipsis.
+        let long_id = state
+            .store
+            .create_session("gateway", Some("test-model"), None)
+            .unwrap();
+        let long_msg = Message {
+            role: Role::Assistant,
+            content: Some("x".repeat(200)),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        state.store.append_message(&long_id, &long_msg).unwrap();
+        let (status, body) =
+            get_json(app, "/api/sessions?limit=10&preview=true", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = body["data"].as_array().unwrap();
+        let long_row = rows.iter().find(|row| row["id"] == long_id).unwrap();
+        let preview = long_row["last_message"].as_str().unwrap();
+        assert_eq!(preview.chars().count(), 81);
+        assert!(preview.ends_with('…'));
     }
 
     #[tokio::test]
