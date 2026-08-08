@@ -23,6 +23,9 @@ function fmtNum(n: number | null | undefined): string {
 }
 
 export class ModelsViewWidget {
+  /** P516: last inventory so the live filter re-renders without refetching. */
+  private payload: ModelOptionsPayload | null = null;
+
   constructor(
     private root: HTMLElement,
     private client: () => GatewayClient | null,
@@ -33,6 +36,7 @@ export class ModelsViewWidget {
       <header id="models-view-header">
         <span id="models-view-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <input id="models-view-filter" type="search" data-i18n-ph="modelsView.filterPlaceholder" />
         <button id="models-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="models-view-status" class="config-status" hidden></div>
@@ -57,6 +61,9 @@ export class ModelsViewWidget {
     `;
     this.root.querySelector("#models-view-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
+    });
+    this.root.querySelector("#models-view-filter")!.addEventListener("input", () => {
+      if (this.payload) this.render(this.payload, this.filterQuery());
     });
     this.root.querySelector("#models-view-ep-test")!.addEventListener("click", () => {
       this.validateEndpoint().catch(() => undefined);
@@ -89,7 +96,7 @@ export class ModelsViewWidget {
     }
     try {
       const payload = await client.modelOptions();
-      this.render(payload);
+      this.render(payload, this.filterQuery());
       this.renderGatewayModel().catch(() => undefined);
       this.renderUsage().catch(() => undefined);
       this.renderEndpoints().catch(() => undefined);
@@ -105,7 +112,14 @@ export class ModelsViewWidget {
     }
   }
 
-  private render(payload: ModelOptionsPayload): void {
+  /** P516: current live-filter query (lowercased, trimmed). */
+  private filterQuery(): string {
+    const input = this.root.querySelector("#models-view-filter") as HTMLInputElement | null;
+    return (input?.value || "").trim().toLowerCase();
+  }
+
+  private render(payload: ModelOptionsPayload, query = ""): void {
+    this.payload = payload;
     const body = this.root.querySelector("#models-view-body") as HTMLElement;
     const v = t.modelsView;
     const parts: string[] = [];
@@ -122,8 +136,15 @@ export class ModelsViewWidget {
       return;
     }
 
+    let rendered = 0;
     for (const provider of payload.providers) {
-      parts.push(this.renderProvider(provider, payload.model));
+      const filtered = this.filterProvider(provider, query);
+      if (!filtered) continue;
+      parts.push(this.renderProvider(filtered, payload.model));
+      rendered += 1;
+    }
+    if (rendered === 0) {
+      parts.push(`<p class="empty">${escapeHtml(v.filterNoMatch)}</p>`);
     }
     body.innerHTML = parts.join("");
     body.querySelectorAll<HTMLButtonElement>(".models-view-set").forEach((btn) => {
@@ -134,6 +155,21 @@ export class ModelsViewWidget {
 
     (this.root.querySelector("#models-view-count") as HTMLElement).textContent =
       v.count.replace("{providers}", String(payload.providers.length));
+  }
+
+  /** P516: narrow a provider's model rows by the live filter; a provider
+   * whose name/slug matches keeps all its models. Returns null when the
+   * provider has nothing to show. */
+  private filterProvider(provider: ModelOptionRow, query: string): ModelOptionRow | null {
+    if (!query) return provider;
+    const name = `${provider.name || ""} ${provider.slug}`.toLowerCase();
+    if (name.includes(query)) return provider;
+    const models = (provider.models || []).filter((model) => {
+      const family = provider.capabilities?.[model]?.family || "";
+      return `${model} ${family}`.toLowerCase().includes(query);
+    });
+    if (models.length === 0) return null;
+    return { ...provider, models };
   }
 
   /** Custom endpoint rows over /api/providers/custom-endpoints (P333). */
