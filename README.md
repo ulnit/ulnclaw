@@ -86,7 +86,8 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw chat --continue "my task"    # ...or the session matching a title/id
 
 # Management subcommands
-./ulnclaw tools            # list toolsets and enabled tools
+./ulnclaw tools            # list toolsets (state + tool counts) and enabled tools (--json)
+./ulnclaw tools disable X  # disable a toolset persistently (ulnclaw tools enable X restores; P580)
 ./ulnclaw sessions list    # recent sessions from state.db
 ./ulnclaw sessions search "auth refactor"
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
@@ -395,7 +396,8 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw chat --continue "我的任务"   # ……或按标题/id 匹配的会话
 
 # 管理子命令
-./ulnclaw tools            # 列出工具集与已启用工具
+./ulnclaw tools            # 列出工具集（状态 + 工具数）与已启用工具（--json）
+./ulnclaw tools disable X  # 持久禁用工具集（ulnclaw tools enable X 恢复；P580）
 ./ulnclaw sessions list    # state.db 中的最近会话
 ./ulnclaw sessions search "认证重构"
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html

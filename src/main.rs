@@ -77,8 +77,16 @@ enum Commands {
         #[command(subcommand)]
         action: PetsAction,
     },
-    /// List registered tools and toolsets
-    Tools,
+    /// List registered tools and toolsets; enable/disable toolsets (hermes tools)
+    Tools {
+        /// Action: list (default) | enable | disable
+        action: Option<String>,
+        /// Toolset name for enable/disable
+        name: Option<String>,
+        /// Emit the inventory as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Skill management
     Skills {
         #[command(subcommand)]
@@ -2458,7 +2466,9 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Kanban { action } => kanban_cmd(action).await,
         Commands::Projects { action } => projects_cmd(action),
         Commands::Pets { action } => pets_cmd(action).await,
-        Commands::Tools => tools_cmd(&config),
+        Commands::Tools { action, name, json } => {
+            tools_cmd(&config, action.as_deref().unwrap_or("list"), name.as_deref(), json)
+        }
         Commands::Skills { action } => skills_cmd(action.unwrap_or(SkillAction::List)).await,
         Commands::Bundles { action } => bundles_cmd(action.unwrap_or(BundlesAction::List)),
         Commands::Security { action } => {
@@ -10315,20 +10325,126 @@ async fn moa_cmd(
     Ok(())
 }
 
-fn tools_cmd(config: &UlncLawConfig) -> Result<(), String> {
-    let mut registry = ToolRegistry::new();
-    register_builtin_tools(&mut registry);
-    ulnclaw::plugins::register_plugin_tools(&mut registry);
-    toolsets::apply_toolset_policy(&mut registry, &config.enabled_toolsets, &config.disabled_toolsets);
-    println!("Toolsets:");
-    for name in toolsets::toolsets().keys() {
-        println!("  {}", name);
+fn tools_cmd(
+    config: &UlncLawConfig,
+    action: &str,
+    name: Option<&str>,
+    json: bool,
+) -> Result<(), String> {
+    match action {
+        "list" => {
+            let mut registry = ToolRegistry::new();
+            register_builtin_tools(&mut registry);
+            ulnclaw::plugins::register_plugin_tools(&mut registry);
+            toolsets::apply_toolset_policy(
+                &mut registry,
+                &config.enabled_toolsets,
+                &config.disabled_toolsets,
+            );
+            let enabled = registry.enabled_toolset_names();
+            if json {
+                let toolsets: Vec<serde_json::Value> = registry
+                    .toolset_names()
+                    .iter()
+                    .map(|ts| {
+                        serde_json::json!({
+                            "name": ts,
+                            "enabled": enabled.contains(ts),
+                            "tools": registry
+                                .toolset_tools(ts)
+                                .iter()
+                                .map(|tool| {
+                                    serde_json::json!({
+                                        "name": tool.definition.name,
+                                        "description": tool
+                                            .definition
+                                            .description
+                                            .lines()
+                                            .next()
+                                            .unwrap_or("")
+                                            .trim(),
+                                        "dangerous": tool.dangerous,
+                                    })
+                                })
+                                .collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "toolsets": toolsets }))
+                        .map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+            println!("Toolsets:");
+            for ts in registry.toolset_names() {
+                let count = registry.toolset_tools(&ts).len();
+                let state = if enabled.contains(&ts) { "enabled" } else { "disabled" };
+                println!("  {:<16} {:<9} {} tools", ts, state, count);
+            }
+            println!("\nEnabled tools ({}):", registry.len());
+            for def in registry.definitions() {
+                println!("  {}", def.name);
+            }
+            Ok(())
+        }
+        "enable" | "disable" => {
+            let Some(toolset) = name else {
+                return Err(format!("Usage: ulnclaw tools {action} <toolset>"));
+            };
+            let mut probe = ToolRegistry::new();
+            register_builtin_tools(&mut probe);
+            let known = probe.toolset_names();
+            if !known.iter().any(|n| n == toolset)
+                && toolsets::resolve_toolset(toolset).is_empty()
+            {
+                return Err(format!(
+                    "Unknown toolset: {toolset}\nKnown toolsets: {}",
+                    known.join(", ")
+                ));
+            }
+            let mut disabled = config.disabled_toolsets.clone();
+            let mut enabled_list = config.enabled_toolsets.clone();
+            if action == "disable" {
+                if !disabled.iter().any(|n| n == toolset) {
+                    disabled.push(toolset.to_string());
+                }
+            } else {
+                disabled.retain(|n| n != toolset);
+                if !enabled_list.is_empty() && !enabled_list.iter().any(|n| n == toolset) {
+                    enabled_list.push(toolset.to_string());
+                }
+            }
+            let render = |list: &[String]| {
+                format!(
+                    "[{}]",
+                    list.iter()
+                        .map(|n| format!("\"{}\"", n.replace('\\', "\\\\").replace('"', "\\\"")))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            print!(
+                "{}",
+                ulnclaw::config_cmd::set_config_value("disabled_toolsets", &render(&disabled), true)?
+            );
+            if !enabled_list.is_empty() || !config.enabled_toolsets.is_empty() {
+                print!(
+                    "{}",
+                    ulnclaw::config_cmd::set_config_value("enabled_toolsets", &render(&enabled_list), true)?
+                );
+            }
+            println!(
+                "{} toolset '{toolset}' — restart running gateways to apply.",
+                if action == "disable" { "Disabled" } else { "Enabled" }
+            );
+            Ok(())
+        }
+        other => Err(format!(
+            "Unknown tools action: {other} (expected list, enable, or disable)"
+        )),
     }
-    println!("\nEnabled tools ({}):", registry.len());
-    for def in registry.definitions() {
-        println!("  {}", def.name);
-    }
-    Ok(())
 }
 
 // ── curator: skill library curation (hermes hermes_cli/curator.py) ────────
