@@ -131,6 +131,7 @@ export interface Translations {
   };
   usage: {
     windowNote: string; perSession: string; empty: string;
+    filterPlaceholder: string; filterNoMatch: string;
     totalTokens: string; input: string; output: string;
     sessions: string; messages: string; processTokens: string;
     prompt: string; completion: string; toolCalls: string;
@@ -488,6 +489,7 @@ const en: Translations = {
   },
   usage: {
     windowNote: "Token accounting · last {count} sessions",
+    filterPlaceholder: "Filter sessions…", filterNoMatch: "No sessions match the filter.",
     perSession: "Per-session breakdown",
     empty: "No sessions recorded yet.",
     totalTokens: "Total tokens (store)", input: "in", output: "out",
@@ -981,6 +983,7 @@ const zh: Translations = {
   },
   usage: {
     windowNote: "令牌核算 · 最近 {count} 个会话",
+    filterPlaceholder: "筛选会话…", filterNoMatch: "没有符合筛选的会话。",
     perSession: "按会话明细",
     empty: "尚无会话记录。",
     totalTokens: "总令牌（存储）", input: "入", output: "出",
@@ -1474,6 +1477,7 @@ const zhHant: Translations = {
   },
   usage: {
     windowNote: "令牌核算 · 最近 {count} 個工作階段",
+    filterPlaceholder: "篩選工作階段…", filterNoMatch: "沒有符合篩選的工作階段。",
     perSession: "按工作階段明細",
     empty: "尚無工作階段記錄。",
     totalTokens: "總令牌（儲存）", input: "入", output: "出",
@@ -1967,6 +1971,7 @@ const ja: Translations = {
   },
   usage: {
     windowNote: "トークン集計 · 直近 {count} セッション",
+    filterPlaceholder: "セッションを絞り込み…", filterNoMatch: "フィルターに一致するセッションはありません。",
     perSession: "セッション別内訳",
     empty: "まだセッションがありません。",
     totalTokens: "総トークン（ストア）", input: "入力", output: "出力",
@@ -2460,6 +2465,7 @@ const ar: Translations = {
   },
   usage: {
     windowNote: "إحصاء الرموز · آخر {count} جلسة",
+    filterPlaceholder: "تصفية الجلسات…", filterNoMatch: "لا توجد جلسات تطابق المرشح.",
     perSession: "التفصيل حسب الجلسة",
     empty: "لا توجد جلسات بعد.",
     totalTokens: "إجمالي الرموز (المخزن)", input: "دخل", output: "خرج",

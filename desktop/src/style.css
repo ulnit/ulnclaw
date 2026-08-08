@@ -1327,6 +1327,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 #models-view-filter { min-width: 200px; }
 #webhooks-filter { min-width: 200px; }
 #projects-filter { min-width: 200px; }
+#usage-filter { min-width: 200px; }
 /* P511: transcript column wrapper + role-visibility toggle bar. */
 .sessions-view-transcriptcol { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 .sessions-view-transcriptcol .sessions-view-transcript { flex: 1; }

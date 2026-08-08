@@ -72,6 +72,7 @@ export class UsageWidget {
       <header id="usage-header">
         <span id="usage-window" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <input id="usage-filter" type="search" data-i18n-ph="usage.filterPlaceholder" />
         <button id="usage-export" class="ghost" data-i18n="usage.exportCsv">CSV</button>
         <button id="usage-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
@@ -92,6 +93,9 @@ export class UsageWidget {
     `;
     this.root.querySelector("#usage-export")!.addEventListener("click", () => {
       this.exportCsv();
+    });
+    this.root.querySelector("#usage-filter")!.addEventListener("input", () => {
+      if (this.lastUsage) this.render(this.lastUsage);
     });
     this.root.querySelector("#usage-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
@@ -336,8 +340,23 @@ export class UsageWidget {
       list.innerHTML = `<p class="empty" data-i18n="usage.empty">${escapeHtml(u.empty)}</p>`;
       return;
     }
-    const max = Math.max(1, ...usage.sessions.map((s) => s.total_tokens));
-    const rows = usage.sessions
+    // P523: live filter over the per-session table.
+    const query = (
+      (this.root.querySelector("#usage-filter") as HTMLInputElement | null)?.value || ""
+    )
+      .trim()
+      .toLowerCase();
+    const sessions = query
+      ? usage.sessions.filter((s) =>
+          `${s.title || ""} ${s.id} ${s.model || ""}`.toLowerCase().includes(query),
+        )
+      : usage.sessions;
+    if (sessions.length === 0) {
+      list.innerHTML = `<p class="empty">${escapeHtml(u.filterNoMatch)}</p>`;
+      return;
+    }
+    const max = Math.max(1, ...sessions.map((s) => s.total_tokens));
+    const rows = sessions
       .map((s) => this.sessionRow(s, max))
       .join("");
     list.innerHTML = `
