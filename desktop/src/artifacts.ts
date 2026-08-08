@@ -159,7 +159,7 @@ export class ArtifactsOverlay {
       this.records = records.sort((a, b) => b.timestamp - a.timestamp);
       this.render();
     } catch (err) {
-      loading.textContent = `Failed to scan sessions: ${err}`;
+      loading.textContent = t.artifacts.scanFailed.replace("{error}", String(err));
     }
   }
 

@@ -334,7 +334,7 @@ export interface Translations {
   };
   artifacts: {
     title: string; filterPlaceholder: string; notConnected: string; none: string;
-    scanning: string; openSession: string;
+    scanning: string; openSession: string; scanFailed: string;
   };
   learning: {
     title: string; tagline: string; searchPlaceholder: string; building: string;
@@ -345,6 +345,8 @@ export interface Translations {
     statSkills: string; statMemories: string; statLinks: string;
     statAgentCreated: string; statUsed: string;
     filterAll: string; filterSkill: string; filterMemory: string;
+    loadFailed: string; saveFailed: string; actionFailed: string; nodeLoadFailed: string;
+    archiveConfirm: string; deleteConfirm: string;
   };
   notify: { dismiss: string; clearAll: string; details: string; stackTitle: string;
     historyTitle: string; historyEmpty: string; historyClear: string; };
@@ -816,7 +818,7 @@ const en: Translations = {
     title: "\u{1F5C2}️ Artifacts", filterPlaceholder: "Filter artifacts…",
     notConnected: "Gateway not connected.",
     none: "No artifacts found in recent sessions.",
-    scanning: "Scanning recent sessions…", openSession: "Open session",
+    scanning: "Scanning recent sessions…", openSession: "Open session", scanFailed: "Failed to scan sessions: {error}",
   },
   learning: {
     title: "✨ Learning", tagline: "learned skills + memory, linked",
@@ -828,6 +830,7 @@ const en: Translations = {
     restore: "Restore", restored: "Restored.", close: "Close",
     statSkills: "learned skills", statMemories: "memories", statLinks: "links", statAgentCreated: "agent-created", statUsed: "used",
     filterAll: "all", filterSkill: "skill", filterMemory: "memory",
+    loadFailed: "Failed to load learning graph: {error}", saveFailed: "Save failed: {error}", actionFailed: "Failed: {error}", nodeLoadFailed: "Failed to load node: {error}", archiveConfirm: "Archive \"{label}\"?", deleteConfirm: "Delete \"{label}\"?",
   },
   notify: { dismiss: "Dismiss notification", clearAll: "Clear all", details: "Details", stackTitle: "Notifications" , historyTitle: "Notifications", historyEmpty: "No notifications yet.", historyClear: "Clear" },
   onboarding: {
@@ -1320,7 +1323,7 @@ const zh: Translations = {
     title: "\u{1F5C2}️ 工件", filterPlaceholder: "过滤工件…",
     notConnected: "网关未连接。",
     none: "近期会话中未发现工件。",
-    scanning: "扫描近期会话中…", openSession: "打开会话",
+    scanning: "扫描近期会话中…", openSession: "打开会话", scanFailed: "扫描会话失败：{error}",
   },
   learning: {
     title: "✨ 学习", tagline: "已学技能 + 记忆，相互连接",
@@ -1332,6 +1335,7 @@ const zh: Translations = {
     restore: "恢复", restored: "已恢复。", close: "关闭",
     statSkills: "习得技能", statMemories: "记忆", statLinks: "关联", statAgentCreated: "agent 创建", statUsed: "已使用",
     filterAll: "全部", filterSkill: "技能", filterMemory: "记忆",
+    loadFailed: "加载学习图谱失败：{error}", saveFailed: "保存失败：{error}", actionFailed: "操作失败：{error}", nodeLoadFailed: "加载节点失败：{error}", archiveConfirm: "归档「{label}」？", deleteConfirm: "删除「{label}」？",
   },
   notify: { dismiss: "关闭通知", clearAll: "全部清除", details: "详情", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "暂无通知。", historyClear: "清空" },
   onboarding: {
@@ -1824,7 +1828,7 @@ const zhHant: Translations = {
     title: "\u{1F5C2}️ 工件", filterPlaceholder: "過濾工件…",
     notConnected: "閘道未連線。",
     none: "近期工作階段中未發現工件。",
-    scanning: "掃描近期工作階段中…", openSession: "開啟工作階段",
+    scanning: "掃描近期工作階段中…", openSession: "開啟工作階段", scanFailed: "掃描工作階段失敗：{error}",
   },
   learning: {
     title: "✨ 學習", tagline: "已學技能 + 記憶，相互連結",
@@ -1836,6 +1840,7 @@ const zhHant: Translations = {
     restore: "還原", restored: "已還原。", close: "關閉",
     statSkills: "習得技能", statMemories: "記憶", statLinks: "關聯", statAgentCreated: "agent 建立", statUsed: "已使用",
     filterAll: "全部", filterSkill: "技能", filterMemory: "記憶",
+    loadFailed: "載入學習圖譜失敗：{error}", saveFailed: "儲存失敗：{error}", actionFailed: "操作失敗：{error}", nodeLoadFailed: "載入節點失敗：{error}", archiveConfirm: "歸檔「{label}」？", deleteConfirm: "刪除「{label}」？",
   },
   notify: { dismiss: "關閉通知", clearAll: "全部清除", details: "詳情", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "暫無通知。", historyClear: "清空" },
   onboarding: {
@@ -2328,7 +2333,7 @@ const ja: Translations = {
     title: "\u{1F5C2}️ 成果物", filterPlaceholder: "成果物を絞り込み…",
     notConnected: "ゲートウェイ未接続。",
     none: "最近のセッションに成果物が見つかりません。",
-    scanning: "最近のセッションをスキャン中…", openSession: "セッションを開く",
+    scanning: "最近のセッションをスキャン中…", openSession: "セッションを開く", scanFailed: "セッションのスキャンに失敗しました: {error}",
   },
   learning: {
     title: "✨ 学習", tagline: "学習済みスキル + メモリ、リンク付き",
@@ -2340,6 +2345,7 @@ const ja: Translations = {
     restore: "復元", restored: "復元しました。", close: "閉じる",
     statSkills: "習得スキル", statMemories: "メモリ", statLinks: "リンク", statAgentCreated: "エージェント作成", statUsed: "使用済み",
     filterAll: "すべて", filterSkill: "スキル", filterMemory: "メモリ",
+    loadFailed: "学習グラフの読み込みに失敗しました: {error}", saveFailed: "保存に失敗しました: {error}", actionFailed: "失敗しました: {error}", nodeLoadFailed: "ノードの読み込みに失敗しました: {error}", archiveConfirm: "「{label}」をアーカイブしますか？", deleteConfirm: "「{label}」を削除しますか？",
   },
   notify: { dismiss: "通知を閉じる", clearAll: "すべてクリア", details: "詳細", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "通知はまだありません。", historyClear: "クリア" },
   onboarding: {
@@ -2832,7 +2838,7 @@ const ar: Translations = {
     title: "\u{1F5C2}️ المخرجات", filterPlaceholder: "تصفية المخرجات…",
     notConnected: "البوابة غير متصلة.",
     none: "لا مخرجات في الجلسات الأخيرة.",
-    scanning: "جارٍ فحص الجلسات الأخيرة…", openSession: "فتح الجلسة",
+    scanning: "جارٍ فحص الجلسات الأخيرة…", openSession: "فتح الجلسة", scanFailed: "فشل فحص الجلسات: {error}",
   },
   learning: {
     title: "✨ التعلم", tagline: "مهارات متعلَّمة + ذاكرة، مترابطة",
@@ -2844,6 +2850,7 @@ const ar: Translations = {
     restore: "استعادة", restored: "تمت الاستعادة.", close: "إغلاق",
     statSkills: "مهارات مكتسبة", statMemories: "ذكريات", statLinks: "روابط", statAgentCreated: "أنشأها الوكيل", statUsed: "مستخدم",
     filterAll: "الكل", filterSkill: "مهارة", filterMemory: "ذاكرة",
+    loadFailed: "فشل تحميل رسم التعلم: {error}", saveFailed: "فشل الحفظ: {error}", actionFailed: "فشلت العملية: {error}", nodeLoadFailed: "فشل تحميل العقدة: {error}", archiveConfirm: "أرشفة \"{label}\"؟", deleteConfirm: "حذف \"{label}\"؟",
   },
   notify: { dismiss: "إغلاق الإشعار", clearAll: "مسح الكل", details: "التفاصيل", stackTitle: "الإشعارات" , historyTitle: "الإشعارات", historyEmpty: "لا إشعارات بعد.", historyClear: "مسح" },
   onboarding: {

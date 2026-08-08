@@ -50,7 +50,7 @@ export class LearningOverlay {
       this.graph = await client.learningGraph();
       this.render();
     } catch (err) {
-      loading.textContent = `Failed to load learning graph: ${err}`;
+      loading.textContent = t.learning.loadFailed.replace("{error}", String(err));
     }
   }
 
@@ -236,7 +236,7 @@ export class LearningOverlay {
           void this.open();
         }, 500);
       } catch (err) {
-        status.textContent = `Save failed: ${err}`;
+        status.textContent = t.learning.saveFailed.replace("{error}", String(err));
       }
     };
     const deleteBtn = document.createElement("button");
@@ -245,7 +245,7 @@ export class LearningOverlay {
     deleteBtn.disabled = true;
     deleteBtn.onclick = async () => {
       const verb = node.kind === "skill" ? "archive" : "delete";
-      if (!window.confirm(`${verb} "${node.label}"?`)) return;
+      if (!window.confirm((verb === "archive" ? t.learning.archiveConfirm : t.learning.deleteConfirm).replace("{label}", node.label))) return;
       try {
         await client.deleteLearningNode(node.id);
         status.textContent = verb === "archive" ? t.learning.archived : t.learning.deleted;
@@ -254,7 +254,7 @@ export class LearningOverlay {
           void this.open();
         }, 500);
       } catch (err) {
-        status.textContent = `Failed: ${err}`;
+        status.textContent = t.learning.actionFailed.replace("{error}", String(err));
       }
     };
     const pinBtn = document.createElement("button");
@@ -270,7 +270,7 @@ export class LearningOverlay {
           void this.open();
         }, 500);
       } catch (err) {
-        status.textContent = `Failed: ${err}`;
+        status.textContent = t.learning.actionFailed.replace("{error}", String(err));
       }
     };
     const restoreBtn = document.createElement("button");
@@ -286,7 +286,7 @@ export class LearningOverlay {
           void this.open();
         }, 500);
       } catch (err) {
-        status.textContent = `Failed: ${err}`;
+        status.textContent = t.learning.actionFailed.replace("{error}", String(err));
       }
     };
     const closeBtn = document.createElement("button");
@@ -314,7 +314,7 @@ export class LearningOverlay {
         if (node.state === "archived") restoreBtn.disabled = false;
       }
     } catch (err) {
-      area.textContent = `Failed to load node: ${err}`;
+      area.textContent = t.learning.nodeLoadFailed.replace("{error}", String(err));
     }
   }
 }
