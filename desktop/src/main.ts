@@ -409,6 +409,16 @@ function renderSessions(): void {
       event.stopPropagation();
       void exportSession(session, "md");
     };
+    // P541: archive/unarchive joins the sidebar hover action set.
+    const archiveBtn = document.createElement("button");
+    archiveBtn.className = "icon";
+    const rowArchived = session.end_reason === "archived";
+    archiveBtn.title = rowArchived ? t.palette.unarchiveSession : t.palette.archiveSession;
+    archiveBtn.textContent = rowArchived ? "♻" : "🗄";
+    archiveBtn.onclick = (event) => {
+      event.stopPropagation();
+      void toggleSessionArchived(session);
+    };
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "icon danger";
     deleteBtn.title = t.palette.deleteSession;
@@ -417,7 +427,7 @@ function renderSessions(): void {
       event.stopPropagation();
       void deleteSession(session);
     };
-    actions.append(renameBtn, exportBtn, deleteBtn);
+    actions.append(renameBtn, exportBtn, archiveBtn, deleteBtn);
     item.appendChild(actions);
     item.onclick = () => openSession(session);
     el.sessionList.appendChild(item);
@@ -3653,6 +3663,25 @@ async function runNewSessionInProject(): Promise<void> {
     await openSession(session);
   } catch (error) {
     notifyError(fmt(t.session.createFailed, { error: String(error) }));
+  }
+}
+
+/** P541: sidebar hover action — archive/unarchive any row's session,
+ * mirroring the palette flows but scoped to the clicked row. */
+async function toggleSessionArchived(session: SessionRow): Promise<void> {
+  if (!state.client) return;
+  const label = session.title || session.id.slice(0, 8);
+  const archived = session.end_reason === "archived";
+  try {
+    await state.client.setSessionEndReason(session.id, archived ? null : "archived");
+    session.end_reason = archived ? undefined : "archived";
+    if (state.current?.id === session.id) refreshEndBadge();
+    notifySuccess(
+      fmt(archived ? t.palette.sessionUnarchived : t.palette.sessionArchived, { label }),
+    );
+    renderSessions();
+  } catch (error) {
+    notifyError(fmt(t.palette.sessionArchiveFailed, { error: String(error) }));
   }
 }
 
