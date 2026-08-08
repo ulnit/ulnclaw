@@ -760,6 +760,54 @@ function completeSlash(name: string): void {
 // file with vision_analyze/read_file).
 // ---------------------------------------------------------------------------
 
+/** P358: drag & drop attach — dropping files anywhere on the chat pane
+ * uploads them through the same /api/uploads path as clipboard paste
+ * (any file kind; the attachment note carries path references). */
+function installDragDrop(): void {
+  const zone = document.getElementById("chat")!;
+  let dragDepth = 0;
+  const hasFiles = (event: DragEvent): boolean =>
+    !!event.dataTransfer && Array.from(event.dataTransfer.types).includes("Files");
+  zone.addEventListener("dragenter", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth += 1;
+    zone.classList.add("drag-over");
+  });
+  zone.addEventListener("dragover", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+  zone.addEventListener("dragleave", (event) => {
+    if (!hasFiles(event)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) zone.classList.remove("drag-over");
+  });
+  zone.addEventListener("drop", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth = 0;
+    zone.classList.remove("drag-over");
+    const files = event.dataTransfer ? Array.from(event.dataTransfer.files) : [];
+    if (files.length === 0 || !state.client) return;
+    void (async () => {
+      for (const file of files) {
+        try {
+          const upload = await state.client!.uploadFile(
+            file,
+            file.name || `drop-${Date.now()}`,
+          );
+          state.pendingUploads.push(upload);
+          renderAttachChips();
+        } catch (error) {
+          addMessage("system", fmt(t.session.uploadFailed, { error }));
+        }
+      }
+    })();
+  });
+}
+
 function renderAttachChips(): void {
   el.attachChips.innerHTML = "";
   el.attachChips.hidden = state.pendingUploads.length === 0;
@@ -1731,6 +1779,7 @@ async function start(): Promise<void> {
   });
 
   installHotkeys();
+  installDragDrop();
 
   await pollHealth();
   el.statusbar.addEventListener("click", () => switchView("doctor"));

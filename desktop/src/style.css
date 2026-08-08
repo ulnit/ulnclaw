@@ -1486,3 +1486,6 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 .notify-history-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-width: 340px; }
 .notify-history-row { display: flex; gap: 8px; align-items: baseline; padding: 6px 8px; border: 1px solid var(--border, rgba(128,128,128,0.18)); border-radius: 6px; font-size: 12px; }
 .notify-history-row .notify-history-time { margin-left: auto; opacity: 0.6; white-space: nowrap; }
+
+/* P358: drag & drop attach highlight. */
+#chat.drag-over { outline: 2px dashed var(--accent, #4a9eff); outline-offset: -6px; }
