@@ -65,6 +65,15 @@ export class ModelsViewWidget {
     this.root.querySelector("#models-view-filter")!.addEventListener("input", () => {
       if (this.payload) this.render(this.payload, this.filterQuery());
     });
+    this.root.querySelector("#models-view-body")!.addEventListener("click", (event) => {
+      const target = (event.target as HTMLElement).closest(".models-view-model") as HTMLElement | null;
+      if (!target || !target.dataset.model) return;
+      const model = target.dataset.model;
+      void navigator.clipboard.writeText(model).then(
+        () => this.status(t.modelsView.copiedModel.replace("{model}", model)),
+        () => this.status(t.modelsView.copyFailed, true),
+      );
+    });
     this.root.querySelector("#models-view-ep-test")!.addEventListener("click", () => {
       this.validateEndpoint().catch(() => undefined);
     });
@@ -447,7 +456,7 @@ export class ModelsViewWidget {
           .join(" ");
         const isCurrent = provider.current && model === currentModel;
         return `<tr class="${isCurrent ? "models-view-current-row" : ""}">
-          <td>${featured.has(model) ? "★ " : ""}${escapeHtml(model)}</td>
+          <td><span class="models-view-model" data-model="${escapeHtml(model)}" title="${escapeHtml(v.copyModelTitle)}">${featured.has(model) ? "★ " : ""}${escapeHtml(model)}</span></td>
           <td class="muted">${escapeHtml(caps?.family || "")}</td>
           <td class="num">${fmtNum(caps?.context_window)}</td>
           <td class="num">${fmtNum(caps?.max_output_tokens)}</td>

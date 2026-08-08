@@ -1408,6 +1408,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .models-view-links a { color: var(--accent); text-decoration: none; }
 .models-view-baseurl { font-size: 0.78em; opacity: 0.6; font-family: var(--mono, monospace); margin: 2px 0 6px; }
 .models-view-current-row td { color: var(--accent); }
+.models-view-model { cursor: pointer; }
 
 /* Plugins view */
 .plugins-view-row {
