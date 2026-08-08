@@ -137,7 +137,10 @@ export class SessionPickerDialog {
       if (session.message_count != null) {
         bits.push(fmt(t.sessionPicker.messages, { count: session.message_count }));
       }
+      // P423: model + end-reason meta, matching the sidebar badges.
+      if (session.model) bits.push(session.model);
       if (session.project) bits.push(session.project);
+      if (session.end_reason) bits.push(session.end_reason);
       const meta = document.createElement("span");
       meta.className = "session-picker-meta";
       meta.textContent = bits.join(" \u00b7 ");
