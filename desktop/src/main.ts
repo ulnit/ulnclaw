@@ -241,9 +241,52 @@ function addMessage(role: string, content: string): HTMLElement {
   bubble.className = "bubble";
   bubble.textContent = content;
   row.appendChild(bubble);
+  // P344: read-aloud action on assistant replies (TTS over
+  // POST /api/audio/speak).
+  if (role === "assistant" && content.trim()) {
+    const actions = document.createElement("div");
+    actions.className = "msg-actions";
+    const speak = document.createElement("button");
+    speak.className = "ghost msg-speak";
+    speak.textContent = "\u{1F50A}";
+    speak.title = t.session.speakTitle;
+    speak.onclick = () => void speakMessage(content, speak);
+    actions.appendChild(speak);
+    row.appendChild(actions);
+  }
   el.messages.appendChild(row);
   el.messages.scrollTop = el.messages.scrollHeight;
   return bubble;
+}
+
+/** Currently playing TTS audio (one at a time; P344). */
+let currentSpeech: { audio: HTMLAudioElement; button: HTMLButtonElement } | null = null;
+
+async function speakMessage(text: string, button: HTMLButtonElement): Promise<void> {
+  if (!state.client) return;
+  if (currentSpeech) {
+    currentSpeech.audio.pause();
+    currentSpeech.button.textContent = "\u{1F50A}";
+    const same = currentSpeech.button === button;
+    currentSpeech = null;
+    if (same) return;
+  }
+  button.disabled = true;
+  try {
+    const dataUrl = await state.client.audioSpeak(text);
+    const audio = new Audio(dataUrl);
+    currentSpeech = { audio, button };
+    audio.onended = () => {
+      button.textContent = "\u{1F50A}";
+      if (currentSpeech?.audio === audio) currentSpeech = null;
+    };
+    button.textContent = "\u23F9";
+    await audio.play();
+  } catch (error) {
+    notifyError(fmt(t.session.speakFailed, { error }));
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function openSession(session: SessionRow): Promise<void> {

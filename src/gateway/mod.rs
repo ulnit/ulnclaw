@@ -1577,6 +1577,56 @@ fn audio_extension_for_mime(mime: &str) -> &'static str {
     }
 }
 
+/// `POST /api/audio/speak` — synthesize speech for `text` over the
+/// configured `[tts]` provider and answer a base64 data URL (hermes
+/// `/api/audio/speak` parity; P344). Desktop voice-playback surface:
+/// the audio bytes never touch disk here.
+async fn audio_speak(Json(body): Json<Value>) -> Response {
+    use base64::Engine as _;
+    let text = body["text"].as_str().unwrap_or_default().trim().to_string();
+    if text.is_empty() {
+        return bad_request("Text is required", None);
+    }
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    match crate::tts::synthesize(&config.tts, &text).await {
+        Ok(output) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&output.bytes);
+            Json(json!({
+                "ok": true,
+                "data_url": format!("data:{};base64,{}", output.mime, encoded),
+                "mime_type": output.mime,
+                "provider": output.provider,
+            }))
+            .into_response()
+        }
+        Err(e) => bad_request(&e, None),
+    }
+}
+
+/// `GET /api/audio/elevenlabs/voices` — non-secret ElevenLabs voice
+/// metadata for the desktop voice picker (hermes parity; P344). No key
+/// configured -> `{available: false}`; a bad key answers 200 +
+/// `error: "unauthorized"` (hermes anti-log-flood semantics).
+async fn elevenlabs_voices_list() -> Response {
+    let Some(key) = crate::config::get_env_value("ELEVENLABS_API_KEY") else {
+        return Json(json!({ "available": false, "voices": [] })).into_response();
+    };
+    match crate::tts::elevenlabs_voices(&key).await {
+        Ok(voices) => Json(json!({ "available": true, "voices": voices })).into_response(),
+        Err(crate::tts::VoicesError::Unauthorized) => Json(json!({
+            "available": false,
+            "voices": [],
+            "error": "unauthorized",
+        }))
+        .into_response(),
+        Err(crate::tts::VoicesError::Other(e)) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("Could not load ElevenLabs voices: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
 /// `POST /api/audio/transcribe` — voice-note transcription over the
 /// configured STT provider (hermes `/api/audio/transcribe` parity):
 /// base64 `data:` URL in, transcript out.
@@ -3979,6 +4029,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/recap", get(session_recap))
         .route("/api/uploads", post(upload_media))
         .route("/api/audio/transcribe", post(audio_transcribe))
+        .route("/api/audio/speak", post(audio_speak))
+        .route("/api/audio/elevenlabs/voices", get(elevenlabs_voices_list))
         .route("/api/learning/graph", get(learning_graph))
         .route(
             "/api/learning/node",
@@ -13537,6 +13589,73 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         match saved_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
             None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_audio_speak_and_voices_posture() {
+        // Provider keys resolve through env + ULNCLAW_HOME/.env — isolate
+        // both like the other home-overriding tests.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        let saved_openai = std::env::var("OPENAI_API_KEY").ok();
+        std::env::remove_var("OPENAI_API_KEY");
+        let saved_eleven = std::env::var("ELEVENLABS_API_KEY").ok();
+        std::env::remove_var("ELEVENLABS_API_KEY");
+
+        let app = router(test_state());
+
+        // Requires auth.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/audio/speak", None,
+            json!({ "text": "hello" }),
+        ).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Empty text -> 400.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/audio/speak", Some("sekret"),
+            json!({ "text": "   " }),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // No OPENAI_API_KEY anywhere -> clean 400 naming the key.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/audio/speak", Some("sekret"),
+            json!({ "text": "hello world" }),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"].as_str().unwrap().contains("OPENAI_API_KEY"));
+
+        // Unknown provider -> 400 naming the problem.
+        std::fs::write(dir.path().join("config.toml"), "[tts]\nprovider = \"edge\"\n").unwrap();
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/audio/speak", Some("sekret"),
+            json!({ "text": "hello world" }),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"].as_str().unwrap().contains("unsupported tts provider"));
+        std::fs::remove_file(dir.path().join("config.toml")).unwrap();
+
+        // Voices without a key -> available:false, empty list.
+        let (status, body) = get_json(app.clone(), "/api/audio/elevenlabs/voices", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["available"], false);
+        assert!(body["voices"].as_array().unwrap().is_empty());
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+        match saved_openai {
+            Some(v) => std::env::set_var("OPENAI_API_KEY", v),
+            None => {}
+        }
+        match saved_eleven {
+            Some(v) => std::env::set_var("ELEVENLABS_API_KEY", v),
+            None => {}
         }
     }
 

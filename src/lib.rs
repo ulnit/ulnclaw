@@ -194,6 +194,7 @@ pub mod signal;
 pub mod simplex;
 pub mod sms;
 pub mod stt;
+pub mod tts;
 pub mod teams;
 pub mod status;
 pub mod think_scrubber;

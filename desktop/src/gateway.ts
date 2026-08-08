@@ -1722,6 +1722,43 @@ export class GatewayClient {
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
   }
 
+  /** POST /api/audio/speak — synthesize speech over the configured
+   * [tts] provider, returns a playable base64 data URL (P344). */
+  async audioSpeak(text: string): Promise<string> {
+    const response = await fetch(this.endpoint("/api/audio/speak"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message =
+        typeof value.error === "string"
+          ? value.error
+          : value.error?.message || `speak HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return String(value.data_url ?? "");
+  }
+
+  /** GET /api/audio/elevenlabs/voices — voice picker metadata (P344). */
+  async elevenlabsVoices(): Promise<{
+    available: boolean;
+    voices: { voice_id: string; name: string; label: string }[];
+    error?: string;
+  }> {
+    const response = await fetch(this.endpoint("/api/audio/elevenlabs/voices"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `voices HTTP ${response.status}`);
+    return value as {
+      available: boolean;
+      voices: { voice_id: string; name: string; label: string }[];
+      error?: string;
+    };
+  }
+
   /** GET /api/media — gateway-host image as base64 data URL (hermes
    * `/api/media` parity; P338). Image extensions only, confined to the
    * gateway's media roots, 25 MiB cap. */

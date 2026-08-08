@@ -870,6 +870,10 @@ pub struct UlncLawConfig {
     /// Speech-to-text pipeline for voice messages (hermes `stt:`).
     #[serde(default)]
     pub stt: crate::stt::SttConfig,
+    /// Text-to-speech for `/api/audio/speak` (hermes `tts:`; lean
+    /// openai/elevenlabs providers — P344).
+    #[serde(default)]
+    pub tts: crate::tts::TtsConfig,
     /// OAuth device-flow login (hermes portal auth, service-agnostic).
     #[serde(default)]
     pub oauth: crate::oauth::OAuthConfig,

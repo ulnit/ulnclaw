@@ -80,6 +80,10 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .message.user .bubble { background: var(--accent); color: white; }
 .message.assistant .bubble { background: var(--panel-2); }
 .message.system .bubble { background: none; color: var(--dim); font-size: 12px; }
+/* P344: per-message action row (read-aloud) — small, dim, unobtrusive. */
+.msg-actions { display: flex; align-items: flex-end; margin: 0 4px; }
+.msg-actions button { opacity: 0.35; font-size: 12px; padding: 2px 5px; }
+.msg-actions button:hover, .msg-actions button:focus { opacity: 1; }
 .bubble.streaming::after { content: "▍"; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 

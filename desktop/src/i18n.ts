@@ -72,6 +72,7 @@ export interface Translations {
     deleteFailed: string; exported: string; exportFailed: string; newTitle: string; loadFailed: string; createFailed: string;
     errorPrefix: string; modelLockTitle: string; gatewayModelTitle: string;
     reachable: string; unreachable: string; removeAttachment: string; uploadFailed: string; projectBadge: string;
+    speakTitle: string; speakFailed: string;
   };
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
   slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; skillFallback: string; resume: string };
@@ -329,7 +330,7 @@ const en: Translations = {
     gatewayModelTitle: "Gateway default model — click to pick a session model",
     reachable: "gateway reachable", unreachable: "gateway unreachable",
     removeAttachment: "Remove attachment",
-    uploadFailed: "Clipboard upload failed: {error}",
+    uploadFailed: "Clipboard upload failed: {error}", speakTitle: "Read aloud (TTS)", speakFailed: "Speech synthesis failed: {error}",
     projectBadge: "Project: {project}",
   },
   tools: { running: "running…", done: "done", thinking: "thinking", arguments: "arguments", result: "result", fallbackName: "tool" },
@@ -753,7 +754,7 @@ const zh: Translations = {
     gatewayModelTitle: "网关默认模型 — 点击挑选会话模型",
     reachable: "网关可达", unreachable: "网关不可达",
     removeAttachment: "移除附件",
-    uploadFailed: "剪贴板上传失败：{error}",
+    uploadFailed: "剪贴板上传失败：{error}", speakTitle: "朗读（TTS）", speakFailed: "语音合成失败：{error}",
     projectBadge: "项目：{project}",
   },
   tools: { running: "运行中…", done: "完成", thinking: "思考中", arguments: "参数", result: "结果", fallbackName: "工具" },
@@ -1177,7 +1178,7 @@ const zhHant: Translations = {
     gatewayModelTitle: "閘道預設模型 — 點選以挑選工作階段模型",
     reachable: "閘道可達", unreachable: "閘道不可達",
     removeAttachment: "移除附件",
-    uploadFailed: "剪貼簿上傳失敗：{error}",
+    uploadFailed: "剪貼簿上傳失敗：{error}", speakTitle: "朗讀（TTS）", speakFailed: "語音合成失敗：{error}",
     projectBadge: "專案：{project}",
   },
   tools: { running: "執行中…", done: "完成", thinking: "思考中", arguments: "參數", result: "結果", fallbackName: "工具" },
@@ -1601,7 +1602,7 @@ const ja: Translations = {
     gatewayModelTitle: "ゲートウェイ既定モデル — クリックでセッションモデルを選択",
     reachable: "ゲートウェイ到達可能", unreachable: "ゲートウェイ到達不能",
     removeAttachment: "添付を削除",
-    uploadFailed: "クリップボードのアップロードに失敗：{error}",
+    uploadFailed: "クリップボードのアップロードに失敗：{error}", speakTitle: "読み上げ（TTS）", speakFailed: "音声合成に失敗しました：{error}",
     projectBadge: "プロジェクト：{project}",
   },
   tools: { running: "実行中…", done: "完了", thinking: "思考中", arguments: "引数", result: "結果", fallbackName: "ツール" },
@@ -2025,7 +2026,7 @@ const ar: Translations = {
     gatewayModelTitle: "نموذج البوابة الافتراضي — انقر لاختيار نموذج الجلسة",
     reachable: "البوابة متاحة", unreachable: "البوابة غير متاحة",
     removeAttachment: "إزالة المرفق",
-    uploadFailed: "فشل رفع الحافظة: {error}",
+    uploadFailed: "فشل رفع الحافظة: {error}", speakTitle: "قراءة بصوت عالٍ (TTS)", speakFailed: "فشل تركيب الكلام: {error}",
     projectBadge: "المشروع: {project}",
   },
   tools: { running: "قيد التشغيل…", done: "تم", thinking: "يفكر", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },
