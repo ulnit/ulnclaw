@@ -2742,6 +2742,22 @@ export class GatewayClient {
     return value as { ok: boolean; presets: number };
   }
 
+  /** POST /api/providers/validate — live-probe a credential (P608). */
+  async providersValidate(
+    key: string,
+    value: string,
+    apiKey?: string,
+  ): Promise<{ ok: boolean; reachable: boolean; message: string; models?: string[] }> {
+    const response = await fetch(this.endpoint("/api/providers/validate"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value, api_key: apiKey ?? "" }),
+    });
+    const value_ = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value_.error || `validate HTTP ${response.status}`);
+    return value_ as { ok: boolean; reachable: boolean; message: string; models?: string[] };
+  }
+
   /** GET /api/model/recommended-default — sensible default model for a
    * provider (first curated catalog entry; P347). */
   async modelRecommendedDefault(provider?: string): Promise<{ provider: string; model: string }> {

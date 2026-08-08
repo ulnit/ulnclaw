@@ -73,6 +73,7 @@ export class ConfigWidget {
           <span class="config-add-label" data-i18n="config.envAddLabel">Add env key</span>
           <input id="config-env-add-key" type="text" placeholder="ALL_CAPS_KEY" />
           <input id="config-env-add-value" type="password" data-i18n-ph="config.envValuePlaceholder" placeholder="value (stored in .env)" />
+          <button id="config-env-validate-btn" class="ghost" data-i18n="config.envValidate">Validate</button>
           <button id="config-env-add-btn" class="ghost" data-i18n="config.add">Add</button>
         </div>
         <p class="config-note" data-i18n="config.envKeysNote"></p>
@@ -137,6 +138,9 @@ export class ConfigWidget {
         </menu>
       </dialog>
     `;
+    this.root.querySelector("#config-env-validate-btn")!.addEventListener("click", () => {
+      this.validateEnvKey().catch(() => undefined);
+    });
     this.root.querySelector("#config-env-add-btn")!.addEventListener("click", () => {
       this.addEnvKey().catch(() => undefined);
     });
@@ -1207,6 +1211,43 @@ export class ConfigWidget {
     }
   }
 
+  /** Live-probe the pending key/value before saving (P608). */
+  private async validateEnvKey(): Promise<boolean> {
+    const client = this.client();
+    const keyEl = this.root.querySelector("#config-env-add-key") as HTMLInputElement;
+    const valueEl = this.root.querySelector("#config-env-add-value") as HTMLInputElement;
+    const key = keyEl.value.trim();
+    const value = valueEl.value.trim();
+    if (!client || !key || !value) {
+      this.status(t.config.envValidateNeed, true);
+      return false;
+    }
+    try {
+      const result = await client.providersValidate(key, value);
+      if (result.ok) {
+        this.status(
+          result.models && result.models.length
+            ? t.config.envValidateOkModels.replace("{count}", String(result.models.length))
+            : t.config.envValidateOk,
+        );
+        return true;
+      }
+      this.status(
+        result.reachable
+          ? t.config.envValidateBad.replace("{message}", result.message)
+          : t.config.envValidateUnreachable,
+        result.reachable,
+      );
+      return !result.reachable;
+    } catch (error) {
+      this.status(
+        t.config.envFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
+        true,
+      );
+      return false;
+    }
+  }
+
   private async addEnvKey(): Promise<void> {
     const client = this.client();
     const keyEl = this.root.querySelector("#config-env-add-key") as HTMLInputElement;
@@ -1215,6 +1256,11 @@ export class ConfigWidget {
     if (!client || !key) {
       keyEl.focus();
       return;
+    }
+    const known = ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "OPENAI_BASE_URL"];
+    if (known.includes(key) && valueEl.value.trim()) {
+      const ok = await this.validateEnvKey();
+      if (!ok) return;
     }
     try {
       await client.envSet(key, valueEl.value);

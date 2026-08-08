@@ -1144,15 +1144,12 @@ async fn custom_endpoints_upsert(Json(body): Json<Value>) -> Response {
         .into_response()
 }
 
-/// `POST /api/providers/custom-endpoints/validate` — probe the
-/// endpoint's OpenAI-compatible `/models` URL (hermes parity).
-async fn custom_endpoints_validate(Json(body): Json<Value>) -> Response {
-    let base_url = body["base_url"]
-        .as_str()
-        .unwrap_or_default()
-        .trim()
-        .trim_end_matches('/')
-        .to_string();
+/// Probe an OpenAI-compatible `<base_url>/models`, optionally
+/// authenticated. Any 2xx answer counts as reachable + ok and the
+/// advertised model ids come back for GUI auto-picking (hermes
+/// `OPENAI_BASE_URL` validation parity).
+async fn probe_models_url(base_url: &str, api_key: Option<&str>) -> Response {
+    let base_url = base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
         return Json(json!({
             "ok": false, "reachable": true,
@@ -1164,11 +1161,7 @@ async fn custom_endpoints_validate(Json(body): Json<Value>) -> Response {
     let mut request = reqwest::Client::new()
         .get(&url)
         .header("accept", "application/json");
-    if let Some(key) = body["api_key"]
-        .as_str()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-    {
+    if let Some(key) = api_key.map(|v| v.trim()).filter(|v| !v.is_empty()) {
         request = request.bearer_auth(key);
     }
     let response = match tokio::time::timeout(
@@ -1212,6 +1205,89 @@ async fn custom_endpoints_validate(Json(body): Json<Value>) -> Response {
         .unwrap_or_default();
     Json(json!({ "ok": true, "reachable": true, "message": "", "models": models }))
         .into_response()
+}
+
+/// `POST /api/providers/custom-endpoints/validate` — probe the
+/// endpoint's OpenAI-compatible `/models` URL (hermes parity).
+async fn custom_endpoints_validate(Json(body): Json<Value>) -> Response {
+    let base_url = body["base_url"].as_str().unwrap_or_default();
+    let api_key = body["api_key"].as_str();
+    probe_models_url(base_url, api_key).await
+}
+
+/// Live credential probes (hermes `_CREDENTIAL_PROBES`): env key →
+/// (probe URL, bearer auth vs `?key=` query).
+const CREDENTIAL_PROBES: &[(&str, &str, bool)] = &[
+    ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/key", true),
+    ("OPENAI_API_KEY", "https://api.openai.com/v1/models", true),
+    ("XAI_API_KEY", "https://api.x.ai/v1/models", true),
+    (
+        "GEMINI_API_KEY",
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        false,
+    ),
+];
+
+/// `POST /api/providers/validate` — live-probe a provider credential
+/// before it is saved (hermes parity). `{key, value, api_key?}` →
+/// `{ok, reachable, message}`; `OPENAI_BASE_URL` probes `/models` and
+/// returns the advertised model ids. Unknown keys pass through
+/// (`ok: true, reachable: false`) so unprobable providers never block.
+async fn providers_validate(Json(body): Json<Value>) -> Response {
+    let key = body["key"].as_str().unwrap_or_default().trim().to_string();
+    let value = body["value"].as_str().unwrap_or_default().trim().to_string();
+    if value.is_empty() {
+        return Json(json!({
+            "ok": false, "reachable": true, "message": "Enter a value first.",
+        }))
+        .into_response();
+    }
+    if key == "OPENAI_BASE_URL" {
+        return probe_models_url(&value, body["api_key"].as_str()).await;
+    }
+    let Some((_, url, bearer)) = CREDENTIAL_PROBES.iter().find(|(probe_key, _, _)| *probe_key == key)
+    else {
+        return Json(json!({ "ok": true, "reachable": false, "message": "" })).into_response();
+    };
+    let mut request = reqwest::Client::new()
+        .get(*url)
+        .header("accept", "application/json");
+    if *bearer {
+        request = request.bearer_auth(&value);
+    } else {
+        request = request.query(&[("key", value.as_str())]);
+    }
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        request.send(),
+    )
+    .await
+    {
+        Ok(Ok(response)) => response,
+        _ => {
+            return Json(json!({
+                "ok": false, "reachable": false,
+                "message": "Could not reach the provider to verify the key.",
+            }))
+            .into_response()
+        }
+    };
+    let status = response.status().as_u16();
+    if status == 401 || status == 403 {
+        return Json(json!({
+            "ok": false, "reachable": true,
+            "message": "That API key was rejected. Double-check it and try again.",
+        }))
+        .into_response();
+    }
+    if status == 429 || (200..300).contains(&status) {
+        return Json(json!({ "ok": true, "reachable": true, "message": "" })).into_response();
+    }
+    Json(json!({
+        "ok": false, "reachable": true,
+        "message": format!("Provider returned HTTP {status} for this key."),
+    }))
+    .into_response()
 }
 
 /// `POST /api/providers/custom-endpoints/:id/activate` — make the
@@ -5852,6 +5928,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model/recommended-default", get(model_recommended_default))
         .route("/api/providers/custom-endpoints", get(custom_endpoints_list).post(custom_endpoints_upsert))
         .route("/api/providers/custom-endpoints/validate", post(custom_endpoints_validate))
+        .route("/api/providers/validate", post(providers_validate))
         .route("/api/providers/custom-endpoints/:id/activate", post(custom_endpoint_activate))
         .route("/api/providers/custom-endpoints/:id", delete(custom_endpoint_delete))
         .route("/api/providers/oauth", get(list_provider_oauth))
@@ -15999,6 +16076,92 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["reset"], true);
         let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
         assert!(!on_disk.contains("[auxiliary.compression]"), "{on_disk}");
+
+        match prev {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_providers_validate_endpoint() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Empty value and unknown-key semantics.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/providers/validate", Some(token),
+            json!({"key": "OPENAI_API_KEY", "value": ""}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["reachable"], true);
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/providers/validate", Some(token),
+            json!({"key": "SOME_RANDOM_KEY", "value": "abc"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["reachable"], false);
+
+        // Unreachable base URL.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/providers/validate", Some(token),
+            json!({"key": "OPENAI_BASE_URL", "value": "http://127.0.0.1:9"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["reachable"], false);
+
+        // Mock OpenAI-compatible endpoint requiring a bearer key.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind mock");
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { break; };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+                    let authorized = request.contains("authorization: bearer sekret-key");
+                    let (status_line, body) = if authorized {
+                        ("HTTP/1.1 200 OK", r#"{"data":[{"id":"mock-1"},{"id":"mock-2"}]}"#.to_string())
+                    } else {
+                        ("HTTP/1.1 401 Unauthorized", r#"{"error":"unauthorized"}"#.to_string())
+                    };
+                    let response = format!(
+                        "{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+
+        // Without the key the probe surfaces the rejection.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/providers/validate", Some(token),
+            json!({"key": "OPENAI_BASE_URL", "value": format!("http://127.0.0.1:{port}")}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["reachable"], true);
+
+        // With the key the probe succeeds and lists the models.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/providers/validate", Some(token),
+            json!({"key": "OPENAI_BASE_URL", "value": format!("http://127.0.0.1:{port}"), "api_key": "sekret-key"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["models"].as_array().unwrap().len(), 2);
 
         match prev {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

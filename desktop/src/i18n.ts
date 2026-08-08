@@ -238,6 +238,7 @@ export interface Translations {
     envAddLabel: string; envValuePlaceholder: string; envEmpty: string; envFile: string;
     envProcess: string; envBoth: string; envRemoveTitle: string; envRemoveConfirm: string; envRevealTitle: string;
     envSaved: string; envFailed: string;
+    envValidate: string; envValidateNeed: string; envValidateOk: string; envValidateOkModels: string; envValidateBad: string; envValidateUnreachable: string;
     memoryTitle: string; memoryTargetAll: string; memoryTargetMemory: string;
     memoryTargetUser: string; memoryReset: string; memoryNote: string;
     memoryMissing: string; memoryEntries: string; memoryLimit: string;
@@ -682,7 +683,7 @@ const en: Translations = {
     envRemoveConfirm: "Remove {key} from .env?",
     envRevealTitle: "Reveal value (5 per 30 s)",
     envSaved: "Environment updated. Restart the gateway to apply.",
-    envFailed: "Environment change failed: {error}",
+    envFailed: "Environment change failed: {error}", envValidate: "Validate", envValidateNeed: "Enter a key and value to validate.", envValidateOk: "Credential accepted by the provider.", envValidateOkModels: "Endpoint reachable — {count} model(s) advertised.", envValidateBad: "Provider rejected this credential: {message}", envValidateUnreachable: "Could not reach the provider — you can still save, but the key is unverified.",
     memoryTitle: "Persistent memory",
     memoryTargetAll: "All (MEMORY.md + USER.md)", memoryTargetMemory: "MEMORY.md only",
     memoryTargetUser: "USER.md only", memoryReset: "Reset\u2026",
@@ -1225,7 +1226,7 @@ const zh: Translations = {
     envRemoveConfirm: "从 .env 移除 {key}？",
     envRevealTitle: "显示值（每 30 秒限 5 次）",
     envSaved: "环境变量已更新。重启网关后生效。",
-    envFailed: "环境变量修改失败：{error}",
+    envFailed: "环境变量修改失败：{error}", envValidate: "校验", envValidateNeed: "请输入要校验的键与值。", envValidateOk: "provider 已接受该凭据。", envValidateOkModels: "端点可达——声明 {count} 个模型。", envValidateBad: "provider 拒绝了该凭据：{message}", envValidateUnreachable: "无法连通 provider——仍可保存，但该密钥未经验证。",
     memoryTitle: "持久记忆",
     memoryTargetAll: "全部（MEMORY.md + USER.md）", memoryTargetMemory: "仅 MEMORY.md",
     memoryTargetUser: "仅 USER.md", memoryReset: "重置…",
@@ -1768,7 +1769,7 @@ const zhHant: Translations = {
     envRemoveConfirm: "從 .env 移除 {key}？",
     envRevealTitle: "顯示值（每 30 秒限 5 次）",
     envSaved: "環境變數已更新。重啟閘道後生效。",
-    envFailed: "環境變數修改失敗：{error}",
+    envFailed: "環境變數修改失敗：{error}", envValidate: "校驗", envValidateNeed: "請輸入要校驗的鍵與值。", envValidateOk: "provider 已接受該憑證。", envValidateOkModels: "端點可達——宣告 {count} 個模型。", envValidateBad: "provider 拒絕了該憑證：{message}", envValidateUnreachable: "無法連通 provider——仍可儲存，但该金鑰未經驗證。",
     memoryTitle: "持久記憶",
     memoryTargetAll: "全部（MEMORY.md + USER.md）", memoryTargetMemory: "僅 MEMORY.md",
     memoryTargetUser: "僅 USER.md", memoryReset: "重置…",
@@ -2311,7 +2312,7 @@ const ja: Translations = {
     envRemoveConfirm: "{key} を .env から削除しますか？",
     envRevealTitle: "値を表示（30 秒に 5 回まで）",
     envSaved: "環境を更新しました。反映にはゲートウェイを再起動してください。",
-    envFailed: "環境の変更に失敗しました: {error}",
+    envFailed: "環境の変更に失敗しました: {error}", envValidate: "検証", envValidateNeed: "検証するキーと値を入力してください。", envValidateOk: "プロバイダーがこの認証情報を受け入れました。", envValidateOkModels: "エンドポイント到達可能——{count} 個のモデルを通知。", envValidateBad: "プロバイダーがこの認証情報を拒否しました: {message}", envValidateUnreachable: "プロバイダーに到達できません——保存は可能ですが、キーは未検証です。",
     memoryTitle: "永続メモリ",
     memoryTargetAll: "すべて（MEMORY.md + USER.md）", memoryTargetMemory: "MEMORY.md のみ",
     memoryTargetUser: "USER.md のみ", memoryReset: "リセット…",
@@ -2854,7 +2855,7 @@ const ar: Translations = {
     envRemoveConfirm: "إزالة {key} من .env؟",
     envRevealTitle: "إظهار القيمة (5 مرات لكل 30 ثانية)",
     envSaved: "تم تحديث البيئة. أعد تشغيل البوابة للتطبيق.",
-    envFailed: "فشل تغيير البيئة: {error}",
+    envFailed: "فشل تغيير البيئة: {error}", envValidate: "تحقق", envValidateNeed: "أدخل مفتاحاً وقيمة للتحقق منهما.", envValidateOk: "قبل المزوّد بيانات الاعتماد.", envValidateOkModels: "نقطة النهاية قابلة للوصول — {count} نموذج متاح.", envValidateBad: "رفض المزوّد بيانات الاعتماد هذه: {message}", envValidateUnreachable: "تعذّر الوصول إلى المزوّد — يمكنك الحفظ لكن المفتاح غير مُتحقق منه.",
     memoryTitle: "الذاكرة الدائمة",
     memoryTargetAll: "الكل (MEMORY.md + USER.md)", memoryTargetMemory: "MEMORY.md فقط",
     memoryTargetUser: "USER.md فقط", memoryReset: "إعادة تعيين…",
