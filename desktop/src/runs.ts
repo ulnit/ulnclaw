@@ -8,6 +8,7 @@ import { t } from "./i18n";
 
 const REFRESH_MS = 5_000;
 const STATUS_FILTER_KEY = "ulnclaw.runs.statusFilter";
+const DELEGATION_FILTER_KEY = "ulnclaw.runs.delegationFilter";
 
 function escapeHtml(text: string): string {
   return text
@@ -37,6 +38,8 @@ export class RunsWidget {
   /** Live status timeline per run, fed by /v1/runs/:id/events (P322). */
   private timelines = new Map<string, { status: string; at: number }[]>();
   private subs = new Map<string, AbortController>();
+  /** Cached delegations so the P505 filter re-renders without a refetch. */
+  private lastDelegations: DelegationRow[] = [];
 
   constructor(
     private root: HTMLElement,
@@ -64,6 +67,12 @@ export class RunsWidget {
       <div id="runs-status" class="config-status" hidden></div>
       <div id="runs-list" class="runs-list"></div>
       <h3 class="config-section runs-delegations-title" data-i18n="runs.delegationsTitle">Delegations</h3>
+      <select id="runs-delegations-filter" data-i18n-title="runs.delegationsFilterTitle">
+        <option value="all" data-i18n="runs.statusAll">All statuses</option>
+        <option value="running" data-i18n="runs.statusRunning">Running</option>
+        <option value="completed" data-i18n="runs.statusCompleted">Completed</option>
+        <option value="failed" data-i18n="runs.statusFailed">Failed</option>
+      </select>
       <div id="delegations-list" class="runs-list"></div>
     `;
     this.root.querySelector("#runs-refresh")!.addEventListener("click", () => {
@@ -74,6 +83,12 @@ export class RunsWidget {
     statusSelect.addEventListener("change", () => {
       window.localStorage.setItem(STATUS_FILTER_KEY, statusSelect.value);
       this.refresh().catch(() => undefined);
+    });
+    const delegationSelect = this.root.querySelector("#runs-delegations-filter") as HTMLSelectElement;
+    delegationSelect.value = this.delegationFilter;
+    delegationSelect.addEventListener("change", () => {
+      window.localStorage.setItem(DELEGATION_FILTER_KEY, delegationSelect.value);
+      this.renderDelegations(this.lastDelegations);
     });
   }
 
@@ -103,6 +118,11 @@ export class RunsWidget {
   /** Persisted run-status filter (P502). */
   private get statusFilter(): string {
     return window.localStorage.getItem(STATUS_FILTER_KEY) ?? "all";
+  }
+
+  /** Persisted delegation-status filter (P505). */
+  private get delegationFilter(): string {
+    return window.localStorage.getItem(DELEGATION_FILTER_KEY) ?? "all";
   }
 
   async refresh(): Promise<void> {
@@ -304,16 +324,21 @@ export class RunsWidget {
   }
 
   private renderDelegations(delegations: DelegationRow[]): void {
+    this.lastDelegations = delegations;
     const list = this.root.querySelector("#delegations-list") as HTMLElement;
     list.innerHTML = "";
-    if (delegations.length === 0) {
+    const filter = this.delegationFilter;
+    const visible =
+      filter === "all" ? delegations : delegations.filter((delegation) => delegation.status === filter);
+    if (visible.length === 0) {
       const empty = document.createElement("p");
       empty.className = "config-note";
-      empty.textContent = t.runs.noDelegations;
+      empty.textContent =
+        delegations.length === 0 ? t.runs.noDelegations : t.runs.delegationsFilteredEmpty;
       list.appendChild(empty);
       return;
     }
-    for (const delegation of delegations) {
+    for (const delegation of visible) {
       const card = document.createElement("div");
       card.className = `run-card ${STATUS_CLASS[delegation.status] || ""}`;
       const when = new Date(delegation.created_ms).toLocaleString();
