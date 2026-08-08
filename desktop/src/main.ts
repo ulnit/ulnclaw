@@ -557,6 +557,12 @@ async function openSession(session: SessionRow): Promise<void> {
   el.chatTitle.textContent = session.title || session.id.slice(0, 8);
   refreshWindowTitle();
   refreshModelBadge();
+  try {
+    // P399: remember the last open session for the next launch.
+    localStorage.setItem(LAST_SESSION_KEY, session.id);
+  } catch {
+    /* storage unavailable */
+  }
   el.input.value = state.drafts.get(session.id) ?? "";
   refreshCharCount();
   hideSlashPop();
@@ -623,6 +629,9 @@ const SESSION_FILTER_KEY = "ulnclaw.sessionFilter";
 
 /** P398: the active view persists across restarts. */
 const ACTIVE_VIEW_KEY = "ulnclaw.activeView";
+
+/** P399: the last open session reopens at boot. */
+const LAST_SESSION_KEY = "ulnclaw.lastSession";
 
 function persistComposerHistory(): void {
   try {
@@ -800,6 +809,11 @@ async function sendTurn(): Promise<void> {
       el.chatTitle.textContent = state.current.title || state.current.id.slice(0, 8);
       refreshModelBadge();
       renderSessions();
+      try {
+        localStorage.setItem(LAST_SESSION_KEY, state.current.id);
+      } catch {
+        /* storage unavailable */
+      }
     } catch (error) {
       addMessage("system", fmt(t.session.createFailed, { error }));
       return;
@@ -2409,6 +2423,12 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     );
   });
   await refreshSessions();
+  // P399: reopen the last open session (when it still exists).
+  const lastSessionId = localStorage.getItem(LAST_SESSION_KEY);
+  if (lastSessionId) {
+    const last = state.sessions.find((row) => row.id === lastSessionId);
+    if (last) await openSession(last);
+  }
   state.skills = (await state.client.listSkills()) || [];
   setInterval(() => void pollHealth(), 10000);
   setInterval(() => void refreshSessions(), 30000);
