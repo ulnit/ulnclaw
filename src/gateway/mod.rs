@@ -11228,6 +11228,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sessions_list_exposes_archived_flag() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+        let id = state
+            .store
+            .create_session("gateway", Some("test-model"), None)
+            .unwrap();
+
+        // Fresh rows report archived=false.
+        let (status, body) = get_json(app.clone(), "/api/sessions?limit=10", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let row = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()
+            .clone();
+        assert_eq!(row["archived"], false);
+
+        // The TUI F8 archive flow flips the flag visible on the API.
+        state.store.set_session_archived(&id, true).unwrap();
+        let (status, body) = get_json(app.clone(), "/api/sessions?limit=10", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let row = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()
+            .clone();
+        assert_eq!(row["archived"], true);
+
+        // The single-session GET carries the flag too.
+        let (status, body) = get_json(app, &format!("/api/sessions/{}", id), Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["archived"], true);
+    }
+
+    #[tokio::test]
     async fn test_runs_404_and_validation() {
         let app = router(test_state());
         let (status, _) = get_json(app.clone(), "/v1/runs/does-not-exist", Some("sekret")).await;

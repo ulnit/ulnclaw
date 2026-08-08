@@ -1008,6 +1008,7 @@ export class SessionsViewWidget {
             <div class="sessions-view-row-meta">
               ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip sessions-view-source" data-source="${escapeHtml(session.source)}" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
               ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" data-reason="${escapeHtml(session.end_reason)}" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
+              ${session.archived ? `<span class="sessions-view-chip sessions-view-endreason" title="${escapeHtml(t.sessionsView.statusArchived)}">␡ ${escapeHtml(t.sessionsView.statusArchived)}</span>` : ""}
               ${session.model ? `<span class="sessions-view-chip sessions-view-model" data-model="${escapeHtml(session.model)}" title="${escapeHtml(session.model)}">${escapeHtml(session.model)}</span>` : ""}
               ${session.project ? `<span class="sessions-view-chip sessions-view-project" data-project="${escapeHtml(session.project)}" title="${escapeHtml(session.project)}">${escapeHtml(session.project)}</span>` : ""}
               ${session.message_count ? `<span class="sessions-view-msgcount">${escapeHtml(fmt(t.sessionsView.msgCount, { count: String(session.message_count) }))}</span>` : ""}

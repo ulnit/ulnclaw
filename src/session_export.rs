@@ -258,6 +258,7 @@ mod tests {
             message_count: 3,
             input_tokens: 120,
             output_tokens: 45,
+            archived: false,
         }
     }
 
