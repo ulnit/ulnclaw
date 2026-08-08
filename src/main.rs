@@ -9487,6 +9487,24 @@ fn run_session_browse_tui(
                             return Ok(Some(row.id.clone()));
                         }
                     }
+                    KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // P551: scroll the details pane up one line
+                        // (Ctrl+U/D move four at a time).
+                        pane_scroll = pane_scroll.saturating_sub(1);
+                    }
+                    KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // P551: scroll the details pane down one line.
+                        pane_scroll = pane_scroll.saturating_add(1);
+                    }
+                    KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // P551: jump the details pane to the top.
+                        pane_scroll = 0;
+                    }
+                    KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // P551: jump the details pane to the bottom —
+                        // clamped to the last line on the next render.
+                        pane_scroll = usize::MAX;
+                    }
                     KeyCode::Up => {
                         // hermes: navigation wraps around the list.
                         if !filtered.is_empty() {
