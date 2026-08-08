@@ -2928,6 +2928,14 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     copyLastReply: () => runCopyLastReply(),
     forkSession: () => runForkSession(),
     toggleHideArchived: () => toggleHideArchived(),
+    // P498: clear every unread marker at once.
+    markAllRead: () => {
+      if (unreadSessions.size === 0) return;
+      unreadSessions.clear();
+      renderSessions();
+      renderUnreadBadge();
+      void state.sessionsBrowser?.refresh();
+    },
     newSessionInProject: () => runNewSessionInProject(),
     // P448: jump into the sessions browser with the chat session selected.
     openInSessionsBrowser: () => {
