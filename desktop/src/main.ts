@@ -1079,7 +1079,9 @@ function toggleSidebar(): void {
 async function refreshSessions(): Promise<void> {
   if (!state.client) return;
   try {
-    state.sessions = await state.client.listSessions();
+    // P565: load last-message previews so the session picker (and any
+    // future surface) can show snippets without extra round-trips.
+    state.sessions = await state.client.listSessions(true);
     await refreshSessionTokens();
     // P545: usage just landed — refresh the open session's token chip.
     refreshTokenBadge();

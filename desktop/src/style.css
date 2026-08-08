@@ -1052,6 +1052,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .session-picker-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .session-picker-row-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-picker-meta { font-size: 11px; color: #8fa3c0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-picker-snippet { font-size: 11px; color: #8fa3c0; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-picker-check { color: var(--accent); width: 14px; }
 /* P557: unread ● mark on picker rows (sidebar/sessions-view parity). */
 .session-picker-row.unread .session-picker-row-title::before { content: "● "; color: var(--accent); font-size: 0.85em; }

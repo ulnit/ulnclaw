@@ -191,6 +191,15 @@ export class SessionPickerDialog {
       meta.className = "session-picker-meta";
       meta.textContent = bits.join(" \u00b7 ");
       main.appendChild(meta);
+      // P565: last-message snippet when the shell loaded previews.
+      const snippet = (session.last_message || "").replace(/\s+/g, " ").trim();
+      if (snippet) {
+        const snippetEl = document.createElement("span");
+        snippetEl.className = "session-picker-snippet";
+        snippetEl.textContent =
+          snippet.length > SNIPPET_MAX ? `${snippet.slice(0, SNIPPET_MAX)}\u2026` : snippet;
+        main.appendChild(snippetEl);
+      }
       const check = document.createElement("span");
       check.className = "session-picker-check";
       check.textContent = session.id === activeId ? "\u2713" : "";
