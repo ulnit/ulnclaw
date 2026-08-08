@@ -41,6 +41,10 @@ const SOURCE_FILTER_KEY = "ulnclaw.sessions.sourceFilter";
 const TRANSCRIPT_LIMIT = 400;
 // P465: messages rendered per batch once the full transcript is loaded.
 const RENDER_WINDOW = 200;
+// P508: hard cap on rendered transcript messages — the pane keeps a
+// sliding window over the cached transcript so very long expanded
+// transcripts never grow the DOM without bound.
+const MAX_RENDERED = 1200;
 
 export class SessionsViewWidget {
   private all: SessionRow[] = [];
@@ -65,6 +69,8 @@ export class SessionsViewWidget {
   // first rendered message, and the server-side total message count.
   private transcriptMessages: MessageRow[] = [];
   private transcriptStart = 0;
+  // P508: exclusive end index of the rendered window in transcriptMessages.
+  private transcriptEnd = 0;
   private transcriptTotal = 0;
   // P453: project drill-down set from the row chips.
   private projectFilter: string | null = localStorage.getItem(PROJECT_FILTER_KEY);
@@ -481,6 +487,8 @@ export class SessionsViewWidget {
         holder.innerHTML = this.renderMessages(fresh);
         this.bindCopyButtons(holder);
         for (const node of Array.from(holder.children)) pane.appendChild(node);
+        this.transcriptEnd = this.transcriptMessages.length;
+        this.trimWindow(pane, "head");
         this.syncDayDividers(pane);
       this.updateDayJump(pane);
         const session = this.all.find((candidate) => candidate.id === sessionId);
@@ -1064,6 +1072,7 @@ export class SessionsViewWidget {
       this.transcriptSession = sessionId;
       this.transcriptMessages = [];
       this.transcriptStart = 0;
+      this.transcriptEnd = 0;
       this.transcriptTotal = 0;
       this.transcriptExpanded = false;
     }
@@ -1077,6 +1086,7 @@ export class SessionsViewWidget {
       this.transcriptMessages = messages;
       this.transcriptTotal = session?.message_count || messages.length;
       this.transcriptStart = Math.max(0, messages.length - RENDER_WINDOW);
+      this.transcriptEnd = messages.length;
       const renderedCount = this.transcriptTotal || messages.length;
       const meta = session ? this.renderTranscriptMeta(session, renderedCount) : "";
       pane.innerHTML = meta + this.renderMessages(messages.slice(this.transcriptStart));
@@ -1116,7 +1126,9 @@ export class SessionsViewWidget {
   }
 
   /** P465/P468: single top banner — reveal cached messages first, then
-   * fetch older windows from the gateway via the `?before=` cursor. */
+   * fetch older windows from the gateway via the `?before=` cursor.
+   * P508: plus a bottom "show newer" banner while the rendered window
+   * is trimmed at the tail. */
   private updateTranscriptBanner(sessionId: string): void {
     const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
     pane.querySelector(".sessions-view-trunc")?.remove();
@@ -1130,15 +1142,70 @@ export class SessionsViewWidget {
       label = fmt(t.sessionsView.loadEarlier, { count: String(remaining) });
       action = () => void this.loadEarlier(sessionId);
     }
-    if (!action) return;
-    const banner = document.createElement("div");
-    banner.className = "sessions-view-trunc sessions-view-earlier";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = label;
-    button.addEventListener("click", action);
-    banner.appendChild(button);
-    pane.insertBefore(banner, pane.querySelector(".sessions-view-msg"));
+    if (action) {
+      const banner = document.createElement("div");
+      banner.className = "sessions-view-trunc sessions-view-earlier";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", action);
+      banner.appendChild(button);
+      pane.insertBefore(banner, pane.querySelector(".sessions-view-msg"));
+    }
+    const hiddenNewer = this.transcriptMessages.length - this.transcriptEnd;
+    if (hiddenNewer > 0) {
+      const banner = document.createElement("div");
+      banner.className = "sessions-view-trunc sessions-view-newer";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = fmt(t.sessionsView.showNewer, { count: String(hiddenNewer) });
+      button.addEventListener("click", () => this.revealLater(sessionId));
+      banner.appendChild(button);
+      pane.appendChild(banner);
+    }
+  }
+
+  /**
+   * P508: enforce MAX_RENDERED by trimming the rendered window from the
+   * opposite side of a reveal. Head trims compensate scrollTop so the
+   * viewport stays put; callers re-sync day dividers/jump/find state.
+   */
+  private trimWindow(pane: HTMLElement, side: "head" | "tail"): void {
+    const messages = Array.from(pane.querySelectorAll<HTMLElement>(".sessions-view-msg"));
+    let excess = messages.length - MAX_RENDERED;
+    if (excess <= 0) return;
+    if (side === "tail") {
+      for (let index = messages.length - 1; index >= 0 && excess > 0; index--, excess--) {
+        messages[index].remove();
+        this.transcriptEnd -= 1;
+      }
+      return;
+    }
+    for (let index = 0; index < messages.length && excess > 0; index++, excess--) {
+      const height = messages[index].offsetHeight;
+      messages[index].remove();
+      this.transcriptStart += 1;
+      pane.scrollTop -= height;
+    }
+  }
+
+  /** P508: re-render the next cached window at the bottom of the pane. */
+  private revealLater(sessionId: string): void {
+    if (this.selected !== sessionId) return;
+    const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    const start = this.transcriptEnd;
+    const end = Math.min(this.transcriptMessages.length, start + RENDER_WINDOW);
+    if (end <= start) return;
+    const holder = document.createElement("div");
+    holder.innerHTML = this.renderMessages(this.transcriptMessages.slice(start, end));
+    this.bindCopyButtons(holder);
+    for (const node of Array.from(holder.children)) pane.appendChild(node);
+    this.transcriptEnd = end;
+    this.trimWindow(pane, "head");
+    this.updateTranscriptBanner(sessionId);
+    this.syncDayDividers(pane);
+    this.updateDayJump(pane);
+    this.findBar?.refresh();
   }
 
   private revealEarlier(sessionId: string): void {
@@ -1157,6 +1224,7 @@ export class SessionsViewWidget {
     this.transcriptStart = start;
     this.transcriptExpanded = true;
     pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
+    this.trimWindow(pane, "tail");
     this.updateTranscriptBanner(sessionId);
     this.syncDayDividers(pane);
       this.updateDayJump(pane);
@@ -1175,6 +1243,8 @@ export class SessionsViewWidget {
       const older = await client.messages(sessionId, { timestamps: true, before: cursor, limit: TRANSCRIPT_LIMIT });
       if (this.selected !== sessionId) return;
       this.transcriptMessages = [...older, ...this.transcriptMessages];
+      // P508: everything cached is now rendered until the tail trim runs.
+      this.transcriptEnd = this.transcriptMessages.length;
       this.transcriptExpanded = true;
       const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
       const holder = document.createElement("div");
@@ -1185,6 +1255,7 @@ export class SessionsViewWidget {
       const anchor = pane.querySelector(".sessions-view-msg");
       for (const node of Array.from(holder.children)) pane.insertBefore(node, anchor);
       pane.scrollTop = prevTop + (pane.scrollHeight - prevHeight);
+      this.trimWindow(pane, "tail");
       this.updateTranscriptBanner(sessionId);
       this.syncDayDividers(pane);
       this.updateDayJump(pane);

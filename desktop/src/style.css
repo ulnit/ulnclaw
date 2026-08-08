@@ -1321,6 +1321,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 /* P463: load-full-transcript banner. */
 .sessions-view-trunc { margin: 0 0 10px; text-align: center; }
 .sessions-view-trunc button { background: var(--panel-2); border: 1px solid var(--border, var(--hover)); color: var(--accent); border-radius: 8px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+.sessions-view-newer { margin: 10px 0 0; }
 .sessions-view-msg-user .sessions-view-role { color: var(--accent); opacity: 0.95; }
 .sessions-view-content { white-space: pre-wrap; word-break: break-word; font-size: 0.93em; }
 .sessions-view-msg-system .sessions-view-content { opacity: 0.6; font-size: 0.85em; }

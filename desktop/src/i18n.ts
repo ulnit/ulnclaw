@@ -160,6 +160,7 @@ export interface Translations {
     loadFull: string;
     showEarlier: string;
     loadEarlier: string;
+    showNewer: string;
     select: string; loading: string; loadFailed: string; transcriptFailed: string;
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
@@ -518,6 +519,7 @@ const en: Translations = {
     loadFull: "Showing the last {count} messages — click to load the full transcript",
     showEarlier: "Show earlier messages ({count} more)",
     loadEarlier: "Load earlier messages ({count} more)",
+    showNewer: "Show newer messages ({count} more)",
     count: "{count} sessions",
     empty: "No sessions recorded yet.",
     noMatch: "No sessions match the filter.",
@@ -1005,6 +1007,7 @@ const zh: Translations = {
     loadFull: "当前仅显示最近 {count} 条消息——点击加载完整转录",
     showEarlier: "显示更早的消息（还有 {count} 条）",
     loadEarlier: "加载更早的消息（还有 {count} 条）",
+    showNewer: "显示更新的消息（还有 {count} 条）",
     count: "{count} 个会话",
     empty: "暂无会话记录。",
     noMatch: "没有匹配过滤条件的会话。",
@@ -1492,6 +1495,7 @@ const zhHant: Translations = {
     loadFull: "目前僅顯示最近 {count} 則訊息——點選載入完整轉錄",
     showEarlier: "顯示更早的訊息（還有 {count} 則）",
     loadEarlier: "載入更早的訊息（還有 {count} 則）",
+    showNewer: "顯示更新的訊息（還有 {count} 則）",
     count: "{count} 個會話",
     empty: "暫無會話記錄。",
     noMatch: "沒有符合過濾條件的會話。",
@@ -1979,6 +1983,7 @@ const ja: Translations = {
     loadFull: "直近 {count} メッセージのみ表示中 — クリックで全文を読み込む",
     showEarlier: "以前のメッセージを表示（あと {count} 件）",
     loadEarlier: "以前のメッセージを読み込む（あと {count} 件）",
+    showNewer: "より新しいメッセージを表示（あと {count} 件）",
     count: "{count} 件のセッション",
     empty: "セッションはまだ記録されていません。",
     noMatch: "フィルタに一致するセッションはありません。",
@@ -2466,6 +2471,7 @@ const ar: Translations = {
     loadFull: "يتم عرض آخر {count} رسالة فقط — انقر لتحميل النسخة الكاملة",
     showEarlier: "عرض الرسائل السابقة ({count} إضافية)",
     loadEarlier: "تحميل الرسائل السابقة ({count} إضافية)",
+    showNewer: "عرض الرسائل الأحدث ({count} إضافية)",
     count: "{count} جلسة",
     empty: "لا توجد جلسات مسجلة بعد.",
     noMatch: "لا توجد جلسات مطابقة للتصفية.",
