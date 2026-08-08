@@ -97,7 +97,7 @@ export interface Translations {
     todo: string; doing: string; done: string; blocked: string;
     addTask: string; addComment: string; comment: string; unblock: string;
     blockEllipsis: string; complete: string; close: string;
-    blockAction: string; unblockAction: string; doneAction: string;
+    blockAction: string; unblockAction: string; doneAction: string; duplicateAction: string; duplicateSuffix: string;
     whyBlocked: string; refresh: string; switchBoard: string;
     counts: string; noDescription: string; resultPrefix: string; noComments: string;
     claim: string; metaAssignee: string; metaPriority: string; metaCreated: string;
@@ -440,7 +440,7 @@ const en: Translations = {
     todo: "To do", doing: "Doing", done: "Done", blocked: "Blocked",
     addTask: "+ Add a task…", addComment: "Add a comment…", comment: "Comment",
     unblock: "Unblock", blockEllipsis: "Block…", complete: "Complete", close: "Close",
-    blockAction: "⛔ block", unblockAction: "↩ unblock", doneAction: "✓ done",
+    blockAction: "⛔ block", unblockAction: "↩ unblock", doneAction: "✓ done", duplicateAction: "Duplicate task", duplicateSuffix: " (copy)",
     whyBlocked: "Why is it blocked?", refresh: "Refresh", switchBoard: "Switch board",
     counts: "{open} open · {total} total", noDescription: "(no description)",
     resultPrefix: "Result: {result}", noComments: "No comments yet.",
@@ -940,7 +940,7 @@ const zh: Translations = {
     todo: "待办", doing: "进行中", done: "已完成", blocked: "受阻",
     addTask: "+ 添加任务…", addComment: "添加评论…", comment: "评论",
     unblock: "解除阻塞", blockEllipsis: "阻塞…", complete: "完成", close: "关闭",
-    blockAction: "⛔ 阻塞", unblockAction: "↩ 解除阻塞", doneAction: "✓ 完成",
+    blockAction: "⛔ 阻塞", unblockAction: "↩ 解除阻塞", doneAction: "✓ 完成", duplicateAction: "复制任务", duplicateSuffix: "（副本）",
     whyBlocked: "为什么受阻？", refresh: "刷新", switchBoard: "切换看板",
     counts: "{open} 进行中 · 共 {total}", noDescription: "（无描述）",
     resultPrefix: "结果：{result}", noComments: "暂无评论。",
@@ -1440,7 +1440,7 @@ const zhHant: Translations = {
     todo: "待辦", doing: "進行中", done: "已完成", blocked: "受阻",
     addTask: "+ 新增任務…", addComment: "新增留言…", comment: "留言",
     unblock: "解除阻塞", blockEllipsis: "阻塞…", complete: "完成", close: "關閉",
-    blockAction: "⛔ 阻塞", unblockAction: "↩ 解除阻塞", doneAction: "✓ 完成",
+    blockAction: "⛔ 阻塞", unblockAction: "↩ 解除阻塞", doneAction: "✓ 完成", duplicateAction: "複製工作", duplicateSuffix: "（副本）",
     whyBlocked: "為何受阻？", refresh: "重新整理", switchBoard: "切換看板",
     counts: "{open} 進行中 · 共 {total}", noDescription: "（無描述）",
     resultPrefix: "結果：{result}", noComments: "尚無留言。",
@@ -1940,7 +1940,7 @@ const ja: Translations = {
     todo: "未着手", doing: "進行中", done: "完了", blocked: "ブロック中",
     addTask: "+ タスクを追加…", addComment: "コメントを追加…", comment: "コメント",
     unblock: "ブロック解除", blockEllipsis: "ブロック…", complete: "完了", close: "閉じる",
-    blockAction: "⛔ ブロック", unblockAction: "↩ ブロック解除", doneAction: "✓ 完了",
+    blockAction: "⛔ ブロック", unblockAction: "↩ ブロック解除", doneAction: "✓ 完了", duplicateAction: "タスクを複製", duplicateSuffix: "（コピー）",
     whyBlocked: "ブロックの理由は？", refresh: "更新", switchBoard: "ボードを切り替え",
     counts: "未完了 {open} · 合計 {total}", noDescription: "（説明なし）",
     resultPrefix: "結果：{result}", noComments: "まだコメントはありません。",
@@ -2440,7 +2440,7 @@ const ar: Translations = {
     todo: "قيد الانتظار", doing: "قيد التنفيذ", done: "منجز", blocked: "محجوب",
     addTask: "+ أضف مهمة…", addComment: "أضف تعليقًا…", comment: "تعليق",
     unblock: "رفع الحجب", blockEllipsis: "حجب…", complete: "إنجاز", close: "إغلاق",
-    blockAction: "⛔ حجب", unblockAction: "↩ رفع الحجب", doneAction: "✓ إنجاز",
+    blockAction: "⛔ حجب", unblockAction: "↩ رفع الحجب", doneAction: "✓ إنجاز", duplicateAction: "تكرار المهمة", duplicateSuffix: " (نسخة)",
     whyBlocked: "لماذا هي محجوبة؟", refresh: "تحديث", switchBoard: "تبديل اللوحة",
     counts: "{open} مفتوحة · {total} إجمالًا", noDescription: "(بدون وصف)",
     resultPrefix: "النتيجة: {result}", noComments: "لا تعليقات بعد.",

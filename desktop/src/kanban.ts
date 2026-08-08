@@ -292,6 +292,14 @@ export class KanbanWidget {
       unblock.onclick = act(() => client!.kanbanUnblock(task.id));
       actions.appendChild(unblock);
     }
+    // P571: duplicate the task (title + body) with a localized suffix.
+    const dup = document.createElement("button");
+    dup.textContent = "\u29C9";
+    dup.title = t.kanban.duplicateAction;
+    dup.onclick = act(() =>
+      client!.kanbanCreateTask(task.title + t.kanban.duplicateSuffix, task.body || undefined),
+    );
+    actions.appendChild(dup);
     card.appendChild(actions);
 
     card.onclick = () => void this.openDetail(task.id);
