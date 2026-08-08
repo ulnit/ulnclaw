@@ -68,7 +68,7 @@ export interface Translations {
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string; statusTokens: string; statusKanban: string;
-    scrollBottom: string; dotAuthOn: string; dotAuthOff: string; dotRuns: string; dotLatency: string;
+    scrollBottom: string; dotAuthOn: string; dotAuthOff: string; dotRuns: string; dotLatency: string; tabApprovals: string;
     shortcuts: string; shortcutsTitle: string; shortcutsClose: string;
     scModelPicker: string; scNewSession: string; scCycle: string; scSessionPicker: string;
     scSettings: string; scSidebar: string; scPalette: string; scFind: string; scFocus: string; scShortcuts: string; scRecall: string; scSessionNav: string; scDayJump: string; scEndHome: string;
@@ -348,6 +348,7 @@ const en: Translations = {
     settingsTheme: "Theme", settingsFont: "Font",
     statusUp: "up {duration}", statusSessions: "{count} sessions", statusRuns: "{count} runs", statusPlugins: "{count} plugins", statusTokens: "{tokens} tok · {calls} tool calls", statusKanban: "kanban {todo} todo · {doing} doing · {blocked} blocked",
     scrollBottom: "Scroll to bottom", dotAuthOn: "auth required", dotAuthOff: "open access", dotRuns: "{count} runs", dotLatency: "{ms} ms probe",
+    tabApprovals: "{count} waiting for approval",
     shortcuts: "Keyboard shortcuts", shortcutsTitle: "Keyboard shortcuts", shortcutsClose: "Close",
     scModelPicker: "Open the model picker", scNewSession: "New session", scCycle: "Cycle sessions",
     scSessionPicker: "Open the session picker", scSettings: "Open settings", scSidebar: "Toggle sidebar",
@@ -812,6 +813,7 @@ const zh: Translations = {
     settingsTheme: "主题", settingsFont: "字体",
     statusUp: "运行 {duration}", statusSessions: "{count} 会话", statusRuns: "{count} 运行", statusPlugins: "{count} 插件", statusTokens: "{tokens} tok · {calls} 次工具调用", statusKanban: "看板 {todo} 待办 · {doing} 进行 · {blocked} 受阻",
     scrollBottom: "滚动到底部", dotAuthOn: "需鉴权", dotAuthOff: "开放访问", dotRuns: "{count} 运行", dotLatency: "探针延迟 {ms} 毫秒",
+    tabApprovals: "{count} 个等待审批",
     shortcuts: "键盘快捷键", shortcutsTitle: "键盘快捷键", shortcutsClose: "关闭",
     scModelPicker: "打开模型挑选器", scNewSession: "新建会话", scCycle: "循环切换会话",
     scSessionPicker: "打开会话挑选器", scSettings: "打开设置", scSidebar: "切换侧栏",
@@ -1276,6 +1278,7 @@ const zhHant: Translations = {
     settingsTheme: "主題", settingsFont: "字型",
     statusUp: "執行 {duration}", statusSessions: "{count} 工作階段", statusRuns: "{count} 執行", statusPlugins: "{count} 外掛", statusTokens: "{tokens} tok · {calls} 次工具呼叫", statusKanban: "看板 {todo} 待辦 · {doing} 進行 · {blocked} 受阻",
     scrollBottom: "捲動到底部", dotAuthOn: "需鑑權", dotAuthOff: "開放存取", dotRuns: "{count} 執行", dotLatency: "探針延遲 {ms} 毫秒",
+    tabApprovals: "{count} 個等待審批",
     shortcuts: "鍵盤快捷鍵", shortcutsTitle: "鍵盤快捷鍵", shortcutsClose: "關閉",
     scModelPicker: "開啟模型挑選器", scNewSession: "新增工作階段", scCycle: "循環切換工作階段",
     scSessionPicker: "開啟工作階段挑選器", scSettings: "開啟設定", scSidebar: "切換側欄",
@@ -1740,6 +1743,7 @@ const ja: Translations = {
     settingsTheme: "テーマ", settingsFont: "フォント",
     statusUp: "稼働 {duration}", statusSessions: "{count} セッション", statusRuns: "{count} 実行", statusPlugins: "{count} プラグイン", statusTokens: "{tokens} tok · {calls} ツール呼び出し", statusKanban: "カンバン {todo} 未着手 · {doing} 進行中 · {blocked} ブロック",
     scrollBottom: "一番下へスクロール", dotAuthOn: "認証必須", dotAuthOff: "オープンアクセス", dotRuns: "{count} 実行", dotLatency: "プローブ遅延 {ms} ms",
+    tabApprovals: "{count} 件が承認待ち",
     shortcuts: "キーボードショートカット", shortcutsTitle: "キーボードショートカット", shortcutsClose: "閉じる",
     scModelPicker: "モデルピッカーを開く", scNewSession: "新規セッション", scCycle: "セッションを切り替え",
     scSessionPicker: "セッションピッカーを開く", scSettings: "設定を開く", scSidebar: "サイドバーを切り替え",
@@ -2204,6 +2208,7 @@ const ar: Translations = {
     settingsTheme: "السمة", settingsFont: "الخط",
     statusUp: "يعمل منذ {duration}", statusSessions: "{count} جلسة", statusRuns: "{count} تشغيل", statusPlugins: "{count} إضافة", statusTokens: "{tokens} رمز · {calls} استدعاء أداة", statusKanban: "كانبان {todo} منتظرة · {doing} قيد التنفيذ · {blocked} محظورة",
     scrollBottom: "التمرير إلى الأسفل", dotAuthOn: "المصادقة مطلوبة", dotAuthOff: "وصول مفتوح", dotRuns: "{count} تشغيل", dotLatency: "زمن الاستجابة {ms} مث",
+    tabApprovals: "{count} بانتظار الموافقة",
     shortcuts: "اختصارات لوحة المفاتيح", shortcutsTitle: "اختصارات لوحة المفاتيح", shortcutsClose: "إغلاق",
     scModelPicker: "فتح منتقي النماذج", scNewSession: "جلسة جديدة", scCycle: "التنقل بين الجلسات",
     scSessionPicker: "فتح منتقي الجلسات", scSettings: "فتح الإعدادات", scSidebar: "تبديل الشريط الجانبي",

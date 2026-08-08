@@ -1206,6 +1206,31 @@ function startApprovalWatcher(): void {
   window.setInterval(() => void watchApprovalsOnce(), APPROVAL_WATCH_INTERVAL_MS);
 }
 
+/** P441: badge the Runs tab with the number of waiting approvals. */
+async function refreshRunsTabBadge(): Promise<void> {
+  const tab = document.getElementById("tab-runs");
+  if (!tab || !state.client) return;
+  try {
+    const runs = await state.client.listRuns();
+    const waiting = runs.filter((run) => run.status === "waiting_for_approval").length;
+    let badge = tab.querySelector<HTMLSpanElement>(".tab-badge");
+    if (waiting === 0) {
+      badge?.remove();
+      tab.title = "";
+      return;
+    }
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "tab-badge";
+      tab.appendChild(badge);
+    }
+    badge.textContent = String(waiting);
+    tab.title = fmt(t.chrome.tabApprovals, { count: String(waiting) });
+  } catch {
+    // Transient error — leave the badge as-is.
+  }
+}
+
 async function pollHealth(): Promise<void> {
   if (!state.client) return;
   // P412: time the health probe so the dot tooltip can show latency.
@@ -1232,6 +1257,8 @@ async function pollHealth(): Promise<void> {
       ].join(" · ");
     }
     void updateStatusBar();
+    // P441: keep the Runs-tab approval badge fresh on every probe.
+    void refreshRunsTabBadge();
   } else {
     el.statusbar.hidden = true;
   }
