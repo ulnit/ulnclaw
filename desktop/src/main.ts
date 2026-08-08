@@ -159,6 +159,7 @@ const el = {
   settingManage: document.getElementById("setting-manage") as HTMLInputElement,
   settingReopen: document.getElementById("setting-reopen") as HTMLInputElement,
   settingCharWarn: document.getElementById("setting-char-warn") as HTMLInputElement,
+  settingCharLimit: document.getElementById("setting-char-limit") as HTMLInputElement,
   settingNotifySystem: document.getElementById("setting-notify-system") as HTMLInputElement,
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
@@ -915,10 +916,20 @@ function refreshCharCount(): void {
   const threshold = state.settings.charWarn;
   el.charCount.classList.toggle("warn", threshold > 0 && length >= threshold * 0.8 && length < threshold);
   el.charCount.classList.toggle("over", threshold > 0 && length >= threshold);
+  // P466: hard-limit state renders distinctly and blocks sending.
+  const limit = state.settings.charLimit;
+  el.charCount.classList.toggle("blocked", limit > 0 && length > limit);
 }
 
 async function sendTurn(): Promise<void> {
   const text = el.input.value.trim();
+  // P466: optional hard limit blocks oversized messages before any dispatch.
+  const charLimit = state.settings.charLimit;
+  if (charLimit > 0 && text.length > charLimit) {
+    notifyError(fmt(t.chrome.charLimitExceeded, { length: String(text.length), limit: String(charLimit) }));
+    refreshCharCount();
+    return;
+  }
   // /resume + /sessions + /switch render the desktop session picker
   // (P254, hermes composer parity) instead of hitting the headless
   // gateway slash worker, which can't show the overlay.
@@ -2363,6 +2374,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     el.settingReopen.checked = state.settings.reopenLast;
     // P434: composer warn threshold.
     el.settingCharWarn.value = String(state.settings.charWarn);
+    // P466: composer hard limit (0 = off).
+    el.settingCharLimit.value = String(state.settings.charLimit);
     // P435: OS-level settle notifications toggle.
     el.settingNotifySystem.checked = state.settings.notifySystem;
     el.settings.showModal();
@@ -2394,6 +2407,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       charWarn: Number(el.settingCharWarn.value) > 0
         ? Math.floor(Number(el.settingCharWarn.value))
         : 4000,
+      charLimit: Number(el.settingCharLimit.value) > 0
+        ? Math.floor(Number(el.settingCharLimit.value))
+        : 0,
       notifySystem: el.settingNotifySystem.checked,
     };
     saveSettings(next);

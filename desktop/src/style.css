@@ -103,6 +103,7 @@ button.ghost { background: none; border: none; color: var(--dim); }
 /* P434: warn-threshold tinting (amber at 80%, red at/above). */
 .char-count.warn { color: #d29a22; }
 .char-count.over { color: #dc3545; font-weight: 600; }
+.char-count.blocked { color: #fff; background: #dc3545; border-radius: 4px; padding: 1px 5px; font-weight: 700; }
 #model-badge:hover { background: var(--panel-2); color: var(--text); }
 #model-badge.locked { color: var(--accent); }
 
