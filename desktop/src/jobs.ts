@@ -93,7 +93,8 @@ export class JobsWidget {
     }
   }
 
-  private async refresh(): Promise<void> {
+  /** P474: public so run-settle events can refresh immediately. */
+  async refresh(): Promise<void> {
     const client = this.client();
     if (!client) return;
     this.jobs = await client.jobsList(true);

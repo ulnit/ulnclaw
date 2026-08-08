@@ -1897,6 +1897,8 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       // Runs-view poll.
       void state.runs?.refresh();
       void refreshRunsTabBadge();
+      // P474: job rows track last-run state — settle them instantly too.
+      void state.jobs?.refresh();
       break;
     }
     case "run.approval": {
