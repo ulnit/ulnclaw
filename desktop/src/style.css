@@ -124,6 +124,11 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .file-tree-attach:hover { opacity: 1; }
 .file-tree-file:hover, .file-tree-dir summary:hover { background: var(--hover); }
 .file-tree-empty { color: var(--dim); padding: 2px 8px; font-size: 0.9em; }
+.file-tree-tabs { display: flex; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.file-tree-tabs button { background: none; border: none; color: inherit; font: inherit; cursor: pointer; padding: 3px 10px; border-radius: 6px; opacity: 0.75; }
+.file-tree-tabs button.active { background: var(--hover); opacity: 1; font-weight: 600; }
+.file-tree-changes-bar { padding: 6px 8px; }
+.file-tree-diff { margin: 4px 8px; padding: 8px; font-family: var(--mono, monospace); font-size: 11px; white-space: pre-wrap; word-break: break-all; background: var(--hover); border-radius: 6px; max-height: none; }
 .file-tree-preview { max-width: min(860px, 92vw); width: 90%; }
 .file-tree-preview-text { width: 100%; font-family: var(--mono, monospace); font-size: 12px; }
 .file-tree-preview-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }

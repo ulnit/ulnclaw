@@ -16,7 +16,12 @@ export class FileTreePanel {
   private aside: HTMLElement;
   private body: HTMLElement;
   private rootLabel: HTMLElement;
+  private tabs: HTMLElement;
+  private filesTabBtn: HTMLButtonElement;
+  private changesTabBtn: HTMLButtonElement;
   private rootPath: string | null = null;
+  private tab: "files" | "changes" = "files";
+  private diffMode: "working" | "staged" | "all" = "working";
 
   constructor(
     private client: () => GatewayClient | null,
@@ -65,7 +70,17 @@ export class FileTreePanel {
     this.body = document.createElement("div");
     this.body.className = "file-tree-body";
 
-    this.aside.append(header, this.body);
+    this.tabs = document.createElement("div");
+    this.tabs.className = "file-tree-tabs";
+    this.filesTabBtn = document.createElement("button");
+    this.filesTabBtn.textContent = t.fileTree.filesTab;
+    this.filesTabBtn.addEventListener("click", () => this.switchTab("files"));
+    this.changesTabBtn = document.createElement("button");
+    this.changesTabBtn.textContent = t.fileTree.changesTab;
+    this.changesTabBtn.addEventListener("click", () => this.switchTab("changes"));
+    this.tabs.append(this.filesTabBtn, this.changesTabBtn);
+
+    this.aside.append(header, this.tabs, this.body);
   }
 
   mount(parent: HTMLElement): void {
@@ -155,7 +170,99 @@ export class FileTreePanel {
     this.rootLabel.textContent = basename(root);
     this.rootLabel.title = root;
     this.body.innerHTML = "";
-    await this.renderDir(this.body, root, 0);
+    if (this.tab === "changes") {
+      await this.renderChanges();
+    } else {
+      await this.renderDir(this.body, root, 0);
+    }
+  }
+
+  /** P596: switch between the files tree and the git-changes pane. */
+  private switchTab(tab: "files" | "changes"): void {
+    if (this.tab === tab) return;
+    this.tab = tab;
+    this.filesTabBtn.classList.toggle("active", tab === "files");
+    this.changesTabBtn.classList.toggle("active", tab === "changes");
+    this.body.innerHTML = "";
+    if (tab === "files") {
+      if (this.rootPath) void this.renderDir(this.body, this.rootPath, 0);
+    } else {
+      void this.renderChanges();
+    }
+  }
+
+  /** P596: render the working-tree diff (stat + untracked + patch). */
+  private async renderChanges(): Promise<void> {
+    const client = this.client();
+    if (!client || !this.rootPath) return;
+    this.body.innerHTML = "";
+    this.filesTabBtn.classList.toggle("active", false);
+    this.changesTabBtn.classList.toggle("active", true);
+    const bar = document.createElement("div");
+    bar.className = "file-tree-changes-bar";
+    const mode = document.createElement("select");
+    const options: ["working" | "staged" | "all", string][] = [
+      ["working", t.fileTree.diffWorking],
+      ["staged", t.fileTree.diffStaged],
+      ["all", t.fileTree.diffAll],
+    ];
+    for (const [value, label] of options) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      if (value === this.diffMode) option.selected = true;
+      mode.appendChild(option);
+    }
+    mode.addEventListener("change", () => {
+      this.diffMode = mode.value as "working" | "staged" | "all";
+      void this.renderChanges();
+    });
+    bar.appendChild(mode);
+    this.body.appendChild(bar);
+    const status = document.createElement("div");
+    status.className = "config-note";
+    status.textContent = t.learning.loading;
+    this.body.appendChild(status);
+    try {
+      const diff = await client.fsGitDiff(this.rootPath, this.diffMode);
+      status.remove();
+      if (diff.empty && diff.untracked.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "config-note";
+        empty.textContent = t.fileTree.noChanges;
+        this.body.appendChild(empty);
+        return;
+      }
+      if (diff.stat) {
+        const stat = document.createElement("pre");
+        stat.className = "file-tree-diff";
+        stat.textContent = diff.stat;
+        this.body.appendChild(stat);
+      }
+      if (diff.untracked.length > 0) {
+        const untracked = document.createElement("pre");
+        untracked.className = "file-tree-diff";
+        untracked.textContent =
+          t.fileTree.untracked +
+          "\n" +
+          diff.untracked.map((path) => `+ ${path}`).join("\n");
+        this.body.appendChild(untracked);
+      }
+      if (diff.diff) {
+        const pre = document.createElement("pre");
+        pre.className = "file-tree-diff";
+        const lines = diff.diff.split("\n");
+        pre.textContent = lines.length > 4000
+          ? lines.slice(0, 4000).join("\n") + `\n\u2026 (${lines.length - 4000} more lines)`
+          : diff.diff;
+        this.body.appendChild(pre);
+      }
+    } catch (error) {
+      status.textContent = t.fileTree.diffFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   private async renderDir(container: HTMLElement, path: string, depth: number): Promise<void> {

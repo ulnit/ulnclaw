@@ -341,6 +341,8 @@ export interface Translations {
     save: string; saved: string; saveFailed: string; previewFailed: string;
     download: string; binary: string; truncated: string; openTitle: string;
     newFolder: string; newFolderPrompt: string; mkdirFailed: string; gitRoot: string;
+    filesTab: string; changesTab: string; noChanges: string; diffFailed: string; untracked: string;
+    diffWorking: string; diffStaged: string; diffAll: string;
   };
   learning: {
     title: string; tagline: string; searchPlaceholder: string; building: string;
@@ -829,7 +831,7 @@ const en: Translations = {
   fileTree: {
     title: "Files", noRoot: "No working folder available.", empty: "(empty)", loadFailed: "List failed: {error}",
     save: "Save", saved: "Saved.", saveFailed: "Save failed: {error}", previewFailed: "Preview failed: {error}",
-    download: "Download", binary: "Binary file — preview unavailable.", truncated: "Large file — preview truncated.", openTitle: "Toggle the file tree", newFolder: "New folder", newFolderPrompt: "New folder name:", mkdirFailed: "Folder creation failed: {error}", gitRoot: "Jump to the git repository root",
+    download: "Download", binary: "Binary file — preview unavailable.", truncated: "Large file — preview truncated.", openTitle: "Toggle the file tree", newFolder: "New folder", newFolderPrompt: "New folder name:", mkdirFailed: "Folder creation failed: {error}", gitRoot: "Jump to the git repository root", filesTab: "Files", changesTab: "Changes", noChanges: "No changes.", diffFailed: "Diff failed: {error}", untracked: "Untracked files:", diffWorking: "working", diffStaged: "staged", diffAll: "all",
   },
   learning: {
     title: "✨ Learning", tagline: "learned skills + memory, linked",
@@ -1339,7 +1341,7 @@ const zh: Translations = {
   fileTree: {
     title: "文件", noRoot: "没有可用的工作目录。", empty: "（空）", loadFailed: "列出失败：{error}",
     save: "保存", saved: "已保存。", saveFailed: "保存失败：{error}", previewFailed: "预览失败：{error}",
-    download: "下载", binary: "二进制文件——无法预览。", truncated: "大文件——预览已截断。", openTitle: "切换文件树", newFolder: "新建文件夹", newFolderPrompt: "新文件夹名称：", mkdirFailed: "创建文件夹失败：{error}", gitRoot: "跳转到 git 仓库根目录",
+    download: "下载", binary: "二进制文件——无法预览。", truncated: "大文件——预览已截断。", openTitle: "切换文件树", newFolder: "新建文件夹", newFolderPrompt: "新文件夹名称：", mkdirFailed: "创建文件夹失败：{error}", gitRoot: "跳转到 git 仓库根目录", filesTab: "文件", changesTab: "变更", noChanges: "没有变更。", diffFailed: "差异获取失败：{error}", untracked: "未跟踪文件：", diffWorking: "工作区", diffStaged: "已暂存", diffAll: "全部",
   },
   learning: {
     title: "✨ 学习", tagline: "已学技能 + 记忆，相互连接",
@@ -1849,7 +1851,7 @@ const zhHant: Translations = {
   fileTree: {
     title: "檔案", noRoot: "沒有可用的工作目錄。", empty: "（空）", loadFailed: "列出失敗：{error}",
     save: "儲存", saved: "已儲存。", saveFailed: "儲存失敗：{error}", previewFailed: "預覽失敗：{error}",
-    download: "下載", binary: "二進位檔案——無法預覽。", truncated: "大檔案——預覽已截斷。", openTitle: "切換檔案樹", newFolder: "新建資料夾", newFolderPrompt: "新資料夾名稱：", mkdirFailed: "建立資料夾失敗：{error}", gitRoot: "跳轉到 git 倉庫根目錄",
+    download: "下載", binary: "二進位檔案——無法預覽。", truncated: "大檔案——預覽已截斷。", openTitle: "切換檔案樹", newFolder: "新建資料夾", newFolderPrompt: "新資料夾名稱：", mkdirFailed: "建立資料夾失敗：{error}", gitRoot: "跳轉到 git 倉庫根目錄", filesTab: "檔案", changesTab: "變更", noChanges: "沒有變更。", diffFailed: "差異取得失敗：{error}", untracked: "未追蹤檔案：", diffWorking: "工作區", diffStaged: "已暫存", diffAll: "全部",
   },
   learning: {
     title: "✨ 學習", tagline: "已學技能 + 記憶，相互連結",
@@ -2359,7 +2361,7 @@ const ja: Translations = {
   fileTree: {
     title: "ファイル", noRoot: "利用可能な作業フォルダがありません。", empty: "（空）", loadFailed: "一覧取得に失敗: {error}",
     save: "保存", saved: "保存しました。", saveFailed: "保存に失敗しました: {error}", previewFailed: "プレビューに失敗しました: {error}",
-    download: "ダウンロード", binary: "バイナリファイル——プレビューできません。", truncated: "大きなファイル——プレビューは切り詰められました。", openTitle: "ファイルツリーを切り替え", newFolder: "新しいフォルダ", newFolderPrompt: "新しいフォルダ名：", mkdirFailed: "フォルダ作成に失敗しました: {error}", gitRoot: "git リポジトリのルートへ移動",
+    download: "ダウンロード", binary: "バイナリファイル——プレビューできません。", truncated: "大きなファイル——プレビューは切り詰められました。", openTitle: "ファイルツリーを切り替え", newFolder: "新しいフォルダ", newFolderPrompt: "新しいフォルダ名：", mkdirFailed: "フォルダ作成に失敗しました: {error}", gitRoot: "git リポジトリのルートへ移動", filesTab: "ファイル", changesTab: "変更", noChanges: "変更はありません。", diffFailed: "差分の取得に失敗しました: {error}", untracked: "未追跡ファイル:", diffWorking: "作業ツリー", diffStaged: "ステージ済み", diffAll: "すべて",
   },
   learning: {
     title: "✨ 学習", tagline: "学習済みスキル + メモリ、リンク付き",
@@ -2869,7 +2871,7 @@ const ar: Translations = {
   fileTree: {
     title: "الملفات", noRoot: "لا يوجد مجلد عمل متاح.", empty: "(فارغ)", loadFailed: "فشل السرد: {error}",
     save: "حفظ", saved: "تم الحفظ.", saveFailed: "فشل الحفظ: {error}", previewFailed: "فشلت المعاينة: {error}",
-    download: "تنزيل", binary: "ملف ثنائي — المعاينة غير متاحة.", truncated: "ملف كبير — تم اقتطاع المعاينة.", openTitle: "تبديل شجرة الملفات", newFolder: "مجلد جديد", newFolderPrompt: "اسم المجلد الجديد:", mkdirFailed: "فشل إنشاء المجلد: {error}", gitRoot: "الانتقال إلى جذر مستودع git",
+    download: "تنزيل", binary: "ملف ثنائي — المعاينة غير متاحة.", truncated: "ملف كبير — تم اقتطاع المعاينة.", openTitle: "تبديل شجرة الملفات", newFolder: "مجلد جديد", newFolderPrompt: "اسم المجلد الجديد:", mkdirFailed: "فشل إنشاء المجلد: {error}", gitRoot: "الانتقال إلى جذر مستودع git", filesTab: "الملفات", changesTab: "التغييرات", noChanges: "لا توجد تغييرات.", diffFailed: "فشل الحصول على الفرق: {error}", untracked: "ملفات غير متتبعة:", diffWorking: "منطقة العمل", diffStaged: "مُدرجة", diffAll: "الكل",
   },
   learning: {
     title: "✨ التعلم", tagline: "مهارات متعلَّمة + ذاكرة، مترابطة",

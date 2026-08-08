@@ -2114,6 +2114,20 @@ export class GatewayClient {
     if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
   }
 
+  /** GET /api/fs/git-diff — working-tree diff for the file-tree review pane (P596). */
+  async fsGitDiff(
+    path: string,
+    mode: "working" | "staged" | "all" = "working",
+  ): Promise<{ empty: boolean; stat: string; diff: string; untracked: string[] }> {
+    const params = new URLSearchParams({ path, mode });
+    const response = await fetch(this.endpoint(`/api/fs/git-diff?${params.toString()}`), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `fs HTTP ${response.status}`);
+    return value as { empty: boolean; stat: string; diff: string; untracked: string[] };
+  }
+
   /** GET /api/fs/git-root — nearest enclosing git checkout (P347). */
   async fsGitRoot(path: string): Promise<{ root: string | null }> {
     const params = new URLSearchParams({ path });

@@ -2596,6 +2596,38 @@ async fn fs_git_root(Query(query): Query<FsPathQuery>) -> Response {
     Json(json!({ "root": fs_find_git_root(&target) })).into_response()
 }
 
+/// Query parameters for `GET /api/fs/git-diff`.
+#[derive(Debug, Deserialize)]
+struct FsGitDiffQuery {
+    path: Option<String>,
+    /// working (default) | staged | all
+    mode: Option<String>,
+}
+
+/// `GET /api/fs/git-diff` — working-tree git diff for the desktop
+/// file-tree review pane (hermes right-sidebar review pane parity).
+async fn fs_git_diff(Query(query): Query<FsGitDiffQuery>) -> Response {
+    let target = match fs_query_path(&FsPathQuery { path: query.path }) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let mode = match query.mode.as_deref().unwrap_or("working") {
+        "staged" => crate::git_diff::DiffMode::Staged,
+        "all" => crate::git_diff::DiffMode::All,
+        _ => crate::git_diff::DiffMode::Working,
+    };
+    match crate::git_diff::collect_working_diff(&target, mode, &[]) {
+        Ok(diff) => Json(json!({
+            "empty": diff.empty,
+            "stat": diff.stat,
+            "diff": diff.diff,
+            "untracked": diff.untracked,
+        }))
+        .into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
 /// `GET /api/fs/default-cwd` — the gateway's working directory plus its
 /// git branch (hermes `/api/fs/default-cwd` parity; honors
 /// `[terminal] cwd`).
@@ -4830,6 +4862,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/download", get(fs_download))
         .route("/api/fs/mkdir", post(fs_mkdir))
         .route("/api/fs/git-root", get(fs_git_root))
+        .route("/api/fs/git-diff", get(fs_git_diff))
         .route("/api/fs/default-cwd", get(fs_default_cwd))
         .route("/api/model/info", get(model_info_api))
         .route("/api/model/set", post(model_set_api))
@@ -14772,6 +14805,114 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
 
         // Missing path errors are structured.
         let (status, _) = get_json(app.clone(), "/api/fs/list", Some("sekret")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        std::env::set_current_dir(saved_cwd).unwrap();
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fs_git_diff_modes() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        let saved_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        // Seed a real repo: init, one commit, then a modification + an
+        // untracked file.
+        std::fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_NAMESPACE")
+                .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .expect("spawn git");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "seed"]);
+        std::fs::write(dir.path().join("tracked.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.path().join("stray.txt"), "untracked\n").unwrap();
+
+        let app = router(test_state());
+
+        // Auth gate.
+        let (status, _) = get_json(app.clone(), "/api/fs/git-diff?path=.", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Working mode sees the modification and the untracked file.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/fs/git-diff?path=.",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["empty"], false);
+        assert!(body["diff"].as_str().unwrap().contains("+two"));
+        assert!(body["untracked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "stray.txt"));
+
+        // Staged mode is empty until something is staged.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/fs/git-diff?path=.&mode=staged",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["empty"], true);
+        git(&["add", "tracked.txt"]);
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/fs/git-diff?path=.&mode=staged",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["empty"], false);
+        assert!(body["diff"].as_str().unwrap().contains("+two"));
+
+        // All mode covers both areas; the stat summary names the file.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/fs/git-diff?path=.&mode=all",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["stat"].as_str().unwrap().contains("tracked.txt"));
+
+        // A path outside any repo is a structured error.
+        let outside = tempfile::tempdir().expect("tempdir");
+        let (status, _) = get_json(
+            app.clone(),
+            &format!("/api/fs/git-diff?path={}", outside.path().display()),
+            Some("sekret"),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
 
         std::env::set_current_dir(saved_cwd).unwrap();
