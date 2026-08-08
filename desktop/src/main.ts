@@ -2435,6 +2435,17 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       jumpDayDivider(event.key === "ArrowDown" ? 1 : -1);
     }
   });
+  // P406: PageUp/PageDown pages the chat transcript when the focus is
+  // not inside a text field.
+  window.addEventListener("keydown", (event) => {
+    if (state.view !== "chat") return;
+    if (event.key !== "PageUp" && event.key !== "PageDown") return;
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+    event.preventDefault();
+    const step = el.messages.clientHeight * 0.9;
+    el.messages.scrollTop += event.key === "PageDown" ? step : -step;
+  });
   // P398: reopen the last active view.
   const savedView = localStorage.getItem(ACTIVE_VIEW_KEY);
   if (
