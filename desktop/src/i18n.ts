@@ -265,6 +265,7 @@ export interface Translations {
   };
   skillsView: {
     count: string; skillsTitle: string; toolsetsTitle: string; noSkills: string;
+    filterPlaceholder: string; filterNoMatch: string;
     noToolsets: string; loadFailed: string; enabled: string; disabled: string; tools: string;
     curationTitle: string; archivedTitle: string; pinSkill: string; unpinSkill: string;
     archiveSkill: string; restoreSkill: string; archiveConfirm: string; curationFailed: string;
@@ -670,6 +671,7 @@ const en: Translations = {
     count: "{skills} skills · toolsets enabled {toolsets}",
     skillsTitle: "Installed skills", toolsetsTitle: "Toolsets",
     noSkills: "No skills installed in ~/.ulnclaw/skills yet.",
+    filterPlaceholder: "Filter skills & toolsets…", filterNoMatch: "No skills or toolsets match the filter.",
     noToolsets: "No toolsets reported.", loadFailed: "Failed to load: {error}",
     curationTitle: "Curation", archivedTitle: "Archived skills (recoverable):",
     pinSkill: "Pin", unpinSkill: "Unpin", archiveSkill: "Archive", restoreSkill: "Restore",
@@ -1159,6 +1161,7 @@ const zh: Translations = {
     count: "{skills} 个技能 · 已启用工具集 {toolsets}",
     skillsTitle: "已安装技能", toolsetsTitle: "工具集",
     noSkills: "~/.ulnclaw/skills 中还没有安装技能。",
+    filterPlaceholder: "筛选技能与工具集…", filterNoMatch: "没有符合筛选的技能或工具集。",
     noToolsets: "没有报告的工具集。", loadFailed: "加载失败：{error}",
     curationTitle: "策展", archivedTitle: "已归档技能（可恢复）：",
     pinSkill: "固定", unpinSkill: "取消固定", archiveSkill: "归档", restoreSkill: "恢复",
@@ -1648,6 +1651,7 @@ const zhHant: Translations = {
     count: "{skills} 個技能 · 已啟用工具集 {toolsets}",
     skillsTitle: "已安裝技能", toolsetsTitle: "工具集",
     noSkills: "~/.ulnclaw/skills 中還沒有安裝技能。",
+    filterPlaceholder: "篩選技能與工具集…", filterNoMatch: "沒有符合篩選的技能或工具集。",
     noToolsets: "沒有報告的工具集。", loadFailed: "載入失敗：{error}",
     curationTitle: "策展", archivedTitle: "已封存技能（可復原）：",
     pinSkill: "釘選", unpinSkill: "取消釘選", archiveSkill: "封存", restoreSkill: "還原",
@@ -2137,6 +2141,7 @@ const ja: Translations = {
     count: "{skills} 件のスキル · 有効なツールセット {toolsets}",
     skillsTitle: "インストール済みスキル", toolsetsTitle: "ツールセット",
     noSkills: "~/.ulnclaw/skills にスキルはまだありません。",
+    filterPlaceholder: "スキルとツールセットを絞り込み…", filterNoMatch: "フィルターに一致するスキルやツールセットはありません。",
     noToolsets: "ツールセットは報告されていません。", loadFailed: "読み込みに失敗：{error}",
     curationTitle: "キュレーション", archivedTitle: "アーカイブ済みスキル（復元可能）:",
     pinSkill: "ピン留め", unpinSkill: "ピン解除", archiveSkill: "アーカイブ", restoreSkill: "復元",
@@ -2626,6 +2631,7 @@ const ar: Translations = {
     count: "{skills} مهارة · مجموعات الأدوات المفعلة {toolsets}",
     skillsTitle: "المهارات المثبتة", toolsetsTitle: "مجموعات الأدوات",
     noSkills: "لا توجد مهارات مثبتة في ~/.ulnclaw/skills بعد.",
+    filterPlaceholder: "تصفية المهارات ومجموعات الأدوات…", filterNoMatch: "لا توجد مهارات أو مجموعات أدوات تطابق المرشح.",
     noToolsets: "لا توجد مجموعات أدوات مبلغ عنها.", loadFailed: "فشل التحميل: {error}",
     curationTitle: "التنسيق", archivedTitle: "مهارات مؤرشفة (قابلة للاستعادة):",
     pinSkill: "تثبيت", unpinSkill: "إلغاء التثبيت", archiveSkill: "أرشفة", restoreSkill: "استعادة",

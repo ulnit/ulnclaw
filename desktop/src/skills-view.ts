@@ -15,6 +15,10 @@ function escapeHtml(text: string): string {
 }
 
 export class SkillsWidget {
+  /** P514: cached catalogs so the live filter re-renders without refetching. */
+  private allSkills: { name: string; description: string; category?: string; path?: string }[] = [];
+  private allToolsets: { name: string; description: string; enabled: boolean; tools: string[] }[] = [];
+
   constructor(
     private root: HTMLElement,
     private client: () => GatewayClient | null,
@@ -25,6 +29,7 @@ export class SkillsWidget {
       <header id="skills-header">
         <span id="skills-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <input id="skills-filter" type="search" data-i18n-ph="skillsView.filterPlaceholder" />
         <button id="skills-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
       <div id="skills-status" class="config-status" hidden></div>
@@ -38,6 +43,9 @@ export class SkillsWidget {
     `;
     this.root.querySelector("#skills-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
+    });
+    this.root.querySelector("#skills-filter")!.addEventListener("input", () => {
+      this.applyFilter();
     });
   }
 
@@ -67,8 +75,9 @@ export class SkillsWidget {
         client.listSkills(),
         client.listToolsets(),
       ]);
-      this.renderSkills(skills);
-      this.renderToolsets(toolsets);
+      this.allSkills = skills;
+      this.allToolsets = toolsets;
+      this.applyFilter();
       const enabledCount = toolsets.filter((toolset) => toolset.enabled).length;
       (this.root.querySelector("#skills-count") as HTMLElement).textContent =
         t.skillsView.count
@@ -82,6 +91,28 @@ export class SkillsWidget {
         true,
       );
     }
+  }
+
+  /** P514: re-render both catalogs through the live filter box. */
+  private applyFilter(): void {
+    const input = this.root.querySelector("#skills-filter") as HTMLInputElement;
+    const query = input.value.trim().toLowerCase();
+    const skills = query
+      ? this.allSkills.filter((skill) =>
+          `${skill.name} ${skill.description} ${skill.category || ""}`
+            .toLowerCase()
+            .includes(query),
+        )
+      : this.allSkills;
+    const toolsets = query
+      ? this.allToolsets.filter((toolset) =>
+          `${toolset.name} ${toolset.description} ${toolset.tools.join(" ")}`
+            .toLowerCase()
+            .includes(query),
+        )
+      : this.allToolsets;
+    this.renderSkills(skills, Boolean(query));
+    this.renderToolsets(toolsets, Boolean(query));
   }
 
   /** Curation section (P316): curator status, usage rows with
@@ -180,13 +211,13 @@ export class SkillsWidget {
     }
   }
 
-  private renderSkills(skills: { name: string; description: string; category?: string; path?: string }[]): void {
+  private renderSkills(skills: { name: string; description: string; category?: string; path?: string }[], filtered = false): void {
     const list = this.root.querySelector("#skills-list") as HTMLElement;
     list.innerHTML = "";
     if (skills.length === 0) {
       const empty = document.createElement("p");
       empty.className = "config-note";
-      empty.textContent = t.skillsView.noSkills;
+      empty.textContent = filtered ? t.skillsView.filterNoMatch : t.skillsView.noSkills;
       list.appendChild(empty);
       return;
     }
@@ -205,13 +236,13 @@ export class SkillsWidget {
     }
   }
 
-  private renderToolsets(toolsets: { name: string; description: string; enabled: boolean; tools: string[] }[]): void {
+  private renderToolsets(toolsets: { name: string; description: string; enabled: boolean; tools: string[] }[], filtered = false): void {
     const list = this.root.querySelector("#toolsets-list") as HTMLElement;
     list.innerHTML = "";
     if (toolsets.length === 0) {
       const empty = document.createElement("p");
       empty.className = "config-note";
-      empty.textContent = t.skillsView.noToolsets;
+      empty.textContent = filtered ? t.skillsView.filterNoMatch : t.skillsView.noToolsets;
       list.appendChild(empty);
       return;
     }

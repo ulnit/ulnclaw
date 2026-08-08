@@ -1323,6 +1323,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .sessions-view-trunc button { background: var(--panel-2); border: 1px solid var(--border, var(--hover)); color: var(--accent); border-radius: 8px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
 .sessions-view-newer { margin: 10px 0 0; }
 .sessions-view-row-snippet { opacity: 0.55; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+#skills-filter { min-width: 200px; }
 /* P511: transcript column wrapper + role-visibility toggle bar. */
 .sessions-view-transcriptcol { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 .sessions-view-transcriptcol .sessions-view-transcript { flex: 1; }
