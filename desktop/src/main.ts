@@ -943,6 +943,16 @@ async function sendTurn(): Promise<void> {
     if (window.confirm(t.slash.clearConfirm)) el.newSession.click();
     return;
   }
+  // P456: view-switching slash commands (desktop-only; no gateway clash).
+  const viewMatch = /^\/(doctor|runs|projects|config|webhooks|models|plugins)\b/i.exec(text);
+  if (viewMatch) {
+    el.input.value = "";
+    refreshCharCount();
+    const view = viewMatch[1].toLowerCase() as
+      | "doctor" | "runs" | "projects" | "config" | "webhooks" | "models" | "plugins";
+    activeSwitchView?.(view);
+    return;
+  }
   if ((!text && state.pendingUploads.length === 0) || state.busy || !state.client) return;
   if (!state.current) {
     try {
@@ -1358,6 +1368,13 @@ function gatewaySlashCommands(): [string, string][] {
     ["/new", t.slash.newSession],
     ["/clear", t.slash.clear],
     ["/insights", t.slash.insights],
+    ["/doctor", t.slash.doctor],
+    ["/runs", t.slash.runs],
+    ["/projects", t.slash.projects],
+    ["/config", t.slash.config],
+    ["/webhooks", t.slash.webhooks],
+    ["/models", t.slash.models],
+    ["/plugins", t.slash.plugins],
   ];
 }
 
