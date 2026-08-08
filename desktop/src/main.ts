@@ -2816,7 +2816,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     if (titleClickTimer !== null) return;
     titleClickTimer = window.setTimeout(() => {
       titleClickTimer = null;
-      openSessionInfo();
+      void openSessionInfo();
     }, 260);
   });
   el.chatTitle.addEventListener("dblclick", () => {
@@ -3441,24 +3441,41 @@ function formatWhen(ms: number | null | undefined): string {
   return new Date(ms).toLocaleString();
 }
 
-function openSessionInfo(): void {
+async function openSessionInfo(): Promise<void> {
   const session = state.current;
   if (!session) return;
+  // P554: prefer the enriched single-session payload (fork lineage +
+  // total tokens); fall back to the cached row if the fetch fails.
+  let detail: SessionRow = session;
+  if (state.client) {
+    try {
+      const enriched = await state.client.getSession(session.id);
+      if (enriched) detail = enriched;
+    } catch {
+      /* gateway unreachable — show what we have */
+    }
+  }
   const rows: [string, string][] = [
-    [t.session.infoId, session.id],
-    [t.session.infoSource, session.source],
-    [t.session.infoModel, session.model || gatewayModel || "—"],
-    [t.session.infoProject, session.project || "—"],
-    [t.session.infoStarted, formatWhen(session.started_at)],
-    [t.session.infoActivity, formatWhen(session.last_activity_at)],
-    [t.session.infoMessages, String(session.message_count ?? "—")],
+    [t.session.infoId, detail.id],
+    [t.session.infoSource, detail.source],
+    [t.session.infoModel, detail.model || gatewayModel || "—"],
+    [t.session.infoProject, detail.project || "—"],
+    [t.session.infoStarted, formatWhen(detail.started_at)],
+    [t.session.infoActivity, formatWhen(detail.last_activity_at)],
+    [t.session.infoMessages, String(detail.message_count ?? "—")],
   ];
   // P460: show the end reason when the session is ended/archived.
-  if (session.end_reason) {
+  if (detail.end_reason) {
     rows.push([
       t.session.infoEndReason,
-      `${END_BADGES[session.end_reason] ?? "■"} ${session.end_reason}`,
+      `${END_BADGES[detail.end_reason] ?? "■"} ${detail.end_reason}`,
     ]);
+  }
+  if (typeof detail.total_tokens === "number") {
+    rows.push([t.session.infoTokens, formatTokens(detail.total_tokens)]);
+  }
+  if (detail.child_session_ids?.length) {
+    rows.push([t.session.infoChildren, detail.child_session_ids.join(", ")]);
   }
   el.sessionInfoRows.innerHTML = rows
     .map(([label, value]) => `<div class="notify-history-row"><span class="monitoring-label">${label}</span><span>${value}</span></div>`)

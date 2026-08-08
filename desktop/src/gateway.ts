@@ -32,6 +32,9 @@ export interface SessionRow {
   last_message?: string | null;
   /** P519: sessions-table archived flag (TUI F8 flow). */
   archived?: boolean;
+  /** P553/P554: fork lineage + token sum (single-session fetches only). */
+  child_session_ids?: string[];
+  total_tokens?: number;
 }
 
 export interface MessageRow {
