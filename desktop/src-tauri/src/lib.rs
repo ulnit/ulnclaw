@@ -366,8 +366,10 @@ fn setup_app_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 /// environments without a status-notifier implementation).
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Show ulnclaw", true, None::<&str>)?;
+    let new_session =
+        MenuItem::with_id(app, "new_session", "New Session", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &new_session, &quit])?;
 
     let mut builder = TrayIconBuilder::new()
         .tooltip("ulnclaw")
@@ -375,6 +377,12 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
+            // P573: mirror the File-menu item (P540) — surface the window,
+            // then let the webview listener create the session.
+            "new_session" => {
+                show_main_window(app);
+                let _ = app.emit("ulnclaw://menu-new-session", ());
+            }
             "quit" => app.exit(0),
             _ => {}
         })
