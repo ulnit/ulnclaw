@@ -1889,6 +1889,10 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       void refreshSessions();
       void state.sessionsBrowser?.refresh();
       state.sessionsBrowser?.refreshTranscript(envelope.session_id);
+      // P472: settle the run row + approval badge without waiting for the
+      // Runs-view poll.
+      void state.runs?.refresh();
+      void refreshRunsTabBadge();
       break;
     }
     case "run.approval": {
@@ -1904,6 +1908,9 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       if (!document.hasFocus()) {
         systemNotify(t.bridge.approvalNeeded, command, runId ? `ulnclaw-approval-${runId}` : "");
       }
+      // P472: the waiting-approval badge and run rows update immediately.
+      void state.runs?.refresh();
+      void refreshRunsTabBadge();
       break;
     }
     case "session.created":
