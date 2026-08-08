@@ -199,6 +199,9 @@ export interface Translations {
     schemaTitle: string; schemaNote: string;
     messagingTitle: string; messagingNote: string; messagingEnable: string; messagingDisable: string; messagingTest: string; messagingFailed: string; messagingSaveEnv: string; messagingClearEnv: string;
     ttsTitle: string; ttsNote: string; ttsPreview: string; ttsSample: string; ttsPreviewFailed: string; ttsVoicesUnavailable: string; ttsVoicesUnauthorized: string;
+    updateTitle: string; updateVersion: string; updateMethod: string; updateStatus: string;
+    updateUpToDate: string; updateBehind: string; updateShallow: string; updateCommand: string;
+    updateCheck: string; updateApply: string; updateApplying: string; updateApplied: string; updateFailed: string;
   };
   doctor: {
     run: string; running: string; online: string; issues: string;
@@ -533,6 +536,12 @@ const en: Translations = {
     memoryResetDone: "Deleted: {files}", memoryResetNone: "Nothing to delete.",
     memoryResetFailed: "Reset failed: {error}",
     poolTitle: "Credential pool", poolAddLabel: "Add pool key", poolEmpty: "No pooled credentials", poolRemoveConfirm: "Remove this pooled key?", poolSaved: "Credential pool updated", poolFailed: "Credential pool failed: {error}", poolNote: "Pooled keys rotate round-robin per request and take precedence over environment variables for their provider; remove every entry to fall back to env keys.", oauthTitle: "OAuth (device flow)", oauthLoggedIn: "Logged in", oauthLoggedOut: "Logged out", oauthPortal: "Open portal", oauthNote: "Read-only posture of the [oauth] device-flow login (ulnclaw oauth CLI); tokens live in oauth_tokens.json.", oauthProviderNotConfigured: "not configured ([oauth] device_authorization_url/token_url)", oauthProviderConnect: "Connect…", oauthProviderDisconnect: "Disconnect", oauthProviderDisconnectConfirm: "Disconnect the OAuth provider and delete the stored tokens?", oauthProviderDisconnected: "OAuth provider disconnected.", oauthProviderPending: "Waiting for authorization — enter code {code} in your browser", oauthProviderOpen: "Open authorization page", oauthProviderComplete: "OAuth login complete.", oauthProviderFailed: "OAuth handshake failed: {error}", schemaTitle: "Config schema (defaults)", schemaNote: "Every config leaf with its type and default value — edit via the rows above or Raw TOML.", messagingTitle: "Messaging platforms", messagingNote: "Enable/disable toggles write [messaging.<id>].enabled; restart the gateway to apply. Credentials live in config.toml (telegram/discord/slack also honor env keys).", messagingEnable: "Enable", messagingDisable: "Disable", messagingTest: "Test", messagingFailed: "Platform update failed: {error}", messagingSaveEnv: "Save", messagingClearEnv: "Clear", ttsTitle: "Text-to-speech", ttsNote: "Provider and voice for the 🔊 read-aloud action ([tts] config). Voice list needs ELEVENLABS_API_KEY; synthesis needs the provider key.", ttsPreview: "Preview", ttsSample: "Hello! This is your ulnclaw gateway speaking.", ttsPreviewFailed: "Preview failed: {error}", ttsVoicesUnavailable: "voice list unavailable (no key?)", ttsVoicesUnauthorized: "voice list unauthorized — check ELEVENLABS_API_KEY",
+    updateTitle: "Software update", updateVersion: "Version", updateMethod: "Install method",
+    updateStatus: "Status", updateUpToDate: "Up to date",
+    updateBehind: "{count} commits behind", updateShallow: "Update available (shallow clone)",
+    updateCommand: "Command", updateCheck: "Check", updateApply: "Update now",
+    updateApplying: "Updating…", updateApplied: "Updated to {sha} ({count} commits)",
+    updateFailed: "Update failed: {error}",
   },
   doctor: {
     run: "Run doctor", running: "Running checks…",
@@ -967,6 +976,12 @@ const zh: Translations = {
     memoryResetDone: "已删除：{files}", memoryResetNone: "无可删除内容。",
     memoryResetFailed: "重置失败：{error}",
     poolTitle: "凭证池", poolAddLabel: "添加池密钥", poolEmpty: "暂无池凭证", poolRemoveConfirm: "移除该池密钥？", poolSaved: "凭证池已更新", poolFailed: "凭证池操作失败：{error}", poolNote: "池内密钥按请求轮转，且对其 provider 优先于环境变量；删光条目即回落到环境密钥。", oauthTitle: "OAuth（设备流程）", oauthLoggedIn: "已登录", oauthLoggedOut: "未登录", oauthPortal: "打开门户", oauthNote: "[oauth] 设备流程登录的只读状态（ulnclaw oauth CLI）；令牌存于 oauth_tokens.json。", oauthProviderNotConfigured: "未配置（[oauth] device_authorization_url/token_url）", oauthProviderConnect: "连接…", oauthProviderDisconnect: "断开连接", oauthProviderDisconnectConfirm: "断开该 OAuth provider 并删除已存储的令牌？", oauthProviderDisconnected: "已断开 OAuth provider。", oauthProviderPending: "等待授权——请在浏览器中输入验证码 {code}", oauthProviderOpen: "打开授权页面", oauthProviderComplete: "OAuth 登录完成。", oauthProviderFailed: "OAuth 握手失败：{error}", schemaTitle: "配置模式（默认值）", schemaNote: "列出每个配置叶子的类型与默认值——可通过上方字段或 Raw TOML 编辑。", messagingTitle: "消息平台", messagingNote: "启用/禁用开关写入 [messaging.<id>].enabled；重启网关后生效。凭证存于 config.toml（telegram/discord/slack 同时支持 env 键）。", messagingEnable: "启用", messagingDisable: "禁用", messagingTest: "测试", messagingFailed: "平台更新失败：{error}", messagingSaveEnv: "保存", messagingClearEnv: "清除", ttsTitle: "语音合成", ttsNote: "🔊 朗读动作所用 provider 与音色（[tts] 配置）。音色列表需 ELEVENLABS_API_KEY；合成需对应 provider 密钥。", ttsPreview: "试听", ttsSample: "你好！这里是你的 ulnclaw 网关在说话。", ttsPreviewFailed: "试听失败：{error}", ttsVoicesUnavailable: "音色列表不可用（未配置密钥？）", ttsVoicesUnauthorized: "音色列表鉴权失败——请检查 ELEVENLABS_API_KEY",
+    updateTitle: "软件更新", updateVersion: "版本", updateMethod: "安装方式",
+    updateStatus: "状态", updateUpToDate: "已是最新",
+    updateBehind: "落后 {count} 个提交", updateShallow: "有可用更新（浅克隆）",
+    updateCommand: "命令", updateCheck: "检查", updateApply: "立即更新",
+    updateApplying: "更新中…", updateApplied: "已更新至 {sha}（{count} 个提交）",
+    updateFailed: "更新失败:{error}",
   },
   doctor: {
     run: "运行诊断", running: "检查中…",
@@ -1401,6 +1416,12 @@ const zhHant: Translations = {
     memoryResetDone: "已刪除：{files}", memoryResetNone: "無可刪除內容。",
     memoryResetFailed: "重置失敗：{error}",
     poolTitle: "憑證池", poolAddLabel: "新增池金鑰", poolEmpty: "無池憑證", poolRemoveConfirm: "移除此池金鑰？", poolSaved: "憑證池已更新", poolFailed: "憑證池操作失敗：{error}", poolNote: "池內金鑰按請求輪換，且對其 provider 優先於環境變數；刪光條目即回落到環境密鑰。", oauthTitle: "OAuth（裝置流程）", oauthLoggedIn: "已登入", oauthLoggedOut: "未登入", oauthPortal: "開啟入口", oauthNote: "[oauth] 裝置流程登入的唯讀狀態（ulnclaw oauth CLI）；憑證存於 oauth_tokens.json。", oauthProviderNotConfigured: "未配置（[oauth] device_authorization_url/token_url）", oauthProviderConnect: "連線…", oauthProviderDisconnect: "中斷連線", oauthProviderDisconnectConfirm: "中斷該 OAuth provider 並刪除已儲存的權杖？", oauthProviderDisconnected: "已中斷 OAuth provider。", oauthProviderPending: "等待授權——請在瀏覽器中輸入驗證碼 {code}", oauthProviderOpen: "開啟授權頁面", oauthProviderComplete: "OAuth 登入完成。", oauthProviderFailed: "OAuth 握手失敗：{error}", schemaTitle: "組態結構（預設值）", schemaNote: "列出每個組態葉子的類型與預設值——可透過上方欄位或 Raw TOML 編輯。", messagingTitle: "訊息平台", messagingNote: "啟用/停用開關寫入 [messaging.<id>].enabled；重啟閘道後生效。憑證存於 config.toml（telegram/discord/slack 同時支援 env 鍵）。", messagingEnable: "啟用", messagingDisable: "停用", messagingTest: "測試", messagingFailed: "平台更新失敗：{error}", messagingSaveEnv: "儲存", messagingClearEnv: "清除", ttsTitle: "語音合成", ttsNote: "🔊 朗讀動作所用 provider 與音色（[tts] 設定）。音色清單需 ELEVENLABS_API_KEY；合成需對應 provider 金鑰。", ttsPreview: "試聽", ttsSample: "你好！這裡是你的 ulnclaw 閘道在說話。", ttsPreviewFailed: "試聽失敗：{error}", ttsVoicesUnavailable: "音色清單不可用（未設定金鑰？）", ttsVoicesUnauthorized: "音色清單驗證失敗——請檢查 ELEVENLABS_API_KEY",
+    updateTitle: "軟體更新", updateVersion: "版本", updateMethod: "安裝方式",
+    updateStatus: "狀態", updateUpToDate: "已是最新",
+    updateBehind: "落後 {count} 個提交", updateShallow: "有可用更新（淺複製）",
+    updateCommand: "命令", updateCheck: "檢查", updateApply: "立即更新",
+    updateApplying: "更新中…", updateApplied: "已更新至 {sha}（{count} 個提交）",
+    updateFailed: "更新失敗:{error}",
   },
   doctor: {
     run: "執行診斷", running: "檢查中…",
@@ -1835,6 +1856,12 @@ const ja: Translations = {
     memoryResetDone: "削除済み: {files}", memoryResetNone: "削除するものがありません。",
     memoryResetFailed: "リセットに失敗しました: {error}",
     poolTitle: "認証情報プール", poolAddLabel: "プールキーを追加", poolEmpty: "プールされた認証情報はありません", poolRemoveConfirm: "このプールキーを削除しますか？", poolSaved: "認証情報プールを更新しました", poolFailed: "認証情報プールに失敗しました: {error}", poolNote: "プール内のキーはリクエストごとにラウンドロビンされ、そのプロバイダーでは環境変數より優先されます；全エントリを削除すると環境キーに戻ります。", oauthTitle: "OAuth（デバイスフロー）", oauthLoggedIn: "ログイン済み", oauthLoggedOut: "未ログイン", oauthPortal: "ポータルを開く", oauthNote: "[oauth] デバイスフローログインの読み取り専用状態（ulnclaw oauth CLI）；トークンは oauth_tokens.json に保存されます。", oauthProviderNotConfigured: "未設定（[oauth] device_authorization_url/token_url）", oauthProviderConnect: "接続…", oauthProviderDisconnect: "切断", oauthProviderDisconnectConfirm: "この OAuth プロバイダーを切断し、保存済みトークンを削除しますか？", oauthProviderDisconnected: "OAuth プロバイダーを切断しました。", oauthProviderPending: "認証待ち — ブラウザでコード {code} を入力してください", oauthProviderOpen: "認証ページを開く", oauthProviderComplete: "OAuth ログインが完了しました。", oauthProviderFailed: "OAuth ハンドシェイクに失敗しました: {error}", schemaTitle: "設定スキーマ（既定値）", schemaNote: "すべての設定リーフを型と既定値で一覧表示 — 上の行または Raw TOML から編集できます。", messagingTitle: "メッセージングプラットフォーム", messagingNote: "有効/無効の切り替えは [messaging.<id>].enabled に書き込みます；反映にはゲートウェイの再起動が必要です。認証情報は config.toml に保存（telegram/discord/slack は env キーも利用可）。", messagingEnable: "有効化", messagingDisable: "無効化", messagingTest: "テスト", messagingFailed: "プラットフォーム更新に失敗しました: {error}", messagingSaveEnv: "保存", messagingClearEnv: "消去", ttsTitle: "音声合成", ttsNote: "🔊 読み上げ動作に使うプロバイダーと声（[tts] 設定）。声一覧には ELEVENLABS_API_KEY、合成には各プロバイダーのキーが必要です。", ttsPreview: "プレビュー", ttsSample: "こんにちは！あなたの ulnclaw ゲートウェイです。", ttsPreviewFailed: "プレビューに失敗しました：{error}", ttsVoicesUnavailable: "声一覧を取得できません（キー未設定？）", ttsVoicesUnauthorized: "声一覧の認証に失敗 — ELEVENLABS_API_KEY を確認してください",
+    updateTitle: "ソフトウェア更新", updateVersion: "バージョン", updateMethod: "インストール方法",
+    updateStatus: "状態", updateUpToDate: "最新です",
+    updateBehind: "{count} コミット遅れ", updateShallow: "更新があります（浅いクローン）",
+    updateCommand: "コマンド", updateCheck: "確認", updateApply: "今すぐ更新",
+    updateApplying: "更新中…", updateApplied: "{sha} に更新しました（{count} コミット）",
+    updateFailed: "更新に失敗しました: {error}",
   },
   doctor: {
     run: "ドクターを実行", running: "チェック中…",
@@ -2269,6 +2296,12 @@ const ar: Translations = {
     memoryResetDone: "تم الحذف: {files}", memoryResetNone: "لا شيء لحذفه.",
     memoryResetFailed: "فشلت إعادة التعيين: {error}",
     poolTitle: "مجمع بيانات الاعتماد", poolAddLabel: "إضافة مفتاح إلى المجمع", poolEmpty: "لا توجد بيانات اعتماد في المجمع", poolRemoveConfirm: "إزالة هذا المفتاح من المجمع؟", poolSaved: "تم تحديث مجمع بيانات الاعتماد", poolFailed: "فشل مجمع بيانات الاعتماد: {error}", poolNote: "تتداول مفاتيح المجمع بالتناوب لكل طلب وتتقدم على متغيرات البيئة لموفرها؛ إزالة جميع الإدخالات تعيد الاستخدام إلى مفاتيح البيئة.", oauthTitle: "OAuth (تدفق الأجهزة)", oauthLoggedIn: "تم تسجيل الدخول", oauthLoggedOut: "غير مسجل الدخول", oauthPortal: "فتح البوابة", oauthNote: "حالة قراءة فقط لتسجيل دخول [oauth] عبر الأجهزة (ulnclaw oauth CLI)؛ الرموز مخزنة في oauth_tokens.json.", oauthProviderNotConfigured: "غير مهيأ ([oauth] device_authorization_url/token_url)", oauthProviderConnect: "اتصال…", oauthProviderDisconnect: "قطع الاتصال", oauthProviderDisconnectConfirm: "قطع اتصال مزود OAuth وحذف الرموز المخزنة؟", oauthProviderDisconnected: "تم قطع اتصال مزود OAuth.", oauthProviderPending: "بانتظار التفويض — أدخل الرمز {code} في المتصفح", oauthProviderOpen: "فتح صفحة التفويض", oauthProviderComplete: "اكتمل تسجيل دخول OAuth.", oauthProviderFailed: "فشلت مصافحة OAuth: {error}", schemaTitle: "مخطط الإعدادات (القيم الافتراضية)", schemaNote: "يعرض كل ورقة إعدادات مع نوعها وقيمتها الافتراضية — عدّل عبر الحقول أعلاه أو TOML الخام.", messagingTitle: "منصات المراسلة", messagingNote: "تكتب مفاتيح التفعيل/التعطيل في [messaging.<id>].enabled؛ أعد تشغيل البوابة للتطبيق. بيانات الاعتماد في config.toml (تدعم telegram/discord/slack مفاتيح البيئة أيضًا).", messagingEnable: "تفعيل", messagingDisable: "تعطيل", messagingTest: "اختبار", messagingFailed: "فشل تحديث المنصة: {error}", messagingSaveEnv: "حفظ", messagingClearEnv: "مسح", ttsTitle: "تركيب الكلام", ttsNote: "المزود والصوت المستخدمان لإجراء القراءة بصوت عالٍ (إعدادات [tts]). قائمة الأصوات تتطلب ELEVENLABS_API_KEY؛ يتطلب التركيب مفتاح المزود.", ttsPreview: "معاينة", ttsSample: "مرحبًا! هذه بوابتك ulnclaw تتحدث.", ttsPreviewFailed: "فشل تشغيل المعاينة: {error}", ttsVoicesUnavailable: "قائمة الأصوات غير متاحة (لا يوجد مفتاح؟)", ttsVoicesUnauthorized: "فشل تفويض قائمة الأصوات — تحقق من ELEVENLABS_API_KEY",
+    updateTitle: "تحديث البرنامج", updateVersion: "الإصدار", updateMethod: "طريقة التثبيت",
+    updateStatus: "الحالة", updateUpToDate: "محدث",
+    updateBehind: "متأخر {count} إيداعًا", updateShallow: "يتوفر تحديث (استنساخ ضحل)",
+    updateCommand: "الأمر", updateCheck: "فحص", updateApply: "تحديث الآن",
+    updateApplying: "جارٍ التحديث…", updateApplied: "تم التحديث إلى {sha} ({count} إيداعًا)",
+    updateFailed: "فشل التحديث: {error}",
   },
   doctor: {
     run: "تشغيل الفحص", running: "جارٍ الفحص…",

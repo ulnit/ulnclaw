@@ -5,7 +5,7 @@
 // secret values round-trip untouched: the server skips the "[redacted]"
 // placeholder on PUT.
 
-import type { GatewayClient, ProviderOAuthRow } from "./gateway";
+import type { GatewayClient, ProviderOAuthRow, UpdateCheckResult } from "./gateway";
 import { t } from "./i18n";
 
 const REDACTED = "[redacted]";
@@ -121,6 +121,10 @@ export class ConfigWidget {
         <h3 data-i18n="config.messagingTitle">Messaging platforms</h3>
         <div id="config-messaging-rows" class="config-env-rows"></div>
         <p class="config-note" data-i18n="config.messagingNote"></p>
+      </div>
+      <div id="config-update" class="config-env" hidden>
+        <h3 data-i18n="config.updateTitle">Software update</h3>
+        <div id="config-update-rows" class="config-env-rows"></div>
       </div>
       <dialog id="config-raw-dialog" class="config-raw-dialog">
         <h2 data-i18n="config.rawTitle">Raw config.toml</h2>
@@ -263,6 +267,7 @@ export class ConfigWidget {
       this.renderSchema().catch(() => undefined);
       this.renderMessaging().catch(() => undefined);
       this.renderTts().catch(() => undefined);
+      this.renderUpdate().catch(() => undefined);
       this.status("");
       const fileEl = this.root.querySelector("#config-file") as HTMLElement;
       fileEl.textContent = this.configPath;
@@ -455,6 +460,102 @@ export class ConfigWidget {
   /** TTS section (P345): provider posture, ElevenLabs voice picker
    * over GET /api/audio/elevenlabs/voices, save via PUT /api/config,
    * and a preview button over POST /api/audio/speak. */
+  /** Software update panel (P353): probe the git checkout for pending
+   * updates and apply them in place over /api/update/check + POST
+   * /api/update. */
+  private async renderUpdate(): Promise<void> {
+    const client = this.client();
+    const block = this.root.querySelector("#config-update") as HTMLElement;
+    const rows = this.root.querySelector("#config-update-rows") as HTMLElement;
+    rows.innerHTML = "";
+    if (!client) {
+      block.hidden = true;
+      return;
+    }
+    block.hidden = false;
+
+    const makeRow = (label: string, value: string): HTMLElement => {
+      const row = document.createElement("div");
+      row.className = "config-env-row";
+      const chip = document.createElement("span");
+      chip.className = "config-env-chip";
+      chip.textContent = `${label}: ${value}`;
+      row.appendChild(chip);
+      return row;
+    };
+
+    let check: UpdateCheckResult;
+    try {
+      check = await client.updateCheck();
+    } catch (error) {
+      rows.appendChild(
+        makeRow(
+          t.config.updateStatus,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+      return;
+    }
+
+    rows.appendChild(makeRow(t.config.updateVersion, check.current_version));
+    rows.appendChild(makeRow(t.config.updateMethod, check.install_method));
+    let stateText: string;
+    if (check.error) {
+      stateText = check.error;
+    } else if (!check.update_available) {
+      stateText = t.config.updateUpToDate;
+    } else if (check.behind === -1) {
+      stateText = t.config.updateShallow;
+    } else {
+      stateText = t.config.updateBehind.replace("{count}", String(check.behind ?? "?"));
+    }
+    rows.appendChild(makeRow(t.config.updateStatus, stateText));
+    if (check.update_command) {
+      rows.appendChild(makeRow(t.config.updateCommand, check.update_command));
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "config-env-row";
+    const checkBtn = document.createElement("button");
+    checkBtn.className = "ghost";
+    checkBtn.textContent = t.config.updateCheck;
+    checkBtn.onclick = () => {
+      this.renderUpdate().catch(() => undefined);
+    };
+    actions.appendChild(checkBtn);
+
+    if (check.can_apply && check.update_available) {
+      const applyBtn = document.createElement("button");
+      applyBtn.className = "primary";
+      applyBtn.textContent = t.config.updateApply;
+      applyBtn.onclick = async () => {
+        applyBtn.disabled = true;
+        applyBtn.textContent = t.config.updateApplying;
+        try {
+          const result = await client.updateApply();
+          this.status(
+            t.config.updateApplied
+              .replace("{sha}", (result.new_sha || "").slice(0, 8))
+              .replace("{count}", String(result.new_commits ?? 0)),
+          );
+          await this.renderUpdate();
+        } catch (error) {
+          this.status(
+            t.config.updateFailed.replace(
+              "{error}",
+              error instanceof Error ? error.message : String(error),
+            ),
+            true,
+          );
+          applyBtn.disabled = false;
+          applyBtn.textContent = t.config.updateApply;
+        }
+      };
+      actions.appendChild(applyBtn);
+    }
+    rows.appendChild(actions);
+  }
+
   private async renderTts(): Promise<void> {
     const client = this.client();
     const block = this.root.querySelector("#config-tts") as HTMLElement;
