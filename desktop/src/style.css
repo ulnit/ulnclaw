@@ -1045,7 +1045,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   background: transparent; border: none; border-radius: 8px;
   padding: 8px; cursor: pointer; text-align: left; color: var(--text);
 }
-.session-picker-row:hover { background: var(--panel-2); }
+.session-picker-row:hover, .session-picker-row.active { background: var(--panel-2); }
+.session-picker-row.active { outline: 1px solid var(--accent); }
 .session-picker-icon { font-size: 14px; }
 .session-picker-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .session-picker-row-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -35,6 +35,8 @@ export class SessionPickerDialog {
   private searchSeq = 0;
   private hits: SessionSearchHit[] = [];
   private hitsQuery = "";
+  // P478: keyboard-navigation index over the rendered rows.
+  private kbIndex = -1;
   private filters: HTMLDivElement;
   private statusFilter: "all" | "open" | "ended" | "archived" = "all";
   private reasonFilter: string | null = null;
@@ -53,6 +55,21 @@ export class SessionPickerDialog {
       if (event.key === "Escape") {
         event.preventDefault();
         this.dialog.close();
+      } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        // P478: up/down cycle the rows.
+        event.preventDefault();
+        const rows = Array.from(this.list.querySelectorAll<HTMLButtonElement>(".session-picker-row"));
+        if (!rows.length) return;
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        this.kbIndex = ((this.kbIndex + delta) % rows.length + rows.length) % rows.length;
+        this.updateKbHighlight(rows);
+      } else if (event.key === "Enter") {
+        // P478: Enter opens the highlighted row.
+        const rows = Array.from(this.list.querySelectorAll<HTMLButtonElement>(".session-picker-row"));
+        if (this.kbIndex >= 0 && rows[this.kbIndex]) {
+          event.preventDefault();
+          rows[this.kbIndex].click();
+        }
       }
     });
     this.filters = document.createElement("div");
@@ -67,6 +84,7 @@ export class SessionPickerDialog {
     this.search.value = "";
     this.hits = [];
     this.hitsQuery = "";
+    this.kbIndex = -1;
     this.statusFilter = "all";
     this.reasonFilter = null;
     this.renderList();
@@ -106,6 +124,7 @@ export class SessionPickerDialog {
   private renderList(): void {
     this.renderFilters();
     this.list.innerHTML = "";
+    this.kbIndex = -1;
     const q = normalize(this.search.value);
     const rows = [...this.hooks.sessions()]
       .sort((a, b) => b.last_activity_at - a.last_activity_at)
@@ -193,6 +212,14 @@ export class SessionPickerDialog {
         void this.hooks.openSession(hit.session_id);
       };
       this.list.appendChild(row);
+    }
+  }
+
+  /** P478: highlight + scroll the keyboard-selected row into view. */
+  private updateKbHighlight(rows: HTMLButtonElement[]): void {
+    rows.forEach((row, index) => row.classList.toggle("active", index === this.kbIndex));
+    if (this.kbIndex >= 0 && rows[this.kbIndex]) {
+      rows[this.kbIndex].scrollIntoView({ block: "nearest" });
     }
   }
 
