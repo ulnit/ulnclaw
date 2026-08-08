@@ -3701,6 +3701,7 @@ function shortcutRows(): [string, string][] {
     [`${mod}+Shift+F`, t.chrome.scSessionPicker],
     [`${mod}+Shift+A`, t.chrome.scArchive],
     [`${mod}+Shift+E`, t.chrome.scExport],
+    [`${mod}+Shift+T`, t.chrome.scFileTree],
     [`${mod}+,`, t.chrome.scSettings],
     [`${mod}+B`, t.chrome.scSidebar],
     [`${mod}+K`, t.chrome.scPalette],
