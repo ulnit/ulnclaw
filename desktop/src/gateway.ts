@@ -1849,6 +1849,18 @@ export class GatewayClient {
     return (await response.json()) as { result?: unknown } & DelegationRow;
   }
 
+  /** P572: POST /v1/runs — start an async run (powers the re-run action). */
+  async runStart(message: string, sessionId?: string): Promise<string | null> {
+    const response = await fetch(this.endpoint("/v1/runs"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ message, session_id: sessionId }),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { run_id?: string };
+    return body.run_id ?? null;
+  }
+
   /** GET /v1/runs — tracked async runs (with pending approvals). */
   async listRuns(): Promise<RunRow[]> {
     const response = await fetch(this.endpoint("/v1/runs"), { headers: this.headers() });

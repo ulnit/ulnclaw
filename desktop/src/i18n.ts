@@ -265,7 +265,7 @@ export interface Translations {
   runs: {
     count: string; empty: string; loadFailed: string; stop: string; stopping: string;
     result: string; approvalTitle: string; approveOnce: string; approveSession: string;
-    approveAlways: string; deny: string; approveFailed: string; stopConfirm: string; stopFailed: string; copyResult: string; copiedResult: string; copyFailed: string;
+    approveAlways: string; deny: string; approveFailed: string; stopConfirm: string; stopFailed: string; copyResult: string; copiedResult: string; copyFailed: string; rerun: string; rerunTitle: string; rerunFailed: string;
     delegationsFilterTitle: string; delegationsFilteredEmpty: string;
     delegationsTitle: string; noDelegations: string; loading: string; noResult: string;
     approvalWaitingTitle: string; approvalWaitingBody: string; viewRuns: string;
@@ -674,7 +674,7 @@ const en: Translations = {
   },
   runs: {
     count: "{count} runs · {active} active", empty: "No async runs tracked yet.",
-    loadFailed: "Failed to load runs: {error}", stop: "Stop", stopping: "Stopping…", stopConfirm: "Stop run {id}? In-flight work will be cancelled.", copyResult: "Copy", copiedResult: "Copied ✓", copyFailed: "Copy failed",
+    loadFailed: "Failed to load runs: {error}", stop: "Stop", stopping: "Stopping…", stopConfirm: "Stop run {id}? In-flight work will be cancelled.", rerun: "↻ re-run", rerunTitle: "Dispatch a fresh run with the same message", rerunFailed: "Re-run failed: {error}", copyResult: "Copy", copiedResult: "Copied ✓", copyFailed: "Copy failed",
     delegationsFilterTitle: "Filter delegations by status", delegationsFilteredEmpty: "No delegations match the current status filter.",
     result: "Result", approvalTitle: "Approval requested",
     approveOnce: "Once", approveSession: "Session", approveAlways: "Always", deny: "Deny",
@@ -1174,7 +1174,7 @@ const zh: Translations = {
   },
   runs: {
     count: "{count} 个运行 · {active} 活跃", empty: "还没有跟踪的异步运行。",
-    loadFailed: "加载运行失败：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "确定停止运行 {id}？进行中的工作将被取消。", copyResult: "复制", copiedResult: "已复制 ✓", copyFailed: "复制失败",
+    loadFailed: "加载运行失败：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "确定停止运行 {id}？进行中的工作将被取消。", rerun: "↻ 重新运行", rerunTitle: "以相同消息派发新运行", rerunFailed: "重新运行失败：{error}", copyResult: "复制", copiedResult: "已复制 ✓", copyFailed: "复制失败",
     delegationsFilterTitle: "按委派状态筛选", delegationsFilteredEmpty: "没有符合当前状态筛选的委派。",
     result: "结果", approvalTitle: "请求批准",
     approveOnce: "一次", approveSession: "本会话", approveAlways: "始终", deny: "拒绝",
@@ -1674,7 +1674,7 @@ const zhHant: Translations = {
   },
   runs: {
     count: "{count} 個執行 · {active} 活躍", empty: "還沒有追蹤的非同步執行。",
-    loadFailed: "載入執行失敗：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "確定停止執行 {id}？進行中的工作將被取消。", copyResult: "複製", copiedResult: "已複製 ✓", copyFailed: "複製失敗",
+    loadFailed: "載入執行失敗：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "確定停止執行 {id}？進行中的工作將被取消。", rerun: "↻ 重新執行", rerunTitle: "以相同訊息派發新執行", rerunFailed: "重新執行失敗：{error}", copyResult: "複製", copiedResult: "已複製 ✓", copyFailed: "複製失敗",
     delegationsFilterTitle: "依委派狀態篩選", delegationsFilteredEmpty: "沒有符合目前狀態篩選的委派。",
     result: "結果", approvalTitle: "請求核准",
     approveOnce: "一次", approveSession: "本工作階段", approveAlways: "始終", deny: "拒絕",
@@ -2174,7 +2174,7 @@ const ja: Translations = {
   },
   runs: {
     count: "{count} 件の実行 · {active} アクティブ", empty: "追跡中の非同期実行はありません。",
-    loadFailed: "実行の読み込みに失敗：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "実行 {id} を停止しますか？進行中の作業はキャンセルされます。", copyResult: "コピー", copiedResult: "コピーしました ✓", copyFailed: "コピーに失敗",
+    loadFailed: "実行の読み込みに失敗：{error}", stop: "停止", stopping: "停止中…", stopConfirm: "実行 {id} を停止しますか？進行中の作業はキャンセルされます。", rerun: "↻ 再実行", rerunTitle: "同じメッセージで新しい実行をディスパッチ", rerunFailed: "再実行に失敗しました：{error}", copyResult: "コピー", copiedResult: "コピーしました ✓", copyFailed: "コピーに失敗",
     delegationsFilterTitle: "委任状態で絞り込み", delegationsFilteredEmpty: "現在の状態フィルターに一致する委任はありません。",
     result: "結果", approvalTitle: "承認要求",
     approveOnce: "今回", approveSession: "セッション", approveAlways: "常に", deny: "拒否",
@@ -2674,7 +2674,7 @@ const ar: Translations = {
   },
   runs: {
     count: "{count} تشغيل(ات) · {active} نشط", empty: "لا توجد تشغيلات غير متزامنة متتبعة بعد.",
-    loadFailed: "فشل تحميل التشغيلات: {error}", stop: "إيقاف", stopping: "جارٍ الإيقاف…", stopConfirm: "إيقاف التشغيل {id}؟ سيتم إلغاء العمل الجاري.", copyResult: "نسخ", copiedResult: "تم النسخ ✓", copyFailed: "فشل النسخ",
+    loadFailed: "فشل تحميل التشغيلات: {error}", stop: "إيقاف", stopping: "جارٍ الإيقاف…", stopConfirm: "إيقاف التشغيل {id}؟ سيتم إلغاء العمل الجاري.", rerun: "↻ إعادة تشغيل", rerunTitle: "إطلاق تشغيل جديد بنفس الرسالة", rerunFailed: "فشلت إعادة التشغيل: {error}", copyResult: "نسخ", copiedResult: "تم النسخ ✓", copyFailed: "فشل النسخ",
     delegationsFilterTitle: "تصفية التفويضات حسب الحالة", delegationsFilteredEmpty: "لا توجد تفويضات تطابق مرشح الحالة الحالي.",
     result: "النتيجة", approvalTitle: "طلب موافقة",
     approveOnce: "مرة", approveSession: "الجلسة", approveAlways: "دائمًا", deny: "رفض",

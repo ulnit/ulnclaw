@@ -205,6 +205,9 @@ export class RunsWidget {
           ${run.status === "running" || run.status === "queued"
             ? `<button class="ghost danger run-stop">${escapeHtml(stopping ? t.runs.stopping : t.runs.stop)}</button>`
             : ""}
+          ${run.status === "completed" || run.status === "failed"
+            ? `<button class="ghost run-rerun" title="${escapeHtml(t.runs.rerunTitle)}">${escapeHtml(t.runs.rerun)}</button>`
+            : ""}
         </div>
         <div class="run-message">${escapeHtml(run.message)}</div>
         ${run.error ? `<div class="run-error">${escapeHtml(run.error)}</div>` : ""}
@@ -250,6 +253,13 @@ export class RunsWidget {
       if (stopBtn) {
         stopBtn.addEventListener("click", () => {
           this.stopRun(run.run_id).catch(() => undefined);
+        });
+      }
+      // P572: settled runs can be dispatched again with the same message.
+      const rerunBtn = card.querySelector(".run-rerun");
+      if (rerunBtn) {
+        rerunBtn.addEventListener("click", () => {
+          this.rerunRun(run).catch(() => undefined);
         });
       }
       const sessionLink = card.querySelector(".run-session-link");
@@ -465,6 +475,25 @@ export class RunsWidget {
     } catch (error) {
       this.status(
         t.runs.stopFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
+        true,
+      );
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /** P572: dispatch a fresh run with the same message (and session). */
+  private async rerunRun(run: RunRow): Promise<void> {
+    const client = this.client();
+    if (!client || this.busy) return;
+    this.busy = true;
+    try {
+      const runId = await client.runStart(run.message, run.session_id ?? undefined);
+      if (!runId) throw new Error("gateway rejected the run");
+      await this.refresh();
+    } catch (error) {
+      this.status(
+        t.runs.rerunFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
         true,
       );
     } finally {
