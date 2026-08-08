@@ -73,6 +73,8 @@ const state = {
   composerDraft: "",
   /** P386: sidebar session-list cap (raised by the Show all row). */
   sessionListLimit: 100,
+  /** P393: per-session composer drafts (session id -> unsent text). */
+  drafts: new Map<string, string>(),
   busy: false,
   managedPid: null as number | null,
   skills: [] as SkillRow[],
@@ -535,10 +537,17 @@ function refreshWindowTitle(): void {
 }
 
 async function openSession(session: SessionRow): Promise<void> {
+  // P393: stash the outgoing session's draft, restore the target's.
+  if (state.current && state.current.id !== session.id) {
+    state.drafts.set(state.current.id, el.input.value);
+  }
   state.current = session;
   el.chatTitle.textContent = session.title || session.id.slice(0, 8);
   refreshWindowTitle();
   refreshModelBadge();
+  el.input.value = state.drafts.get(session.id) ?? "";
+  refreshCharCount();
+  hideSlashPop();
   el.messages.innerHTML = "";
   el.dayJump.hidden = true;
   el.chatActions.hidden = false;
@@ -736,6 +745,7 @@ async function sendTurn(): Promise<void> {
     if (state.composerHistory.length > 50) state.composerHistory.shift();
   }
   state.composerHistoryIndex = null;
+  if (state.current) state.drafts.delete(state.current.id);
   state.busy = true;
   el.send.disabled = true;
   // P390: thinking indicator while the turn streams.
@@ -1730,6 +1740,7 @@ async function start(): Promise<void> {
   };
 
   el.newSession.onclick = async () => {
+    if (state.current) state.drafts.set(state.current.id, el.input.value);
     state.current = null;
     el.contextMeter.hidden = true;
     el.dayJump.hidden = true;
@@ -1740,6 +1751,8 @@ async function start(): Promise<void> {
     renderIntro(el.messages, "new");
     renderSessions();
     refreshComposerPlaceholder();
+    el.input.value = "";
+    refreshCharCount();
     el.input.focus();
   };
 
