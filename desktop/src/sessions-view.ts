@@ -872,9 +872,13 @@ export class SessionsViewWidget {
         }
         return header + `
           <div class="sessions-view-row${active}${kb}" data-id="${escapeHtml(session.id)}">
+            <span class="sessions-view-row-actions">
+              <button class="sessions-view-row-action" data-action="rename" title="${escapeHtml(t.sessionsView.renameTitle)}">✎</button>
+              <button class="sessions-view-row-action" data-action="fork" title="${escapeHtml(t.sessionsView.forkTitle)}">⑂</button>
+              <button class="sessions-view-row-action" data-action="delete" title="${escapeHtml(t.sessionsView.deleteTitle)}">🗑</button>
+            </span>
             <div class="sessions-view-row-title">${escapeHtml(title)}</div>
             <div class="sessions-view-row-meta">
-              ${session.model ? `<span class="sessions-view-model">${escapeHtml(session.model)}</span>` : ""}
               ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip sessions-view-source" data-source="${escapeHtml(session.source)}" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
               ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" data-reason="${escapeHtml(session.end_reason)}" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
               ${session.model ? `<span class="sessions-view-chip sessions-view-model" data-model="${escapeHtml(session.model)}" title="${escapeHtml(session.model)}">${escapeHtml(session.model)}</span>` : ""}
@@ -895,6 +899,17 @@ export class SessionsViewWidget {
       row.addEventListener("dblclick", () => {
         const session = this.all.find((candidate) => candidate.id === row.dataset.id);
         if (session && this.openInChat) this.openInChat(session);
+      });
+    }
+    // P489: per-row hover quick actions (rename / fork / delete).
+    for (const button of Array.from(list.querySelectorAll<HTMLButtonElement>(".sessions-view-row-action"))) {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const id = button.closest(".sessions-view-row")?.getAttribute("data-id") || "";
+        if (!id) return;
+        if (button.dataset.action === "rename") this.renameSelected(id).catch(() => undefined);
+        else if (button.dataset.action === "fork") this.forkSelected(id).catch(() => undefined);
+        else if (button.dataset.action === "delete") this.deleteSelected(id).catch(() => undefined);
       });
     }
     // P438: end-reason chips drill the list down to that reason.
@@ -1275,10 +1290,11 @@ export class SessionsViewWidget {
   }
 
   /** P439: open the rename dialog for the selected session. */
-  private async renameSelected(): Promise<void> {
-    if (!this.client() || !this.selected) return;
-    const current = this.all.find((session) => session.id === this.selected);
-    this.renameTarget = this.selected;
+  private async renameSelected(sessionId?: string): Promise<void> {
+    const target = sessionId ?? this.selected;
+    if (!this.client() || !target) return;
+    const current = this.all.find((session) => session.id === target);
+    this.renameTarget = target;
     const input = this.root.querySelector("#sessions-rename-input") as HTMLInputElement;
     input.value = current?.title || "";
     const statusEl = this.root.querySelector("#sessions-rename-status") as HTMLElement;
@@ -1311,11 +1327,12 @@ export class SessionsViewWidget {
   }
 
   /** P442: open the delete confirmation dialog for the selected session. */
-  private async deleteSelected(): Promise<void> {
-    if (!this.client() || !this.selected) return;
-    this.deleteTarget = this.selected;
-    const current = this.all.find((session) => session.id === this.selected);
-    const label = current?.title || this.selected.slice(0, 12);
+  private async deleteSelected(sessionId?: string): Promise<void> {
+    const target = sessionId ?? this.selected;
+    if (!this.client() || !target) return;
+    this.deleteTarget = target;
+    const current = this.all.find((session) => session.id === target);
+    const label = current?.title || target.slice(0, 12);
     const message = this.root.querySelector("#sessions-delete-message") as HTMLElement;
     message.textContent = t.sessionsView.deleteConfirm.replace("{id}", label);
     (this.root.querySelector("#sessions-delete-dialog") as HTMLDialogElement).showModal();
@@ -1358,11 +1375,12 @@ export class SessionsViewWidget {
     if (session) this.openInChat(session);
   }
 
-  private async forkSelected(): Promise<void> {
+  private async forkSelected(sessionId?: string): Promise<void> {
     const client = this.client();
-    if (!client || !this.selected) return;
+    const target = sessionId ?? this.selected;
+    if (!client || !target) return;
     try {
-      const forked = await client.forkSession(this.selected);
+      const forked = await client.forkSession(target);
       this.status(
         t.sessionsView.forked.replace("{id}", forked.id.slice(0, 12)),
         false,

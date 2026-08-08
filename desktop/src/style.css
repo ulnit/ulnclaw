@@ -1180,7 +1180,16 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
+  position: relative;
 }
+/* P489: per-row hover quick actions. */
+.sessions-view-row-actions { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; }
+.sessions-view-row:hover .sessions-view-row-actions { display: inline-flex; }
+.sessions-view-row-action {
+  background: transparent; border: none; color: var(--dim); cursor: pointer;
+  font-size: 12px; padding: 1px 4px; border-radius: 4px; line-height: 1.4;
+}
+.sessions-view-row-action:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
 .sessions-view-row:hover { background: rgba(255, 255, 255, 0.04); }
 .sessions-view-row.active {
   background: rgba(255, 255, 255, 0.06);
