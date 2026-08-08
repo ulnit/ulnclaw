@@ -420,7 +420,7 @@ async function renameSession(session: SessionRow): Promise<void> {
   }
 }
 
-async function exportSession(session: SessionRow, format: "md" | "html"): Promise<void> {
+async function exportSession(session: SessionRow, format: "md" | "html" | "json"): Promise<void> {
   if (!state.client) return;
   try {
     const { blob, filename } = await state.client.exportSession(session.id, format);
@@ -436,6 +436,41 @@ async function exportSession(session: SessionRow, format: "md" | "html"): Promis
   } catch (error) {
     notifyError(fmt(t.session.exportFailed, { error }));
   }
+}
+
+/** P415: chat-header export picker — Markdown / HTML / portable JSON. */
+function openExportPicker(): void {
+  if (!state.current) return;
+  const session = state.current;
+  const dialog = document.createElement("dialog");
+  dialog.className = "theme-picker-dialog";
+  const heading = document.createElement("div");
+  heading.className = "theme-picker-title";
+  heading.textContent = t.palette.exportPickerTitle;
+  const list = document.createElement("div");
+  list.className = "theme-picker-list";
+  const options: { format: "md" | "html" | "json"; label: string }[] = [
+    { format: "md", label: t.sessionsView.exportTitle },
+    { format: "html", label: t.sessionsView.exportHtmlTitle },
+    { format: "json", label: t.sessionsView.exportJsonTitle },
+  ];
+  for (const option of options) {
+    const row = document.createElement("button");
+    row.className = "theme-picker-item";
+    row.textContent = option.label;
+    row.onclick = () => {
+      dialog.close();
+      void exportSession(session, option.format);
+    };
+    list.appendChild(row);
+  }
+  dialog.append(heading, list);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }
 
 async function deleteSession(session: SessionRow): Promise<void> {
@@ -2006,7 +2041,8 @@ async function start(): Promise<void> {
     if (state.current) void renameSession(state.current);
   };
   el.chatExport.onclick = () => {
-    if (state.current) void exportSession(state.current, "md");
+    // P415: pick the export format (md / html / portable json).
+    openExportPicker();
   };
   el.chatDelete.onclick = () => {
     if (state.current) void deleteSession(state.current);

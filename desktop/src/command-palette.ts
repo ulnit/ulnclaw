@@ -28,7 +28,7 @@ export interface CommandPaletteHooks {
   learning(): void | Promise<void>;
   findInChat(): void;
   switchView(view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing"): void;
-  exportSession(format: "md" | "html"): Promise<void>;
+  exportSession(format: "md" | "html" | "json"): Promise<void>;
   openSettings(): void;
   refreshSessions(): void | Promise<void>;
   restartGateway(): void | Promise<void>;
