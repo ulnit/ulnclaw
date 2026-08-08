@@ -494,6 +494,9 @@ function openExportPicker(): void {
 // P473: ids this shell deleted itself (suppresses cross-client toasts).
 const localDeletes = new Set<string>();
 
+// P494: debounce timer for list refreshes driven by session.message.
+let sessionMessageListTimer: number | null = null;
+
 async function deleteSession(session: SessionRow): Promise<void> {
   if (!state.client) return;
   const label = session.title || session.id.slice(0, 8);
@@ -1968,6 +1971,15 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       // P493: a message was appended anywhere — the sessions browser
       // catches up when the affected session is open (debounced there).
       state.sessionsBrowser?.notifyMessageAppended(envelope.session_id);
+      // P494: message counts + activity follow along in the sidebar and
+      // the sessions-browser list (debounced to coalesce bursts).
+      if (sessionMessageListTimer === null) {
+        sessionMessageListTimer = window.setTimeout(() => {
+          sessionMessageListTimer = null;
+          void refreshSessions();
+          void state.sessionsBrowser?.refresh();
+        }, 2000);
+      }
       break;
     }
     case "session.created":
