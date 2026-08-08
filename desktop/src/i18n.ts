@@ -64,7 +64,7 @@ export interface Translations {
     fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
     fsGitRootTitle: string; fsGitRootNone: string; fsPreviewOpen: string; fsPreviewTitle: string; fsPreviewLoading: string; fsPreviewBinary: string; fsPreviewTruncated: string; fsPreviewFailed: string; fsPreviewSave: string; fsPreviewSaved: string; fsPreviewSaveFailed: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
-    manageProcess: string; reopenLast: string; replayOnboarding: string; cancel: string; save: string;
+    manageProcess: string; reopenLast: string; charWarn: string; replayOnboarding: string; cancel: string; save: string;
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string; statusTokens: string; statusKanban: string;
@@ -341,6 +341,7 @@ const en: Translations = {
     settingsTitle: "Gateway settings", gatewayUrl: "Gateway URL",
     apiKey: "API key (optional, [gateway] key)", bearerToken: "bearer token",
     manageProcess: "Manage the gateway process (start/stop with the app)", reopenLast: "Reopen the last session at launch",
+    charWarn: "Composer warn threshold (characters)",
     replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save", restartGateway: "Restart gateway", restartDone: "Gateway restarted.", restartFailed: "Gateway restart timed out.", restartUnavailable: "The gateway is not managed here — restart it where it runs.",
     settingsTheme: "Theme", settingsFont: "Font",
     statusUp: "up {duration}", statusSessions: "{count} sessions", statusRuns: "{count} runs", statusPlugins: "{count} plugins", statusTokens: "{tokens} tok · {calls} tool calls", statusKanban: "kanban {todo} todo · {doing} doing · {blocked} blocked",
@@ -801,6 +802,7 @@ const zh: Translations = {
     settingsTitle: "网关设置", gatewayUrl: "网关 URL",
     apiKey: "API 密钥（可选，[gateway] key）", bearerToken: "bearer 令牌",
     manageProcess: "管理网关进程（随应用启动/停止）", reopenLast: "启动时重新打开上次会话",
+    charWarn: "输入框预警阈值（字符数）",
     replayOnboarding: "重放引导", cancel: "取消", save: "保存", restartGateway: "重启网关", restartDone: "网关已重启。", restartFailed: "网关重启超时。", restartUnavailable: "此环境不管理网关——请在网关运行处重启。",
     settingsTheme: "主题", settingsFont: "字体",
     statusUp: "运行 {duration}", statusSessions: "{count} 会话", statusRuns: "{count} 运行", statusPlugins: "{count} 插件", statusTokens: "{tokens} tok · {calls} 次工具调用", statusKanban: "看板 {todo} 待办 · {doing} 进行 · {blocked} 受阻",
@@ -1261,6 +1263,7 @@ const zhHant: Translations = {
     settingsTitle: "閘道設定", gatewayUrl: "閘道 URL",
     apiKey: "API 金鑰（選填，[gateway] key）", bearerToken: "bearer 權杖",
     manageProcess: "管理閘道程序（隨應用程式啟動/停止）", reopenLast: "啟動時重新開啟上次工作階段",
+    charWarn: "輸入框預警閾值（字元數）",
     replayOnboarding: "重播引導", cancel: "取消", save: "儲存", restartGateway: "重啟閘道", restartDone: "閘道已重啟。", restartFailed: "閘道重啟逾時。", restartUnavailable: "此環境不管理閘道——請在閘道執行處重啟。",
     settingsTheme: "主題", settingsFont: "字型",
     statusUp: "執行 {duration}", statusSessions: "{count} 工作階段", statusRuns: "{count} 執行", statusPlugins: "{count} 外掛", statusTokens: "{tokens} tok · {calls} 次工具呼叫", statusKanban: "看板 {todo} 待辦 · {doing} 進行 · {blocked} 受阻",
@@ -1721,6 +1724,7 @@ const ja: Translations = {
     settingsTitle: "ゲートウェイ設定", gatewayUrl: "ゲートウェイ URL",
     apiKey: "API キー（任意、[gateway] key）", bearerToken: "bearer トークン",
     manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）", reopenLast: "起動時に最後のセッションを再び開く",
+    charWarn: "入力欄の警告しきい値（文字数）",
     replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存", restartGateway: "ゲートウェイを再起動", restartDone: "ゲートウェイを再起動しました。", restartFailed: "ゲートウェイの再起動がタイムアウトしました。", restartUnavailable: "この環境はゲートウェイを管理していません — 実行場所で再起動してください。",
     settingsTheme: "テーマ", settingsFont: "フォント",
     statusUp: "稼働 {duration}", statusSessions: "{count} セッション", statusRuns: "{count} 実行", statusPlugins: "{count} プラグイン", statusTokens: "{tokens} tok · {calls} ツール呼び出し", statusKanban: "カンバン {todo} 未着手 · {doing} 進行中 · {blocked} ブロック",
@@ -2181,6 +2185,7 @@ const ar: Translations = {
     settingsTitle: "إعدادات البوابة", gatewayUrl: "عنوان البوابة",
     apiKey: "مفتاح API (اختياري، [gateway] key)", bearerToken: "رمز bearer",
     manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)", reopenLast: "إعادة فتح آخر جلسة عند التشغيل",
+    charWarn: "عتبة التحذير في حقل الإدخال (عدد الأحرف)",
     replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ", restartGateway: "إعادة تشغيل البوابة", restartDone: "تمت إعادة تشغيل البوابة.", restartFailed: "انتهت مهلة إعادة تشغيل البوابة.", restartUnavailable: "البوابة غير مُدارة هنا — أعد تشغيلها حيث تعمل.",
     settingsTheme: "السمة", settingsFont: "الخط",
     statusUp: "يعمل منذ {duration}", statusSessions: "{count} جلسة", statusRuns: "{count} تشغيل", statusPlugins: "{count} إضافة", statusTokens: "{tokens} رمز · {calls} استدعاء أداة", statusKanban: "كانبان {todo} منتظرة · {doing} قيد التنفيذ · {blocked} محظورة",

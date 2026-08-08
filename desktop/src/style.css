@@ -100,8 +100,9 @@ button.ghost { background: none; border: none; color: var(--dim); }
 .chat-busy { font-size: 11px; color: var(--dim); margin-left: 8px; animation: blink 1.2s ease-in-out infinite; }
 /* P391: composer character counter. */
 .char-count { align-self: flex-end; font-size: 11px; color: var(--dim); padding: 0 2px 6px; font-variant-numeric: tabular-nums; }
-/* P391: composer character counter. */
-.char-count { align-self: flex-end; font-size: 11px; color: var(--dim); padding: 0 2px 6px; font-variant-numeric: tabular-nums; }
+/* P434: warn-threshold tinting (amber at 80%, red at/above). */
+.char-count.warn { color: #d29a22; }
+.char-count.over { color: #dc3545; font-weight: 600; }
 #model-badge:hover { background: var(--panel-2); color: var(--text); }
 #model-badge.locked { color: var(--accent); }
 

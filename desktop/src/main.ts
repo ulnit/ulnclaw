@@ -157,6 +157,7 @@ const el = {
   settingKey: document.getElementById("setting-key") as HTMLInputElement,
   settingManage: document.getElementById("setting-manage") as HTMLInputElement,
   settingReopen: document.getElementById("setting-reopen") as HTMLInputElement,
+  settingCharWarn: document.getElementById("setting-char-warn") as HTMLInputElement,
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
   settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
@@ -908,6 +909,10 @@ function refreshCharCount(): void {
   const length = el.input.value.length;
   el.charCount.textContent = String(length);
   el.charCount.hidden = length === 0;
+  // P434: amber from 80% of the configured threshold, red at/above it.
+  const threshold = state.settings.charWarn;
+  el.charCount.classList.toggle("warn", threshold > 0 && length >= threshold * 0.8 && length < threshold);
+  el.charCount.classList.toggle("over", threshold > 0 && length >= threshold);
 }
 
 async function sendTurn(): Promise<void> {
@@ -2211,6 +2216,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     el.settingManage.checked = state.settings.manage;
     // P431: the reopen-last-session launch toggle.
     el.settingReopen.checked = state.settings.reopenLast;
+    // P434: composer warn threshold.
+    el.settingCharWarn.value = String(state.settings.charWarn);
     el.settings.showModal();
   };
   el.notifyBell.onclick = () => openNotifyHistory();
@@ -2237,6 +2244,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       key: el.settingKey.value.trim(),
       manage: el.settingManage.checked,
       reopenLast: el.settingReopen.checked,
+      charWarn: Number(el.settingCharWarn.value) > 0
+        ? Math.floor(Number(el.settingCharWarn.value))
+        : 4000,
     };
     saveSettings(next);
     state.settings = next;
@@ -2245,6 +2255,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     void pollHealth();
     void refreshSessions();
     void loadAppearance();
+    refreshCharCount();
   });
   el.settingTheme.addEventListener("change", () => {
     const name = el.settingTheme.value;
