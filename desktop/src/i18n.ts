@@ -342,6 +342,9 @@ export interface Translations {
     saved: string; archive: string; archived: string; delete: string; deleted: string;
     pin: string; unpin: string; pinnedDone: string; unpinned: string;
     restore: string; restored: string; close: string;
+    statSkills: string; statMemories: string; statLinks: string;
+    statAgentCreated: string; statUsed: string;
+    filterAll: string; filterSkill: string; filterMemory: string;
   };
   notify: { dismiss: string; clearAll: string; details: string; stackTitle: string;
     historyTitle: string; historyEmpty: string; historyClear: string; };
@@ -823,6 +826,8 @@ const en: Translations = {
     archive: "Archive", archived: "Archived.", delete: "Delete", deleted: "Deleted.",
     pin: "Pin", unpin: "Unpin", pinnedDone: "Pinned.", unpinned: "Unpinned.",
     restore: "Restore", restored: "Restored.", close: "Close",
+    statSkills: "learned skills", statMemories: "memories", statLinks: "links", statAgentCreated: "agent-created", statUsed: "used",
+    filterAll: "all", filterSkill: "skill", filterMemory: "memory",
   },
   notify: { dismiss: "Dismiss notification", clearAll: "Clear all", details: "Details", stackTitle: "Notifications" , historyTitle: "Notifications", historyEmpty: "No notifications yet.", historyClear: "Clear" },
   onboarding: {
@@ -1325,6 +1330,8 @@ const zh: Translations = {
     archive: "归档", archived: "已归档。", delete: "删除", deleted: "已删除。",
     pin: "固定", unpin: "取消固定", pinnedDone: "已固定。", unpinned: "已取消固定。",
     restore: "恢复", restored: "已恢复。", close: "关闭",
+    statSkills: "习得技能", statMemories: "记忆", statLinks: "关联", statAgentCreated: "agent 创建", statUsed: "已使用",
+    filterAll: "全部", filterSkill: "技能", filterMemory: "记忆",
   },
   notify: { dismiss: "关闭通知", clearAll: "全部清除", details: "详情", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "暂无通知。", historyClear: "清空" },
   onboarding: {
@@ -1827,6 +1834,8 @@ const zhHant: Translations = {
     archive: "封存", archived: "已封存。", delete: "刪除", deleted: "已刪除。",
     pin: "固定", unpin: "取消固定", pinnedDone: "已固定。", unpinned: "已取消固定。",
     restore: "還原", restored: "已還原。", close: "關閉",
+    statSkills: "習得技能", statMemories: "記憶", statLinks: "關聯", statAgentCreated: "agent 建立", statUsed: "已使用",
+    filterAll: "全部", filterSkill: "技能", filterMemory: "記憶",
   },
   notify: { dismiss: "關閉通知", clearAll: "全部清除", details: "詳情", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "暫無通知。", historyClear: "清空" },
   onboarding: {
@@ -2329,6 +2338,8 @@ const ja: Translations = {
     archive: "アーカイブ", archived: "アーカイブしました。", delete: "削除", deleted: "削除しました。",
     pin: "ピン留め", unpin: "ピン解除", pinnedDone: "ピン留めしました。", unpinned: "ピン留めを解除しました。",
     restore: "復元", restored: "復元しました。", close: "閉じる",
+    statSkills: "習得スキル", statMemories: "メモリ", statLinks: "リンク", statAgentCreated: "エージェント作成", statUsed: "使用済み",
+    filterAll: "すべて", filterSkill: "スキル", filterMemory: "メモリ",
   },
   notify: { dismiss: "通知を閉じる", clearAll: "すべてクリア", details: "詳細", stackTitle: "通知" , historyTitle: "通知", historyEmpty: "通知はまだありません。", historyClear: "クリア" },
   onboarding: {
@@ -2831,6 +2842,8 @@ const ar: Translations = {
     archive: "أرشفة", archived: "تمت الأرشفة.", delete: "حذف", deleted: "تم الحذف.",
     pin: "تثبيت", unpin: "إلغاء التثبيت", pinnedDone: "تم التثبيت.", unpinned: "تم إلغاء التثبيت.",
     restore: "استعادة", restored: "تمت الاستعادة.", close: "إغلاق",
+    statSkills: "مهارات مكتسبة", statMemories: "ذكريات", statLinks: "روابط", statAgentCreated: "أنشأها الوكيل", statUsed: "مستخدم",
+    filterAll: "الكل", filterSkill: "مهارة", filterMemory: "ذاكرة",
   },
   notify: { dismiss: "إغلاق الإشعار", clearAll: "مسح الكل", details: "التفاصيل", stackTitle: "الإشعارات" , historyTitle: "الإشعارات", historyEmpty: "لا إشعارات بعد.", historyClear: "مسح" },
   onboarding: {

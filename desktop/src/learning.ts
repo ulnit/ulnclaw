@@ -63,11 +63,11 @@ export class LearningOverlay {
     const stats = document.createElement("div");
     stats.className = "learning-stats";
     const statDefs: [string, number | undefined][] = [
-      ["learned skills", graph.stats.learned_skills],
-      ["memories", graph.stats.memory_nodes],
-      ["links", graph.edges.length],
-      ["agent-created", graph.stats.agent_created],
-      ["used", graph.stats.used],
+      [t.learning.statSkills, graph.stats.learned_skills],
+      [t.learning.statMemories, graph.stats.memory_nodes],
+      [t.learning.statLinks, graph.edges.length],
+      [t.learning.statAgentCreated, graph.stats.agent_created],
+      [t.learning.statUsed, graph.stats.used],
     ];
     for (const [label, value] of statDefs) {
       const cell = document.createElement("div");
@@ -99,10 +99,15 @@ export class LearningOverlay {
     // Toolbar: kind filter + search.
     const toolbar = document.createElement("div");
     toolbar.className = "learning-toolbar";
+    const kindLabels: Record<"all" | "skill" | "memory", string> = {
+      all: t.learning.filterAll,
+      skill: t.learning.filterSkill,
+      memory: t.learning.filterMemory,
+    };
     for (const kind of ["all", "skill", "memory"] as const) {
       const btn = document.createElement("button");
       btn.className = "learning-filter" + (kind === this.kindFilter ? " active" : "");
-      btn.textContent = kind;
+      btn.textContent = kindLabels[kind];
       btn.onclick = () => {
         this.kindFilter = kind;
         this.render();
