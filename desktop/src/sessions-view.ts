@@ -371,8 +371,35 @@ export class SessionsViewWidget {
     try {
       const total = await client.messagesTotal(sessionId);
       if (this.selected !== sessionId || total === this.transcriptTotal) return;
-      if (!this.transcriptExpanded) {
+      if (total < this.transcriptTotal) {
+        // The transcript shrank (compression/prune) — reload from scratch.
         this.loadTranscript(sessionId).catch(() => undefined);
+        return;
+      }
+      if (!this.transcriptExpanded) {
+        // P476: append just the new messages over the `after` cursor.
+        const fresh = await client.messages(sessionId, {
+          timestamps: true,
+          after: this.transcriptTotal,
+        });
+        if (this.selected !== sessionId) return;
+        if (fresh.length !== total - this.transcriptTotal) {
+          this.loadTranscript(sessionId).catch(() => undefined);
+          return;
+        }
+        this.transcriptMessages.push(...fresh);
+        this.transcriptTotal = total;
+        const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+        const holder = document.createElement("div");
+        holder.innerHTML = this.renderMessages(fresh);
+        this.bindCopyButtons(holder);
+        for (const node of Array.from(holder.children)) pane.appendChild(node);
+        const session = this.all.find((candidate) => candidate.id === sessionId);
+        const existing = pane.querySelector(".sessions-view-meta");
+        if (session && existing) {
+          existing.outerHTML = this.renderTranscriptMeta(session, total);
+        }
+        this.findBar?.refresh();
       } else {
         // The user is reading history — only update the count + banner.
         this.transcriptTotal = total;

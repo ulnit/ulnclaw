@@ -7470,19 +7470,30 @@ struct MessagesQuery {
     /// just before this position (combine with `limit` for windowed
     /// load-earlier pagination).
     before: Option<usize>,
+    /// P476: downward cursor — inclusive start index; returns messages from
+    /// this position onward (tail-append polling for live transcripts).
+    after: Option<usize>,
 }
 
-/// P468: apply the upward `before` cursor, then the trailing `limit`.
-fn window_messages<T>(mut messages: Vec<T>, before: Option<usize>, limit: Option<usize>) -> Vec<T> {
-    if let Some(before) = before {
-        messages.truncate(before.min(messages.len()));
-    }
+/// P468/P476: slice the stored transcript with the `after` (inclusive
+/// start) and `before` (exclusive end) cursors — both relative to the
+/// original positions — then apply the trailing `limit`.
+fn window_messages<T: Clone>(
+    messages: Vec<T>,
+    after: Option<usize>,
+    before: Option<usize>,
+    limit: Option<usize>,
+) -> Vec<T> {
+    let len = messages.len();
+    let start = after.unwrap_or(0).min(len);
+    let end = before.unwrap_or(len).min(len);
+    let mut window: Vec<T> = if start < end { messages[start..end].to_vec() } else { Vec::new() };
     if let Some(limit) = limit {
-        if messages.len() > limit {
-            messages = messages.split_off(messages.len() - limit);
+        if window.len() > limit {
+            window = window.split_off(window.len() - limit);
         }
     }
-    messages
+    window
 }
 
 async fn session_messages(
@@ -7504,8 +7515,8 @@ async fn session_messages(
                         value
                     })
                     .collect();
-                // P462/P468: trailing-window + upward-cursor pagination.
-                let data = window_messages(data, query.before, query.limit);
+                // P462/P468/P476: trailing-window + cursor pagination.
+                let data = window_messages(data, query.after, query.before, query.limit);
                 Json(json!({"object": "list", "session_id": id, "total": total, "data": data})).into_response()
             }
             Err(e) => server_error(&e.to_string()),
@@ -7514,8 +7525,8 @@ async fn session_messages(
     match state.store.load_messages(&id) {
         Ok(messages) => {
             let total = messages.len();
-            // P462/P468: trailing-window + upward-cursor pagination.
-            let messages = window_messages(messages, query.before, query.limit);
+            // P462/P468/P476: trailing-window + cursor pagination.
+            let messages = window_messages(messages, query.after, query.before, query.limit);
             Json(json!({"object": "list", "session_id": id, "total": total, "data": messages})).into_response()
         }
         Err(e) => server_error(&e.to_string()),
@@ -15919,6 +15930,71 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(rows[0]["content"], json!("m2"));
         assert!(rows[0]["timestamp"].as_f64().is_some());
         assert_eq!(body["total"], json!(10));
+    }
+
+    #[tokio::test]
+    async fn test_session_messages_after_cursor() {
+        use crate::provider::{Message, Role};
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+        let session_id = state.store.create_session("gateway", None, None).unwrap();
+        for i in 0..10 {
+            state
+                .store
+                .append_message(
+                    &session_id,
+                    &Message {
+                        role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                        content: Some(format!("m{i}")),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                )
+                .unwrap();
+        }
+        // `after` returns messages from the index onward (tail appends).
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?after=8", session_id),
+            Some(token),
+        )
+        .await;
+        let rows = body["data"].as_array().expect("rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["content"], json!("m8"));
+        assert_eq!(rows[1]["content"], json!("m9"));
+        assert_eq!(body["total"], json!(10));
+        // `after` + `before` bound an interior slice.
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?after=2&before=5", session_id),
+            Some(token),
+        )
+        .await;
+        let rows = body["data"].as_array().expect("rows");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["content"], json!("m2"));
+        assert_eq!(rows[2]["content"], json!("m4"));
+        // `after` past the end is empty; the timestamped branch agrees.
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?after=10", session_id),
+            Some(token),
+        )
+        .await;
+        assert!(body["data"].as_array().expect("rows").is_empty());
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{}/messages?after=7&timestamps=true", session_id),
+            Some(token),
+        )
+        .await;
+        let rows = body["data"].as_array().expect("rows");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["content"], json!("m7"));
+        assert!(rows[0]["timestamp"].as_f64().is_some());
     }
 
     #[test]
