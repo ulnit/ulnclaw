@@ -954,6 +954,19 @@ async function sendTurn(): Promise<void> {
     activeSwitchView?.(view);
     return;
   }
+  // P459: /archive + /unarchive manage the current session's end state.
+  if (/^\/archive\b/i.test(text)) {
+    el.input.value = "";
+    refreshCharCount();
+    void runArchiveSession();
+    return;
+  }
+  if (/^\/unarchive\b/i.test(text)) {
+    el.input.value = "";
+    refreshCharCount();
+    void runUnarchiveSession();
+    return;
+  }
   if ((!text && state.pendingUploads.length === 0) || state.busy || !state.client) return;
   if (!state.current) {
     try {
@@ -1391,6 +1404,8 @@ function gatewaySlashCommands(): [string, string][] {
     ["/webhooks", t.slash.webhooks],
     ["/models", t.slash.models],
     ["/plugins", t.slash.plugins],
+    ["/archive", t.slash.archive],
+    ["/unarchive", t.slash.unarchive],
   ];
 }
 
