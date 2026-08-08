@@ -633,9 +633,19 @@ fn process_tool() -> crate::tools::Tool {
 mod tests {
     use super::*;
 
+    /// Tests must not inherit the process cwd: gateway fs/git tests
+    /// temporarily `set_current_dir` into tempdirs they later delete, so a
+    /// shell spawned with that cwd dies with "getcwd: cannot access parent
+    /// directories". Pin every terminal test to its own stable workdir.
+    fn stable_ctx() -> (Arc<ToolContext>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = Arc::new(ToolContext::new().with_workdir(dir.path()));
+        (ctx, dir)
+    }
+
     #[tokio::test]
     async fn test_foreground_echo() {
-        let ctx = Arc::new(ToolContext::new());
+        let (ctx, _workdir) = stable_ctx();
         let result = terminal_exec(ctx, "echo hello-ulnclaw".into(), false, 10, None, false)
             .await
             .unwrap();
@@ -645,7 +655,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_timeout() {
-        let ctx = Arc::new(ToolContext::new());
+        let (ctx, _workdir) = stable_ctx();
         let result = terminal_exec(ctx, "sleep 5".into(), false, 1, None, false)
             .await
             .unwrap();
@@ -655,7 +665,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cd_updates_workdir() {
-        let ctx = Arc::new(ToolContext::new());
+        let (ctx, _workdir) = stable_ctx();
         let dir = tempfile::tempdir().unwrap();
         let result = terminal_exec(
             ctx.clone(),
@@ -673,7 +683,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_benign_exit_code_meaning() {
-        let ctx = Arc::new(ToolContext::new());
+        let (ctx, _workdir) = stable_ctx();
         let result = terminal_exec(
             ctx,
             "grep -q ulnclaw-no-match-zzz /dev/null".into(),
@@ -691,7 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_failure_hint_command_not_found() {
-        let ctx = Arc::new(ToolContext::new());
+        let (ctx, _workdir) = stable_ctx();
         let result = terminal_exec(
             ctx,
             "ulnclaw-no-such-cmd-xyz".into(),
@@ -720,7 +730,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_output_is_ansi_stripped() {
-        let ctx = Arc::new(ToolContext::new());
+        let (ctx, _workdir) = stable_ctx();
         let result = terminal_exec(
             ctx,
             "printf '\\033[31mred\\033[0m plain'".into(),
@@ -743,7 +753,7 @@ mod tests {
         std::env::set_var("OPENAI_API_KEY", "scrub-secret-xyz");
         std::env::set_var("ULNCLAW_TEST_PT_VAR", "passme-123");
 
-        let ctx = Arc::new(ToolContext::new());
+        let (ctx, _workdir) = stable_ctx();
         ctx.register_env_passthrough(&["ULNCLAW_TEST_PT_VAR".to_string()]);
         let result = terminal_exec(ctx, "env".into(), false, 10, None, false)
             .await

@@ -1404,6 +1404,9 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 
 /* Models view — provider/model inventory */
 .models-view-body { margin-top: 8px; }
+.models-view-aux-row input[type="text"] { width: 130px; font-size: 12px; padding: 2px 6px; }
+.models-view-aux-row button { font-size: 11px; padding: 1px 8px; }
+.models-view-aux-row .monitoring-value code { font-size: 0.95em; }
 .models-view-current { font-size: 0.9em; opacity: 0.85; }
 .models-view-current code { font-family: var(--mono, monospace); font-size: 0.95em; }
 .models-view-provider {

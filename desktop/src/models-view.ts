@@ -42,6 +42,8 @@ export class ModelsViewWidget {
       <div id="models-view-status" class="config-status" hidden></div>
       <div id="models-view-gateway" class="models-view-gateway"></div>
       <div id="models-view-body" class="models-view-body"></div>
+      <h3 class="config-section" data-i18n="modelsView.auxTitle">Auxiliary task models</h3>
+      <div id="models-view-aux"></div>
       <h3 class="config-section" data-i18n="modelsView.usageTitle">Model usage (30 days)</h3>
       <div id="models-view-usage"></div>
       <h3 class="config-section" data-i18n="modelsView.endpointsTitle">Custom endpoints</h3>
@@ -107,6 +109,7 @@ export class ModelsViewWidget {
       const payload = await client.modelOptions();
       this.render(payload, this.filterQuery());
       this.renderGatewayModel().catch(() => undefined);
+      this.renderAuxiliary().catch(() => undefined);
       this.renderUsage().catch(() => undefined);
       this.renderEndpoints().catch(() => undefined);
       this.status("");
@@ -385,6 +388,82 @@ export class ModelsViewWidget {
           "{error}",
           error instanceof Error ? error.message : String(error),
         ),
+        true,
+      );
+    }
+  }
+
+  /** Per-task auxiliary model assignments (GET /api/model/auxiliary;
+   * hermes auxiliary slot UI parity; P605). */
+  private async renderAuxiliary(): Promise<void> {
+    const client = this.client();
+    const box = this.root.querySelector("#models-view-aux") as HTMLElement;
+    if (!client) {
+      box.innerHTML = "";
+      return;
+    }
+    const v = t.modelsView;
+    try {
+      const payload = await client.modelAuxiliary();
+      box.innerHTML = "";
+      for (const task of payload.tasks) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row models-view-aux-row";
+        const label = document.createElement("span");
+        label.className = "monitoring-label";
+        label.innerHTML = `<code>${escapeHtml(task.task)}</code>`;
+        const current = document.createElement("span");
+        current.className = "monitoring-value";
+        const providerPinned = task.provider !== "auto" && task.provider !== "";
+        const modelPinned = task.model !== "auto" && task.model !== "";
+        if (providerPinned || modelPinned) {
+          const shownProvider = providerPinned ? task.provider : payload.main.provider;
+          const shownModel = modelPinned ? task.model : payload.main.model;
+          current.innerHTML = `<code>${escapeHtml(shownProvider)}/${escapeHtml(shownModel)}</code>`;
+        } else {
+          current.textContent = v.auxInherit;
+        }
+        row.append(label, current);
+        const providerInput = document.createElement("input");
+        providerInput.type = "text";
+        providerInput.placeholder = v.auxProviderPh;
+        providerInput.value = providerPinned ? task.provider : "";
+        const modelInput = document.createElement("input");
+        modelInput.type = "text";
+        modelInput.placeholder = v.auxModelPh;
+        modelInput.value = modelPinned ? task.model : "";
+        const saveBtn = document.createElement("button");
+        saveBtn.className = "ghost";
+        saveBtn.textContent = v.auxSave;
+        saveBtn.addEventListener("click", () => {
+          void this.setAuxiliary(task.task, providerInput.value.trim(), modelInput.value.trim());
+        });
+        const resetBtn = document.createElement("button");
+        resetBtn.className = "ghost";
+        resetBtn.textContent = v.auxReset;
+        resetBtn.addEventListener("click", () => {
+          void this.setAuxiliary(task.task, "", "");
+        });
+        row.append(providerInput, modelInput, saveBtn, resetBtn);
+        box.appendChild(row);
+      }
+    } catch {
+      box.innerHTML = "";
+    }
+  }
+
+  /** Pin or reset one auxiliary task slot (POST /api/model/set; P605). */
+  private async setAuxiliary(task: string, provider: string, model: string): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const v = t.modelsView;
+    try {
+      const result = await client.modelSetAuxiliary(task, provider, model);
+      this.status(result.reset ? v.auxResetDone.replace("{task}", task) : v.auxSaved.replace("{task}", task));
+      await this.renderAuxiliary();
+    } catch (error) {
+      this.status(
+        v.auxFailed.replace("{error}", error instanceof Error ? error.message : String(error)),
         true,
       );
     }

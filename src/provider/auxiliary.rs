@@ -23,6 +23,16 @@ pub const TASK_APPROVAL: &str = "approval";
 /// `title_generator.generate_title` task name).
 pub const TASK_TITLE_GENERATION: &str = "title_generation";
 
+/// Canonical auxiliary task slots ulnclaw knows (lean subset of hermes'
+/// `_AUX_TASK_SLOTS`; only tasks ulnclaw actually routes). Used by
+/// `GET /api/model/auxiliary` and the auxiliary scope of `/api/model/set`.
+pub const TASK_SLOTS: &[&str] = &[
+    TASK_VISION,
+    TASK_COMPRESSION,
+    TASK_APPROVAL,
+    TASK_TITLE_GENERATION,
+];
+
 /// Where the resolved auxiliary runtime came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuxSource {

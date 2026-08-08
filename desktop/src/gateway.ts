@@ -2662,6 +2662,37 @@ export class GatewayClient {
     if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
   }
 
+  /** GET /api/model/auxiliary — per-task provider assignments (P605). */
+  async modelAuxiliary(): Promise<{
+    tasks: { task: string; provider: string; model: string; base_url: string }[];
+    main: { provider: string; model: string };
+  }> {
+    const response = await fetch(this.endpoint("/api/model/auxiliary"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
+    return value as {
+      tasks: { task: string; provider: string; model: string; base_url: string }[];
+      main: { provider: string; model: string };
+    };
+  }
+
+  /** POST /api/model/set (scope=auxiliary) — pin or reset a task slot (P605). */
+  async modelSetAuxiliary(
+    task: string,
+    provider: string,
+    model: string,
+    baseUrl?: string,
+  ): Promise<{ ok: boolean; task: string; reset: boolean }> {
+    const response = await fetch(this.endpoint("/api/model/set"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ scope: "auxiliary", task, provider, model, base_url: baseUrl ?? "" }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
+    return value as { ok: boolean; task: string; reset: boolean };
+  }
+
   /** GET /api/model/recommended-default — sensible default model for a
    * provider (first curated catalog entry; P347). */
   async modelRecommendedDefault(provider?: string): Promise<{ provider: string; model: string }> {

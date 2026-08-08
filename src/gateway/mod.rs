@@ -1324,8 +1324,15 @@ async fn model_info_api(State(state): State<Arc<GatewayState>>) -> Json<Value> {
 /// slots or cost guard). Applies to new sessions once the gateway
 /// restarts; per-session hot-swap stays `POST /api/sessions/:id/model`.
 async fn model_set_api(Json(body): Json<Value>) -> Response {
+    let scope = body["scope"].as_str().unwrap_or("main").trim().to_string();
     let provider = body["provider"].as_str().unwrap_or_default().trim().to_string();
     let model = body["model"].as_str().unwrap_or_default().trim().to_string();
+    if scope == "auxiliary" {
+        return model_set_auxiliary(body, provider, model);
+    }
+    if scope != "main" {
+        return bad_request("scope must be 'main' or 'auxiliary'", None);
+    }
     if provider.is_empty() || model.is_empty() {
         return bad_request("provider and model are required", None);
     }
@@ -1345,6 +1352,101 @@ async fn model_set_api(Json(body): Json<Value>) -> Response {
         "provider": provider,
         "model": model,
         "note": "applies to new sessions; restart the gateway to change the running process",
+    }))
+    .into_response()
+}
+
+/// `GET /api/model/auxiliary` — per-task auxiliary provider assignments
+/// plus the main slot (hermes `/api/model/auxiliary` parity, lean:
+/// ulnclaw task slots only).
+async fn model_auxiliary() -> Response {
+    let path = crate::config_cmd::config_path();
+    let config = crate::config::UlncLawConfig::load(Some(&path)).unwrap_or_default();
+    let tasks: Vec<Value> = crate::provider::auxiliary::TASK_SLOTS
+        .iter()
+        .map(|task| {
+            let entry = config.auxiliary.get(*task);
+            json!({
+                "task": task,
+                "provider": entry
+                    .and_then(|cfg| cfg.provider.clone())
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "auto".to_string()),
+                "model": entry
+                    .and_then(|cfg| cfg.model.clone())
+                    .unwrap_or_default(),
+                "base_url": entry
+                    .and_then(|cfg| cfg.base_url.clone())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect();
+    Json(json!({
+        "tasks": tasks,
+        "main": { "provider": config.model.provider, "model": config.model.model },
+    }))
+    .into_response()
+}
+
+/// Auxiliary scope of `POST /api/model/set` (hermes parity): pin
+/// `[auxiliary.<task>]` provider/model/base_url, or reset the slot when
+/// everything is blank/"auto" (removes the table).
+fn model_set_auxiliary(body: Value, provider: String, model: String) -> Response {
+    let task = body["task"].as_str().unwrap_or_default().trim().to_string();
+    if !crate::provider::auxiliary::TASK_SLOTS.contains(&task.as_str()) {
+        return bad_request(&format!("unknown auxiliary task: '{task}'"), None);
+    }
+    let base_url = body["base_url"].as_str().unwrap_or_default().trim().to_string();
+    let reset = (provider.is_empty() || provider == "auto")
+        && model.is_empty()
+        && base_url.is_empty();
+    let path = crate::config_cmd::config_path();
+    let mut doc = match crate::config_cmd::load_toml(&path) {
+        Ok(v) => v,
+        Err(e) => return server_error(&e),
+    };
+    let Some(root) = doc.as_table_mut() else {
+        return bad_request("config root is not a table", None);
+    };
+    if reset {
+        if let Some(aux) = root.get_mut("auxiliary").and_then(|v| v.as_table_mut()) {
+            aux.remove(&task);
+            if aux.is_empty() {
+                root.remove("auxiliary");
+            }
+        }
+    } else {
+        let aux = root
+            .entry("auxiliary")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let Some(aux_table) = aux.as_table_mut() else {
+            return bad_request("'auxiliary' is not a table in config.toml", None);
+        };
+        let entry = aux_table
+            .entry(task.clone())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let Some(slot) = entry.as_table_mut() else {
+            return bad_request(&format!("'auxiliary.{task}' is not a table"), None);
+        };
+        slot.insert("provider".into(), toml::Value::String(provider.clone()));
+        slot.insert("model".into(), toml::Value::String(model.clone()));
+        if base_url.is_empty() {
+            slot.remove("base_url");
+        } else {
+            slot.insert("base_url".into(), toml::Value::String(base_url.clone()));
+        }
+    }
+    if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
+        return server_error(&e);
+    }
+    Json(json!({
+        "ok": true,
+        "scope": "auxiliary",
+        "task": task,
+        "reset": reset,
+        "provider": provider,
+        "model": model,
+        "note": "applies to new auxiliary calls immediately (config is re-read per task)",
     }))
     .into_response()
 }
@@ -5640,6 +5742,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fs/default-cwd", get(fs_default_cwd))
         .route("/api/model/info", get(model_info_api))
         .route("/api/model/set", post(model_set_api))
+        .route("/api/model/auxiliary", get(model_auxiliary))
         .route("/api/model/recommended-default", get(model_recommended_default))
         .route("/api/providers/custom-endpoints", get(custom_endpoints_list).post(custom_endpoints_upsert))
         .route("/api/providers/custom-endpoints/validate", post(custom_endpoints_validate))
@@ -15490,8 +15593,13 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
     async fn test_fs_endpoints_list_read_write() {
         let _guard = crate::models_dev::test_env_lock();
         let dir = tempfile::tempdir().expect("tempdir");
+        // Home lives in a SEPARATE tempdir: dozens of unlocked tests read
+        // ULNCLAW_HOME concurrently and would drop state files into `dir`
+        // (corrupting fs-listing/git-status assertions) if it doubled as
+        // the home.
+        let home_dir = tempfile::tempdir().expect("tempdir");
         let saved_home = std::env::var("ULNCLAW_HOME").ok();
-        std::env::set_var("ULNCLAW_HOME", dir.path());
+        std::env::set_var("ULNCLAW_HOME", home_dir.path());
         let saved_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
@@ -15665,6 +15773,74 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
     }
 
     #[tokio::test]
+    async fn test_model_auxiliary_endpoints() {
+        let _guard = crate::models_dev::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", tmp.path());
+
+        let app = router(test_state());
+        let token = "sekret";
+
+        // Default: four slots, all "auto", main slot reported.
+        let (status, body) = get_json(app.clone(), "/api/model/auxiliary", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let tasks = body["tasks"].as_array().unwrap().clone();
+        assert_eq!(tasks.len(), crate::provider::auxiliary::TASK_SLOTS.len());
+        assert!(tasks.iter().all(|task| task["provider"] == "auto"));
+        assert!(body["main"]["model"].is_string());
+
+        // Pin compression to a different provider/model.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/model/set", Some(token),
+            json!({"scope": "auxiliary", "task": "compression", "provider": "anthropic", "model": "claude-test"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["reset"], false);
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(on_disk.contains("[auxiliary.compression]"), "{on_disk}");
+        assert!(on_disk.contains("claude-test"), "{on_disk}");
+        let (status, body) = get_json(app.clone(), "/api/model/auxiliary", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        let compression = body["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["task"] == "compression")
+            .cloned()
+            .unwrap();
+        assert_eq!(compression["provider"], "anthropic");
+        assert_eq!(compression["model"], "claude-test");
+
+        // Unknown task and unknown scope are rejected.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/model/set", Some(token),
+            json!({"scope": "auxiliary", "task": "nope", "provider": "openai", "model": "x"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/model/set", Some(token),
+            json!({"scope": "bogus", "provider": "openai", "model": "x"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Reset removes the slot.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/model/set", Some(token),
+            json!({"scope": "auxiliary", "task": "compression", "provider": "auto"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["reset"], true);
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(!on_disk.contains("[auxiliary.compression]"), "{on_disk}");
+
+        match prev {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_mcp_server_crud_endpoints() {
         let _guard = crate::models_dev::test_env_lock();
         let tmp = tempfile::tempdir().unwrap();
@@ -15759,8 +15935,13 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
     async fn test_git_review_endpoints() {
         let _guard = crate::models_dev::test_env_lock();
         let dir = tempfile::tempdir().expect("tempdir");
+        // Home lives in a SEPARATE tempdir: dozens of unlocked tests read
+        // ULNCLAW_HOME concurrently and would drop state files into `dir`
+        // (corrupting fs-listing/git-status assertions) if it doubled as
+        // the home.
+        let home_dir = tempfile::tempdir().expect("tempdir");
         let saved_home = std::env::var("ULNCLAW_HOME").ok();
-        std::env::set_var("ULNCLAW_HOME", dir.path());
+        std::env::set_var("ULNCLAW_HOME", home_dir.path());
         let saved_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
@@ -16055,8 +16236,13 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
     async fn test_fs_git_diff_modes() {
         let _guard = crate::models_dev::test_env_lock();
         let dir = tempfile::tempdir().expect("tempdir");
+        // Home lives in a SEPARATE tempdir: dozens of unlocked tests read
+        // ULNCLAW_HOME concurrently and would drop state files into `dir`
+        // (corrupting fs-listing/git-status assertions) if it doubled as
+        // the home.
+        let home_dir = tempfile::tempdir().expect("tempdir");
         let saved_home = std::env::var("ULNCLAW_HOME").ok();
-        std::env::set_var("ULNCLAW_HOME", dir.path());
+        std::env::set_var("ULNCLAW_HOME", home_dir.path());
         let saved_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 

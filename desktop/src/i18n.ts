@@ -197,6 +197,7 @@ export interface Translations {
     usageTitle: string; usageEmpty: string; usageSessions: string; usageMessages: string; usageTokens: string;
     gatewayTitle: string; gatewayContext: string; gatewaySet: string; gatewaySetConfirm: string; gatewaySetDone: string; gatewaySetFailed: string; recommendedDefault: string;
     endpointsTitle: string; endpointsEmpty: string; endpointsTest: string; endpointsActivate: string; endpointsActivated: string; endpointsDeleteConfirm: string; endpointsSaved: string; endpointsFailed: string;
+    auxTitle: string; auxInherit: string; auxProviderPh: string; auxModelPh: string; auxSave: string; auxReset: string; auxSaved: string; auxResetDone: string; auxFailed: string;
   };
   pluginsView: {
     count: string; none: string; loadFailed: string; hooksWord: string; toolsWord: string;
@@ -611,7 +612,7 @@ const en: Translations = {
     colModel: "Model", colFamily: "Family", colContext: "Context", colMaxOut: "Max out", colCaps: "Caps", colPrice: "$/Mtok",
     copyModelTitle: "Click to copy model id", copiedModel: "Copied {model} to clipboard.", copyFailed: "Clipboard copy failed.",
     usageTitle: "Model usage (30 days)", usageEmpty: "No model usage recorded yet.",
-    gatewayTitle: "Gateway model", gatewayContext: "context", gatewaySet: "Set as gateway model", gatewaySetConfirm: "Switch the gateway model to {provider}/{model}? Applies to new sessions once the gateway restarts.", gatewaySetDone: "Gateway model updated — restart the gateway to apply.", gatewaySetFailed: "Model switch failed: {error}", recommendedDefault: "Recommended default", endpointsTitle: "Custom endpoints", endpointsEmpty: "No custom endpoints configured.", endpointsTest: "Test", endpointsActivate: "Activate", endpointsActivated: "Custom endpoint activated — restart the gateway to apply.", endpointsDeleteConfirm: "Delete the {id} endpoint and its stored key?", endpointsSaved: "Endpoint saved.", endpointsFailed: "Endpoint operation failed: {error}",
+    gatewayTitle: "Gateway model", gatewayContext: "context", gatewaySet: "Set as gateway model", gatewaySetConfirm: "Switch the gateway model to {provider}/{model}? Applies to new sessions once the gateway restarts.", gatewaySetDone: "Gateway model updated — restart the gateway to apply.", gatewaySetFailed: "Model switch failed: {error}", recommendedDefault: "Recommended default", endpointsTitle: "Custom endpoints", endpointsEmpty: "No custom endpoints configured.", endpointsTest: "Test", endpointsActivate: "Activate", endpointsActivated: "Custom endpoint activated — restart the gateway to apply.", endpointsDeleteConfirm: "Delete the {id} endpoint and its stored key?", endpointsSaved: "Endpoint saved.", endpointsFailed: "Endpoint operation failed: {error}", auxTitle: "Auxiliary task models", auxInherit: "inherit main", auxProviderPh: "provider (auto)", auxModelPh: "model (auto)", auxSave: "Pin", auxReset: "Reset", auxSaved: "{task} pinned.", auxResetDone: "{task} reset to main.", auxFailed: "Auxiliary update failed: {error}",
     usageSessions: "sessions", usageMessages: "msgs", usageTokens: "tokens",
   },
   pluginsView: {
@@ -1154,7 +1155,7 @@ const zh: Translations = {
     colModel: "模型", colFamily: "家族", colContext: "上下文", colMaxOut: "最大输出", colCaps: "能力", colPrice: "$/Mtok",
     copyModelTitle: "点击复制模型 ID", copiedModel: "已复制 {model} 到剪贴板。", copyFailed: "复制到剪贴板失败。",
     usageTitle: "模型用量（30 天）", usageEmpty: "尚无模型用量记录。",
-    gatewayTitle: "网关模型", gatewayContext: "上下文", gatewaySet: "设为网关模型", gatewaySetConfirm: "将网关模型切换为 {provider}/{model}？网关重启后对新会话生效。", gatewaySetDone: "网关模型已更新——重启网关后生效。", gatewaySetFailed: "模型切换失败：{error}", recommendedDefault: "推荐默认", endpointsTitle: "自定义端点", endpointsEmpty: "尚未配置自定义端点。", endpointsTest: "测试", endpointsActivate: "启用", endpointsActivated: "自定义端点已启用——重启网关后生效。", endpointsDeleteConfirm: "删除 {id} 端点及其存储的密钥？", endpointsSaved: "端点已保存。", endpointsFailed: "端点操作失败：{error}",
+    gatewayTitle: "网关模型", gatewayContext: "上下文", gatewaySet: "设为网关模型", gatewaySetConfirm: "将网关模型切换为 {provider}/{model}？网关重启后对新会话生效。", gatewaySetDone: "网关模型已更新——重启网关后生效。", gatewaySetFailed: "模型切换失败：{error}", recommendedDefault: "推荐默认", endpointsTitle: "自定义端点", endpointsEmpty: "尚未配置自定义端点。", endpointsTest: "测试", endpointsActivate: "启用", endpointsActivated: "自定义端点已启用——重启网关后生效。", endpointsDeleteConfirm: "删除 {id} 端点及其存储的密钥？", endpointsSaved: "端点已保存。", endpointsFailed: "端点操作失败：{error}", auxTitle: "辅助任务模型", auxInherit: "继承主模型", auxProviderPh: "提供商（auto）", auxModelPh: "模型（auto）", auxSave: "固定", auxReset: "重置", auxSaved: "已固定 {task}。", auxResetDone: "{task} 已重置为主模型。", auxFailed: "辅助模型更新失败：{error}",
     usageSessions: "会话", usageMessages: "消息", usageTokens: "令牌",
   },
   pluginsView: {
@@ -1697,7 +1698,7 @@ const zhHant: Translations = {
     colModel: "模型", colFamily: "家族", colContext: "上下文", colMaxOut: "最大輸出", colCaps: "能力", colPrice: "$/Mtok",
     copyModelTitle: "點擊複製模型 ID", copiedModel: "已複製 {model} 到剪貼簿。", copyFailed: "複製到剪貼簿失敗。",
     usageTitle: "模型用量（30 天）", usageEmpty: "尚無模型用量紀錄。",
-    gatewayTitle: "閘道模型", gatewayContext: "內文窗口", gatewaySet: "設為閘道模型", gatewaySetConfirm: "將閘道模型切換為 {provider}/{model}？閘道重啟後對新工作階段生效。", gatewaySetDone: "閘道模型已更新——重啟閘道後生效。", gatewaySetFailed: "模型切換失敗：{error}", recommendedDefault: "推薦預設", endpointsTitle: "自訂端點", endpointsEmpty: "尚未配置自訂端點。", endpointsTest: "測試", endpointsActivate: "啟用", endpointsActivated: "自訂端點已啟用——重啟閘道後生效。", endpointsDeleteConfirm: "刪除 {id} 端點及其儲存的密鑰？", endpointsSaved: "端點已儲存。", endpointsFailed: "端點操作失敗：{error}",
+    gatewayTitle: "閘道模型", gatewayContext: "內文窗口", gatewaySet: "設為閘道模型", gatewaySetConfirm: "將閘道模型切換為 {provider}/{model}？閘道重啟後對新工作階段生效。", gatewaySetDone: "閘道模型已更新——重啟閘道後生效。", gatewaySetFailed: "模型切換失敗：{error}", recommendedDefault: "推薦預設", endpointsTitle: "自訂端點", endpointsEmpty: "尚未配置自訂端點。", endpointsTest: "測試", endpointsActivate: "啟用", endpointsActivated: "自訂端點已啟用——重啟閘道後生效。", endpointsDeleteConfirm: "刪除 {id} 端點及其儲存的密鑰？", endpointsSaved: "端點已儲存。", endpointsFailed: "端點操作失敗：{error}", auxTitle: "輔助任務模型", auxInherit: "繼承主模型", auxProviderPh: "供應商（auto）", auxModelPh: "模型（auto）", auxSave: "固定", auxReset: "重置", auxSaved: "已固定 {task}。", auxResetDone: "{task} 已重置為主模型。", auxFailed: "輔助模型更新失敗：{error}",
     usageSessions: "工作階段", usageMessages: "訊息", usageTokens: "記號",
   },
   pluginsView: {
@@ -2240,7 +2241,7 @@ const ja: Translations = {
     colModel: "モデル", colFamily: "ファミリー", colContext: "コンテキスト", colMaxOut: "最大出力", colCaps: "機能", colPrice: "$/Mtok",
     copyModelTitle: "クリックしてモデル ID をコピー", copiedModel: "{model} をクリップボードにコピーしました。", copyFailed: "クリップボードへのコピーに失敗しました。",
     usageTitle: "モデル使用量（30 日）", usageEmpty: "モデル使用量はまだ記録されていません。",
-    gatewayTitle: "ゲートウェイモデル", gatewayContext: "コンテキスト", gatewaySet: "ゲートウェイモデルに設定", gatewaySetConfirm: "ゲートウェイモデルを {provider}/{model} に切り替えますか？ゲートウェイ再起動後、新しいセッションに適用されます。", gatewaySetDone: "ゲートウェイモデルを更新しました——再起動後に適用されます。", gatewaySetFailed: "モデル切り替えに失敗しました: {error}", recommendedDefault: "推奨デフォルト", endpointsTitle: "カスタムエンドポイント", endpointsEmpty: "カスタムエンドポイントは未設定です。", endpointsTest: "テスト", endpointsActivate: "有効化", endpointsActivated: "カスタムエンドポイントを有効化しました——再起動後に適用されます。", endpointsDeleteConfirm: "エンドポイント {id} とその保存キーを削除しますか？", endpointsSaved: "エンドポイントを保存しました。", endpointsFailed: "エンドポイント操作に失敗しました: {error}",
+    gatewayTitle: "ゲートウェイモデル", gatewayContext: "コンテキスト", gatewaySet: "ゲートウェイモデルに設定", gatewaySetConfirm: "ゲートウェイモデルを {provider}/{model} に切り替えますか？ゲートウェイ再起動後、新しいセッションに適用されます。", gatewaySetDone: "ゲートウェイモデルを更新しました——再起動後に適用されます。", gatewaySetFailed: "モデル切り替えに失敗しました: {error}", recommendedDefault: "推奨デフォルト", endpointsTitle: "カスタムエンドポイント", endpointsEmpty: "カスタムエンドポイントは未設定です。", endpointsTest: "テスト", endpointsActivate: "有効化", endpointsActivated: "カスタムエンドポイントを有効化しました——再起動後に適用されます。", endpointsDeleteConfirm: "エンドポイント {id} とその保存キーを削除しますか？", endpointsSaved: "エンドポイントを保存しました。", endpointsFailed: "エンドポイント操作に失敗しました: {error}", auxTitle: "補助タスクモデル", auxInherit: "メインを継承", auxProviderPh: "プロバイダー（auto）", auxModelPh: "モデル（auto）", auxSave: "固定", auxReset: "リセット", auxSaved: "{task} を固定しました。", auxResetDone: "{task} をメインに戻しました。", auxFailed: "補助モデルの更新に失敗しました: {error}",
     usageSessions: "セッション", usageMessages: "メッセージ", usageTokens: "トークン",
   },
   pluginsView: {
@@ -2783,7 +2784,7 @@ const ar: Translations = {
     colModel: "النموذج", colFamily: "العائلة", colContext: "السياق", colMaxOut: "أقصى إخراج", colCaps: "القدرات", colPrice: "$/Mtok",
     copyModelTitle: "انقر لنسخ معرف النموذج", copiedModel: "تم نسخ {model} إلى الحافظة.", copyFailed: "فشل النسخ إلى الحافظة.",
     usageTitle: "استخدام النماذج (30 يومًا)", usageEmpty: "لا يوجد استخدام للنماذج بعد.",
-    gatewayTitle: "نموذج البوابة", gatewayContext: "السياق", gatewaySet: "تعيين كنموذج للبوابة", gatewaySetConfirm: "تبديل نموذج البوابة إلى {provider}/{model}؟ يُطبق على الجلسات الجديدة بعد إعادة تشغيل البوابة.", gatewaySetDone: "تم تحديث نموذج البوابة — أعد تشغيل البوابة للتطبيق.", gatewaySetFailed: "فشل تبديل النموذج: {error}", recommendedDefault: "الافتراضي الموصى به", endpointsTitle: "نقاط نهاية مخصصة", endpointsEmpty: "لا توجد نقاط نهاية مخصصة.", endpointsTest: "اختبار", endpointsActivate: "تفعيل", endpointsActivated: "تم تفعيل نقطة النهاية — أعد تشغيل البوابة للتطبيق.", endpointsDeleteConfirm: "حذف نقطة النهاية {id} ومفتاحها المخزن؟", endpointsSaved: "تم حفظ نقطة النهاية.", endpointsFailed: "فشلت عملية نقطة النهاية: {error}",
+    gatewayTitle: "نموذج البوابة", gatewayContext: "السياق", gatewaySet: "تعيين كنموذج للبوابة", gatewaySetConfirm: "تبديل نموذج البوابة إلى {provider}/{model}؟ يُطبق على الجلسات الجديدة بعد إعادة تشغيل البوابة.", gatewaySetDone: "تم تحديث نموذج البوابة — أعد تشغيل البوابة للتطبيق.", gatewaySetFailed: "فشل تبديل النموذج: {error}", recommendedDefault: "الافتراضي الموصى به", endpointsTitle: "نقاط نهاية مخصصة", endpointsEmpty: "لا توجد نقاط نهاية مخصصة.", endpointsTest: "اختبار", endpointsActivate: "تفعيل", endpointsActivated: "تم تفعيل نقطة النهاية — أعد تشغيل البوابة للتطبيق.", endpointsDeleteConfirm: "حذف نقطة النهاية {id} ومفتاحها المخزن؟", endpointsSaved: "تم حفظ نقطة النهاية.", endpointsFailed: "فشلت عملية نقطة النهاية: {error}", auxTitle: "نماذج المهام المساعدة", auxInherit: "يرث الرئيسي", auxProviderPh: "المزوّد (auto)", auxModelPh: "النموذج (auto)", auxSave: "تثبيت", auxReset: "إعادة تعيين", auxSaved: "تم تثبيت {task}.", auxResetDone: "أُعيد {task} إلى الرئيسي.", auxFailed: "فشل تحديث النموذج المساعد: {error}",
     usageSessions: "جلسات", usageMessages: "رسائل", usageTokens: "رموز",
   },
   pluginsView: {
