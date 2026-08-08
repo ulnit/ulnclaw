@@ -9943,6 +9943,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /sessions [N]    list the N most recent sessions (default 10)
   /stop            request a stop for this session's running run
   /retry           truncate the transcript to the last user turn and re-run it
+  /undo [N]        drop the last N user turns (default 1), echoing what was removed
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -9953,6 +9954,22 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /<bundle>        invoke a skill bundle (ulnclaw bundles)";
+
+/// A user message that counts as a real conversational turn for slash
+/// surgery (`/retry`, `/undo`): not a tool result, not empty, and not
+/// a slash invocation (those rows are bookkeeping, not user turns —
+/// hermes display_kind filtering parity).
+fn is_real_user_turn(message: &Message) -> bool {
+    message.role == Role::User
+        && message.tool_call_id.is_none()
+        && message
+            .content
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| !text.starts_with('/'))
+            .unwrap_or(false)
+}
 
 async fn resolve_gateway_slash(
     state: &Arc<GatewayState>,
@@ -10468,17 +10485,11 @@ async fn resolve_gateway_slash(
             // everything from there on, and re-run it. Slash rows and
             // tool results are bookkeeping, not retryable user turns.
             let history = state.store.load_messages(session_id).unwrap_or_default();
-            let last_user = history.iter().enumerate().rev().find(|(_, m)| {
-                m.role == Role::User
-                    && m.tool_call_id.is_none()
-                    && m
-                        .content
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
-                        .map(|text| !text.starts_with('/'))
-                        .unwrap_or(false)
-            });
+            let last_user = history
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, m)| is_real_user_turn(m));
             let Some((index, message)) = last_user else {
                 return Some(GatewaySlash::Direct(
                     "no previous message to retry.".to_string(),
@@ -10492,6 +10503,55 @@ async fn resolve_gateway_slash(
                 )));
             }
             Some(GatewaySlash::AgentTurn(text))
+        }
+        "/undo" => {
+            // Hermes /undo parity (hard-truncate adaptation): drop the
+            // last N user turns plus everything after them, and echo
+            // the removed user text so it can be copied and re-sent.
+            let turns = match rest.split_whitespace().next() {
+                None => 1,
+                Some(raw) => match raw.parse::<usize>() {
+                    Ok(parsed) => parsed.max(1),
+                    Err(_) => {
+                        return Some(GatewaySlash::Direct(format!(
+                            "invalid turn count: {raw}"
+                        )))
+                    }
+                },
+            };
+            let history = state.store.load_messages(session_id).unwrap_or_default();
+            let user_cuts: Vec<usize> = history
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| is_real_user_turn(m))
+                .map(|(index, _)| index)
+                .collect();
+            let Some(&cut) = user_cuts.iter().rev().nth(turns - 1).or(user_cuts.first())
+            else {
+                return Some(GatewaySlash::Direct("nothing to undo.".to_string()));
+            };
+            let removed: Vec<Message> = history.iter().skip(cut).cloned().collect();
+            let truncated: Vec<Message> = history.into_iter().take(cut).collect();
+            if let Err(e) = state.store.replace_messages(session_id, &truncated) {
+                return Some(GatewaySlash::Direct(format!("undo failed: {e}")));
+            }
+            let echoes: Vec<String> = removed
+                .iter()
+                .filter(|m| is_real_user_turn(m))
+                .filter_map(|m| m.content.as_deref())
+                .map(|text| {
+                    let first_line = text.lines().next().unwrap_or(text);
+                    let clipped: String = first_line.chars().take(120).collect();
+                    format!("> {clipped}")
+                })
+                .collect();
+            let undone = echoes.len().max(1);
+            let mut reply = format!("undid {undone} user turn(s). removed:");
+            for echo in echoes {
+                reply.push('\n');
+                reply.push_str(&echo);
+            }
+            Some(GatewaySlash::Direct(reply))
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');
@@ -13769,6 +13829,57 @@ mod tests {
             .expect("session created");
         let reply = post_chat(app.clone(), &sid2, "/retry").await;
         assert_eq!(reply["response"], "no previous message to retry.");
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_undo_turns() {
+        // P617: /undo [N] drops the last N user turns + everything
+        // after them and echoes the removed user text.
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-undo", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        post_chat(app.clone(), &sid, "first question").await;
+        post_chat(app.clone(), &sid, "second question").await;
+        let reply = post_chat(app.clone(), &sid, "/title Undo Wave").await;
+        assert_eq!(reply["response"], "title set: Undo Wave");
+
+        // Undo one turn: the slash row and the second exchange go; the
+        // removed question is echoed. (The /undo exchange itself is
+        // persisted afterwards, like every direct slash command.)
+        let reply = post_chat(app.clone(), &sid, "/undo").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("> second question"), "{text}");
+        let messages = state.store.load_messages(&sid).expect("messages load");
+        let texts: Vec<String> = messages
+            .iter()
+            .filter_map(|m| m.content.clone())
+            .collect();
+        assert_eq!(&texts[..2], ["first question", "Hello"], "{texts:?}");
+        assert_eq!(texts.len(), 4, "{texts:?}");
+        assert_eq!(texts[2], "/undo");
+
+        // Undo past the remaining turns: only the slash exchange stays.
+        let reply = post_chat(app.clone(), &sid, "/undo 5").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("> first question"));
+        let messages = state.store.load_messages(&sid).expect("messages load");
+        let texts: Vec<String> = messages
+            .iter()
+            .filter_map(|m| m.content.clone())
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert_eq!(texts[0], "/undo 5");
+
+        let reply = post_chat(app.clone(), &sid, "/undo").await;
+        assert_eq!(reply["response"], "nothing to undo.");
+        let reply = post_chat(app.clone(), &sid, "/undo abc").await;
+        assert_eq!(reply["response"], "invalid turn count: abc");
     }
 
     #[tokio::test]

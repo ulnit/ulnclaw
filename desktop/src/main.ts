@@ -1892,6 +1892,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/sessions", t.slash.sessions],
     ["/stop", t.slash.stop],
     ["/retry", t.slash.retry],
+    ["/undo", t.slash.undo],
   ];
 }
 
