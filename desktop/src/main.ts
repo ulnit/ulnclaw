@@ -158,6 +158,7 @@ const el = {
   settingManage: document.getElementById("setting-manage") as HTMLInputElement,
   settingReopen: document.getElementById("setting-reopen") as HTMLInputElement,
   settingCharWarn: document.getElementById("setting-char-warn") as HTMLInputElement,
+  settingNotifySystem: document.getElementById("setting-notify-system") as HTMLInputElement,
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
   settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
@@ -1709,6 +1710,33 @@ function transcriptText(): string {
     .join("\n");
 }
 
+/**
+ * P435: OS-level notification for a settled run (Web Notifications API).
+ * Only fires when the window is unfocused — the in-app stacks cover the
+ * focused case — and lazily requests permission on first settle.
+ */
+function systemNotifySettle(failed: boolean, snippet: string, runId: string): void {
+  if (!state.settings.notifySystem || typeof Notification === "undefined") return;
+  const show = () => {
+    const note = new Notification(failed ? t.bridge.runFailed : t.bridge.runCompleted, {
+      body: snippet || undefined,
+      tag: runId ? `ulnclaw-run-${runId}` : undefined,
+    });
+    note.onclick = () => {
+      window.focus();
+      activeSwitchView?.("runs");
+      note.close();
+    };
+  };
+  if (Notification.permission === "granted") {
+    show();
+  } else if (Notification.permission === "default") {
+    void Notification.requestPermission().then((permission) => {
+      if (permission === "granted") show();
+    });
+  }
+}
+
 function handleDesktopEvent(envelope: DesktopEnvelope): void {
   const payload = envelope.payload ?? {};
   const switchView = (view: "chat" | "kanban" | "projects" | "jobs" | "usage" | "config" | "doctor" | "webhooks" | "runs" | "skills" | "sessions" | "models" | "plugins" | "pairing") =>
@@ -1752,6 +1780,7 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
         meta: runId ? `#${runId.slice(0, 8)}` : undefined,
         action: { label: t.bridge.runOpenRuns, onClick: () => switchView("runs") },
       });
+      if (!document.hasFocus()) systemNotifySettle(failed, snippet, runId);
       break;
     }
     case "terminal.read": {
@@ -2218,6 +2247,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     el.settingReopen.checked = state.settings.reopenLast;
     // P434: composer warn threshold.
     el.settingCharWarn.value = String(state.settings.charWarn);
+    // P435: OS-level settle notifications toggle.
+    el.settingNotifySystem.checked = state.settings.notifySystem;
     el.settings.showModal();
   };
   el.notifyBell.onclick = () => openNotifyHistory();
@@ -2247,6 +2278,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       charWarn: Number(el.settingCharWarn.value) > 0
         ? Math.floor(Number(el.settingCharWarn.value))
         : 4000,
+      notifySystem: el.settingNotifySystem.checked,
     };
     saveSettings(next);
     state.settings = next;

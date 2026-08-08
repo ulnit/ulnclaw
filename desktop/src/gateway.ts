@@ -10,6 +10,8 @@ export interface GatewaySettings {
   reopenLast: boolean;
   /** P434: composer character counter warn threshold (default 4000). */
   charWarn: number;
+  /** P435: OS-level notification when a run settles (default on). */
+  notifySystem: boolean;
 }
 
 export interface SessionRow {
@@ -963,12 +965,13 @@ export function loadSettings(): GatewaySettings {
         manage: Boolean(parsed.manage),
         reopenLast: parsed.reopenLast !== false,
         charWarn: Number(parsed.charWarn) > 0 ? Math.floor(Number(parsed.charWarn)) : 4000,
+        notifySystem: parsed.notifySystem !== false,
       };
     }
   } catch {
     /* fall through */
   }
-  return { url: "http://127.0.0.1:8642", key: "", manage: true, reopenLast: true, charWarn: 4000 };
+  return { url: "http://127.0.0.1:8642", key: "", manage: true, reopenLast: true, charWarn: 4000, notifySystem: true };
 }
 
 export function saveSettings(settings: GatewaySettings): void {
