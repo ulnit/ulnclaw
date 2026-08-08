@@ -95,7 +95,7 @@ export class SessionsViewWidget {
           <input id="sessions-view-search" type="search" data-i18n-ph="sessionsView.searchPlaceholder" />
           <div id="sessions-view-list" class="sessions-view-list" tabindex="0"></div>
         </div>
-        <div id="sessions-view-transcript" class="sessions-view-transcript">
+        <div id="sessions-view-transcript" class="sessions-view-transcript" tabindex="0">
           <p class="empty" data-i18n="sessionsView.select"></p>
         </div>
       </div>
@@ -166,6 +166,23 @@ export class SessionsViewWidget {
     this.root.querySelector("#sessions-view-project-pill")!.addEventListener("click", () => {
       this.projectFilter = null;
       this.renderList();
+    });
+    // P455: Home/End + PageUp/PageDown paging in the transcript pane.
+    (this.root.querySelector("#sessions-view-transcript") as HTMLElement).addEventListener("keydown", (event) => {
+      const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+      if (event.key === "Home") {
+        event.preventDefault();
+        pane.scrollTop = 0;
+      } else if (event.key === "End") {
+        event.preventDefault();
+        pane.scrollTop = pane.scrollHeight;
+      } else if (event.key === "PageUp") {
+        event.preventDefault();
+        pane.scrollTop -= pane.clientHeight * 0.9;
+      } else if (event.key === "PageDown") {
+        event.preventDefault();
+        pane.scrollTop += pane.clientHeight * 0.9;
+      }
     });
     // P450: the count header toggles activity ↔ title sorting.
     const countHeader = this.root.querySelector("#sessions-view-count") as HTMLElement;
