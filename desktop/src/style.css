@@ -94,6 +94,7 @@ button.ghost { background: none; border: none; color: var(--dim); }
   padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--panel);
 }
 #model-badge { font-size: 12px; color: var(--dim); cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+#token-badge { font-size: 12px; color: var(--dim); padding: 2px 6px; border-radius: 6px; }
 /* P429: owning-project badge beside the model badge in the chat header. */
 #project-badge { font-size: 12px; color: var(--dim); padding: 2px 6px; border-radius: 6px; background: rgba(74, 170, 120, 0.14); }
 /* P390: thinking indicator beside the chat title while a turn streams. */

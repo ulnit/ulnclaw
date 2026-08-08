@@ -147,6 +147,7 @@ const el = {
   sessionInfoRows: document.getElementById("session-info-rows")!,
   sessionInfoCopy: document.getElementById("session-info-copy") as HTMLButtonElement,
   modelBadge: document.getElementById("model-badge")!,
+  tokenBadge: document.getElementById("token-badge")!,
   projectBadge: document.getElementById("project-badge")!,
   endBadge: document.getElementById("end-badge")!,
   contextMeter: document.getElementById("context-meter")!,
@@ -989,6 +990,8 @@ async function refreshSessions(): Promise<void> {
   try {
     state.sessions = await state.client.listSessions();
     await refreshSessionTokens();
+    // P545: usage just landed — refresh the open session's token chip.
+    refreshTokenBadge();
     // P500: drop unread markers for sessions that no longer exist.
     const known = new Set(state.sessions.map((session) => session.id));
     let changed = false;
@@ -1365,6 +1368,20 @@ function refreshComposerPlaceholder(): void {
   el.input.placeholder = model ? `${base} — ${model}` : base;
 }
 
+/** P545: total-token chip for the open session, beside the model
+ * badge — sourced from the same /api/usage map as the sidebar rows. */
+function refreshTokenBadge(): void {
+  const tokens = state.current ? state.sessionTokens.get(state.current.id) ?? 0 : 0;
+  if (tokens > 0) {
+    el.tokenBadge.textContent = `${formatTokens(tokens)} tok`;
+    el.tokenBadge.title = fmt(t.session.tokensTitle, { tokens: tokens.toLocaleString() });
+    el.tokenBadge.hidden = false;
+  } else {
+    el.tokenBadge.hidden = true;
+    el.tokenBadge.textContent = "";
+  }
+}
+
 function refreshModelBadge(): void {
   const locked =
     state.current?.model && state.current.model !== gatewayModel
@@ -1380,6 +1397,7 @@ function refreshModelBadge(): void {
   el.modelBadge.classList.toggle("locked", !!locked);
   refreshProjectBadge();
   refreshEndBadge();
+  refreshTokenBadge();
   refreshComposerPlaceholder();
 }
 
