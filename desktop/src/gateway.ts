@@ -37,6 +37,14 @@ export interface SessionRow {
   total_tokens?: number;
 }
 
+/** P559/P560: single-session retitler result. */
+export interface RetitleResult {
+  id: string;
+  old_title: string;
+  new_title: string;
+  status: "proposed" | "applied" | "rejected" | "unchanged";
+}
+
 export interface MessageRow {
   role: string;
   content: string | null;
@@ -1380,6 +1388,17 @@ export class GatewayClient {
   }
 
   /** Rename a session (PATCH accepts only `title` / `end_reason`). */
+  /** P560: regenerate a session title via the LLM titler (P559). */
+  async retitleSession(sessionId: string, apply: boolean): Promise<RetitleResult | null> {
+    const response = await fetch(this.endpoint(`/api/sessions/${encodeURIComponent(sessionId)}/retitle`), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ apply }),
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as RetitleResult;
+  }
+
   async renameSession(sessionId: string, title: string): Promise<void> {
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}`), {
       method: "PATCH",

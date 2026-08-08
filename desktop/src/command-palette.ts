@@ -21,6 +21,7 @@ export interface CommandPaletteHooks {
   newSession(): void;
   openSession(id: string): void | Promise<void>;
   renameSession(): void | Promise<void>;
+  retitleSession(): void | Promise<void>;
   deleteSession(): void | Promise<void>;
   modelPicker(): void | Promise<void>;
   resumeSession(): void | Promise<void>;
@@ -159,6 +160,7 @@ export class CommandPalette {
       { id: "model", label: t.palette.modelForSession, group: t.palette.sessionGroup, hint: "Ctrl/Cmd+Shift+M", run: () => hooks.modelPicker() },
       { id: "resume", label: t.palette.resumeSession, group: t.palette.sessionGroup, hint: "/resume", run: () => hooks.resumeSession() },
       { id: "rename", label: t.palette.renameSession, group: t.palette.sessionGroup, run: () => hooks.renameSession() },
+      { id: "retitle", label: t.palette.retitleCurrent, group: t.palette.sessionGroup, run: () => hooks.retitleSession() },
       { id: "delete", label: t.palette.deleteSession, group: t.palette.sessionGroup, run: () => hooks.deleteSession() },
       { id: "export-md", label: t.palette.exportMd, group: t.palette.sessionGroup, run: () => hooks.exportSession("md") },
       { id: "export-html", label: t.palette.exportHtml, group: t.palette.sessionGroup, run: () => hooks.exportSession("html") },

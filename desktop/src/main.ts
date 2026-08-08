@@ -569,6 +569,32 @@ async function renameSession(session: SessionRow): Promise<void> {
   }
 }
 
+/** P560: regenerate the current session's title via the LLM titler
+ * (gateway P559) and sync the header, sidebar and window title. */
+async function runRetitleSession(): Promise<void> {
+  const session = state.current;
+  if (!session || !state.client) return;
+  try {
+    const result = await state.client.retitleSession(session.id, true);
+    if (!result || result.status === "rejected") {
+      notifyError(t.palette.retitleCurrentFailed);
+      return;
+    }
+    if (result.status === "unchanged") {
+      notifySuccess(t.palette.retitleCurrentUnchanged);
+      return;
+    }
+    session.title = result.new_title;
+    state.current!.title = result.new_title;
+    el.chatTitle.textContent = result.new_title;
+    refreshWindowTitle();
+    renderSessions();
+    notifySuccess(fmt(t.palette.retitledCurrent, { label: result.new_title }));
+  } catch {
+    notifyError(t.palette.retitleCurrentFailed);
+  }
+}
+
 async function exportSession(session: SessionRow, format: "md" | "html" | "json"): Promise<void> {
   if (!state.client) return;
   try {
@@ -3196,6 +3222,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     renameSession: async () => {
       if (state.current) await renameSession(state.current);
     },
+    retitleSession: () => runRetitleSession(),
     deleteSession: async () => {
       if (state.current) await deleteSession(state.current);
     },
