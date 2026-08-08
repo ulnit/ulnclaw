@@ -2267,7 +2267,15 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   state.runs.mount();
   state.skillsView = new SkillsWidget(skillsMain, () => state.client);
   state.skillsView.mount();
-  state.sessionsBrowser = new SessionsViewWidget(sessionsViewMain, () => state.client);
+  state.sessionsBrowser = new SessionsViewWidget(
+    sessionsViewMain,
+    () => state.client,
+    // P422: resume a browsed session straight from the Sessions view.
+    (session) => {
+      void openSession(session);
+      switchView("chat");
+    },
+  );
   state.sessionsBrowser.mount();
   state.modelsView = new ModelsViewWidget(modelsMain, () => state.client);
   state.modelsView.mount();

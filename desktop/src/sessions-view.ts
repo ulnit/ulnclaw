@@ -29,6 +29,8 @@ export class SessionsViewWidget {
   constructor(
     private root: HTMLElement,
     private client: () => GatewayClient | null,
+    // P422: bridge back into the chat view (resume the selected session).
+    private openInChat: ((session: SessionRow) => void) | null = null,
   ) {}
 
   mount(): void {
@@ -40,6 +42,7 @@ export class SessionsViewWidget {
         <button id="sessions-view-rename" class="ghost" data-i18n-title="sessionsView.renameTitle" hidden>✎</button>
         <button id="sessions-view-delete" class="ghost" data-i18n-title="sessionsView.deleteTitle" hidden>🗑</button>
         <button id="sessions-view-fork" class="ghost" data-i18n-title="sessionsView.forkTitle" hidden>⑂</button>
+        <button id="sessions-view-open-chat" class="ghost" data-i18n="sessionsView.openInChat" data-i18n-title="sessionsView.openInChatTitle" hidden></button>
         <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
         <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳ MD</button>
         <button id="sessions-view-export-html" class="ghost" data-i18n-title="sessionsView.exportHtmlTitle" hidden>⭳ HTML</button>
@@ -110,6 +113,9 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-fork")!.addEventListener("click", () => {
       this.forkSelected().catch(() => undefined);
+    });
+    this.root.querySelector("#sessions-view-open-chat")!.addEventListener("click", () => {
+      this.resumeSelected();
     });
     this.root.querySelector("#sessions-view-delete")!.addEventListener("click", () => {
       this.deleteSelected().catch(() => undefined);
@@ -389,6 +395,7 @@ export class SessionsViewWidget {
       (this.root.querySelector("#sessions-view-export-json") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = false;
+      (this.root.querySelector("#sessions-view-open-chat") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-rename") as HTMLButtonElement).hidden = false;
     } catch (error) {
@@ -404,6 +411,7 @@ export class SessionsViewWidget {
       (this.root.querySelector("#sessions-view-export-json") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = true;
+      (this.root.querySelector("#sessions-view-open-chat") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-rename") as HTMLButtonElement).hidden = true;
     }
@@ -503,7 +511,7 @@ export class SessionsViewWidget {
       this.selected = null;
       const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
       pane.innerHTML = `<p class="empty">${escapeHtml(t.sessionsView.select)}</p>`;
-      for (const id of ["#sessions-view-export", "#sessions-view-export-html", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-delete", "#sessions-view-rename"]) {
+      for (const id of ["#sessions-view-export", "#sessions-view-export-html", "#sessions-view-recap", "#sessions-view-fork", "#sessions-view-open-chat", "#sessions-view-delete", "#sessions-view-rename"]) {
         (this.root.querySelector(id) as HTMLButtonElement).hidden = true;
       }
       await this.refresh();
@@ -516,6 +524,13 @@ export class SessionsViewWidget {
         true,
       );
     }
+  }
+
+  /** P422: hand the selected session back to the chat view. */
+  private resumeSelected(): void {
+    if (!this.selected || !this.openInChat) return;
+    const session = this.all.find((candidate) => candidate.id === this.selected);
+    if (session) this.openInChat(session);
   }
 
   private async forkSelected(): Promise<void> {

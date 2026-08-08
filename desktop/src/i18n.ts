@@ -149,7 +149,7 @@ export interface Translations {
     emptyTranscript: string; exportTitle: string; exportFailed: string;
     roleUser: string; roleAssistant: string; roleTool: string; roleSystem: string;
     recap: string; recapTitle: string; recapFailed: string;
-    forkTitle: string; forked: string; forkFailed: string;
+    forkTitle: string; forked: string; forkFailed: string; openInChat: string; openInChatTitle: string;
     deleteTitle: string; deleteConfirm: string; deleted: string; deleteFailed: string;
     searchPlaceholder: string; noResults: string; searchFailed: string;
     renameTitle: string; renamePrompt: string; renamed: string; renameFailed: string;
@@ -491,7 +491,7 @@ const en: Translations = {
     exportFailed: "Export failed.",
     roleUser: "User", roleAssistant: "Assistant", roleTool: "Tool", roleSystem: "System",
     recap: "Recap", recapTitle: "Show or hide the gateway-built session recap", recapFailed: "Recap failed: {error}",
-    forkTitle: "Fork this session into a new branch", forked: "Forked as {id}", forkFailed: "Fork failed: {error}",
+    forkTitle: "Fork this session into a new branch", forked: "Forked as {id}", forkFailed: "Fork failed: {error}", openInChat: "→ Chat", openInChatTitle: "Open this session in the chat view",
     deleteTitle: "Delete this session", deleteConfirm: "Delete session {id}? This cannot be undone.", deleted: "Deleted {id}.", deleteFailed: "Delete failed: {error}",
     searchPlaceholder: "Full-text search transcripts…", noResults: "No transcript matches.", searchFailed: "Search failed: {error}",
     renameTitle: "Rename this session", renamePrompt: "New title (empty clears):", renamed: "Session renamed.", renameFailed: "Rename failed: {error}",
@@ -945,7 +945,7 @@ const zh: Translations = {
     exportFailed: "导出失败。",
     roleUser: "用户", roleAssistant: "助手", roleTool: "工具", roleSystem: "系统",
     recap: "回顾", recapTitle: "显示/隐藏网关生成的会话回顾", recapFailed: "生成回顾失败:{error}",
-    forkTitle: "将此会话分叉为新分支", forked: "已分叉为 {id}", forkFailed: "分叉失败:{error}",
+    forkTitle: "将此会话分叉为新分支", forked: "已分叉为 {id}", forkFailed: "分叉失败:{error}", openInChat: "→ 聊天", openInChatTitle: "在聊天视图中打开此会话",
     deleteTitle: "删除此会话", deleteConfirm: "删除会话 {id}？此操作无法撤销。", deleted: "已删除 {id}。", deleteFailed: "删除失败:{error}",
     searchPlaceholder: "全文搜索转录…", noResults: "没有匹配的转录。", searchFailed: "搜索失败:{error}",
     renameTitle: "重命名此会话", renamePrompt: "新标题（留空清除）：", renamed: "会话已重命名。", renameFailed: "重命名失败:{error}",
@@ -1399,7 +1399,7 @@ const zhHant: Translations = {
     exportFailed: "匯出失敗。",
     roleUser: "使用者", roleAssistant: "助理", roleTool: "工具", roleSystem: "系統",
     recap: "回顧", recapTitle: "顯示/隱藏閘道產生的會話回顧", recapFailed: "產生回顧失敗:{error}",
-    forkTitle: "將此會話分叉為新分支", forked: "已分叉為 {id}", forkFailed: "分叉失敗:{error}",
+    forkTitle: "將此會話分叉為新分支", forked: "已分叉為 {id}", forkFailed: "分叉失敗:{error}", openInChat: "→ 聊天", openInChatTitle: "在聊天視圖中開啟此工作階段",
     deleteTitle: "刪除此會話", deleteConfirm: "刪除會話 {id}？此操作無法復原。", deleted: "已刪除 {id}。", deleteFailed: "刪除失敗:{error}",
     searchPlaceholder: "全文搜尋轉錄…", noResults: "沒有符合的轉錄。", searchFailed: "搜尋失敗:{error}",
     renameTitle: "重新命名此會話", renamePrompt: "新標題（留空清除）：", renamed: "會話已重新命名。", renameFailed: "重新命名失敗:{error}",
@@ -1853,7 +1853,7 @@ const ja: Translations = {
     exportFailed: "エクスポートに失敗しました。",
     roleUser: "ユーザー", roleAssistant: "アシスタント", roleTool: "ツール", roleSystem: "システム",
     recap: "リキャップ", recapTitle: "ゲートウェイ生成のセッション要約を表示/非表示", recapFailed: "リキャップに失敗しました: {error}",
-    forkTitle: "このセッションを新しいブランチにフォーク", forked: "{id} としてフォークしました", forkFailed: "フォークに失敗しました: {error}",
+    forkTitle: "このセッションを新しいブランチにフォーク", forked: "{id} としてフォークしました", forkFailed: "フォークに失敗しました: {error}", openInChat: "→ チャット", openInChatTitle: "このセッションをチャットビューで開く",
     deleteTitle: "このセッションを削除", deleteConfirm: "セッション {id} を削除しますか？元に戻せません。", deleted: "{id} を削除しました。", deleteFailed: "削除に失敗しました: {error}",
     searchPlaceholder: "トランスクリプト全文検索…", noResults: "一致するトランスクリプトはありません。", searchFailed: "検索に失敗しました: {error}",
     renameTitle: "このセッションの名前を変更", renamePrompt: "新しいタイトル（空でクリア）:", renamed: "セッション名を変更しました。", renameFailed: "名前の変更に失敗しました: {error}",
@@ -2307,7 +2307,7 @@ const ar: Translations = {
     exportFailed: "فشل التصدير.",
     roleUser: "المستخدم", roleAssistant: "المساعد", roleTool: "أداة", roleSystem: "النظام",
     recap: "ملخص", recapTitle: "إظهار أو إخفاء ملخص الجلسة المُنشأ من البوابة", recapFailed: "فشل الملخص: {error}",
-    forkTitle: "تفريع هذه الجلسة إلى فرع جديد", forked: "تم التفريع باسم {id}", forkFailed: "فشل التفريع: {error}",
+    forkTitle: "تفريع هذه الجلسة إلى فرع جديد", forked: "تم التفريع باسم {id}", forkFailed: "فشل التفريع: {error}", openInChat: "← الدردشة", openInChatTitle: "فتح هذه الجلسة في عرض الدردشة",
     deleteTitle: "حذف هذه الجلسة", deleteConfirm: "حذف الجلسة {id}؟ لا يمكن التراجع عن هذا.", deleted: "تم حذف {id}.", deleteFailed: "فشل الحذف: {error}",
     searchPlaceholder: "بحث كامل في النصوص…", noResults: "لا توجد نصوص مطابقة.", searchFailed: "فشل البحث: {error}",
     renameTitle: "إعادة تسمية هذه الجلسة", renamePrompt: "العنوان الجديد (فارغ للمسح):", renamed: "تمت إعادة تسمية الجلسة.", renameFailed: "فشل إعادة التسمية: {error}",
