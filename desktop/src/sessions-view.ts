@@ -578,6 +578,15 @@ export class SessionsViewWidget {
     select.value = this.modelFilter ?? "";
   }
 
+  /** P490: run a full-text search from outside (composer /search). */
+  searchFor(query: string): void {
+    const input = this.root.querySelector("#sessions-view-search") as HTMLInputElement;
+    if (!input) return;
+    input.value = query;
+    localStorage.setItem(SEARCH_KEY, query);
+    void this.runSearch();
+  }
+
   /** P473: true (and consumes) when this id was deleted from this UI. */
   takeLocalDelete(sessionId: string): boolean {
     if (this.localDeletes.has(sessionId)) {

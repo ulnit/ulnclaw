@@ -969,6 +969,15 @@ async function sendTurn(): Promise<void> {
     activeSwitchView?.(view);
     return;
   }
+  // P490: /search <query> opens the Sessions view with an FTS search.
+  const searchMatch = /^\/search\s+(.+)$/i.exec(text);
+  if (searchMatch) {
+    el.input.value = "";
+    refreshCharCount();
+    activeSwitchView?.("sessions");
+    state.sessionsBrowser?.searchFor(searchMatch[1].trim());
+    return;
+  }
   // P459: /archive + /unarchive manage the current session's end state.
   if (/^\/archive\b/i.test(text)) {
     el.input.value = "";
@@ -1441,6 +1450,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/unarchive", t.slash.unarchive],
     ["/export", t.slash.exportSession],
     ["/fork", t.slash.forkSession],
+    ["/search", t.slash.search],
   ];
 }
 
