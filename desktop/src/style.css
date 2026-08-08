@@ -1328,6 +1328,7 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 #doctor-level-filter { min-width: 160px; }
 #plugins-view-filter { min-width: 200px; }
 #jobs-filter { min-width: 200px; }
+#runs-filter { min-width: 200px; }
 #models-view-filter { min-width: 200px; }
 #webhooks-filter { min-width: 200px; }
 #projects-filter { min-width: 200px; }

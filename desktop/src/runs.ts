@@ -40,6 +40,9 @@ export class RunsWidget {
   private subs = new Map<string, AbortController>();
   /** Cached delegations so the P505 filter re-renders without a refetch. */
   private lastDelegations: DelegationRow[] = [];
+  /** P539: cached runs + live text filter over message/id/session. */
+  private lastRuns: RunRow[] = [];
+  private textFilter = "";
 
   constructor(
     private root: HTMLElement,
@@ -53,6 +56,7 @@ export class RunsWidget {
       <header id="runs-header">
         <span id="runs-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <input id="runs-filter" type="search" data-i18n-ph="runs.filterPlaceholder" />
         <select id="runs-status-filter" data-i18n-title="runs.statusFilterTitle">
           <option value="all" data-i18n="runs.statusAll">All statuses</option>
           <option value="running" data-i18n="runs.statusRunning">Running</option>
@@ -88,6 +92,16 @@ export class RunsWidget {
     delegationSelect.value = this.delegationFilter;
     delegationSelect.addEventListener("change", () => {
       window.localStorage.setItem(DELEGATION_FILTER_KEY, delegationSelect.value);
+      this.renderDelegations(this.lastDelegations);
+    });
+    // P539: live text filter — re-renders the cached rows client-side.
+    this.root.querySelector("#runs-filter")!.addEventListener("input", () => {
+      this.textFilter = (
+        (this.root.querySelector("#runs-filter") as HTMLInputElement).value || ""
+      )
+        .trim()
+        .toLowerCase();
+      this.render(this.lastRuns);
       this.renderDelegations(this.lastDelegations);
     });
   }
@@ -153,11 +167,23 @@ export class RunsWidget {
   }
 
   private render(runs: RunRow[]): void {
+    this.lastRuns = runs;
     this.reconcileSubscriptions(runs);
     const list = this.root.querySelector("#runs-list") as HTMLElement;
     list.innerHTML = "";
     const filter = this.statusFilter;
-    const visible = filter === "all" ? runs : runs.filter((run) => run.status === filter);
+    // P539: status select first, then the live text filter (message,
+    // run id, or session id).
+    const query = this.textFilter;
+    const visible = (
+      filter === "all" ? runs : runs.filter((run) => run.status === filter)
+    ).filter(
+      (run) =>
+        query === "" ||
+        run.message.toLowerCase().includes(query) ||
+        run.run_id.toLowerCase().includes(query) ||
+        (run.session_id || "").toLowerCase().includes(query),
+    );
     if (visible.length === 0) {
       const empty = document.createElement("p");
       empty.className = "config-note";
@@ -328,8 +354,20 @@ export class RunsWidget {
     const list = this.root.querySelector("#delegations-list") as HTMLElement;
     list.innerHTML = "";
     const filter = this.delegationFilter;
-    const visible =
-      filter === "all" ? delegations : delegations.filter((delegation) => delegation.status === filter);
+    // P539: the same text filter narrows delegations by parent session
+    // key, log dir, or delegation id.
+    const query = this.textFilter;
+    const visible = (
+      filter === "all"
+        ? delegations
+        : delegations.filter((delegation) => delegation.status === filter)
+    ).filter(
+      (delegation) =>
+        query === "" ||
+        delegation.parent_session_key.toLowerCase().includes(query) ||
+        delegation.log_dir.toLowerCase().includes(query) ||
+        delegation.id.toLowerCase().includes(query),
+    );
     if (visible.length === 0) {
       const empty = document.createElement("p");
       empty.className = "config-note";

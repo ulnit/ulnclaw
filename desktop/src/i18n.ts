@@ -270,7 +270,7 @@ export interface Translations {
     timelineTitle: string; openSessionTitle: string;
     statusFilterTitle: string; statusAll: string; statusRunning: string; statusQueued: string;
     statusWaiting: string; statusCompleted: string; statusFailed: string; statusStopped: string;
-    filteredEmpty: string;
+    filteredEmpty: string; filterPlaceholder: string;
   };
   skillsView: {
     count: string; skillsTitle: string; toolsetsTitle: string; noSkills: string;
@@ -683,7 +683,7 @@ const en: Translations = {
     statusFilterTitle: "Filter runs by status", statusAll: "All statuses",
     statusRunning: "Running", statusQueued: "Queued", statusWaiting: "Waiting for approval",
     statusCompleted: "Completed", statusFailed: "Failed", statusStopped: "Stopped",
-    filteredEmpty: "No runs match the current status filter.",
+    filteredEmpty: "No runs match the current status filter.", filterPlaceholder: "Filter runs…",
   },
   skillsView: {
     count: "{skills} skills · toolsets enabled {toolsets}",
@@ -1182,7 +1182,7 @@ const zh: Translations = {
     statusFilterTitle: "按运行状态筛选", statusAll: "全部状态",
     statusRunning: "运行中", statusQueued: "排队中", statusWaiting: "等待审批",
     statusCompleted: "已完成", statusFailed: "已失败", statusStopped: "已停止",
-    filteredEmpty: "没有符合当前状态筛选的运行。",
+    filteredEmpty: "没有符合当前状态筛选的运行。", filterPlaceholder: "筛选运行…",
   },
   skillsView: {
     count: "{skills} 个技能 · 已启用工具集 {toolsets}",
@@ -1681,7 +1681,7 @@ const zhHant: Translations = {
     statusFilterTitle: "依執行狀態篩選", statusAll: "全部狀態",
     statusRunning: "執行中", statusQueued: "排隊中", statusWaiting: "等待核准",
     statusCompleted: "已完成", statusFailed: "已失敗", statusStopped: "已停止",
-    filteredEmpty: "沒有符合目前狀態篩選的執行。",
+    filteredEmpty: "沒有符合目前狀態篩選的執行。", filterPlaceholder: "篩選執行…",
   },
   skillsView: {
     count: "{skills} 個技能 · 已啟用工具集 {toolsets}",
@@ -2180,7 +2180,7 @@ const ja: Translations = {
     statusFilterTitle: "実行状態で絞り込み", statusAll: "すべての状態",
     statusRunning: "実行中", statusQueued: "キュー待ち", statusWaiting: "承認待ち",
     statusCompleted: "完了", statusFailed: "失敗", statusStopped: "停止済み",
-    filteredEmpty: "現在の状態フィルターに一致する実行はありません。",
+    filteredEmpty: "現在の状態フィルターに一致する実行はありません。", filterPlaceholder: "実行を絞り込み…",
   },
   skillsView: {
     count: "{skills} 件のスキル · 有効なツールセット {toolsets}",
@@ -2679,7 +2679,7 @@ const ar: Translations = {
     statusFilterTitle: "تصفية التشغيلات حسب الحالة", statusAll: "كل الحالات",
     statusRunning: "قيد التشغيل", statusQueued: "في قائمة الانتظار", statusWaiting: "بانتظار الموافقة",
     statusCompleted: "مكتمل", statusFailed: "فشل", statusStopped: "متوقف",
-    filteredEmpty: "لا توجد تشغيلات تطابق مرشح الحالة الحالي.",
+    filteredEmpty: "لا توجد تشغيلات تطابق مرشح الحالة الحالي.", filterPlaceholder: "تصفية التشغيلات…",
   },
   skillsView: {
     count: "{skills} مهارة · مجموعات الأدوات المفعلة {toolsets}",
