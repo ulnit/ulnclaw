@@ -1231,6 +1231,9 @@ async function refreshRunsTabBadge(): Promise<void> {
   }
 }
 
+/** P452: previous health-probe outcome (null before the first probe). */
+let lastHealthOk: boolean | null = null;
+
 async function pollHealth(): Promise<void> {
   if (!state.client) return;
   // P412: time the health probe so the dot tooltip can show latency.
@@ -1240,6 +1243,9 @@ async function pollHealth(): Promise<void> {
   el.dot.className = "dot " + (ok ? "up" : "down");
   el.dot.title = ok ? t.session.reachable : t.session.unreachable;
   if (ok) {
+    // P452: toast the recovery transition.
+    if (lastHealthOk === false) notifySuccess(t.chrome.healthRestored);
+    lastHealthOk = true;
     const model = await state.client.models();
     if (model) {
       gatewayModel = model;
@@ -1260,6 +1266,9 @@ async function pollHealth(): Promise<void> {
     // P441: keep the Runs-tab approval badge fresh on every probe.
     void refreshRunsTabBadge();
   } else {
+    // P452: toast the loss transition.
+    if (lastHealthOk === true) notifyError(t.chrome.healthLost);
+    lastHealthOk = false;
     el.statusbar.hidden = true;
   }
 }
