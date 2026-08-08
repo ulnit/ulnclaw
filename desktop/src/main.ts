@@ -100,6 +100,9 @@ const el = {
   messages: document.getElementById("messages")!,
   chatTitle: document.getElementById("chat-title")!,
   modelBadge: document.getElementById("model-badge")!,
+  contextMeter: document.getElementById("context-meter")!,
+  contextMeterFill: document.getElementById("context-meter-fill")!,
+  contextMeterText: document.getElementById("context-meter-text")!,
   input: document.getElementById("input") as HTMLTextAreaElement,
   send: document.getElementById("send") as HTMLButtonElement,
   mic: document.getElementById("mic") as HTMLButtonElement,
@@ -325,6 +328,7 @@ async function openSession(session: SessionRow): Promise<void> {
     addMessage("system", fmt(t.session.loadFailed, { error }));
   }
   state.findBar?.refresh();
+  void updateContextMeter();
 }
 
 async function refreshSessions(): Promise<void> {
@@ -539,6 +543,7 @@ async function sendTurn(): Promise<void> {
     el.toolProgress.textContent = "";
     state.findBar?.refresh();
     el.input.focus();
+    void updateContextMeter();
   }
 }
 
@@ -1362,6 +1367,7 @@ async function start(): Promise<void> {
 
   el.newSession.onclick = async () => {
     state.current = null;
+    el.contextMeter.hidden = true;
     el.chatTitle.textContent = t.session.newTitle;
     el.messages.innerHTML = "";
     renderIntro(el.messages, "new");
@@ -1788,6 +1794,41 @@ async function start(): Promise<void> {
   setInterval(() => void pollHealth(), 10000);
   setInterval(() => void refreshSessions(), 30000);
   startApprovalWatcher();
+}
+
+function formatTokens(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+  return String(count);
+}
+
+/** P359: chat-header context meter — the current session's total
+ * tokens against the gateway model's effective context window. */
+async function updateContextMeter(): Promise<void> {
+  if (!state.client || !state.current) {
+    el.contextMeter.hidden = true;
+    return;
+  }
+  try {
+    const [usage, info] = await Promise.all([
+      state.client.usage(100),
+      state.client.modelInfo(),
+    ]);
+    const row = usage.sessions.find((session) => session.id === state.current!.id);
+    const windowSize = info.context?.effective || 0;
+    if (!row || windowSize <= 0) {
+      el.contextMeter.hidden = true;
+      return;
+    }
+    const pct = Math.min(100, Math.round((row.total_tokens / windowSize) * 100));
+    el.contextMeterFill.style.width = `${pct}%`;
+    el.contextMeterText.textContent = `${pct}%`;
+    el.contextMeter.title = `${formatTokens(row.total_tokens)} / ${formatTokens(windowSize)} tokens`;
+    el.contextMeter.classList.toggle("hot", pct >= 80);
+    el.contextMeter.hidden = false;
+  } catch {
+    el.contextMeter.hidden = true;
+  }
 }
 
 // ---------------------------------------------------------------------------

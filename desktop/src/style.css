@@ -1489,3 +1489,9 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 
 /* P358: drag & drop attach highlight. */
 #chat.drag-over { outline: 2px dashed var(--accent, #4a9eff); outline-offset: -6px; }
+
+/* P359: chat-header context usage meter. */
+#context-meter { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font-size: 11px; opacity: 0.85; }
+#context-meter-bar { width: 64px; height: 6px; border-radius: 3px; background: var(--border, rgba(128,128,128,0.25)); overflow: hidden; display: inline-block; }
+#context-meter-fill { display: block; height: 100%; width: 0%; background: var(--accent, #4a9eff); border-radius: 3px; transition: width 0.4s ease; }
+#context-meter.hot #context-meter-fill { background: #d33; }
