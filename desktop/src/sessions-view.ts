@@ -877,6 +877,7 @@ export class SessionsViewWidget {
               ${session.model ? `<span class="sessions-view-model">${escapeHtml(session.model)}</span>` : ""}
               ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
               ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" data-reason="${escapeHtml(session.end_reason)}" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
+              ${session.model ? `<span class="sessions-view-chip sessions-view-model" data-model="${escapeHtml(session.model)}" title="${escapeHtml(session.model)}">${escapeHtml(session.model)}</span>` : ""}
               ${session.project ? `<span class="sessions-view-chip sessions-view-project" data-project="${escapeHtml(session.project)}" title="${escapeHtml(session.project)}">${escapeHtml(session.project)}</span>` : ""}
               ${session.message_count ? `<span class="sessions-view-msgcount">${escapeHtml(fmt(t.sessionsView.msgCount, { count: String(session.message_count) }))}</span>` : ""}
               <span title="${escapeHtml(fmtWhen(session.started_at))}">${fmtWhen(session.last_activity_at || session.started_at)}</span>
@@ -896,6 +897,14 @@ export class SessionsViewWidget {
       chip.addEventListener("click", (event) => {
         event.stopPropagation();
         this.endReasonFilter = chip.dataset.reason || null;
+        this.renderList();
+      });
+    }
+    // P486: model chips drill the list down to that model.
+    for (const chip of Array.from(list.querySelectorAll<HTMLElement>(".sessions-view-model"))) {
+      chip.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.modelFilter = chip.dataset.model || null;
         this.renderList();
       });
     }
