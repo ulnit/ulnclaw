@@ -119,6 +119,18 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Web dashboard server management — run/status/stop over the gateway
+    /// process that serves the dashboard (hermes dashboard/serve)
+    Dashboard {
+        /// Action: run (default) | status | stop
+        action: Option<String>,
+        /// Bind host (run action)
+        #[arg(long)]
+        host: Option<String>,
+        /// Bind port (run action)
+        #[arg(long)]
+        port: Option<u16>,
+    },
     /// Weixin (WeChat iLink bot) account management
     Weixin {
         #[command(subcommand)]
@@ -2246,6 +2258,53 @@ async fn build_gateway_stack(
     Ok(state)
 }
 
+/// `ulnclaw dashboard [run|status|stop]` — hermes `dashboard`/`serve`
+/// parity. The gateway process serves the dashboard, so `run` delegates to
+/// `gateway_cmd`; `status`/`stop` inspect/terminate the recorded pid.
+async fn dashboard_cmd(
+    config: &UlncLawConfig,
+    action: &str,
+    host: Option<String>,
+    port: Option<u16>,
+) -> Result<(), String> {
+    match action {
+        "run" | "start" => gateway_cmd(config, host, port, false, false).await,
+        "status" => {
+            let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+            let gateway = config.gateway.resolved();
+            match ulnclaw::gateway_pidfile::running_gateway_pid(&home) {
+                Some(pid) => {
+                    println!("dashboard: running (pid {pid})");
+                    println!("  url:     http://{}:{}", gateway.host, gateway.port);
+                    println!(
+                        "  pidfile: {}",
+                        ulnclaw::gateway_pidfile::pidfile_path(&home).display()
+                    );
+                }
+                None => println!("dashboard: not running"),
+            }
+            Ok(())
+        }
+        "stop" => {
+            let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+            match ulnclaw::gateway_pidfile::running_gateway_pid(&home) {
+                Some(pid) => {
+                    ulnclaw::gateway_pidfile::replace_running(
+                        pid,
+                        std::time::Duration::from_secs(10),
+                    )?;
+                    println!("dashboard: stopped (pid {pid})");
+                }
+                None => println!("dashboard: not running"),
+            }
+            Ok(())
+        }
+        other => Err(format!(
+            "Unknown dashboard action: {other} (expected run, status, or stop)"
+        )),
+    }
+}
+
 async fn gateway_cmd(
     config: &UlncLawConfig,
     host: Option<String>,
@@ -2507,6 +2566,9 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Egress { action } => egress_cmd(action).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
+        Commands::Dashboard { action, host, port } => {
+            dashboard_cmd(&config, action.as_deref().unwrap_or("run"), host, port).await
+        }
         Commands::Weixin { action } => weixin_cmd(action).await,
         Commands::Qq { action } => qq_cmd(action).await,
         Commands::GoogleChatOauth { action } => google_chat_oauth_cmd(action).await,
