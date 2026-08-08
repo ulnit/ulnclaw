@@ -30,6 +30,7 @@ export class ProjectsWidget {
           <input id="projects-show-archived" type="checkbox" /> <span data-i18n="projects.archived">archived</span>
         </label>
         <span class="spacer"></span>
+        <input id="projects-filter" type="search" data-i18n-ph="projects.filterPlaceholder" />
         <button id="projects-scan" class="ghost" title="Scan the filesystem for git repos" data-i18n-title="projects.scanTitle" data-i18n="projects.scanRepos">Scan repos</button>
         <button id="projects-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
         <button id="projects-new" class="primary" data-i18n="projects.newProject">New project</button>
@@ -69,6 +70,9 @@ export class ProjectsWidget {
 
     (this.root.querySelector("#projects-refresh") as HTMLButtonElement).onclick = () =>
       void this.refresh();
+    (this.root.querySelector("#projects-filter") as HTMLInputElement).addEventListener("input", () => {
+      this.render();
+    });
     (this.root.querySelector("#projects-new") as HTMLButtonElement).onclick = () => {
       const dialog = this.root.querySelector("#project-create") as HTMLDialogElement;
       dialog.showModal();
@@ -188,13 +192,31 @@ export class ProjectsWidget {
       ? fmt(t.projects.activePrefix, { name: activeProject.name })
       : t.projects.noActiveProject;
 
+    // P518: live filter over project cards and discovered repos.
+    const query = (
+      (this.root.querySelector("#projects-filter") as HTMLInputElement | null)?.value || ""
+    )
+      .trim()
+      .toLowerCase();
+
     const list = this.root.querySelector("#projects-list") as HTMLElement;
     list.innerHTML = "";
     if (!this.projects.length) {
       list.innerHTML = '<p class="projects-empty"></p>';
       list.querySelector(".projects-empty")!.textContent = t.projects.empty;
     }
-    for (const project of this.projects) {
+    const projects = query
+      ? this.projects.filter((project) =>
+          `${project.name} ${project.slug} ${project.description || ""} ${project.primary_path || ""}`
+            .toLowerCase()
+            .includes(query),
+        )
+      : this.projects;
+    if (this.projects.length && projects.length === 0) {
+      list.innerHTML = '<p class="projects-empty"></p>';
+      list.querySelector(".projects-empty")!.textContent = t.projects.filterNoMatch;
+    }
+    for (const project of projects) {
       list.appendChild(this.renderCard(project));
     }
 
@@ -204,7 +226,16 @@ export class ProjectsWidget {
       repos.innerHTML = '<p class="projects-empty"></p>';
       repos.querySelector(".projects-empty")!.textContent = t.projects.reposEmpty;
     }
-    for (const repo of this.repos) {
+    const reposList = query
+      ? this.repos.filter((repo) =>
+          `${repo.root} ${repo.label}`.toLowerCase().includes(query),
+        )
+      : this.repos;
+    if (this.repos.length && reposList.length === 0) {
+      repos.innerHTML = '<p class="projects-empty"></p>';
+      repos.querySelector(".projects-empty")!.textContent = t.projects.filterNoMatch;
+    }
+    for (const repo of reposList) {
       repos.appendChild(this.renderRepo(repo));
     }
   }
