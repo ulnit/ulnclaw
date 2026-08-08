@@ -292,6 +292,7 @@ export interface Translations {
     findInChat: string; modelForSession: string; resumeSession: string; renameSession: string;
     deleteSession: string; exportMd: string; exportHtml: string; browseArtifacts: string; learningGraph: string;
     openSettings: string; refreshSessions: string; restartGateway: string;
+    updateCheck: string; shortcuts: string; notifications: string;
     hintFreshChat: string; hintArtifacts: string; hintLearning: string; switchTo: string;
   };
   artifacts: {
@@ -717,7 +718,8 @@ const en: Translations = {
     exportMd: "Export session (Markdown)", exportHtml: "Export session (HTML)",
     browseArtifacts: "Browse artifacts…", learningGraph: "Learning graph…",
     openSettings: "Open gateway settings…", refreshSessions: "Refresh session list", restartGateway: "Restart gateway",
-    hintFreshChat: "start a fresh chat", hintArtifacts: "links, files, images",
+    updateCheck: "Check for updates", shortcuts: "Keyboard shortcuts", notifications: "Notification history",
+        hintFreshChat: "start a fresh chat", hintArtifacts: "links, files, images",
     hintLearning: "learned skills + memory", switchTo: "Switch to: {title}",
   },
   artifacts: {
@@ -1168,7 +1170,8 @@ const zh: Translations = {
     exportMd: "导出会话（Markdown）", exportHtml: "导出会话（HTML）",
     browseArtifacts: "浏览工件…", learningGraph: "学习图谱…",
     openSettings: "打开网关设置…", refreshSessions: "刷新会话列表", restartGateway: "重启网关",
-    hintFreshChat: "开始全新聊天", hintArtifacts: "链接、文件、图片",
+    updateCheck: "检查更新", shortcuts: "键盘快捷键", notifications: "通知历史",
+        hintFreshChat: "开始全新聊天", hintArtifacts: "链接、文件、图片",
     hintLearning: "已学技能 + 记忆", switchTo: "切换到：{title}",
   },
   artifacts: {
@@ -1619,7 +1622,8 @@ const zhHant: Translations = {
     exportMd: "匯出工作階段（Markdown）", exportHtml: "匯出工作階段（HTML）",
     browseArtifacts: "瀏覽工件…", learningGraph: "學習圖譜…",
     openSettings: "開啟閘道設定…", refreshSessions: "重新整理工作階段清單", restartGateway: "重啟閘道",
-    hintFreshChat: "開始全新聊天", hintArtifacts: "連結、檔案、圖片",
+    updateCheck: "檢查更新", shortcuts: "鍵盤快捷鍵", notifications: "通知歷史",
+        hintFreshChat: "開始全新聊天", hintArtifacts: "連結、檔案、圖片",
     hintLearning: "已學技能 + 記憶", switchTo: "切換至：{title}",
   },
   artifacts: {
@@ -2070,7 +2074,8 @@ const ja: Translations = {
     exportMd: "セッションをエクスポート（Markdown）", exportHtml: "セッションをエクスポート（HTML）",
     browseArtifacts: "成果物を閲覧…", learningGraph: "学習グラフ…",
     openSettings: "ゲートウェイ設定を開く…", refreshSessions: "セッション一覧を更新", restartGateway: "ゲートウェイを再起動",
-    hintFreshChat: "新しいチャットを開始", hintArtifacts: "リンク、ファイル、画像",
+    updateCheck: "更新を確認", shortcuts: "キーボードショートカット", notifications: "通知履歴",
+        hintFreshChat: "新しいチャットを開始", hintArtifacts: "リンク、ファイル、画像",
     hintLearning: "学習済みスキル + メモリ", switchTo: "切り替え先：{title}",
   },
   artifacts: {
@@ -2521,7 +2526,8 @@ const ar: Translations = {
     exportMd: "تصدير الجلسة (Markdown)", exportHtml: "تصدير الجلسة (HTML)",
     browseArtifacts: "تصفح المخرجات…", learningGraph: "رسم التعلم…",
     openSettings: "فتح إعدادات البوابة…", refreshSessions: "تحديث قائمة الجلسات", restartGateway: "إعادة تشغيل البوابة",
-    hintFreshChat: "بدء دردشة جديدة", hintArtifacts: "روابط وملفات وصور",
+    updateCheck: "فحص التحديثات", shortcuts: "اختصارات لوحة المفاتيح", notifications: "سجل الإشعارات",
+        hintFreshChat: "بدء دردشة جديدة", hintArtifacts: "روابط وملفات وصور",
     hintLearning: "مهارات متعلَّمة + ذاكرة", switchTo: "التبديل إلى: {title}",
   },
   artifacts: {

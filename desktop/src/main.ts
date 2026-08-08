@@ -1794,6 +1794,9 @@ async function start(): Promise<void> {
     restartGateway: () => {
       void restartGateway();
     },
+    shortcuts: () => openShortcuts(),
+    notifications: () => openNotifyHistory(),
+    updateCheck: () => runUpdateCheck(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
@@ -1976,6 +1979,28 @@ function renderShortcuts(): void {
 function openShortcuts(): void {
   renderShortcuts();
   el.shortcutsDialog.showModal();
+}
+
+/** P362: command-palette update check — probe /api/update/check and
+ * surface the verdict as a toast. */
+async function runUpdateCheck(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const check = await state.client.updateCheck();
+    let text: string;
+    if (check.error) text = check.error;
+    else if (!check.update_available) text = t.config.updateUpToDate;
+    else if (check.behind === -1) text = t.config.updateShallow;
+    else text = t.config.updateBehind.replace("{count}", String(check.behind ?? "?"));
+    notifySuccess(`${t.palette.updateCheck}: ${text}`);
+  } catch (error) {
+    notifyError(
+      t.config.updateFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
+  }
 }
 
 // Stop a managed gateway when the window closes.
