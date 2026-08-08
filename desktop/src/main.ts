@@ -3,7 +3,7 @@
 // everything else is plain HTTP (gateway.ts).
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
-import type { FsEntry, GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
+import type { DashboardTheme, FsEntry, GatewaySettings, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import { KanbanWidget } from "./kanban";
 import { ProjectsWidget } from "./projects";
 import { JobsWidget } from "./jobs";
@@ -2352,6 +2352,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     kanbanDispatch: () => runKanbanDispatch(),
     kanbanQuickAdd: () => runKanbanQuickAdd(),
     toggleSidebar: () => toggleSidebar(),
+    themePicker: () => openThemePicker(),
   });
 
   // Translate widget skeletons mounted after the initial applyStatic
@@ -2587,6 +2588,45 @@ function renderShortcuts(): void {
 function openShortcuts(): void {
   renderShortcuts();
   el.shortcutsDialog.showModal();
+}
+
+/** P400: palette theme picker — apply + persist dashboard themes. */
+async function openThemePicker(): Promise<void> {
+  if (!state.client) return;
+  let payload: { themes: DashboardTheme[]; active: string };
+  try {
+    payload = await state.client.dashboardThemes();
+  } catch (error) {
+    notifyError(fmt(t.palette.themeFailed, { error: String(error) }));
+    return;
+  }
+  const dialog = document.createElement("dialog");
+  dialog.className = "theme-picker-dialog";
+  const heading = document.createElement("div");
+  heading.className = "theme-picker-title";
+  heading.textContent = t.palette.themePickerTitle;
+  const list = document.createElement("div");
+  list.className = "theme-picker-list";
+  for (const theme of payload.themes) {
+    const row = document.createElement("button");
+    row.className = "theme-picker-item" + (theme.name === payload.active ? " active" : "");
+    row.textContent = theme.label;
+    row.title = theme.description;
+    row.onclick = () => {
+      applyTheme(theme.name);
+      state.client?.dashboardSetTheme(theme.name).catch(() => undefined);
+      if (el.settingTheme.value !== theme.name) el.settingTheme.value = theme.name;
+      dialog.close();
+    };
+    list.appendChild(row);
+  }
+  dialog.append(heading, list);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }
 
 /** P376: command-palette kanban quick-add — prompt for a title and

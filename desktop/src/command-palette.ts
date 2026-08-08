@@ -38,6 +38,7 @@ export interface CommandPaletteHooks {
   kanbanDispatch(): void | Promise<void>;
   kanbanQuickAdd(): void | Promise<void>;
   toggleSidebar(): void;
+  themePicker(): void | Promise<void>;
 }
 
 /** Subsequence fuzzy score (higher = better, null = no match). */
@@ -155,6 +156,7 @@ export class CommandPalette {
       { id: "kanban-dispatch", label: t.palette.kanbanDispatch, group: t.palette.gatewayGroup, run: () => hooks.kanbanDispatch() },
       { id: "kanban-quick-add", label: t.palette.kanbanQuickAdd, group: t.palette.gatewayGroup, run: () => hooks.kanbanQuickAdd() },
       { id: "toggle-sidebar", label: t.palette.toggleSidebar, group: t.palette.gatewayGroup, hint: "Ctrl/Cmd+B", run: () => hooks.toggleSidebar() },
+      { id: "theme-picker", label: t.palette.themePicker, group: t.palette.gatewayGroup, run: () => hooks.themePicker() },
     ];
     const current = hooks.currentSessionId();
     for (const session of hooks.sessions()) {
