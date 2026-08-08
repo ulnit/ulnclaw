@@ -27,6 +27,8 @@ export class SessionsViewWidget {
   private pruneMode: "prune" | "archive" = "prune";
   // P438: end-reason drill-down set from the row chips.
   private endReasonFilter: string | null = null;
+  // P439: target of the rename dialog while it is open.
+  private renameTarget: string | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -72,6 +74,17 @@ export class SessionsViewWidget {
           <p class="empty" data-i18n="sessionsView.select"></p>
         </div>
       </div>
+      <dialog id="sessions-rename-dialog">
+        <h2 data-i18n="sessionsView.renameTitle">Rename this session</h2>
+        <label><span data-i18n="sessionsView.renamePrompt">New title (empty clears):</span>
+          <input id="sessions-rename-input" type="text" />
+        </label>
+        <p id="sessions-rename-status" class="config-note" hidden></p>
+        <menu>
+          <button id="sessions-rename-cancel" class="ghost" data-i18n="chrome.cancel">Cancel</button>
+          <button id="sessions-rename-save" class="primary" data-i18n="chrome.save">Save</button>
+        </menu>
+      </dialog>
       <dialog id="sessions-prune-dialog">
         <h2 id="sessions-prune-title"></h2>
         <label><span data-i18n="sessionsView.olderThanLabel">Last activity older than</span>
@@ -144,6 +157,18 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-rename")!.addEventListener("click", () => {
       this.renameSelected().catch(() => undefined);
+    });
+    this.root.querySelector("#sessions-rename-save")!.addEventListener("click", () => {
+      void this.commitRename();
+    });
+    this.root.querySelector("#sessions-rename-cancel")!.addEventListener("click", () => {
+      (this.root.querySelector("#sessions-rename-dialog") as HTMLDialogElement).close();
+    });
+    (this.root.querySelector("#sessions-rename-input") as HTMLInputElement).addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void this.commitRename();
+      }
     });
     this.root.querySelector("#sessions-view-prune")!.addEventListener("click", () => {
       this.openPruneDialog("prune");
@@ -544,24 +569,38 @@ export class SessionsViewWidget {
       .join("");
   }
 
+  /** P439: open the rename dialog for the selected session. */
   private async renameSelected(): Promise<void> {
+    if (!this.client() || !this.selected) return;
+    const current = this.all.find((session) => session.id === this.selected);
+    this.renameTarget = this.selected;
+    const input = this.root.querySelector("#sessions-rename-input") as HTMLInputElement;
+    input.value = current?.title || "";
+    const statusEl = this.root.querySelector("#sessions-rename-status") as HTMLElement;
+    statusEl.hidden = true;
+    statusEl.textContent = "";
+    (this.root.querySelector("#sessions-rename-dialog") as HTMLDialogElement).showModal();
+    input.focus();
+    input.select();
+  }
+
+  /** P439: commit the rename dialog over PATCH /api/sessions/:id. */
+  private async commitRename(): Promise<void> {
     const client = this.client();
-    if (!client || !this.selected) return;
-    const sessionId = this.selected;
-    const current = this.all.find((session) => session.id === sessionId);
-    const title = window.prompt(t.sessionsView.renamePrompt, current?.title || "");
-    if (title === null) return;
+    const sessionId = this.renameTarget;
+    if (!client || !sessionId) return;
+    const input = this.root.querySelector("#sessions-rename-input") as HTMLInputElement;
+    const statusEl = this.root.querySelector("#sessions-rename-status") as HTMLElement;
     try {
-      await client.renameSession(sessionId, title.trim());
+      await client.renameSession(sessionId, input.value.trim());
+      (this.root.querySelector("#sessions-rename-dialog") as HTMLDialogElement).close();
       this.status(t.sessionsView.renamed, false);
       await this.refresh();
     } catch (error) {
-      this.status(
-        t.sessionsView.renameFailed.replace(
-          "{error}",
-          error instanceof Error ? error.message : String(error),
-        ),
-        true,
+      statusEl.hidden = false;
+      statusEl.textContent = t.sessionsView.renameFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
       );
     }
   }
