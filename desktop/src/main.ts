@@ -1804,6 +1804,17 @@ function gatewaySlashCommands(): [string, string][] {
     ["/fork", t.slash.forkSession],
     ["/search", t.slash.search],
     ["/open", t.slash.open],
+    ["/status", t.slash.status],
+    ["/context", t.slash.context],
+    ["/whoami", t.slash.whoami],
+    ["/version", t.slash.version],
+    ["/commands", t.slash.commands],
+    ["/profile", t.slash.profile],
+    ["/model", t.slash.model],
+    ["/reasoning", t.slash.reasoning],
+    ["/memory", t.slash.memory],
+    ["/sessions", t.slash.sessions],
+    ["/stop", t.slash.stop],
   ];
 }
 
