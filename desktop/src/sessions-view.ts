@@ -43,6 +43,8 @@ export class SessionsViewWidget {
         <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
         <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳ MD</button>
         <button id="sessions-view-export-html" class="ghost" data-i18n-title="sessionsView.exportHtmlTitle" hidden>⭳ HTML</button>
+        <button id="sessions-view-export-json" class="ghost" data-i18n-title="sessionsView.exportJsonTitle" hidden>⭳ JSON</button>
+        <button id="sessions-view-import" class="ghost" data-i18n="sessionsView.import" data-i18n-title="sessionsView.importTitle"></button>
         <button id="sessions-view-prune" class="ghost" data-i18n="sessionsView.prune" data-i18n-title="sessionsView.pruneTitle"></button>
         <button id="sessions-view-archive" class="ghost" data-i18n="sessionsView.archive" data-i18n-title="sessionsView.archiveTitle"></button>
         <button id="sessions-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
@@ -96,6 +98,12 @@ export class SessionsViewWidget {
     });
     this.root.querySelector("#sessions-view-export-html")!.addEventListener("click", () => {
       this.exportSelected("html");
+    });
+    this.root.querySelector("#sessions-view-export-json")!.addEventListener("click", () => {
+      this.exportSelected("json");
+    });
+    this.root.querySelector("#sessions-view-import")!.addEventListener("click", () => {
+      this.importSessions();
     });
     this.root.querySelector("#sessions-view-recap")!.addEventListener("click", () => {
       this.toggleRecap().catch(() => undefined);
@@ -376,6 +384,7 @@ export class SessionsViewWidget {
       pane.scrollTop = 0;
       exportBtn.hidden = false;
       (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = false;
+      (this.root.querySelector("#sessions-view-export-json") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = false;
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = false;
@@ -390,6 +399,7 @@ export class SessionsViewWidget {
       )}</p>`;
       exportBtn.hidden = true;
       (this.root.querySelector("#sessions-view-export-html") as HTMLButtonElement).hidden = true;
+      (this.root.querySelector("#sessions-view-export-json") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-recap") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-fork") as HTMLButtonElement).hidden = true;
       (this.root.querySelector("#sessions-view-delete") as HTMLButtonElement).hidden = true;
@@ -556,7 +566,7 @@ export class SessionsViewWidget {
     }
   }
 
-  private exportSelected(format: "md" | "html"): void {
+  private exportSelected(format: "md" | "html" | "json"): void {
     const client = this.client();
     if (!client || !this.selected) return;
     const sessionId = this.selected;
@@ -575,5 +585,52 @@ export class SessionsViewWidget {
       .catch(() => {
         this.status(t.sessionsView.exportFailed, true);
       });
+  }
+
+  /** P348: import portable session JSON (own ⭳ JSON exports or hermes
+   * dashboard exports) over POST /api/sessions/import. */
+  private importSessions(): void {
+    const client = this.client();
+    if (!client) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      void this.importSessionFile(client, file);
+    };
+    input.click();
+  }
+
+  private async importSessionFile(client: GatewayClient, file: File): Promise<void> {
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      const sessions = Array.isArray(parsed)
+        ? parsed
+        : (parsed as { sessions?: unknown } | null)?.sessions;
+      if (!Array.isArray(sessions)) {
+        this.status(t.sessionsView.importParseFailed, true);
+        return;
+      }
+      const result = await client.sessionsImport(sessions);
+      const summary = t.sessionsView.imported
+        .replace("{imported}", String(result.imported))
+        .replace("{messages}", String(result.messages))
+        .replace("{skipped}", String(result.skipped));
+      this.status(
+        result.ok ? summary : `${summary} — ${result.errors[0]?.error ?? ""}`,
+        !result.ok,
+      );
+      await this.refresh();
+    } catch (error) {
+      this.status(
+        t.sessionsView.importFailed.replace(
+          "{error}",
+          error instanceof Error ? error.message : String(error),
+        ),
+        true,
+      );
+    }
   }
 }

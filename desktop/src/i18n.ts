@@ -142,7 +142,8 @@ export interface Translations {
     deleteTitle: string; deleteConfirm: string; deleted: string; deleteFailed: string;
     searchPlaceholder: string; noResults: string; searchFailed: string;
     renameTitle: string; renamePrompt: string; renamed: string; renameFailed: string;
-    exportHtmlTitle: string;
+    exportHtmlTitle: string; exportJsonTitle: string;
+    import: string; importTitle: string; imported: string; importParseFailed: string; importFailed: string;
     msgCount: string; project: string; source: string;
     stats: string;
     prune: string; archive: string; pruneTitle: string; archiveTitle: string;
@@ -443,7 +444,7 @@ const en: Translations = {
     loadFailed: "Failed to load sessions: {error}",
     transcriptFailed: "Failed to load transcript: {error}",
     emptyTranscript: "This session has no messages.",
-    exportTitle: "Export selected session as Markdown", exportHtmlTitle: "Export selected session as standalone HTML", msgCount: "{count} messages", project: "project", source: "source", stats: "{sessions} sessions \u00b7 {messages} messages \u00b7 {size} on disk",
+    exportTitle: "Export selected session as Markdown", exportHtmlTitle: "Export selected session as standalone HTML", exportJsonTitle: "Export selected session as portable JSON (re-importable)", import: "⭱ Import", importTitle: "Import sessions from a portable JSON export", imported: "Imported {imported} session(s), {messages} message(s); skipped {skipped}.", importParseFailed: "Import failed: file is not a session export JSON payload.", importFailed: "Import failed: {error}", msgCount: "{count} messages", project: "project", source: "source", stats: "{sessions} sessions \u00b7 {messages} messages \u00b7 {size} on disk",
     prune: "Prune…", archive: "Archive…", pruneTitle: "Delete ended sessions matching filters", archiveTitle: "Archive ended sessions matching filters",
     pruneDialogTitle: "Prune ended sessions", archiveDialogTitle: "Archive ended sessions",
     olderThanLabel: "Last activity older than (90d, 2026-01-01…)", sourceLabel: "Source filter (optional)",
@@ -869,7 +870,7 @@ const zh: Translations = {
     loadFailed: "加载会话列表失败:{error}",
     transcriptFailed: "加载转录失败:{error}",
     emptyTranscript: "该会话没有消息。",
-    exportTitle: "将选中会话导出为 Markdown", exportHtmlTitle: "将选中会话导出为独立 HTML", msgCount: "{count} 条消息", project: "项目", source: "来源", stats: "{sessions} 个会话 \u00b7 {messages} 条消息 \u00b7 磁盘占用 {size}",
+    exportTitle: "将选中会话导出为 Markdown", exportHtmlTitle: "将选中会话导出为独立 HTML", exportJsonTitle: "将选中会话导出为可移植 JSON（可重新导入）", import: "⭱ 导入", importTitle: "从可移植 JSON 导出文件导入会话", imported: "已导入 {imported} 个会话、{messages} 条消息；跳过 {skipped}。", importParseFailed: "导入失败：文件不是会话导出 JSON 载荷。", importFailed: "导入失败：{error}", msgCount: "{count} 条消息", project: "项目", source: "来源", stats: "{sessions} 个会话 \u00b7 {messages} 条消息 \u00b7 磁盘占用 {size}",
     prune: "清理…", archive: "归档…", pruneTitle: "按过滤条件删除已结束的会话", archiveTitle: "按过滤条件归档已结束的会话",
     pruneDialogTitle: "清理已结束的会话", archiveDialogTitle: "归档已结束的会话",
     olderThanLabel: "最后活动早于（90d、2026-01-01…）", sourceLabel: "来源过滤（可选）",
@@ -1295,7 +1296,7 @@ const zhHant: Translations = {
     loadFailed: "載入會話列表失敗:{error}",
     transcriptFailed: "載入轉錄失敗:{error}",
     emptyTranscript: "該會話沒有訊息。",
-    exportTitle: "將選取會話匯出為 Markdown", exportHtmlTitle: "將選取會話匯出為獨立 HTML", msgCount: "{count} 則訊息", project: "專案", source: "來源", stats: "{sessions} 個會話 \u00b7 {messages} 則訊息 \u00b7 磁碟佔用 {size}",
+    exportTitle: "將選取會話匯出為 Markdown", exportHtmlTitle: "將選取會話匯出為獨立 HTML", exportJsonTitle: "將選取會話匯出為可攜式 JSON（可重新匯入）", import: "⭱ 匯入", importTitle: "從可攜式 JSON 匯出檔匯入會話", imported: "已匯入 {imported} 個會話、{messages} 則訊息；跳過 {skipped}。", importParseFailed: "匯入失敗：檔案不是會話匯出 JSON 負載。", importFailed: "匯入失敗：{error}", msgCount: "{count} 則訊息", project: "專案", source: "來源", stats: "{sessions} 個會話 \u00b7 {messages} 則訊息 \u00b7 磁碟佔用 {size}",
     prune: "清理…", archive: "封存…", pruneTitle: "按過濾條件刪除已結束的會話", archiveTitle: "按過濾條件封存已結束的會話",
     pruneDialogTitle: "清理已結束的會話", archiveDialogTitle: "封存已結束的會話",
     olderThanLabel: "最後活動早於（90d、2026-01-01…）", sourceLabel: "來源過濾（選填）",
@@ -1721,7 +1722,7 @@ const ja: Translations = {
     loadFailed: "セッションの読み込みに失敗しました: {error}",
     transcriptFailed: "トランスクリプトの読み込みに失敗しました: {error}",
     emptyTranscript: "このセッションにはメッセージがありません。",
-    exportTitle: "選択したセッションを Markdown でエクスポート", exportHtmlTitle: "選択したセッションを単体 HTML でエクスポート", msgCount: "{count} メッセージ", project: "プロジェクト", source: "ソース", stats: "{sessions} セッション \u00b7 {messages} メッセージ \u00b7 ディスク {size}",
+    exportTitle: "選択したセッションを Markdown でエクスポート", exportHtmlTitle: "選択したセッションを単体 HTML でエクスポート", exportJsonTitle: "選択したセッションをポータブル JSON としてエクスポート（再インポート可）", import: "⭱ インポート", importTitle: "ポータブル JSON エクスポートからセッションをインポート", imported: "{imported} セッション、{messages} メッセージをインポートしました；{skipped} 件スキップ。", importParseFailed: "インポート失敗: ファイルがセッションエクスポート JSON ではありません。", importFailed: "インポートに失敗しました: {error}", msgCount: "{count} メッセージ", project: "プロジェクト", source: "ソース", stats: "{sessions} セッション \u00b7 {messages} メッセージ \u00b7 ディスク {size}",
     prune: "枝切り…", archive: "アーカイブ…", pruneTitle: "フィルタに一致する終了セッションを削除", archiveTitle: "フィルタに一致する終了セッションをアーカイブ",
     pruneDialogTitle: "終了セッションを枝切り", archiveDialogTitle: "終了セッションをアーカイブ",
     olderThanLabel: "最終アクティビティがこれより古い（90d、2026-01-01…）", sourceLabel: "ソースフィルタ（任意）",
@@ -2147,7 +2148,7 @@ const ar: Translations = {
     loadFailed: "فشل تحميل الجلسات: {error}",
     transcriptFailed: "فشل تحميل النص: {error}",
     emptyTranscript: "لا توجد رسائل في هذه الجلسة.",
-    exportTitle: "تصدير الجلسة المحددة بصيغة Markdown", exportHtmlTitle: "تصدير الجلسة المحددة بصيغة HTML مستقلة", msgCount: "{count} رسالة", project: "المشروع", source: "المصدر", stats: "{sessions} جلسة \u00b7 {messages} رسالة \u00b7 {size} على القرص",
+    exportTitle: "تصدير الجلسة المحددة بصيغة Markdown", exportHtmlTitle: "تصدير الجلسة المحددة بصيغة HTML مستقلة", exportJsonTitle: "تصدير الجلسة المحددة بصيغة JSON محمولة (قابلة لإعادة الاستيراد)", import: "⭱ استيراد", importTitle: "استيراد الجلسات من تصدير JSON محمول", imported: "تم استيراد {imported} جلسة و{messages} رسالة؛ تم تخطي {skipped}.", importParseFailed: "فشل الاستيراد: الملف ليس حمولة JSON لتصدير الجلسات.", importFailed: "فشل الاستيراد: {error}", msgCount: "{count} رسالة", project: "المشروع", source: "المصدر", stats: "{sessions} جلسة \u00b7 {messages} رسالة \u00b7 {size} على القرص",
     prune: "تشذيب…", archive: "أرشفة…", pruneTitle: "حذف الجلسات المنتهية المطابقة للمرشحات", archiveTitle: "أرشفة الجلسات المنتهية المطابقة للمرشحات",
     pruneDialogTitle: "تشذيب الجلسات المنتهية", archiveDialogTitle: "أرشفة الجلسات المنتهية",
     olderThanLabel: "النشاط الأحدث أقدم من (90d، 2026-01-01…)", sourceLabel: "مرشح المصدر (اختياري)",

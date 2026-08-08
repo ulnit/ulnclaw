@@ -438,8 +438,57 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Insert a session row with an explicit id and metadata (session
+    /// import; hermes `import_sessions`). Existing ids are left untouched
+    /// — returns `false` when the id already exists. Live-runtime fields
+    /// stay reset: `last_activity_at` mirrors `started_at` so imported
+    /// history sorts at its original time without fabricating activity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_imported_session(
+        &self,
+        id: &str,
+        source: &str,
+        model: Option<&str>,
+        title: Option<&str>,
+        cwd: Option<&str>,
+        started_at: f64,
+        ended_at: Option<f64>,
+        end_reason: Option<&str>,
+        archived: bool,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let exists: i64 = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if exists != 0 {
+            return Ok(false);
+        }
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, title, cwd, started_at, ended_at, end_reason, archived, last_activity_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?6)",
+            params![id, source, model, title, cwd, started_at, ended_at, end_reason, archived as i64],
+        )
+        .map_err(|e| AgentError::session(format!("import session: {}", e)))?;
+        Ok(true)
+    }
+
     /// Append one message to a session.
     pub fn append_message(&self, session_id: &str, message: &Message) -> Result<()> {
+        self.append_message_at(session_id, message, now_secs())
+    }
+
+    /// Append a message with an explicit timestamp (session import keeps
+    /// the original timeline; hermes `import_sessions`).
+    pub fn append_message_at(
+        &self,
+        session_id: &str,
+        message: &Message,
+        timestamp: f64,
+    ) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
         let tool_calls = message
             .tool_calls
@@ -458,7 +507,7 @@ impl SqliteSessionStore {
                 message.tool_call_id,
                 tool_calls,
                 message.name,
-                now_secs(),
+                timestamp,
             ],
         )
         .map_err(|e| AgentError::session(format!("append message: {}", e)))?;
@@ -466,7 +515,7 @@ impl SqliteSessionStore {
         conn.execute(
             "UPDATE sessions SET message_count = message_count + 1, last_activity_at = ?2
              WHERE id = ?1",
-            params![session_id, now_secs()],
+            params![session_id, timestamp],
         )
         .ok();
         if self.has_fts {

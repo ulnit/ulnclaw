@@ -2281,12 +2281,13 @@ export class GatewayClient {
     return typeof value.recap === "string" ? value.recap : "";
   }
 
-  /** GET /api/sessions/:id/export — download the transcript as md/html. */
+  /** GET /api/sessions/:id/export — download the transcript as
+   * md/html/json (json is the portable re-importable payload; P348). */
   async exportSession(
     sessionId: string,
-    format: "md" | "html",
+    format: "md" | "html" | "json",
   ): Promise<{ blob: Blob; filename: string }> {
-    const qs = format === "html" ? "?format=html" : "";
+    const qs = format === "md" ? "" : `?format=${format}`;
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/export${qs}`), {
       headers: this.headers(),
     });
@@ -2296,6 +2297,37 @@ export class GatewayClient {
     const filename =
       match?.[1] || `ulnclaw-session-${sessionId.slice(0, 8)}.${format}`;
     return { blob: await response.blob(), filename };
+  }
+
+  /** POST /api/sessions/import — import portable session JSON exports
+   * (hermes `/api/sessions/import` parity; P348). */
+  async sessionsImport(sessions: unknown[]): Promise<{
+    ok: boolean;
+    imported: number;
+    skipped: number;
+    messages: number;
+    errors: { index: number; id: string | null; error: string }[];
+  }> {
+    const response = await fetch(this.endpoint("/api/sessions/import"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ sessions }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message =
+        typeof value.error === "string"
+          ? value.error
+          : value.error?.message || `sessions import HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return value as {
+      ok: boolean;
+      imported: number;
+      skipped: number;
+      messages: number;
+      errors: { index: number; id: string | null; error: string }[];
+    };
   }
 
   /** GET /api/doctor — run the doctor report, optionally with online probes. */

@@ -4016,6 +4016,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/search", get(search_sessions))
         .route("/api/sessions/prune", post(prune_sessions))
         .route("/api/sessions/archive", post(archive_sessions))
+        .route("/api/sessions/import", post(import_sessions))
         .route(
             "/api/sessions/:id",
             get(get_session).patch(patch_session).delete(delete_session),
@@ -6669,13 +6670,15 @@ async fn session_messages(
 /// Query parameters for `GET /api/sessions/:id/export`.
 #[derive(Debug, Deserialize)]
 struct ExportQuery {
-    /// `md` (default) or `html`.
+    /// `md` (default), `html`, or `json` (portable round-trip payload for
+    /// `POST /api/sessions/import`; P348).
     format: Option<String>,
 }
 
-/// `GET /api/sessions/:id/export?format=md|html` — download the session
-/// transcript as a Markdown or standalone HTML file (desktop session
-/// export actions; ulnclaw extension).
+/// `GET /api/sessions/:id/export?format=md|html|json` — download the
+/// session transcript as Markdown, standalone HTML, or a portable JSON
+/// payload re-importable through `POST /api/sessions/import` (P348;
+/// desktop session export actions; ulnclaw extension).
 async fn export_session(
     State(state): State<Arc<GatewayState>>,
     Path(id): Path<String>,
@@ -6691,19 +6694,27 @@ async fn export_session(
         Err(e) => return server_error(&e.to_string()),
     };
     let stem = crate::session_export::export_stem(&row);
-    let html = matches!(query.format.as_deref(), Some("html"));
-    let (mime, extension, body) = if html {
-        (
+    let (mime, extension, body) = match query.format.as_deref() {
+        Some("html") => (
             "text/html; charset=utf-8",
             "html",
             crate::session_export::render_html(&row, &messages),
-        )
-    } else {
-        (
+        ),
+        Some("json") => (
+            "application/json; charset=utf-8",
+            "json",
+            serde_json::to_string_pretty(&json!({
+                "object": "ulnclaw.session_export",
+                "version": 1,
+                "sessions": [portable_session_json(&row, &messages)],
+            }))
+            .unwrap_or_else(|_| "{}".to_string()),
+        ),
+        _ => (
             "text/markdown; charset=utf-8",
             "md",
             crate::session_export::render_markdown(&row, &messages),
-        )
+        ),
     };
     let filename = format!("ulnclaw-session-{stem}.{extension}");
     (
@@ -6718,6 +6729,228 @@ async fn export_session(
         body,
     )
         .into_response()
+}
+
+/// One session inside the portable export/import payload (P348).
+fn portable_session_json(
+    row: &crate::session::sqlite::SessionRow,
+    messages: &[(f64, crate::provider::Message)],
+) -> Value {
+    json!({
+        "id": row.id,
+        "title": row.title,
+        "source": row.source,
+        "model": row.model,
+        "cwd": row.cwd,
+        "started_at": row.started_at,
+        "ended_at": row.ended_at,
+        "end_reason": row.end_reason,
+        "messages": messages
+            .iter()
+            .map(|(timestamp, message)| {
+                json!({
+                    "role": message.role.to_string(),
+                    "content": message.content,
+                    "tool_call_id": message.tool_call_id,
+                    "tool_name": message.name,
+                    "tool_calls": message.tool_calls,
+                    "timestamp": timestamp,
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// One message inside a `POST /api/sessions/import` payload (P348).
+#[derive(Debug, Deserialize)]
+struct ImportMessageRow {
+    role: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<crate::provider::ToolCall>>,
+    #[serde(default)]
+    timestamp: Option<f64>,
+}
+
+/// One session inside a `POST /api/sessions/import` payload (P348;
+/// hermes `SessionImport.sessions` entries, lean field set).
+#[derive(Debug, Deserialize)]
+struct ImportSessionRow {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    started_at: Option<f64>,
+    #[serde(default)]
+    ended_at: Option<f64>,
+    #[serde(default)]
+    end_reason: Option<String>,
+    #[serde(default)]
+    archived: Option<bool>,
+    #[serde(default)]
+    messages: Vec<ImportMessageRow>,
+}
+
+/// `POST /api/sessions/import` body (P348).
+#[derive(Debug, Deserialize)]
+struct SessionsImportBody {
+    sessions: Option<Vec<ImportSessionRow>>,
+    /// Accepted for hermes wire parity; ulnclaw is single-profile.
+    #[serde(default)]
+    #[allow(dead_code)]
+    profile: Option<String>,
+}
+
+const IMPORT_MAX_SESSIONS: usize = 500;
+const IMPORT_MAX_MESSAGES_PER_SESSION: usize = 10_000;
+const IMPORT_MAX_TOTAL_CONTENT_BYTES: usize = 25 * 1024 * 1024;
+
+/// `POST /api/sessions/import` — import sessions exported by
+/// `GET /api/sessions/:id/export?format=json` (hermes
+/// `/api/sessions/import` parity, lean: single profile, parent lineage
+/// stays detached, live runtime state stays reset). Existing session ids
+/// are skipped; message timestamps are preserved.
+async fn import_sessions(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<SessionsImportBody>,
+) -> Response {
+    let Some(sessions) = body.sessions else {
+        return bad_request("sessions must be a list", Some("invalid_request"));
+    };
+    if sessions.len() > IMPORT_MAX_SESSIONS {
+        return bad_request(
+            &format!(
+                "sessions must contain at most {} entries",
+                IMPORT_MAX_SESSIONS
+            ),
+            Some("invalid_request"),
+        );
+    }
+    let mut imported = 0u64;
+    let mut skipped = 0u64;
+    let mut total_messages = 0u64;
+    let mut total_bytes = 0usize;
+    let mut errors: Vec<Value> = Vec::new();
+    for (index, raw) in sessions.iter().enumerate() {
+        if raw.messages.len() > IMPORT_MAX_MESSAGES_PER_SESSION {
+            errors.push(json!({
+                "index": index,
+                "id": raw.id,
+                "error": "messages exceeds the per-session import limit",
+            }));
+            continue;
+        }
+        let session_bytes: usize = raw
+            .messages
+            .iter()
+            .map(|message| message.content.as_deref().map(str::len).unwrap_or(0))
+            .sum();
+        if session_bytes > IMPORT_MAX_TOTAL_CONTENT_BYTES
+            || total_bytes.saturating_add(session_bytes) > IMPORT_MAX_TOTAL_CONTENT_BYTES
+        {
+            errors.push(json!({
+                "index": index,
+                "id": raw.id,
+                "error": "payload exceeds the import byte limit",
+            }));
+            continue;
+        }
+        let mut parsed_messages: Vec<(f64, crate::provider::Message)> = Vec::new();
+        let mut parse_error: Option<String> = None;
+        for message in &raw.messages {
+            let role = match message.role.trim() {
+                "system" => crate::provider::Role::System,
+                "user" => crate::provider::Role::User,
+                "assistant" => crate::provider::Role::Assistant,
+                "tool" => crate::provider::Role::Tool,
+                other => {
+                    parse_error = Some(format!("invalid message role: {other}"));
+                    break;
+                }
+            };
+            parsed_messages.push((
+                message.timestamp.unwrap_or(0.0),
+                crate::provider::Message {
+                    role,
+                    content: message.content.clone(),
+                    tool_calls: message.tool_calls.clone(),
+                    tool_call_id: message.tool_call_id.clone(),
+                    name: message.tool_name.clone(),
+                },
+            ));
+        }
+        if let Some(error) = parse_error {
+            errors.push(json!({"index": index, "id": raw.id, "error": error}));
+            continue;
+        }
+        let id = raw
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let started_at = raw.started_at.unwrap_or_else(now_secs);
+        match state.store.insert_imported_session(
+            &id,
+            raw.source.as_deref().unwrap_or("import"),
+            raw.model.as_deref(),
+            raw.title.as_deref(),
+            raw.cwd.as_deref(),
+            started_at,
+            raw.ended_at,
+            raw.end_reason.as_deref(),
+            raw.archived.unwrap_or(false),
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                skipped += 1;
+                continue;
+            }
+            Err(e) => {
+                errors.push(json!({"index": index, "id": id, "error": e.to_string()}));
+                continue;
+            }
+        }
+        for (offset, (timestamp, message)) in parsed_messages.into_iter().enumerate() {
+            let at = if timestamp > 0.0 {
+                timestamp
+            } else {
+                started_at + offset as f64 * 0.001
+            };
+            if let Err(e) = state.store.append_message_at(&id, &message, at) {
+                errors.push(json!({
+                    "index": index,
+                    "id": id,
+                    "error": format!("message {offset}: {e}"),
+                }));
+                break;
+            }
+            total_messages += 1;
+        }
+        total_bytes += session_bytes;
+        imported += 1;
+    }
+    Json(json!({
+        "ok": errors.is_empty(),
+        "imported": imported,
+        "skipped": skipped,
+        "messages": total_messages,
+        "errors": errors,
+    }))
+    .into_response()
 }
 
 /// `POST /api/uploads` — store a binary upload (desktop composer pastes
@@ -13656,6 +13889,151 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         match saved_eleven {
             Some(v) => std::env::set_var("ELEVENLABS_API_KEY", v),
             None => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_export_json_and_import_round_trip() {
+        // Import writes rows into the session store under the test home.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = test_state();
+        let app = router(state.clone());
+
+        // Seed a session with two messages.
+        let id = state
+            .store
+            .create_session("gateway", Some("test-model"), None)
+            .unwrap();
+        state.store.set_session_title(&id, "export me").unwrap();
+        state
+            .store
+            .append_message(
+                &id,
+                &Message {
+                    role: Role::User,
+                    content: Some("hello".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        state
+            .store
+            .append_message(
+                &id,
+                &Message {
+                    role: Role::Assistant,
+                    content: Some("hi there".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+
+        // JSON export returns a portable payload.
+        let (status, text) = get_text(
+            app.clone(),
+            &format!("/api/sessions/{id}/export?format=json"),
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let payload: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(payload["object"], "ulnclaw.session_export");
+        assert_eq!(payload["sessions"][0]["id"], id);
+        assert_eq!(payload["sessions"][0]["title"], "export me");
+        assert_eq!(payload["sessions"][0]["messages"].as_array().unwrap().len(), 2);
+
+        // Import a fresh session with explicit timestamps.
+        let import_payload = json!({
+            "sessions": [{
+                "id": "imported-session-1",
+                "title": "imported",
+                "source": "cli",
+                "model": "m",
+                "started_at": 1_700_000_000.0_f64,
+                "messages": [
+                    {"role": "user", "content": "q1", "timestamp": 1_700_000_010.0_f64},
+                    {"role": "assistant", "content": "a1"},
+                ],
+            }],
+        });
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/import",
+            &import_payload.to_string(),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["imported"], 1);
+        assert_eq!(body["skipped"], 0);
+        assert_eq!(body["messages"], 2);
+
+        // Re-import: the existing id is skipped.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/import",
+            &import_payload.to_string(),
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["imported"], 0);
+        assert_eq!(body["skipped"], 1);
+
+        // Imported row keeps title and original message timestamps.
+        let row = state
+            .store
+            .get_session_row("imported-session-1")
+            .unwrap()
+            .expect("imported row");
+        assert_eq!(row.title.as_deref(), Some("imported"));
+        let messages = state
+            .store
+            .load_messages_with_timestamps("imported-session-1")
+            .unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!((messages[0].0 - 1_700_000_010.0).abs() < 0.5);
+
+        // Invalid role -> per-session error, nothing imported.
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/sessions/import",
+            r#"{"sessions":[{"id":"bad-role","messages":[{"role":"wizard","content":"x"}]}]}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["imported"], 0);
+        assert!(body["errors"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("invalid message role"));
+        assert!(state.store.get_session_row("bad-role").unwrap().is_none());
+
+        // Missing sessions field -> 400.
+        let (status, body) =
+            post_json(app.clone(), "/api/sessions/import", r#"{"profile":"p"}"#, "sekret").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"].as_str().unwrap().contains("sessions"));
+
+        // Auth required.
+        let (status, _) =
+            post_json(app.clone(), "/api/sessions/import", r#"{"sessions":[]}"#, "wrong").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
         }
     }
 
