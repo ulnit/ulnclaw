@@ -2964,6 +2964,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     fontPicker: () => openFontPicker(),
     copySessionId: () => runCopySessionId(),
     copyLastReply: () => runCopyLastReply(),
+    copyTranscript: () => runCopyTranscript(),
     forkSession: () => runForkSession(),
     toggleHideArchived: () => toggleHideArchived(),
     // P498: clear every unread marker at once.
@@ -3452,6 +3453,20 @@ async function runCopyLastReply(): Promise<void> {
     notifySuccess(t.palette.lastReplyCopied);
   } catch {
     notifyError(t.session.copyFailed);
+  }
+}
+
+/** P525: palette action — copy the current session transcript as
+ * Markdown straight to the clipboard (no file download). */
+async function runCopyTranscript(): Promise<void> {
+  if (!state.client || !state.current) return;
+  try {
+    const { blob } = await state.client.exportSession(state.current.id, "md");
+    const text = await blob.text();
+    await navigator.clipboard.writeText(text);
+    notifySuccess(t.palette.copiedTranscript);
+  } catch (error) {
+    notifyError(fmt(t.palette.copyTranscriptFailed, { error: String(error) }));
   }
 }
 
