@@ -551,6 +551,18 @@ function renderDayJump(days: { key: string; timestamp: number }[]): void {
   el.dayJump.hidden = false;
 }
 
+/** P388: sidebar collapse toggling, persisted across launches. */
+const SIDEBAR_COLLAPSED_KEY = "ulnclaw.sidebarCollapsed";
+
+function toggleSidebar(): void {
+  const app = document.getElementById("app")!;
+  app.classList.toggle("no-sidebar");
+  localStorage.setItem(
+    SIDEBAR_COLLAPSED_KEY,
+    app.classList.contains("no-sidebar") ? "1" : "0",
+  );
+}
+
 async function refreshSessions(): Promise<void> {
   if (!state.client) return;
   try {
@@ -1523,7 +1535,7 @@ function installHotkeys(): void {
     // mod+b — toggle sidebar (hermes view.toggleSidebar chord).
     if (mod && !event.shiftKey && key === "b") {
       event.preventDefault();
-      document.getElementById("app")!.classList.toggle("no-sidebar");
+      toggleSidebar();
       return;
     }
     if (anyDialogOpen() || isTypingTarget(event)) return;
@@ -2175,6 +2187,10 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
 
   await pollHealth();
   // P385: status-bar segments jump to their view (doctor fallback).
+  // P388: restore the persisted sidebar collapse state first.
+  if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1") {
+    document.getElementById("app")!.classList.add("no-sidebar");
+  }
   el.statusbar.addEventListener("click", (event) => {
     const seg = (event.target as HTMLElement).closest<HTMLElement>(".statusbar-seg");
     const target = seg?.dataset.target;
