@@ -1739,6 +1739,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/tools", t.slash.tools],
     ["/recap", t.slash.recap],
     ["/title", t.slash.title],
+    ["/retitle", t.slash.retitle],
     ["/usage", t.slash.usage],
     ["/kanban", t.slash.kanban],
     ["/new", t.slash.newSession],

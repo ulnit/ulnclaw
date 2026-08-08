@@ -8588,6 +8588,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /tools           list enabled tools
   /recap           recap this session
   /title [text]    show or set the session title
+  /retitle         regenerate this session's title via the LLM
   /usage           this session's token usage
   /kanban <title>  add a task to the current kanban board
   /insights [N] [--days N] [--source S]   usage analytics across sessions
@@ -8652,6 +8653,77 @@ async fn resolve_gateway_slash(
                     Err(e) => Some(GatewaySlash::Direct(format!("title set failed: {e}"))),
                 }
             }
+        }
+        "/retitle" => {
+            // P570: regenerate this session's title through the LLM
+            // titler — the slash twin of POST /api/sessions/:id/retitle.
+            let Some(row) = state.store.get_session_row(session_id).ok().flatten() else {
+                return Some(GatewaySlash::Direct("session not found.".to_string()));
+            };
+            let user_text = state
+                .store
+                .get_first_user_text(session_id)
+                .unwrap_or_default();
+            if user_text.trim().is_empty() {
+                return Some(GatewaySlash::Direct(
+                    "no user message to title from.".to_string(),
+                ));
+            }
+            let first_reply = state
+                .store
+                .get_first_assistant_text(session_id)
+                .unwrap_or_default();
+            let provider = state.agent.provider();
+            let context = state.agent.context();
+            let Some(new_title) = crate::title_generator::generate_title_forced(
+                &context.config,
+                provider.clone(),
+                &user_text,
+                &first_reply,
+            )
+            .await
+            else {
+                return Some(GatewaySlash::Direct(
+                    "title generation failed (provider unreachable?).".to_string(),
+                ));
+            };
+            let old_title = row.title.clone().unwrap_or_default();
+            if !crate::session::retitle::is_titlelike(&new_title) {
+                return Some(GatewaySlash::Direct(format!(
+                    "kept \"{old_title}\" \u{2014} got \"{new_title}\" (rejected)"
+                )));
+            }
+            if new_title == old_title {
+                return Some(GatewaySlash::Direct(format!(
+                    "title already up to date: \"{old_title}\""
+                )));
+            }
+            let final_title = match state.store.set_session_title(session_id, &new_title) {
+                Ok(()) => new_title,
+                Err(_) => match state.store.get_next_title_in_lineage(&new_title) {
+                    Ok(deduped)
+                        if state
+                            .store
+                            .set_session_title(session_id, &deduped)
+                            .is_ok() =>
+                    {
+                        deduped
+                    }
+                    _ => {
+                        return Some(GatewaySlash::Direct(
+                            "title set failed (collision).".to_string(),
+                        ))
+                    }
+                },
+            };
+            crate::desktop_bridge::publish(
+                session_id,
+                "session.updated",
+                &json!({"session_id": session_id}),
+            );
+            Some(GatewaySlash::Direct(format!(
+                "title: \"{old_title}\" \u{2192} \"{final_title}\""
+            )))
         }
         "/usage" => {
             let Some(row) = state.store.get_session_row(session_id).ok().flatten() else {
@@ -11838,6 +11910,16 @@ mod tests {
         assert_eq!(reply["response"], "title set: Slash Session");
         let reply = post_chat(app.clone(), &sid, "/title").await;
         assert_eq!(reply["response"], "title: Slash Session");
+
+        // P570: /retitle regenerates the title from the first exchange
+        // (the fake provider's answer is always "Hello"), then no-ops.
+        let reply = post_chat(app.clone(), &sid, "/retitle").await;
+        assert_eq!(
+            reply["response"],
+            "title: \"Slash Session\" \u{2192} \"Hello\""
+        );
+        let reply = post_chat(app.clone(), &sid, "/retitle").await;
+        assert_eq!(reply["response"], "title already up to date: \"Hello\"");
 
         let reply = post_chat(app.clone(), &sid, "/no-such-command").await;
         assert!(reply["response"]
