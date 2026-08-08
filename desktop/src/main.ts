@@ -67,6 +67,10 @@ const state = {
   sessionTokens: new Map<string, number>(),
   /** P372: sidebar session-filter text (title or id substring). */
   sessionFilterText: "",
+  /** P378: sent-prompt history for terminal-style ↑/↓ recall. */
+  composerHistory: [] as string[],
+  composerHistoryIndex: null as number | null,
+  composerDraft: "",
   busy: false,
   managedPid: null as number | null,
   skills: [] as SkillRow[],
@@ -610,6 +614,12 @@ async function sendTurn(): Promise<void> {
   const message = (text + attachmentNote()).trim();
   state.pendingUploads = [];
   renderAttachChips();
+  // P378: record the prompt for ↑/↓ recall.
+  if (text) {
+    state.composerHistory.push(text);
+    if (state.composerHistory.length > 50) state.composerHistory.shift();
+  }
+  state.composerHistoryIndex = null;
   state.busy = true;
   el.send.disabled = true;
   el.input.value = "";
@@ -1646,6 +1656,41 @@ async function start(): Promise<void> {
   };
   el.fsPreviewSave.onclick = () => void saveFsPreview();
   el.fsPreviewClose.onclick = () => el.fsPreviewDialog.close();
+/** P378: terminal-style prompt recall — ↑/↓ walk the sent-prompt
+ * history when the slash popup is closed (Up needs the caret at the
+ * start so multi-line editing keeps working). */
+function handleComposerHistory(event: KeyboardEvent): boolean {
+  if (event.shiftKey || event.isComposing) return false;
+  const history = state.composerHistory;
+  if (event.key === "ArrowUp" && el.input.selectionStart === 0) {
+    if (history.length === 0) return false;
+    if (state.composerHistoryIndex === null) {
+      state.composerDraft = el.input.value;
+      state.composerHistoryIndex = history.length - 1;
+    } else if (state.composerHistoryIndex > 0) {
+      state.composerHistoryIndex -= 1;
+    } else {
+      return false;
+    }
+    event.preventDefault();
+    el.input.value = history[state.composerHistoryIndex];
+    return true;
+  }
+  if (event.key === "ArrowDown") {
+    if (state.composerHistoryIndex === null) return false;
+    event.preventDefault();
+    if (state.composerHistoryIndex < history.length - 1) {
+      state.composerHistoryIndex += 1;
+      el.input.value = history[state.composerHistoryIndex];
+    } else {
+      state.composerHistoryIndex = null;
+      el.input.value = state.composerDraft;
+    }
+    return true;
+  }
+  return false;
+}
+
   el.input.addEventListener("keydown", (event) => {
     if (!el.slashPop.hidden) {
       const items = slashCandidates(el.input.value);
@@ -1672,6 +1717,9 @@ async function start(): Promise<void> {
         return;
       }
     }
+    // P378: ↑/↓ recall sent prompts (the slash popup owns the arrows
+    // while it is open).
+    if (handleComposerHistory(event)) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void sendTurn();
