@@ -176,7 +176,7 @@ export interface Translations {
     forkTitle: string; forked: string; forkFailed: string; openInChat: string; openInChatTitle: string;
     deleteTitle: string; deleteConfirm: string; deleted: string; deleteFailed: string;
     searchPlaceholder: string; noResults: string; searchFailed: string;
-    renameTitle: string; renamePrompt: string; renamed: string; renameFailed: string;
+    renameTitle: string; renamePrompt: string; renamed: string; renameFailed: string; retitleTitle: string; retitleApplied: string; retitleUnchanged: string; retitleFailed: string;
     exportHtmlTitle: string; exportJsonTitle: string;
     import: string; importTitle: string; imported: string; importParseFailed: string; importFailed: string;
     msgCount: string; project: string; source: string; metaEnded: string; metaDuration: string;
@@ -563,7 +563,7 @@ const en: Translations = {
     forkTitle: "Fork this session into a new branch", forked: "Forked as {id}", forkFailed: "Fork failed: {error}", openInChat: "→ Chat", openInChatTitle: "Open this session in the chat view",
     deleteTitle: "Delete this session", deleteConfirm: "Delete session {id}? This cannot be undone.", deleted: "Deleted {id}.", deleteFailed: "Delete failed: {error}",
     searchPlaceholder: "Full-text search transcripts…", noResults: "No transcript matches.", searchFailed: "Search failed: {error}",
-    renameTitle: "Rename this session", renamePrompt: "New title (empty clears):", renamed: "Session renamed.", renameFailed: "Rename failed: {error}",
+    renameTitle: "Rename this session", retitleTitle: "Regenerate title via LLM", retitleApplied: "Title regenerated: {label}", retitleUnchanged: "Title already up to date.", retitleFailed: "Title regeneration failed (provider unreachable or rejected).", renamePrompt: "New title (empty clears):", renamed: "Session renamed.", renameFailed: "Rename failed: {error}",
   },
   modelsView: {
     count: "{providers} providers", current: "Current", catalog: "catalog", providersLower: "providers", stale: "stale",
@@ -1063,7 +1063,7 @@ const zh: Translations = {
     forkTitle: "将此会话分叉为新分支", forked: "已分叉为 {id}", forkFailed: "分叉失败:{error}", openInChat: "→ 聊天", openInChatTitle: "在聊天视图中打开此会话",
     deleteTitle: "删除此会话", deleteConfirm: "删除会话 {id}？此操作无法撤销。", deleted: "已删除 {id}。", deleteFailed: "删除失败:{error}",
     searchPlaceholder: "全文搜索转录…", noResults: "没有匹配的转录。", searchFailed: "搜索失败:{error}",
-    renameTitle: "重命名此会话", renamePrompt: "新标题（留空清除）：", renamed: "会话已重命名。", renameFailed: "重命名失败:{error}",
+    renameTitle: "重命名此会话", retitleTitle: "经 LLM 重新生成标题", retitleApplied: "已重新生成标题：{label}", retitleUnchanged: "标题已是最新。", retitleFailed: "标题重新生成失败（provider 不可达或被拒绝）。", renamePrompt: "新标题（留空清除）：", renamed: "会话已重命名。", renameFailed: "重命名失败:{error}",
   },
   modelsView: {
     count: "{providers} 个 provider", current: "当前", catalog: "目录", providersLower: "个 provider", stale: "已过期",
@@ -1563,7 +1563,7 @@ const zhHant: Translations = {
     forkTitle: "將此會話分叉為新分支", forked: "已分叉為 {id}", forkFailed: "分叉失敗:{error}", openInChat: "→ 聊天", openInChatTitle: "在聊天視圖中開啟此工作階段",
     deleteTitle: "刪除此會話", deleteConfirm: "刪除會話 {id}？此操作無法復原。", deleted: "已刪除 {id}。", deleteFailed: "刪除失敗:{error}",
     searchPlaceholder: "全文搜尋轉錄…", noResults: "沒有符合的轉錄。", searchFailed: "搜尋失敗:{error}",
-    renameTitle: "重新命名此會話", renamePrompt: "新標題（留空清除）：", renamed: "會話已重新命名。", renameFailed: "重新命名失敗:{error}",
+    renameTitle: "重新命名此會話", retitleTitle: "經 LLM 重新產生標題", retitleApplied: "已重新產生標題：{label}", retitleUnchanged: "標題已是最新。", retitleFailed: "標題重新產生失敗（provider 不可達或被拒絕）。", renamePrompt: "新標題（留空清除）：", renamed: "會話已重新命名。", renameFailed: "重新命名失敗:{error}",
   },
   modelsView: {
     count: "{providers} 個 provider", current: "目前", catalog: "目錄", providersLower: "個 provider", stale: "已過期",
@@ -2063,7 +2063,7 @@ const ja: Translations = {
     forkTitle: "このセッションを新しいブランチにフォーク", forked: "{id} としてフォークしました", forkFailed: "フォークに失敗しました: {error}", openInChat: "→ チャット", openInChatTitle: "このセッションをチャットビューで開く",
     deleteTitle: "このセッションを削除", deleteConfirm: "セッション {id} を削除しますか？元に戻せません。", deleted: "{id} を削除しました。", deleteFailed: "削除に失敗しました: {error}",
     searchPlaceholder: "トランスクリプト全文検索…", noResults: "一致するトランスクリプトはありません。", searchFailed: "検索に失敗しました: {error}",
-    renameTitle: "このセッションの名前を変更", renamePrompt: "新しいタイトル（空でクリア）:", renamed: "セッション名を変更しました。", renameFailed: "名前の変更に失敗しました: {error}",
+    renameTitle: "このセッションの名前を変更", retitleTitle: "LLM でタイトルを再生成", retitleApplied: "タイトルを再生成しました：{label}", retitleUnchanged: "タイトルは既に最新です。", retitleFailed: "タイトルの再生成に失敗しました（プロバイダ到達不能または拒否）。", renamePrompt: "新しいタイトル（空でクリア）:", renamed: "セッション名を変更しました。", renameFailed: "名前の変更に失敗しました: {error}",
   },
   modelsView: {
     count: "{providers} プロバイダ", current: "現在", catalog: "カタログ", providersLower: "プロバイダ", stale: "古い",
@@ -2563,7 +2563,7 @@ const ar: Translations = {
     forkTitle: "تفريع هذه الجلسة إلى فرع جديد", forked: "تم التفريع باسم {id}", forkFailed: "فشل التفريع: {error}", openInChat: "← الدردشة", openInChatTitle: "فتح هذه الجلسة في عرض الدردشة",
     deleteTitle: "حذف هذه الجلسة", deleteConfirm: "حذف الجلسة {id}؟ لا يمكن التراجع عن هذا.", deleted: "تم حذف {id}.", deleteFailed: "فشل الحذف: {error}",
     searchPlaceholder: "بحث كامل في النصوص…", noResults: "لا توجد نصوص مطابقة.", searchFailed: "فشل البحث: {error}",
-    renameTitle: "إعادة تسمية هذه الجلسة", renamePrompt: "العنوان الجديد (فارغ للمسح):", renamed: "تمت إعادة تسمية الجلسة.", renameFailed: "فشل إعادة التسمية: {error}",
+    renameTitle: "إعادة تسمية هذه الجلسة", retitleTitle: "إعادة توليد العنوان عبر LLM", retitleApplied: "تمت إعادة توليد العنوان: {label}", retitleUnchanged: "العنوان محدث بالفعل.", retitleFailed: "فشلت إعادة توليد العنوان (تعذر الوصول إلى المزود أو تم الرفض).", renamePrompt: "العنوان الجديد (فارغ للمسح):", renamed: "تمت إعادة تسمية الجلسة.", renameFailed: "فشل إعادة التسمية: {error}",
   },
   modelsView: {
     count: "{providers} مزود", current: "الحالي", catalog: "الفهرس", providersLower: "مزودًا", stale: "قديم",

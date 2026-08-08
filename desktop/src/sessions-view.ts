@@ -1023,6 +1023,7 @@ export class SessionsViewWidget {
             <span class="sessions-view-row-actions">
               <button class="sessions-view-row-action" data-action="pin" title="${escapeHtml(pinned ? t.palette.unpinSession : t.palette.pinSession)}">${pinned ? "\u{1F4CC}" : "\u{1F4CD}"}</button>
               <button class="sessions-view-row-action" data-action="rename" title="${escapeHtml(t.sessionsView.renameTitle)}">✎</button>
+              <button class="sessions-view-row-action" data-action="retitle" title="${escapeHtml(t.sessionsView.retitleTitle)}">✨</button>
               <button class="sessions-view-row-action" data-action="fork" title="${escapeHtml(t.sessionsView.forkTitle)}">⑂</button>
               <button class="sessions-view-row-action" data-action="delete" title="${escapeHtml(t.sessionsView.deleteTitle)}">🗑</button>
             </span>
@@ -1060,6 +1061,7 @@ export class SessionsViewWidget {
         const id = button.closest(".sessions-view-row")?.getAttribute("data-id") || "";
         if (!id) return;
         if (button.dataset.action === "rename") this.renameSelected(id).catch(() => undefined);
+        else if (button.dataset.action === "retitle") this.retitleSelected(id).catch(() => undefined);
         else if (button.dataset.action === "fork") this.forkSelected(id).catch(() => undefined);
         else if (button.dataset.action === "delete") this.deleteSelected(id).catch(() => undefined);
         else if (button.dataset.action === "pin") {
@@ -1570,6 +1572,30 @@ export class SessionsViewWidget {
         "{error}",
         error instanceof Error ? error.message : String(error),
       );
+    }
+  }
+
+  /** P568: regenerate the hovered session's title via the LLM (P559). */
+  private async retitleSelected(id: string): Promise<void> {
+    const client = this.client();
+    const session = this.all.find((row) => row.id === id);
+    if (!client || !session) return;
+    try {
+      const result = await client.retitleSession(id, true);
+      if (!result || result.status === "rejected") {
+        this.status(t.sessionsView.retitleFailed, true);
+        return;
+      }
+      if (result.status === "unchanged") {
+        this.status(t.sessionsView.retitleUnchanged, false);
+        return;
+      }
+      session.title = result.new_title;
+      this.sortSessions();
+      this.renderList();
+      this.status(fmt(t.sessionsView.retitleApplied, { label: result.new_title }), false);
+    } catch {
+      this.status(t.sessionsView.retitleFailed, true);
     }
   }
 
