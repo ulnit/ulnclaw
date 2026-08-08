@@ -130,6 +130,7 @@ const el = {
   sessionInfoRows: document.getElementById("session-info-rows")!,
   sessionInfoCopy: document.getElementById("session-info-copy") as HTMLButtonElement,
   modelBadge: document.getElementById("model-badge")!,
+  projectBadge: document.getElementById("project-badge")!,
   contextMeter: document.getElementById("context-meter")!,
   contextMeterFill: document.getElementById("context-meter-fill")!,
   contextMeterText: document.getElementById("context-meter-text")!,
@@ -1117,7 +1118,21 @@ function refreshModelBadge(): void {
     el.modelBadge.title = t.session.gatewayModelTitle;
   }
   el.modelBadge.classList.toggle("locked", !!locked);
+  refreshProjectBadge();
   refreshComposerPlaceholder();
+}
+
+/** P429: owning-project badge beside the model badge (if any). */
+function refreshProjectBadge(): void {
+  const project = state.current?.project;
+  if (project) {
+    el.projectBadge.textContent = `\u{1F4C1} ${project}`;
+    el.projectBadge.title = project;
+    el.projectBadge.hidden = false;
+  } else {
+    el.projectBadge.hidden = true;
+    el.projectBadge.textContent = "";
+  }
 }
 
 // P283: background watcher — polls `/v1/runs` and raises a sticky
