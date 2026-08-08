@@ -176,6 +176,15 @@ function sessionWhen(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleDateString();
 }
 
+/** P384: compact glyphs for well-known non-gateway session sources. */
+const SOURCE_BADGES: Record<string, string> = {
+  cli: "⌨",
+  tui: "⌨",
+  import: "⭳",
+  "cron-run": "⏰",
+  "gateway-run": "⚙",
+};
+
 function renderSessions(): void {
   el.sessionList.innerHTML = "";
   // P372: optional sidebar filter (title or id substring, case-insensitive).
@@ -220,6 +229,14 @@ function renderSessions(): void {
       badge.title = fmt(t.session.projectBadge, { project: session.project });
       badge.textContent = session.project;
       item.appendChild(badge);
+    }
+    // P384: badge non-gateway origins (cli/import/cron…) at a glance.
+    if (session.source && session.source !== "gateway") {
+      const sourceBadge = document.createElement("span");
+      sourceBadge.className = "session-source-badge";
+      sourceBadge.title = session.source;
+      sourceBadge.textContent = SOURCE_BADGES[session.source] ?? session.source;
+      item.appendChild(sourceBadge);
     }
     const actions = document.createElement("span");
     actions.className = "session-actions";
