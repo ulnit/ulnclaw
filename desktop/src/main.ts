@@ -141,6 +141,8 @@ const el = {
   dayJump: document.getElementById("day-jump") as HTMLSelectElement,
   chatActions: document.getElementById("chat-header-actions")!,
   chatRename: document.getElementById("chat-rename") as HTMLButtonElement,
+  chatFork: document.getElementById("chat-fork") as HTMLButtonElement,
+  chatArchive: document.getElementById("chat-archive") as HTMLButtonElement,
   chatExport: document.getElementById("chat-export") as HTMLButtonElement,
   chatDelete: document.getElementById("chat-delete") as HTMLButtonElement,
   input: document.getElementById("input") as HTMLTextAreaElement,
@@ -1307,6 +1309,14 @@ function refreshEndBadge(): void {
     el.endBadge.hidden = true;
     el.endBadge.textContent = "";
   }
+  // P538: the archive header button flips into an unarchive action.
+  const archived = reason === "archived";
+  const label = archived ? t.palette.unarchiveSession : t.palette.archiveSession;
+  el.chatArchive.title = label;
+  el.chatArchive.dataset.i18nTitle = archived
+    ? "palette.unarchiveSession"
+    : "palette.archiveSession";
+  el.chatArchive.textContent = archived ? "\u{267B}" : "\u{1F5C4}";
 }
 
 /** P429: owning-project badge beside the model badge (if any). */
@@ -2471,6 +2481,15 @@ async function start(): Promise<void> {
   };
   el.chatDelete.onclick = () => {
     if (state.current) void deleteSession(state.current);
+  };
+  // P538: fork + archive/unarchive join the chat-header action set.
+  el.chatFork.onclick = () => {
+    void runForkSession();
+  };
+  el.chatArchive.onclick = () => {
+    if (!state.current) return;
+    if (state.current.end_reason === "archived") void runUnarchiveSession();
+    else void runArchiveSession();
   };
   el.send.onclick = () => void sendTurn();
   el.mic.onclick = () => void toggleMic();
