@@ -254,6 +254,18 @@ function refreshArchivedButton(): void {
     : t.session.hideArchived;
 }
 
+/** P424: flip the hide-archived sidebar filter (toolbar + palette). */
+function toggleHideArchived(): void {
+  state.hideArchived = !state.hideArchived;
+  try {
+    localStorage.setItem(HIDE_ARCHIVED_KEY, state.hideArchived ? "1" : "0");
+  } catch {
+    /* storage unavailable */
+  }
+  refreshArchivedButton();
+  renderSessions();
+}
+
 function renderSessions(): void {
   el.sessionList.innerHTML = "";
   // P372: optional sidebar filter (title or id substring, case-insensitive).
@@ -1999,17 +2011,9 @@ async function start(): Promise<void> {
   };
   refreshSortButton();
 
-  // P414: hide/show archived sessions in the sidebar, persisted.
-  el.sessionArchivedToggle.onclick = () => {
-    state.hideArchived = !state.hideArchived;
-    try {
-      localStorage.setItem(HIDE_ARCHIVED_KEY, state.hideArchived ? "1" : "0");
-    } catch {
-      /* storage unavailable */
-    }
-    refreshArchivedButton();
-    renderSessions();
-  };
+  // P414: hide/show archived sessions in the sidebar, persisted
+  // (P424: the same toggle rides the command palette).
+  el.sessionArchivedToggle.onclick = () => toggleHideArchived();
   refreshArchivedButton();
 
   // P394: keyboard navigation over the sidebar session list.
@@ -2521,6 +2525,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     copySessionId: () => runCopySessionId(),
     copyLastReply: () => runCopyLastReply(),
     forkSession: () => runForkSession(),
+    toggleHideArchived: () => toggleHideArchived(),
     archiveSession: () => runArchiveSession(),
     unarchiveSession: () => runUnarchiveSession(),
   });
