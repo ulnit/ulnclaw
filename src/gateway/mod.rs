@@ -7369,12 +7369,51 @@ async fn list_sessions(
     }
 }
 
-async fn create_session(State(state): State<Arc<GatewayState>>) -> Response {
-    match state
-        .store
-        .create_session("gateway", Some(&state.model_name), None)
-    {
-        Ok(id) => (StatusCode::CREATED, Json(json!({"id": id, "source": "gateway"}))).into_response(),
+/// Body for `POST /api/sessions` — every field optional (P426; hermes
+/// session-create carries the same meta): `source` defaults to
+/// "gateway", `model` to the gateway default, `cwd`/`title` unset.
+#[derive(Debug, Deserialize, Default)]
+struct CreateSessionBody {
+    source: Option<String>,
+    cwd: Option<String>,
+    title: Option<String>,
+    model: Option<String>,
+}
+
+async fn create_session(
+    State(state): State<Arc<GatewayState>>,
+    body: Option<Json<CreateSessionBody>>,
+) -> Response {
+    let body = body.map(|Json(value)| value).unwrap_or_default();
+    let source = body
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("gateway");
+    let cwd = body
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let model = body
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(state.model_name.as_str());
+    match state.store.create_session(source, Some(model), cwd) {
+        Ok(id) => {
+            if let Some(title) = body
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let _ = state.store.set_session_title(&id, title);
+            }
+            (StatusCode::CREATED, Json(json!({"id": id, "source": source}))).into_response()
+        }
         Err(e) => server_error(&e.to_string()),
     }
 }
@@ -15300,6 +15339,38 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         ).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body["session"]["end_reason"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_create_session_honors_body_source_cwd_title() {
+        let state = test_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Full meta body (P426): source/cwd/title survive creation.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/sessions", Some(token),
+            json!({"source": "desktop", "cwd": "/tmp/proj", "title": "My task"}),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body["source"], "desktop");
+        let id = body["id"].as_str().unwrap().to_string();
+        let (status, row) = get_json(app.clone(), &format!("/api/sessions/{id}"), Some(token)).await;
+        assert_eq!(status, StatusCode::OK, "{row}");
+        assert_eq!(row["source"], "desktop");
+        assert_eq!(row["cwd"], "/tmp/proj");
+        assert_eq!(row["title"], "My task");
+
+        // Empty body keeps the gateway defaults.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/sessions", Some(token), json!({}),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body["source"], "gateway");
+        let id = body["id"].as_str().unwrap().to_string();
+        let (_, row) = get_json(app, &format!("/api/sessions/{id}"), Some(token)).await;
+        assert_eq!(row["source"], "gateway");
+        assert!(row["cwd"].is_null());
     }
 
     #[tokio::test]

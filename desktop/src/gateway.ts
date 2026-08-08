@@ -1048,11 +1048,12 @@ export class GatewayClient {
     return (await response.json()) as SessionRow;
   }
 
-  async createSession(): Promise<SessionRow> {
+  async createSession(options: { cwd?: string; title?: string } = {}): Promise<SessionRow> {
     const response = await fetch(this.endpoint("/api/sessions"), {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({ source: "desktop" }),
+      // P426: the gateway honors source/cwd/title in the create body.
+      body: JSON.stringify({ source: "desktop", ...options }),
     });
     if (!response.ok) throw new Error(`create session: HTTP ${response.status}`);
     const value = await response.json();
