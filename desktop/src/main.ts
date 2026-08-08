@@ -335,9 +335,13 @@ function maybeScrollToBottom(): void {
   }
 }
 
-function addMessage(role: string, content: string): HTMLElement {
+function addMessage(role: string, content: string, timestamp?: number): HTMLElement {
   const row = document.createElement("div");
   row.className = `message ${role}`;
+  // P381: hovering a bubble shows the stored message time.
+  if (typeof timestamp === "number" && timestamp > 0) {
+    row.title = new Date(timestamp * 1000).toLocaleString();
+  }
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   bubble.textContent = content;
@@ -468,7 +472,7 @@ async function openSession(session: SessionRow): Promise<void> {
           lastDay = day;
         }
       }
-      addMessage(message.role, message.content);
+      addMessage(message.role, message.content, message.timestamp);
       rendered += 1;
     }
     // Empty transcript → welcome copy (P255, hermes chat intro parity).
