@@ -33,6 +33,8 @@ export class SessionsViewWidget {
   private endReasonFilter: string | null = null;
   // P439: target of the rename dialog while it is open.
   private renameTarget: string | null = null;
+  // P442: target of the delete dialog while it is open.
+  private deleteTarget: string | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -86,7 +88,15 @@ export class SessionsViewWidget {
         <p id="sessions-rename-status" class="config-note" hidden></p>
         <menu>
           <button id="sessions-rename-cancel" class="ghost" data-i18n="chrome.cancel">Cancel</button>
-          <button id="sessions-rename-save" class="primary" data-i18n="chrome.save">Save</button>
+          <button id="sessions-rename-save" value="default" data-i18n="chrome.save">Save</button>
+        </menu>
+      </dialog>
+      <dialog id="sessions-delete-dialog">
+        <h2 data-i18n="sessionsView.deleteTitle">Delete this session</h2>
+        <p id="sessions-delete-message"></p>
+        <menu>
+          <button id="sessions-delete-cancel" class="ghost" data-i18n="chrome.cancel">Cancel</button>
+          <button id="sessions-delete-confirm" class="danger" value="default" data-i18n="chrome.delete">Delete</button>
         </menu>
       </dialog>
       <dialog id="sessions-prune-dialog">
@@ -179,6 +189,12 @@ export class SessionsViewWidget {
         event.preventDefault();
         void this.commitRename();
       }
+    });
+    this.root.querySelector("#sessions-delete-confirm")!.addEventListener("click", () => {
+      void this.commitDelete();
+    });
+    this.root.querySelector("#sessions-delete-cancel")!.addEventListener("click", () => {
+      (this.root.querySelector("#sessions-delete-dialog") as HTMLDialogElement).close();
     });
     this.root.querySelector("#sessions-view-prune")!.addEventListener("click", () => {
       this.openPruneDialog("prune");
@@ -619,14 +635,25 @@ export class SessionsViewWidget {
     }
   }
 
+  /** P442: open the delete confirmation dialog for the selected session. */
   private async deleteSelected(): Promise<void> {
+    if (!this.client() || !this.selected) return;
+    this.deleteTarget = this.selected;
+    const current = this.all.find((session) => session.id === this.selected);
+    const label = current?.title || this.selected.slice(0, 12);
+    const message = this.root.querySelector("#sessions-delete-message") as HTMLElement;
+    message.textContent = t.sessionsView.deleteConfirm.replace("{id}", label);
+    (this.root.querySelector("#sessions-delete-dialog") as HTMLDialogElement).showModal();
+  }
+
+  /** P442: commit the confirmed delete over DELETE /api/sessions/:id. */
+  private async commitDelete(): Promise<void> {
     const client = this.client();
-    if (!client || !this.selected) return;
-    const sessionId = this.selected;
-    const confirmText = t.sessionsView.deleteConfirm.replace("{id}", sessionId.slice(0, 12));
-    if (!window.confirm(confirmText)) return;
+    const sessionId = this.deleteTarget;
+    if (!client || !sessionId) return;
     try {
       await client.deleteSession(sessionId);
+      (this.root.querySelector("#sessions-delete-dialog") as HTMLDialogElement).close();
       this.status(t.sessionsView.deleted.replace("{id}", sessionId.slice(0, 12)), false);
       this.selected = null;
       const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
@@ -636,6 +663,7 @@ export class SessionsViewWidget {
       }
       await this.refresh();
     } catch (error) {
+      (this.root.querySelector("#sessions-delete-dialog") as HTMLDialogElement).close();
       this.status(
         t.sessionsView.deleteFailed.replace(
           "{error}",

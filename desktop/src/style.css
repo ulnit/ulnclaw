@@ -198,6 +198,8 @@ dialog input[type="text"], dialog input[type="password"] {
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 8px 0 0; }
 dialog menu button { border-radius: 8px; padding: 6px 14px; border: 1px solid var(--hover); background: var(--panel-2); color: var(--text); }
 dialog menu button[value="default"] { background: var(--accent); border-color: var(--accent); color: white; }
+/* P442: destructive confirm buttons keep the danger color. */
+dialog menu button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
 
 /* ---- view tabs ---- */
 .view-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 8px; }
