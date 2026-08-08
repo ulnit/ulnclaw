@@ -77,6 +77,24 @@ export class SessionPickerDialog {
           event.preventDefault();
           rows[this.kbIndex].click();
         }
+      } else if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey
+        && (event.key === "p" || event.key === "P")) {
+        // P566: Ctrl/Cmd+P toggles the pin on the highlighted row.
+        event.preventDefault();
+        if (this.kbIndex < 0 || !this.hooks.togglePin) return;
+        const rows = Array.from(this.list.querySelectorAll<HTMLButtonElement>(".session-picker-row"));
+        const target = rows[this.kbIndex];
+        if (!target) return;
+        const session = this.hooks.sessions().find((row) => row.id === target.dataset.sessionId);
+        if (!session) return;
+        const keep = this.kbIndex;
+        this.hooks.togglePin(session);
+        this.renderList();
+        const fresh = Array.from(this.list.querySelectorAll<HTMLButtonElement>(".session-picker-row"));
+        if (fresh.length) {
+          this.kbIndex = Math.min(keep, fresh.length - 1);
+          this.updateKbHighlight(fresh);
+        }
       }
     });
     this.filters = document.createElement("div");
@@ -221,6 +239,7 @@ export class SessionPickerDialog {
         this.dialog.close();
         void this.hooks.openSession(session.id);
       };
+      row.dataset.sessionId = session.id;
       this.list.appendChild(row);
     }
     for (const hit of hits) {
@@ -250,6 +269,7 @@ export class SessionPickerDialog {
         this.dialog.close();
         void this.hooks.openSession(hit.session_id);
       };
+      row.dataset.sessionId = hit.session_id;
       this.list.appendChild(row);
     }
   }
