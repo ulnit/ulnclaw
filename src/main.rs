@@ -8611,6 +8611,37 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                         .map_err(|e| e.to_string())?;
                     Ok(fork_id)
                 };
+                // P585: F11 export — write the highlighted session's
+                // transcript as Markdown into <home>/exports.
+                let export_home = home.clone();
+                let export = move |id: &str| {
+                    let export_store =
+                        SqliteSessionStore::open(export_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    let row = export_store
+                        .get_session_row(id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("session {id} not found"))?;
+                    let messages = export_store
+                        .load_messages_with_timestamps(id)
+                        .map_err(|e| e.to_string())?;
+                    let session = ulnclaw::session::export::ExportSession {
+                        id: row.id.clone(),
+                        title: row.title.clone(),
+                        source: row.source.clone(),
+                        model: row.model.clone(),
+                        cwd: row.cwd.clone(),
+                        started_at: row.started_at,
+                        ended_at: row.ended_at,
+                        messages,
+                    };
+                    ulnclaw::session::export::write_session_export(
+                        &export_home.join("exports"),
+                        &session,
+                        "md",
+                    )
+                    .map_err(|e| e.to_string())
+                };
                 match run_session_browse_tui(
                     rows.clone(),
                     project_by_session.clone(),
@@ -8621,6 +8652,7 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     Some(&delete),
                     Some(&rename),
                     Some(&fork),
+                    Some(&export),
                 ) {
                     Ok(selected) => selected,
                     Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
@@ -9096,6 +9128,7 @@ fn run_session_browse_tui(
     delete: Option<&dyn Fn(&str) -> Result<(), String>>,
     rename: Option<&dyn Fn(&str, &str) -> Result<(), String>>,
     fork: Option<&dyn Fn(&str) -> Result<String, String>>,
+    export: Option<&dyn Fn(&str) -> Result<std::path::PathBuf, String>>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -10039,6 +10072,20 @@ fn run_session_browse_tui(
                             };
                             cursor_idx = 0;
                             scroll_offset = 0;
+                        }
+                    }
+                    KeyCode::F(11) => {
+                        // P585: export the highlighted session's transcript
+                        // as Markdown; the footer reports the written path.
+                        if let (Some(id), Some(export_fn)) = (highlighted_id.clone(), export) {
+                            match export_fn(&id) {
+                                Ok(path) => {
+                                    notice = Some(format!("Exported to {}", path.display()));
+                                }
+                                Err(e) => {
+                                    notice = Some(format!("Export failed: {e}"));
+                                }
+                            }
                         }
                     }
                     KeyCode::Char('/') if filter.is_empty() && search_hits.is_none() => {

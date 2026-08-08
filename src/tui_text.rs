@@ -185,6 +185,7 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("F8", "archive / unarchive the highlighted session (y confirms)"),
         ("F9", "delete the highlighted session forever (y confirms)"),
         ("F10", "cycle the model filter (all \u{2192} model \u{2192} \u{2026}; Shift cycles backwards)"),
+        ("F11", "export the highlighted session to Markdown (P585)"),
         ("/", "search message bodies (FTS) while no filter is typed \u{2014} Enter runs, Esc cancels"),
         ("F1", "toggle this help overlay"),
         ("Ctrl+L", "redraw the screen"),
