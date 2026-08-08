@@ -6,7 +6,7 @@
 // sessions for continued conversation.
 
 import type { GatewayClient, MessageRow, SessionPruneOptions, SessionRow } from "./gateway";
-import { t } from "./i18n";
+import { onLocaleChange, t } from "./i18n";
 
 function escapeHtml(text: string): string {
   return text
@@ -98,6 +98,12 @@ export class SessionsViewWidget {
     this.root.querySelector("#sessions-view-status-filter")!.addEventListener("change", () => {
       this.renderList();
     });
+    // P436: option labels are driven by updateStatusOptions (live counts);
+    // strip data-i18n so applyStatic doesn't fight the count suffixes.
+    const statusSelect = this.root.querySelector("#sessions-view-status-filter") as HTMLSelectElement;
+    for (const option of Array.from(statusSelect.options)) option.removeAttribute("data-i18n");
+    this.updateStatusOptions();
+    onLocaleChange(() => this.updateStatusOptions());
     let searchDebounce: number | null = null;
     this.root.querySelector("#sessions-view-search")!.addEventListener("input", () => {
       if (searchDebounce !== null) window.clearTimeout(searchDebounce);
@@ -353,6 +359,13 @@ export class SessionsViewWidget {
       .trim()
       .toLowerCase();
     const status = (this.root.querySelector("#sessions-view-status-filter") as HTMLSelectElement).value;
+    // P436: live per-status counts on the filter options.
+    this.updateStatusOptions({
+      all: this.all.length,
+      open: this.all.filter((s) => !s.end_reason).length,
+      ended: this.all.filter((s) => s.end_reason && s.end_reason !== "archived").length,
+      archived: this.all.filter((s) => s.end_reason === "archived").length,
+    });
     const rows = this.all.filter((session) => {
       if (status === "open" && session.end_reason) return false;
       if (status === "ended" && (!session.end_reason || session.end_reason === "archived")) return false;
@@ -387,6 +400,23 @@ export class SessionsViewWidget {
         this.renderList();
         this.loadTranscript(row.dataset.id || "").catch(() => undefined);
       });
+    }
+  }
+
+  /** P436: status filter option labels, optionally suffixed with counts. */
+  private updateStatusOptions(counts?: { all: number; open: number; ended: number; archived: number }): void {
+    const select = this.root.querySelector("#sessions-view-status-filter") as HTMLSelectElement;
+    if (!select) return;
+    const labels: Record<string, string> = {
+      all: t.sessionsView.statusAll,
+      open: t.sessionsView.statusOpen,
+      ended: t.sessionsView.statusEnded,
+      archived: t.sessionsView.statusArchived,
+    };
+    for (const option of Array.from(select.options)) {
+      const base = labels[option.value] ?? option.value;
+      const count = counts?.[option.value as keyof typeof counts];
+      option.textContent = count === undefined ? base : `${base} (${count})`;
     }
   }
 
