@@ -1466,6 +1466,117 @@ fn persist_reasoning_effort(
     Ok(normalized)
 }
 
+/// Activate (or clear) a personality: resolves the named personality's
+/// prompt into `agent.system_prompt` and records the name in
+/// `agent.personality` (both removed on clear). Shared by the
+/// `/personality` slash command and `PUT /api/personality` (P620).
+/// Returns the applied name (None = cleared/default).
+fn apply_personality(name: Option<&str>) -> std::result::Result<Option<String>, String> {
+    let path = crate::config_cmd::config_path();
+    let config = crate::config::UlncLawConfig::load(Some(&path))
+        .map_err(|e| format!("config load failed: {e}"))?;
+    let resolved: Option<String> = match name {
+        None => None,
+        Some(requested) => {
+            let key = requested.to_ascii_lowercase();
+            let Some(def) = config.agent.personalities.get(&key) else {
+                let mut names: Vec<String> = vec!["none".to_string()];
+                let mut keys: Vec<&String> = config.agent.personalities.keys().collect();
+                keys.sort();
+                names.extend(keys.iter().map(|k| k.to_string()));
+                return Err(format!(
+                    "unknown personality: {requested} \u{2014} available: {}",
+                    names.join(", ")
+                ));
+            };
+            Some(def.resolve_prompt())
+        }
+    };
+    let mut doc = crate::config_cmd::load_toml(&path)?;
+    let Some(root) = doc.as_table_mut() else {
+        return Err("config root is not a table".to_string());
+    };
+    let agent_entry = root
+        .entry("agent".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let Some(agent_table) = agent_entry.as_table_mut() else {
+        return Err("config [agent] is not a table".to_string());
+    };
+    match (&resolved, name) {
+        (Some(prompt), Some(requested)) => {
+            agent_table.insert(
+                "system_prompt".to_string(),
+                toml::Value::String(prompt.clone()),
+            );
+            agent_table.insert(
+                "personality".to_string(),
+                toml::Value::String(requested.to_ascii_lowercase()),
+            );
+        }
+        _ => {
+            agent_table.remove("system_prompt");
+            agent_table.remove("personality");
+        }
+    }
+    crate::config_cmd::save_toml(&path, &doc)?;
+    Ok(name.map(|n| n.to_ascii_lowercase()))
+}
+
+/// `GET /api/personalities` — the configured personalities with
+/// previews plus the active name (P620; HTTP twin of `/personality`).
+async fn personalities_get() -> Response {
+    let config = match crate::config::UlncLawConfig::load(None) {
+        Ok(c) => c,
+        Err(e) => return server_error(&format!("config load failed: {e}")),
+    };
+    let mut names: Vec<&String> = config.agent.personalities.keys().collect();
+    names.sort();
+    let personalities: Vec<Value> = names
+        .iter()
+        .map(|name| {
+            json!({
+                "name": name,
+                "preview": config.agent.personalities[name.as_str()].preview(),
+            })
+        })
+        .collect();
+    let active = {
+        let active = config.agent.personality.trim().to_string();
+        if active.is_empty() {
+            Value::Null
+        } else {
+            Value::String(active)
+        }
+    };
+    Json(json!({
+        "active": active,
+        "personalities": personalities,
+        "note": "applies to new runs; restart the gateway to change the running process",
+    }))
+    .into_response()
+}
+
+/// `PUT /api/personality` — activate or clear the personality (P620).
+/// Body: {"name": "poet"} activates; {"name": "" | "none"} clears.
+async fn personality_set(Json(body): Json<Value>) -> Response {
+    let raw = body["name"].as_str().map(str::trim).unwrap_or("");
+    let name = if raw.is_empty() || matches!(raw.to_ascii_lowercase().as_str(), "none" | "default" | "neutral") {
+        None
+    } else {
+        Some(raw)
+    };
+    match apply_personality(name) {
+        Ok(applied) => Json(json!({
+            "ok": true,
+            "active": applied,
+            "note": "applies to new runs; restart the gateway to change the running process",
+        }))
+        .into_response(),
+        Err(e) if e.starts_with("unknown personality") => bad_request(&e, None),
+        Err(e) => server_error(&e),
+    }
+}
+
 /// `GET /api/reasoning` — the persisted `agent.reasoning_effort` pin
 /// plus the accepted levels (P615; the HTTP twin of `/reasoning`).
 async fn reasoning_get() -> Response {
@@ -6049,6 +6160,11 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model/moa", get(model_moa_get).put(model_moa_put))
         .route("/api/model/recommended-default", get(model_recommended_default))
         .route("/api/reasoning", get(reasoning_get).put(reasoning_set))
+        .route(
+            "/api/personalities",
+            get(personalities_get),
+        )
+        .route("/api/personality", put(personality_set))
         .route("/api/providers/custom-endpoints", get(custom_endpoints_list).post(custom_endpoints_upsert))
         .route("/api/providers/custom-endpoints/validate", post(custom_endpoints_validate))
         .route("/api/providers/validate", post(providers_validate))
@@ -10691,64 +10807,21 @@ async fn resolve_gateway_slash(
                 return Some(GatewaySlash::Direct(lines.join("\n")));
             }
             let lower = arg.to_ascii_lowercase();
-            let prompt = if matches!(lower.as_str(), "none" | "default" | "neutral") {
+            let name = if matches!(lower.as_str(), "none" | "default" | "neutral") {
                 None
             } else {
-                match config.agent.personalities.get(&lower) {
-                    Some(def) => Some(def.resolve_prompt()),
-                    None => {
-                        let mut names: Vec<String> = vec!["none".to_string()];
-                        let mut keys: Vec<&String> =
-                            config.agent.personalities.keys().collect();
-                        keys.sort();
-                        names.extend(keys.iter().map(|k| k.to_string()));
-                        return Some(GatewaySlash::Direct(format!(
-                            "unknown personality: {arg} \u{2014} available: {}",
-                            names.join(", ")
-                        )));
-                    }
-                }
+                Some(lower.as_str())
             };
-            let mut doc = match crate::config_cmd::load_toml(&path) {
-                Ok(v) => v,
-                Err(e) => {
-                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
-                }
-            };
-            let Some(root) = doc.as_table_mut() else {
-                return Some(GatewaySlash::Direct(
-                    "config root is not a table".to_string(),
-                ));
-            };
-            let agent_entry = root
-                .entry("agent".to_string())
-                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-            let Some(agent_table) = agent_entry.as_table_mut() else {
-                return Some(GatewaySlash::Direct(
-                    "config [agent] is not a table".to_string(),
-                ));
-            };
-            match &prompt {
-                Some(resolved) => {
-                    agent_table.insert(
-                        "system_prompt".to_string(),
-                        toml::Value::String(resolved.clone()),
-                    );
-                }
-                None => {
-                    agent_table.remove("system_prompt");
-                }
+            match apply_personality(name) {
+                Ok(Some(applied)) => Some(GatewaySlash::Direct(format!(
+                    "personality set to {applied} \u{2014} applies to new runs; restart the gateway to change this process"
+                ))),
+                Ok(None) => Some(GatewaySlash::Direct(
+                    "personality cleared \u{2014} the default persona applies to new runs"
+                        .to_string(),
+                )),
+                Err(e) => Some(GatewaySlash::Direct(e)),
             }
-            if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
-                return Some(GatewaySlash::Direct(format!("config save failed: {e}")));
-            }
-            Some(GatewaySlash::Direct(match &prompt {
-                Some(_) => format!(
-                    "personality set to {lower} \u{2014} applies to new runs; restart the gateway to change this process"
-                ),
-                None => "personality cleared \u{2014} the default persona applies to new runs"
-                    .to_string(),
-            }))
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');
@@ -14729,6 +14802,81 @@ mod tests {
             app.clone(), "POST", "/api/jobs/nope/run", Some(token), json!({}),
         ).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_personality_api_roundtrip() {
+        // P620: GET /api/personalities + PUT /api/personality.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[agent.personalities]\npirate = \"Talk like a grizzled pirate.\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let (state, _temp) = jobs_state();
+        let app = router(state);
+        let token = "sekret";
+
+        let (status, _) = get_json(app.clone(), "/api/personalities", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = get_json(app.clone(), "/api/personalities", Some(token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["active"].is_null(), "{body}");
+        let names: Vec<&str> = body["personalities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["pirate"]);
+
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/personality",
+            Some(token),
+            json!({"name": "pirate"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["active"], "pirate");
+        let (_, body) = get_json(app.clone(), "/api/personalities", Some(token)).await;
+        assert_eq!(body["active"], "pirate");
+
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/personality",
+            Some(token),
+            json!({"name": "wizard"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown personality"));
+
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/personality",
+            Some(token),
+            json!({"name": "none"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["active"].is_null(), "{body}");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

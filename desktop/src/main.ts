@@ -93,6 +93,10 @@ const state = {
   reasoningEffort: null as string | null,
   reasoningLevels: [] as string[],
   reasoningLoaded: false,
+  /** P620: active personality name + configured personas. */
+  personalityActive: null as string | null,
+  personalityNames: [] as string[],
+  personalityLoaded: false,
   /** P386: sidebar session-list cap (raised by the Show all row). */
   sessionListLimit: 100,
   /** P393: per-session composer drafts (session id -> unsent text). */
@@ -195,6 +199,8 @@ const el = {
   tokenBadge: document.getElementById("token-badge")!,
   reasoningBadge: document.getElementById("reasoning-badge") as HTMLButtonElement,
   reasoningPop: document.getElementById("reasoning-pop")!,
+  personalityBadge: document.getElementById("personality-badge") as HTMLButtonElement,
+  personalityPop: document.getElementById("personality-pop")!,
   projectBadge: document.getElementById("project-badge")!,
   endBadge: document.getElementById("end-badge")!,
   contextMeter: document.getElementById("context-meter")!,
@@ -1577,6 +1583,71 @@ async function applyReasoningPick(level: string | null): Promise<void> {
   }
 }
 
+/** P620: personality chip beside the reasoning badge — shows the
+ * active persona (🎭 default when clear); clicking pops the persona
+ * list and persists the pick through PUT /api/personality. */
+function refreshPersonalityBadge(): void {
+  const active = state.personalityActive;
+  el.personalityBadge.textContent = active
+    ? `\u{1F3AD} ${active}`
+    : `\u{1F3AD} ${t.chrome.personalityDefault}`;
+  el.personalityBadge.title = t.chrome.personalityTitle;
+  el.personalityBadge.classList.toggle("pinned", !!active);
+  el.personalityBadge.hidden = false;
+}
+
+async function loadPersonalityState(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const payload = await state.client.personalitiesGet();
+    state.personalityActive = payload.active;
+    state.personalityNames = (payload.personalities ?? []).map((p) => p.name);
+    refreshPersonalityBadge();
+  } catch {
+    // Gateway without /api/personalities (or none configured): hide.
+  }
+}
+
+function togglePersonalityPop(): void {
+  if (!el.personalityPop.hidden) {
+    el.personalityPop.hidden = true;
+    return;
+  }
+  const items: (string | null)[] = [null, ...state.personalityNames];
+  el.personalityPop.innerHTML = items
+    .map((name) => {
+      const label = name ?? t.chrome.personalityDefault;
+      const active = (name ?? "") === (state.personalityActive ?? "");
+      return `<div class="slash-item${active ? " selected" : ""}" data-name="${name ?? ""}">\u{1F3AD} ${escapeHtmlInfo(label)}</div>`;
+    })
+    .join("");
+  const rect = el.personalityBadge.getBoundingClientRect();
+  el.personalityPop.style.position = "fixed";
+  el.personalityPop.style.left = `${rect.left}px`;
+  el.personalityPop.style.top = `${rect.bottom + 6}px`;
+  el.personalityPop.style.right = "auto";
+  el.personalityPop.style.bottom = "auto";
+  el.personalityPop.style.minWidth = "160px";
+  el.personalityPop.hidden = false;
+}
+
+async function applyPersonalityPick(name: string | null): Promise<void> {
+  el.personalityPop.hidden = true;
+  if (!state.client) return;
+  try {
+    const payload = await state.client.personalitySet(name);
+    state.personalityActive = payload.active;
+    refreshPersonalityBadge();
+    notifySuccess(
+      payload.active
+        ? `\u{1F3AD} ${payload.active}`
+        : `\u{1F3AD} ${t.chrome.personalityDefault}`,
+    );
+  } catch (error) {
+    notifyError(String(error));
+  }
+}
+
 /** P545: total-token chip for the open session, beside the model
  * badge — sourced from the same /api/usage map as the sidebar rows. */
 function refreshTokenBadge(): void {
@@ -1757,6 +1828,11 @@ async function pollHealth(): Promise<void> {
     if (!state.reasoningLoaded) {
       state.reasoningLoaded = true;
       void loadReasoningState();
+    }
+    // P620: one-shot personality chip load.
+    if (!state.personalityLoaded) {
+      state.personalityLoaded = true;
+      void loadPersonalityState();
     }
     // P365: enrich the dot tooltip with the detailed open probe.
     const detailed = await state.client.healthDetailed();
@@ -3343,6 +3419,22 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     const target = event.target as Node;
     if (el.reasoningPop.contains(target) || el.reasoningBadge.contains(target)) return;
     el.reasoningPop.hidden = true;
+  });
+  el.personalityBadge.addEventListener("click", (event) => {
+    event.stopPropagation();
+    togglePersonalityPop();
+  });
+  el.personalityPop.addEventListener("click", (event) => {
+    const item = (event.target as HTMLElement).closest(".slash-item") as HTMLElement | null;
+    if (!item) return;
+    const name = item.dataset.name ?? "";
+    void applyPersonalityPick(name === "" ? null : name);
+  });
+  document.addEventListener("click", (event) => {
+    if (el.personalityPop.hidden) return;
+    const target = event.target as Node;
+    if (el.personalityPop.contains(target) || el.personalityBadge.contains(target)) return;
+    el.personalityPop.hidden = true;
   });
   el.modelBadge.addEventListener("click", () => {
     if (!state.current || !state.picker) return;

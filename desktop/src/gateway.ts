@@ -726,6 +726,13 @@ export interface MoaConfigPayload {
   aggregator?: MoaSlotConfig;
 }
 
+/** GET /api/personalities payload (P620). */
+export interface PersonalitiesPayload {
+  active: string | null;
+  personalities: { name: string; preview: string }[];
+  note?: string;
+}
+
 /** GET/PUT /api/reasoning payload (P615). */
 export interface ReasoningPayload {
   effort: string | null;
@@ -2752,6 +2759,26 @@ export class GatewayClient {
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
     return value as { ok: boolean; task: string; reset: boolean };
+  }
+
+  /** GET /api/personalities — configured personas + active name (P620). */
+  async personalitiesGet(): Promise<PersonalitiesPayload> {
+    const response = await fetch(this.endpoint("/api/personalities"), { headers: this.headers() });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error?.message || `personalities HTTP ${response.status}`);
+    return value as PersonalitiesPayload;
+  }
+
+  /** PUT /api/personality — activate or clear the persona (P620). */
+  async personalitySet(name: string | null): Promise<{ ok: boolean; active: string | null }> {
+    const response = await fetch(this.endpoint("/api/personality"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ name: name ?? "none" }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error?.message || `personality HTTP ${response.status}`);
+    return value as { ok: boolean; active: string | null };
   }
 
   /** GET /api/reasoning — persisted agent.reasoning_effort pin (P615). */

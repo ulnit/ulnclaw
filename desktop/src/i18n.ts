@@ -58,7 +58,7 @@ export interface Translations {
   chrome: {
     chatTab: string; kanbanTab: string; projectsTab: string; jobsTab: string; usageTab: string; configTab: string; doctorTab: string; webhooksTab: string; runsTab: string; skillsTab: string; sessionsTab: string; modelsTab: string; pluginsTab: string; pairingTab: string; profilesTab: string;
     newSession: string; settings: string; gatewayStatus: string; hatchPet: string;
-    selectOrStart: string; inputPlaceholder: string; send: string; charCountTitle: string; reasoningTitle: string; reasoningAuto: string;
+    selectOrStart: string; inputPlaceholder: string; send: string; charCountTitle: string; reasoningTitle: string; reasoningAuto: string; personalityTitle: string; personalityDefault: string;
     micTitle: string; micRecording: string; micFailed: string;
     attachTitle: string; fsTitle: string; fsUpTitle: string; fsEmpty: string; fsFailed: string;
     fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
@@ -406,7 +406,7 @@ const en: Translations = {
     newSession: "New session", settings: "Settings", gatewayStatus: "gateway status",
     hatchPet: "\u{1F95A} Hatch pet",
     selectOrStart: "Select or start a session",
-    inputPlaceholder: "Message ulnclaw… (Enter to send, Shift+Enter for newline)", charCountTitle: "Character count", reasoningTitle: "Reasoning effort — click to pin a level (persists agent.reasoning_effort)", reasoningAuto: "auto",
+    inputPlaceholder: "Message ulnclaw… (Enter to send, Shift+Enter for newline)", charCountTitle: "Character count", reasoningTitle: "Reasoning effort — click to pin a level (persists agent.reasoning_effort)", reasoningAuto: "auto", personalityTitle: "Personality — click to activate a persona (persists agent.personality)", personalityDefault: "default",
     send: "Send",
     micTitle: "Voice input (record and transcribe)",
     micRecording: "Recording\u2026 click to stop",
@@ -950,7 +950,7 @@ const zh: Translations = {
     newSession: "新建会话", settings: "设置", gatewayStatus: "网关状态",
     hatchPet: "\u{1F95A} 孵化宠物",
     selectOrStart: "选择或开始一个会话",
-    inputPlaceholder: "给 ulnclaw 发消息…（Enter 发送，Shift+Enter 换行）", charCountTitle: "字符数", reasoningTitle: "推理深度 —— 点击钉选级别（持久化 agent.reasoning_effort）", reasoningAuto: "自动",
+    inputPlaceholder: "给 ulnclaw 发消息…（Enter 发送，Shift+Enter 换行）", charCountTitle: "字符数", reasoningTitle: "推理深度 —— 点击钉选级别（持久化 agent.reasoning_effort）", reasoningAuto: "自动", personalityTitle: "人格 —— 点击启用人格（持久化 agent.personality）", personalityDefault: "默认",
     send: "发送",
     micTitle: "语音输入（录音并转写）",
     micRecording: "录音中…点击停止",
@@ -1494,7 +1494,7 @@ const zhHant: Translations = {
     newSession: "新增工作階段", settings: "設定", gatewayStatus: "閘道狀態",
     hatchPet: "\u{1F95A} 孵化寵物",
     selectOrStart: "選擇或開始工作階段",
-    inputPlaceholder: "傳送訊息給 ulnclaw…（Enter 傳送，Shift+Enter 換行）", charCountTitle: "字元數", reasoningTitle: "推理深度 —— 點選釘選層級（持久化 agent.reasoning_effort）", reasoningAuto: "自動",
+    inputPlaceholder: "傳送訊息給 ulnclaw…（Enter 傳送，Shift+Enter 換行）", charCountTitle: "字元數", reasoningTitle: "推理深度 —— 點選釘選層級（持久化 agent.reasoning_effort）", reasoningAuto: "自動", personalityTitle: "人格 —— 點選啟用人格（持久化 agent.personality）", personalityDefault: "預設",
     send: "傳送",
     micTitle: "語音輸入（錄音並轉寫）",
     micRecording: "錄音中…點選停止",
@@ -2038,7 +2038,7 @@ const ja: Translations = {
     newSession: "新規セッション", settings: "設定", gatewayStatus: "ゲートウェイ状態",
     hatchPet: "\u{1F95A} ペットをふ化",
     selectOrStart: "セッションを選択または開始",
-    inputPlaceholder: "ulnclaw にメッセージ…（Enter で送信、Shift+Enter で改行）", charCountTitle: "文字数", reasoningTitle: "推論深度 — クリックでレベルを固定（agent.reasoning_effort に永続化）", reasoningAuto: "自動",
+    inputPlaceholder: "ulnclaw にメッセージ…（Enter で送信、Shift+Enter で改行）", charCountTitle: "文字数", reasoningTitle: "推論深度 — クリックでレベルを固定（agent.reasoning_effort に永続化）", reasoningAuto: "自動", personalityTitle: "パーソナリティ — クリックで有効化（agent.personality に永続化）", personalityDefault: "デフォルト",
     send: "送信",
     micTitle: "音声入力（録音して文字起こし）",
     micRecording: "録音中…クリックで停止",
@@ -2582,7 +2582,7 @@ const ar: Translations = {
     newSession: "جلسة جديدة", settings: "الإعدادات", gatewayStatus: "حالة البوابة",
     hatchPet: "\u{1F95A} فقّس حيوانًا أليفًا",
     selectOrStart: "اختر جلسة أو ابدأ واحدة",
-    inputPlaceholder: "راسل ulnclaw… (Enter للإرسال، Shift+Enter لسطر جديد)", charCountTitle: "عدد الأحرف", reasoningTitle: "جهد الاستدلال — انقر لتثبيت مستوى (يُحفظ في agent.reasoning_effort)", reasoningAuto: "تلقائي",
+    inputPlaceholder: "راسل ulnclaw… (Enter للإرسال، Shift+Enter لسطر جديد)", charCountTitle: "عدد الأحرف", reasoningTitle: "جهد الاستدلال — انقر لتثبيت مستوى (يُحفظ في agent.reasoning_effort)", reasoningAuto: "تلقائي", personalityTitle: "الشخصية — انقر لتفعيل شخصية (تُحفظ في agent.personality)", personalityDefault: "افتراضي",
     send: "إرسال",
     micTitle: "إدخال صوتي (تسجيل وتحويل إلى نص)",
     micRecording: "جارٍ التسجيل… انقر للإيقاف",

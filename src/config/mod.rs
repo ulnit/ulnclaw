@@ -275,6 +275,10 @@ pub struct AgentSettings {
     /// here.
     #[serde(default)]
     pub system_prompt: String,
+    /// Name of the active personality (ulnclaw bookkeeping over hermes
+    /// `agent.system_prompt` writes): empty = the default persona.
+    #[serde(default)]
+    pub personality: String,
     /// Named personalities for `/personality` (hermes
     /// `agent.personalities`): bare prompt strings or tables with
     /// system_prompt/tone/style/description.
@@ -381,6 +385,7 @@ impl Default for AgentSettings {
             environment_probe: true,
             reasoning_effort: String::new(),
             system_prompt: String::new(),
+            personality: String::new(),
             personalities: HashMap::new(),
         }
     }
