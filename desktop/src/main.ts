@@ -857,6 +857,14 @@ async function sendTurn(): Promise<void> {
     el.newSession.click();
     return;
   }
+  // P410: /clear clears the screen and starts a new session (hermes
+  // CLI /clear parity — destructive, so it asks first).
+  if (/^\/clear\b/i.test(text)) {
+    el.input.value = "";
+    refreshCharCount();
+    if (window.confirm(t.slash.clearConfirm)) el.newSession.click();
+    return;
+  }
   if ((!text && state.pendingUploads.length === 0) || state.busy || !state.client) return;
   if (!state.current) {
     try {
@@ -1216,6 +1224,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/usage", t.slash.usage],
     ["/kanban", t.slash.kanban],
     ["/new", t.slash.newSession],
+    ["/clear", t.slash.clear],
   ];
 }
 

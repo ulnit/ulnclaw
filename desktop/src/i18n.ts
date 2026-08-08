@@ -87,7 +87,7 @@ export interface Translations {
     whenNow: string;
   };
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
-  slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; kanban: string; newSession: string; skillFallback: string; resume: string };
+  slash: { help: string; skills: string; tools: string; recap: string; title: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; skillFallback: string; resume: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
     failureTitle: string; retry: string; openSettings: string; dismiss: string };
   bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string };
@@ -376,7 +376,7 @@ const en: Translations = {
   slash: {
     help: "gateway slash commands", skills: "list skills", tools: "list enabled tools",
     recap: "recap this session", title: "show or set the session title",
-    usage: "this session's token usage", kanban: "add a kanban task (/kanban <title>)", newSession: "start a new session (desktop)", skillFallback: "skill",
+    usage: "this session's token usage", kanban: "add a kanban task (/kanban <title>)", newSession: "start a new session (desktop)", clear: "clear the screen and start a new session (desktop)", clearConfirm: "Clear the screen and start a new session? The current conversation stays in the session list.", skillFallback: "skill",
     resume: "resume a recent session (desktop)",
   },
   boot: {
@@ -830,7 +830,7 @@ const zh: Translations = {
   slash: {
     help: "网关斜杠命令", skills: "列出技能", tools: "列出已启用工具",
     recap: "回顾本会话", title: "查看或设置会话标题",
-    usage: "本会话的 token 用量", kanban: "添加看板任务（/kanban <标题>）", newSession: "开始新会话（桌面）", skillFallback: "技能",
+    usage: "本会话的 token 用量", kanban: "添加看板任务（/kanban <标题>）", newSession: "开始新会话（桌面）", clear: "清空屏幕并开始新会话（桌面）", clearConfirm: "清空屏幕并开始新会话？当前会话仍保留在会话列表中。", skillFallback: "技能",
     resume: "恢复近期会话（桌面）",
   },
   boot: {
@@ -1284,7 +1284,7 @@ const zhHant: Translations = {
   slash: {
     help: "閘道斜線命令", skills: "列出技能", tools: "列出已啟用工具",
     recap: "回顧本工作階段", title: "檢視或設定工作階段標題",
-    usage: "本工作階段的 token 用量", kanban: "新增看板任務（/kanban <標題>）", newSession: "開始新工作階段（桌面）", skillFallback: "技能",
+    usage: "本工作階段的 token 用量", kanban: "新增看板任務（/kanban <標題>）", newSession: "開始新工作階段（桌面）", clear: "清空螢幕並開始新工作階段（桌面）", clearConfirm: "清空螢幕並開始新工作階段？目前工作階段仍保留在工作階段清單中。", skillFallback: "技能",
     resume: "恢復近期工作階段（桌面）",
   },
   boot: {
@@ -1738,7 +1738,7 @@ const ja: Translations = {
   slash: {
     help: "ゲートウェイのスラッシュコマンド", skills: "スキル一覧", tools: "有効なツール一覧",
     recap: "このセッションの要約", title: "セッションタイトルを表示/設定",
-    usage: "このセッションのトークン使用量", kanban: "カンバンタスクを追加（/kanban <タイトル>）", newSession: "新しいセッションを開始（デスクトップ）", skillFallback: "スキル",
+    usage: "このセッションのトークン使用量", kanban: "カンバンタスクを追加（/kanban <タイトル>）", newSession: "新しいセッションを開始（デスクトップ）", clear: "画面をクリアして新しいセッションを開始（デスクトップ）", clearConfirm: "画面をクリアして新しいセッションを開始しますか？現在のセッションはセッション一覧に残ります。", skillFallback: "スキル",
     resume: "最近のセッションを再開（デスクトップ）",
   },
   boot: {
@@ -2192,7 +2192,7 @@ const ar: Translations = {
   slash: {
     help: "أوامر البوابة المائلة", skills: "قائمة المهارات", tools: "قائمة الأدوات المفعّلة",
     recap: "تلخيص هذه الجلسة", title: "عرض عنوان الجلسة أو تعيينه",
-    usage: "استخدام الرموز لهذه الجلسة", kanban: "إضافة مهمة كانبان (/kanban <العنوان>)", newSession: "بدء جلسة جديدة (سطح المكتب)", skillFallback: "مهارة",
+    usage: "استخدام الرموز لهذه الجلسة", kanban: "إضافة مهمة كانبان (/kanban <العنوان>)", newSession: "بدء جلسة جديدة (سطح المكتب)", clear: "مسح الشاشة وبدء جلسة جديدة (سطح المكتب)", clearConfirm: "مسح الشاشة وبدء جلسة جديدة؟ تبقى الجلسة الحالية في قائمة الجلسات.", skillFallback: "مهارة",
     resume: "استئناف جلسة حديثة (سطح المكتب)",
   },
   boot: {
