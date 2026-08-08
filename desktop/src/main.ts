@@ -3464,6 +3464,16 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   startApprovalWatcher();
 }
 
+/** P563: compact duration (45s / 12m / 3h05m / 2d4h) — TUI P562 parity. */
+function formatDurationCompact(totalSecs: number): string {
+  if (totalSecs < 60) return `${totalSecs}s`;
+  const minutes = Math.floor(totalSecs / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h${String(minutes % 60).padStart(2, "0")}m`;
+  return `${Math.floor(hours / 24)}d${hours % 24}h`;
+}
+
 /** P360: session info popover — clicking the chat title shows the
  * current session's metadata (id, source, model, project, activity,
  * message census) with a copy-id action. */
@@ -3495,6 +3505,11 @@ async function openSessionInfo(): Promise<void> {
     [t.session.infoActivity, formatWhen(detail.last_activity_at)],
     [t.session.infoMessages, String(detail.message_count ?? "—")],
   ];
+  // P563: session duration (started → last activity), TUI parity (P562).
+  const durationSecs = Math.max(0, Math.floor(detail.last_activity_at - detail.started_at));
+  if (durationSecs > 0) {
+    rows.push([t.session.infoDuration, formatDurationCompact(durationSecs)]);
+  }
   // P460: show the end reason when the session is ended/archived.
   if (detail.end_reason) {
     rows.push([
