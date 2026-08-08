@@ -358,6 +358,7 @@ export interface Translations {
     counts: string; stageAll: string; unstageAll: string; revert: string; revertConfirm: string;
     commitPlaceholder: string; commit: string; push: string; pushing: string; failed: string;
     committed: string; pushed: string; stagedNote: string; unstagedNote: string; reverted: string;
+    newBranch: string; newBranchPrompt: string; createdBranch: string; switchedBranch: string;
   };
   learning: {
     title: string; tagline: string; searchPlaceholder: string; building: string;
@@ -872,6 +873,7 @@ const en: Translations = {
     commitPlaceholder: "Commit message", commit: "Commit", push: "Push", pushing: "Pushing…",
     failed: "Git action failed: {error}", committed: "Committed.", pushed: "Pushed.",
     stagedNote: "Staged.", unstagedNote: "Unstaged.", reverted: "Reverted {count} file(s).",
+    newBranch: "New branch", newBranchPrompt: "New branch name:", createdBranch: "Created and switched to {name}.", switchedBranch: "Switched to {name}.",
   },
   learning: {
     title: "✨ Learning", tagline: "learned skills + memory, linked",
@@ -1407,6 +1409,7 @@ const zh: Translations = {
     commitPlaceholder: "提交信息", commit: "提交", push: "推送", pushing: "推送中…",
     failed: "git 操作失败：{error}", committed: "已提交。", pushed: "已推送。",
     stagedNote: "已暂存。", unstagedNote: "已取消暂存。", reverted: "已还原 {count} 个文件。",
+    newBranch: "新建分支", newBranchPrompt: "新分支名称：", createdBranch: "已创建并切换到 {name}。", switchedBranch: "已切换到 {name}。",
   },
   learning: {
     title: "✨ 学习", tagline: "已学技能 + 记忆，相互连接",
@@ -1942,6 +1945,7 @@ const zhHant: Translations = {
     commitPlaceholder: "提交訊息", commit: "提交", push: "推送", pushing: "推送中…",
     failed: "git 操作失敗：{error}", committed: "已提交。", pushed: "已推送。",
     stagedNote: "已暫存。", unstagedNote: "已取消暫存。", reverted: "已還原 {count} 個檔案。",
+    newBranch: "新建分支", newBranchPrompt: "新分支名稱：", createdBranch: "已建立並切換到 {name}。", switchedBranch: "已切換到 {name}。",
   },
   learning: {
     title: "✨ 學習", tagline: "已學技能 + 記憶，相互連結",
@@ -2477,6 +2481,7 @@ const ja: Translations = {
     commitPlaceholder: "コミットメッセージ", commit: "コミット", push: "プッシュ", pushing: "プッシュ中…",
     failed: "git 操作に失敗: {error}", committed: "コミットしました。", pushed: "プッシュしました。",
     stagedNote: "ステージしました。", unstagedNote: "アンステージしました。", reverted: "{count} 個のファイルを元に戻しました。",
+    newBranch: "新規ブランチ", newBranchPrompt: "新しいブランチ名:", createdBranch: "{name} を作成して切り替えました。", switchedBranch: "{name} に切り替えました。",
   },
   learning: {
     title: "✨ 学習", tagline: "学習済みスキル + メモリ、リンク付き",
@@ -3012,6 +3017,7 @@ const ar: Translations = {
     commitPlaceholder: "رسالة الالتزام", commit: "التزام", push: "دفع", pushing: "جارٍ الدفع…",
     failed: "فشلت عملية git: {error}", committed: "تم الالتزام.", pushed: "تم الدفع.",
     stagedNote: "تمت التهيئة.", unstagedNote: "تم إلغاء التهيئة.", reverted: "تم التراجع عن {count} ملف.",
+    newBranch: "فرع جديد", newBranchPrompt: "اسم الفرع الجديد:", createdBranch: "تم إنشاء {name} والانتقال إليه.", switchedBranch: "تم الانتقال إلى {name}.",
   },
   learning: {
     title: "✨ التعلم", tagline: "مهارات متعلَّمة + ذاكرة، مترابطة",

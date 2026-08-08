@@ -2761,6 +2761,42 @@ async fn git_push(Json(body): Json<GitActionBody>) -> Response {
     }
 }
 
+/// Body for the `POST /api/git/branch/*` endpoints.
+#[derive(Debug, Deserialize)]
+struct GitBranchBody {
+    #[serde(default)]
+    path: Option<String>,
+    name: String,
+    #[serde(default)]
+    start_point: Option<String>,
+}
+
+/// `POST /api/git/branch/create` — create a branch (hermes
+/// `/api/git/branch` parity, lean port).
+async fn git_branch_create(Json(body): Json<GitBranchBody>) -> Response {
+    let target = match git_action_target(&GitActionBody { path: body.path.clone(), ..Default::default() }) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    match crate::git_diff::create_branch(&target, body.name.trim(), body.start_point.as_deref()) {
+        Ok(output) => Json(json!({ "ok": true, "name": body.name.trim(), "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
+/// `POST /api/git/branch/switch` — switch the checkout to a branch
+/// (hermes `/api/git/branch/switch` parity).
+async fn git_branch_switch(Json(body): Json<GitBranchBody>) -> Response {
+    let target = match git_action_target(&GitActionBody { path: body.path.clone(), ..Default::default() }) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    match crate::git_diff::switch_branch(&target, body.name.trim()) {
+        Ok(output) => Json(json!({ "ok": true, "name": body.name.trim(), "output": output.trim() })).into_response(),
+        Err(e) => bad_request(&e.to_string(), None),
+    }
+}
+
 /// `GET /api/fs/default-cwd` — the gateway's working directory plus its
 /// git branch (hermes `/api/fs/default-cwd` parity; honors
 /// `[terminal] cwd`).
@@ -5132,6 +5168,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/git/revert", post(git_revert))
         .route("/api/git/commit", post(git_commit))
         .route("/api/git/push", post(git_push))
+        .route("/api/git/branch/create", post(git_branch_create))
+        .route("/api/git/branch/switch", post(git_branch_switch))
         .route("/api/fs/default-cwd", get(fs_default_cwd))
         .route("/api/model/info", get(model_info_api))
         .route("/api/model/set", post(model_set_api))
@@ -15189,6 +15227,32 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (status, body) = get_json(app.clone(), "/api/git/status?path=.", Some("sekret")).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body["unstaged"].as_array().unwrap().is_empty());
+
+        // Branch create + switch round-trip.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/git/branch/create", Some("sekret"),
+            json!({"name": "feature/api"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["name"], "feature/api");
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/branch/create", Some("sekret"),
+            json!({"name": "bad name"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/branch/switch", Some("sekret"),
+            json!({"name": "feature/api"}),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = get_json(app.clone(), "/api/git/status?path=.", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["branch"], "feature/api");
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/git/branch/switch", Some("sekret"),
+            json!({"name": "no-such"}),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
 
         // Push without an upstream is a structured error, not a panic.
         let (status, _) = send_json(app.clone(), "POST", "/api/git/push", Some("sekret"), json!({})).await;

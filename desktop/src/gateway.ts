@@ -2229,6 +2229,34 @@ export class GatewayClient {
     return value as { ok: boolean; output: string };
   }
 
+  /** POST /api/git/branch/create — create a branch (P599). */
+  async gitBranchCreate(
+    path: string,
+    name: string,
+    startPoint?: string,
+  ): Promise<{ ok: boolean; name: string; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/branch/create"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path, name, start_point: startPoint || undefined }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; name: string; output: string };
+  }
+
+  /** POST /api/git/branch/switch — switch to a branch (P599). */
+  async gitBranchSwitch(path: string, name: string): Promise<{ ok: boolean; name: string; output: string }> {
+    const response = await fetch(this.endpoint("/api/git/branch/switch"), {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ path, name }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `git HTTP ${response.status}`);
+    return value as { ok: boolean; name: string; output: string };
+  }
+
   /** GET /api/fs/git-root — nearest enclosing git checkout (P347). */
   async fsGitRoot(path: string): Promise<{ root: string | null }> {
     const params = new URLSearchParams({ path });

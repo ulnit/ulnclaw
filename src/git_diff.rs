@@ -385,6 +385,39 @@ pub fn push(cwd: &Path) -> Result<String> {
     mutate(&["push"], cwd, "git push", Duration::from_secs(60))
 }
 
+/// Branch-name sanity: no whitespace, no `..`, no control chars, no
+/// leading `-` (git refuses these; keeps CLI injection impossible).
+fn valid_branch_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('-')
+        && !name.contains("..")
+        && !name.contains(char::is_whitespace)
+        && !name.chars().any(|ch| ch.is_control() || matches!(ch, '~' | '^' | ':' | '?' | '*' | '['))
+}
+
+/// Create a branch (`git branch <name> [<start_point>]`).
+pub fn create_branch(cwd: &Path, name: &str, start_point: Option<&str>) -> Result<String> {
+    require_repo(cwd)?;
+    if !valid_branch_name(name) {
+        return Err(AgentError::Tool("invalid branch name".to_string()));
+    }
+    match start_point {
+        Some(start) => mutate(&["branch", name, start], cwd, "git branch", GIT_TIMEOUT),
+        None => mutate(&["branch", name], cwd, "git branch", GIT_TIMEOUT),
+    }
+}
+
+/// Switch branches (`git checkout <name>` — works on every supported
+/// git version). Refuses names that look like options.
+pub fn switch_branch(cwd: &Path, name: &str) -> Result<String> {
+    require_repo(cwd)?;
+    if !valid_branch_name(name) {
+        return Err(AgentError::Tool("invalid branch name".to_string()));
+    }
+    mutate(&["checkout", name], cwd, "git checkout", GIT_TIMEOUT_LONG)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,6 +578,17 @@ mod tests {
         let branches = local_branches(&dir).unwrap();
         assert_eq!(branches[0], current_branch_name(&dir));
         assert!(branches.iter().any(|name| name == "feature/x"));
+
+        // Branch create/switch: invalid names rejected, switching works.
+        assert!(create_branch(&dir, "bad name", None).is_err());
+        assert!(create_branch(&dir, "-flag", None).is_err());
+        create_branch(&dir, "feature/y", None).unwrap();
+        assert!(create_branch(&dir, "feature/y", None).is_err()); // duplicate
+        let before = current_branch_name(&dir);
+        switch_branch(&dir, "feature/y").unwrap();
+        assert_eq!(current_branch_name(&dir), "feature/y");
+        assert!(switch_branch(&dir, "no-such-branch").is_err());
+        switch_branch(&dir, &before).unwrap();
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -180,6 +180,7 @@ export class FileTreePanel {
 
   /** P596: switch between the files tree and the git-changes pane. */
   private switchTab(tab: "files" | "changes"): void {
+    this.reviewNote = null;
     if (this.tab === tab) return;
     this.tab = tab;
     this.filesTabBtn.classList.toggle("active", tab === "files");
@@ -290,10 +291,44 @@ export class FileTreePanel {
 
     const line = document.createElement("div");
     line.className = "file-tree-review-status";
-    const aheadBehind = summary.upstream
+    const branchSelect = document.createElement("select");
+    branchSelect.className = "file-tree-review-branch";
+    try {
+      const { branches } = await client.gitBranches(this.rootPath);
+      for (const name of branches) {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        if (name === summary.branch) option.selected = true;
+        branchSelect.appendChild(option);
+      }
+    } catch {
+      const option = document.createElement("option");
+      option.textContent = summary.branch;
+      branchSelect.appendChild(option);
+    }
+    const newBranchBtn = document.createElement("button");
+    newBranchBtn.className = "ghost file-tree-review-newbranch";
+    newBranchBtn.textContent = "\uff0b";
+    newBranchBtn.title = t.gitReview.newBranch;
+    newBranchBtn.addEventListener("click", () => {
+      const raw = window.prompt(t.gitReview.newBranchPrompt);
+      const name = (raw || "").trim();
+      if (!name) return;
+      void run(async () => {
+        await client.gitBranchCreate(this.rootPath!, name);
+        await client.gitBranchSwitch(this.rootPath!, name);
+        this.reviewNote = {
+          text: t.gitReview.createdBranch.replace("{name}", name),
+          error: false,
+        };
+      });
+    });
+    const aheadBehind = document.createElement("span");
+    aheadBehind.className = "file-tree-review-counts";
+    aheadBehind.textContent = summary.upstream
       ? ` \u2191${summary.ahead} \u2193${summary.behind}`
       : "";
-    line.textContent = `\u2387 ${summary.branch}${aheadBehind}`;
     const counts = document.createElement("span");
     counts.className = "file-tree-review-counts";
     counts.textContent =
@@ -302,7 +337,18 @@ export class FileTreePanel {
         .replace("{staged}", String(summary.staged.length))
         .replace("{unstaged}", String(summary.unstaged.length))
         .replace("{untracked}", String(summary.untracked.length));
-    line.appendChild(counts);
+    branchSelect.addEventListener("change", () => {
+      const target = branchSelect.value;
+      if (!target || target === summary.branch) return;
+      void run(async () => {
+        await client.gitBranchSwitch(this.rootPath!, target);
+        this.reviewNote = {
+          text: t.gitReview.switchedBranch.replace("{name}", target),
+          error: false,
+        };
+      });
+    });
+    line.append(branchSelect, newBranchBtn, aheadBehind, counts);
     review.appendChild(line);
 
     const feedback = document.createElement("div");
