@@ -1964,6 +1964,12 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       void refreshRunsTabBadge();
       break;
     }
+    case "session.message": {
+      // P493: a message was appended anywhere — the sessions browser
+      // catches up when the affected session is open (debounced there).
+      state.sessionsBrowser?.notifyMessageAppended(envelope.session_id);
+      break;
+    }
     case "session.created":
     case "session.updated":
     case "session.deleted": {

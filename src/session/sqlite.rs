@@ -529,6 +529,18 @@ impl SqliteSessionStore {
             )
             .ok();
         }
+        // P493: live transcript updates — announce every append on the
+        // desktop bus (inert unless a desktop consumer is subscribed).
+        crate::desktop_bridge::publish(
+            session_id,
+            "session.message",
+            &serde_json::json!({
+                "session_id": session_id,
+                "role": role,
+                "message_id": msg_id,
+                "timestamp": timestamp,
+            }),
+        );
         Ok(())
     }
 

@@ -78,6 +78,8 @@ export class SessionsViewWidget {
   // P471: background poll timer + whether the user expanded past the tail.
   private pollTimer: number | null = null;
   private transcriptExpanded = false;
+  // P493: debounce timer for session.message catch-ups.
+  private messageEventTimer: number | null = null;
   // P450: activity-first or title-first list sorting.
   private sortMode: "activity" | "title" =
     localStorage.getItem(SORT_KEY) === "title" ? "title" : "activity";
@@ -426,6 +428,10 @@ export class SessionsViewWidget {
       window.clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    if (this.messageEventTimer !== null) {
+      window.clearTimeout(this.messageEventTimer);
+      this.messageEventTimer = null;
+    }
   }
 
   /** P471: keep the list and the open transcript fresh in the background. */
@@ -619,6 +625,17 @@ export class SessionsViewWidget {
   private csvCell(value: string | number | null): string {
     const text = String(value ?? "");
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  }
+
+  /** P493: the gateway appended a message — catch up soon (debounced so
+   * streaming bursts coalesce into one probe + append pass). */
+  notifyMessageAppended(sessionId: string): void {
+    if (sessionId !== this.selected) return;
+    if (this.messageEventTimer !== null) window.clearTimeout(this.messageEventTimer);
+    this.messageEventTimer = window.setTimeout(() => {
+      this.messageEventTimer = null;
+      void this.pollTranscriptTotal();
+    }, 400);
   }
 
   /** P490: run a full-text search from outside (composer /search). */

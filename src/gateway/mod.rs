@@ -15709,6 +15709,47 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
     }
 
     #[tokio::test]
+    async fn test_append_message_publishes_desktop_event() {
+        use crate::provider::{Message, Role};
+        let (state, _temp) = jobs_state();
+        let mut rx = crate::desktop_bridge::subscribe();
+        let session_id = state.store.create_session("gateway", None, None).unwrap();
+        state
+            .store
+            .append_message(
+                &session_id,
+                &Message {
+                    role: Role::User,
+                    content: Some("hello".to_string()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline && !found {
+            match rx.try_recv() {
+                Ok(envelope)
+                    if envelope.event == "session.message"
+                        && envelope.payload["session_id"] == json!(session_id) =>
+                {
+                    assert_eq!(envelope.payload["role"], json!("user"));
+                    found = true;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+        assert!(found, "session.message not published on the desktop bus");
+    }
+
+    #[tokio::test]
     async fn test_session_patch_and_delete_publish_desktop_events() {
         let (state, _temp) = jobs_state();
         let token = "sekret";
