@@ -123,6 +123,7 @@ export interface Translations {
   jobs: {
     active: string; paused: string; pause: string; resume: string; runNow: string;
     delete: string; edit: string; promptPrompt: string; schedulePrompt: string;
+    duplicate: string; duplicateSuffix: string;
     whatShouldAgentDo: string;
     fromNow: string; ago: string; newJob: string; newCronJob: string; nameLabel: string;
     scheduleLabel: string; promptLabel: string; skillsLabel: string; repeatLabel: string; deliverLabel: string;
@@ -477,6 +478,7 @@ const en: Translations = {
   jobs: {
     active: "Active", paused: "Paused", pause: "Pause", resume: "Resume",
     runNow: "Run now", delete: "Delete", edit: "Edit prompt/schedule",
+    duplicate: "Duplicate job", duplicateSuffix: " (copy)",
     promptPrompt: "Prompt:", schedulePrompt: "Schedule:",
     whatShouldAgentDo: "What should the agent do?",
     fromNow: "from now", ago: "ago", newJob: "New job", newCronJob: "New cron job",
@@ -976,6 +978,7 @@ const zh: Translations = {
   jobs: {
     active: "活跃", paused: "已暂停", pause: "暂停", resume: "恢复",
     runNow: "立即运行", delete: "删除", edit: "编辑提示词/调度",
+    duplicate: "复制任务", duplicateSuffix: "（副本）",
     promptPrompt: "提示词：", schedulePrompt: "调度：",
     whatShouldAgentDo: "让 agent 做什么？",
     fromNow: "后", ago: "前", newJob: "新建任务", newCronJob: "新建定时任务",
@@ -1475,6 +1478,7 @@ const zhHant: Translations = {
   jobs: {
     active: "活躍", paused: "已暫停", pause: "暫停", resume: "恢復",
     runNow: "立即執行", delete: "刪除", edit: "編輯提示詞/排程",
+    duplicate: "複製工作", duplicateSuffix: "（副本）",
     promptPrompt: "提示詞：", schedulePrompt: "排程：",
     whatShouldAgentDo: "要讓 agent 做什麼？",
     fromNow: "後", ago: "前", newJob: "新增工作", newCronJob: "新增定時工作",
@@ -1974,6 +1978,7 @@ const ja: Translations = {
   jobs: {
     active: "有効", paused: "一時停止中", pause: "一時停止", resume: "再開",
     runNow: "今すぐ実行", delete: "削除", edit: "プロンプト/スケジュールを編集",
+    duplicate: "ジョブを複製", duplicateSuffix: "（コピー）",
     promptPrompt: "プロンプト：", schedulePrompt: "スケジュール：",
     whatShouldAgentDo: "エージェントに何をさせますか？",
     fromNow: "後", ago: "前", newJob: "新規ジョブ", newCronJob: "新規 cron ジョブ",
@@ -2473,6 +2478,7 @@ const ar: Translations = {
   jobs: {
     active: "نشط", paused: "متوقف مؤقتًا", pause: "إيقاف مؤقت", resume: "استئناف",
     runNow: "تشغيل الآن", delete: "حذف", edit: "تعديل المطالب/الجدولة",
+    duplicate: "تكرار المهمة", duplicateSuffix: " (نسخة)",
     promptPrompt: "المطالب:", schedulePrompt: "الجدولة:",
     whatShouldAgentDo: "ماذا يجب أن يفعل الوكيل؟",
     fromNow: "من الآن", ago: "مضت", newJob: "مهمة جديدة", newCronJob: "مهمة cron جديدة",

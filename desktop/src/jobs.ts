@@ -92,11 +92,8 @@ export class JobsWidget {
         .toLowerCase();
       this.render();
     });
-    (this.root.querySelector("#jobs-new") as HTMLButtonElement).onclick = () => {
-      const dialog = this.root.querySelector("#job-create") as HTMLDialogElement;
-      this.populateDeliverTargets().catch(() => undefined);
-      dialog.showModal();
-    };
+    (this.root.querySelector("#jobs-new") as HTMLButtonElement).onclick = () =>
+      this.openCreateDialog();
     const dialog = this.root.querySelector("#job-create") as HTMLDialogElement;
     dialog.addEventListener("close", () => {
       if (dialog.returnValue !== "save") return;
@@ -165,6 +162,31 @@ export class JobsWidget {
     if (this.deliveryTargetIds.has(deliver)) return true;
     const base = deliver.split(":")[0];
     return this.deliveryTargetIds.has(base);
+  }
+
+  /**
+   * Open the create dialog, optionally prefilled from an existing job so it
+   * can be duplicated with tweaks (P549).
+   */
+  private openCreateDialog(source?: CronJob): void {
+    (this.root.querySelector("#job-create-name") as HTMLInputElement).value = source
+      ? source.name + t.jobs.duplicateSuffix
+      : "";
+    (this.root.querySelector("#job-create-schedule") as HTMLInputElement).value =
+      source?.schedule ?? "";
+    (this.root.querySelector("#job-create-prompt") as HTMLTextAreaElement).value =
+      source?.prompt ?? "";
+    (this.root.querySelector("#job-create-skills") as HTMLInputElement).value =
+      source?.skills.join(", ") ?? "";
+    (this.root.querySelector("#job-create-repeat") as HTMLInputElement).value =
+      source && source.repeat !== null ? String(source.repeat) : "";
+    void this.populateDeliverTargets().then(() => {
+      if (!source?.deliver) return;
+      const select = this.root.querySelector("#job-create-deliver") as HTMLSelectElement;
+      const deliver = source.deliver;
+      if ([...select.options].some((option) => option.value === deliver)) select.value = deliver;
+    });
+    (this.root.querySelector("#job-create") as HTMLDialogElement).showModal();
   }
 
   private async populateDeliverTargets(): Promise<void> {
@@ -341,6 +363,7 @@ export class JobsWidget {
       if (!client) return;
       void client.jobRunNow(job.id).then(() => void this.refresh());
     });
+    mk("⧉", t.jobs.duplicate, () => this.openCreateDialog(job));
     mk("✎", t.jobs.edit, () => {
       if (!client) return;
       const nextPrompt = window.prompt(t.jobs.promptPrompt, job.prompt);
