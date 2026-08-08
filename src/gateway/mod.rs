@@ -7412,6 +7412,13 @@ async fn create_session(
             {
                 let _ = state.store.set_session_title(&id, title);
             }
+            // P444: tell the desktop shell a session appeared (another
+            // client — CLI, API — may have created it).
+            crate::desktop_bridge::publish(
+                "",
+                "session.created",
+                &json!({"session_id": id, "source": source}),
+            );
             (StatusCode::CREATED, Json(json!({"id": id, "source": source}))).into_response()
         }
         Err(e) => server_error(&e.to_string()),
@@ -9283,6 +9290,12 @@ async fn spawn_job_run(
         .store
         .create_session("cron-run", Some(&state.model_name), None)
         .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+    // P444: tell the desktop shell a cron-run session appeared.
+    crate::desktop_bridge::publish(
+        "",
+        "session.created",
+        &json!({"session_id": session_id, "source": "cron-run"}),
+    );
     let run = RunState {
         run_id: run_id.clone(),
         status: "running".to_string(),
@@ -10174,10 +10187,19 @@ async fn start_run(
     // conversation stays continuable.
     let session_id = match request.session_id.clone() {
         Some(sid) if !sid.trim().is_empty() => sid,
-        _ => state
-            .store
-            .create_session("gateway-run", Some(&state.model_name), None)
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string()),
+        _ => {
+            let created = state
+                .store
+                .create_session("gateway-run", Some(&state.model_name), None)
+                .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+            // P444: tell the desktop shell a gateway-run session appeared.
+            crate::desktop_bridge::publish(
+                "",
+                "session.created",
+                &json!({"session_id": created, "source": "gateway-run"}),
+            );
+            created
+        }
     };
     let run = RunState {
         run_id: run_id.clone(),
@@ -15535,6 +15557,42 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             .expect("parked respond");
         let _ = respond.send("once".to_string());
         assert!(request.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_create_session_publishes_desktop_event() {
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+        let mut rx = crate::desktop_bridge::subscribe();
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/sessions", Some(token),
+            json!({"source": "cli", "title": "from test"}),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = body["id"].as_str().expect("id").to_string();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline && !found {
+            match rx.try_recv() {
+                Ok(envelope)
+                    if envelope.event == "session.created"
+                        && envelope.payload["session_id"] == json!(id) =>
+                {
+                    assert_eq!(envelope.payload["source"], json!("cli"));
+                    found = true;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+        assert!(found, "session.created not published on the desktop bus");
     }
 
     #[tokio::test]

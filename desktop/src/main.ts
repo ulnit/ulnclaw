@@ -1832,6 +1832,13 @@ function handleDesktopEvent(envelope: DesktopEnvelope): void {
       }
       break;
     }
+    case "session.created": {
+      // P444: another client (CLI/API/cron) created a session — refresh
+      // the sidebar list and the sessions browser if it is mounted.
+      void refreshSessions();
+      void state.sessionsBrowser?.refresh();
+      break;
+    }
     case "terminal.read": {
       const id = String(payload.id ?? "");
       if (!id || !state.client) break;
