@@ -27,6 +27,7 @@ export class PluginsViewWidget {
       <header id="plugins-view-header">
         <span id="plugins-view-count" class="jobs-counts"></span>
         <span class="spacer"></span>
+        <input id="plugins-view-filter" type="search" data-i18n-ph="pluginsView.filterPlaceholder" />
         <button id="plugins-view-rescan" class="ghost" data-i18n="pluginsView.rescan">Rescan</button>
         <button id="plugins-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
       </header>
@@ -47,6 +48,10 @@ export class PluginsViewWidget {
     this.root.querySelector("#plugins-view-rescan")!.addEventListener("click", () => {
       this.rescan().catch(() => undefined);
     });
+    // P533: live filter across plugin, hub, and toolset rows.
+    this.root.querySelector("#plugins-view-filter")!.addEventListener("input", () => {
+      this.applyFilter();
+    });
   }
 
   start(): void {
@@ -62,6 +67,29 @@ export class PluginsViewWidget {
     el.hidden = !message;
     el.textContent = message;
     el.classList.toggle("error", isError);
+  }
+
+  /** P533: narrow every `.plugins-view-row` (installed plugins, hub
+   * catalog entries, toolsets) by name/description text as you type. */
+  private applyFilter(): void {
+    const input = this.root.querySelector("#plugins-view-filter") as HTMLInputElement | null;
+    if (!input) return;
+    const query = (input.value || "").trim().toLowerCase();
+    let visible = 0;
+    for (const row of Array.from(
+      this.root.querySelectorAll<HTMLElement>(".plugins-view-row"),
+    )) {
+      const match = query === "" || (row.textContent || "").toLowerCase().includes(query);
+      row.hidden = !match;
+      if (match) visible += 1;
+    }
+    if (query === "") {
+      this.status("");
+    } else if (visible === 0) {
+      this.status(t.pluginsView.filterNoMatch);
+    } else {
+      this.status("");
+    }
   }
 
   async refresh(): Promise<void> {
@@ -80,6 +108,7 @@ export class PluginsViewWidget {
       this.renderHub(hub);
       this.renderToolsets().catch(() => undefined);
       this.status("");
+      this.applyFilter();
     } catch (error) {
       this.status(
         t.pluginsView.loadFailed.replace(
@@ -373,6 +402,8 @@ export class PluginsViewWidget {
           </details>`;
       })
       .join("");
+    // P533: toolset rows re-render asynchronously — reapply the filter.
+    this.applyFilter();
   }
 
   private async rescan(): Promise<void> {

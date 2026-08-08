@@ -204,6 +204,7 @@ export interface Translations {
     providersTitle: string; memoryProvider: string; contextEngine: string; providersSave: string;
     rescan: string; hide: string; show: string;
     toolsetsTitle: string; toolsetsNone: string;
+    filterPlaceholder: string; filterNoMatch: string;
   };
   pairingView: {
     count: string; none: string; loadFailed: string; clearPending: string; lockedOut: string;
@@ -582,6 +583,7 @@ const en: Translations = {
     providersTitle: "Plugin providers", memoryProvider: "Memory provider", contextEngine: "Context engine",
     providersSave: "Save", rescan: "Rescan", hide: "Hide", show: "Show",
     toolsetsTitle: "Toolsets", toolsetsNone: "No toolsets registered.",
+    filterPlaceholder: "Filter plugins…", filterNoMatch: "No plugins match the filter.",
   },
   pairingView: {
     count: "{platforms} platform(s) · {pending} pending", none: "No pairing activity yet — unknown senders who DM an enabled bot receive a pairing code.",
@@ -1078,6 +1080,7 @@ const zh: Translations = {
     providersTitle: "插件提供方", memoryProvider: "记忆提供方", contextEngine: "上下文引擎",
     providersSave: "保存", rescan: "重新扫描", hide: "隐藏", show: "显示",
     toolsetsTitle: "工具集", toolsetsNone: "未注册工具集。",
+    filterPlaceholder: "筛选插件…", filterNoMatch: "没有匹配筛选条件的插件。",
   },
   pairingView: {
     count: "{platforms} 个平台 · {pending} 个待批", none: "暂无配对活动——向已启用机器人私聊的陌生发送者会收到配对码。",
@@ -1574,6 +1577,7 @@ const zhHant: Translations = {
     providersTitle: "外掛提供方", memoryProvider: "記憶提供方", contextEngine: "上下文引擎",
     providersSave: "儲存", rescan: "重新掃描", hide: "隱藏", show: "顯示",
     toolsetsTitle: "工具集", toolsetsNone: "未註冊工具集。",
+    filterPlaceholder: "篩選外掛…", filterNoMatch: "沒有匹配篩選條件的外掛。",
   },
   pairingView: {
     count: "{platforms} 個平台 · {pending} 個待批", none: "暫無配對活動——向已啟用機器人私訊的陌生傳送者會收到配對碼。",
@@ -2070,6 +2074,7 @@ const ja: Translations = {
     providersTitle: "プラグインプロバイダー", memoryProvider: "メモリープロバイダー", contextEngine: "コンテキストエンジン",
     providersSave: "保存", rescan: "再スキャン", hide: "非表示", show: "表示",
     toolsetsTitle: "ツールセット", toolsetsNone: "ツールセットは登録されていません。",
+    filterPlaceholder: "プラグインを絞り込み…", filterNoMatch: "条件に一致するプラグインがありません。",
   },
   pairingView: {
     count: "{platforms} プラットフォーム · 保留 {pending} 件", none: "ペアリングはまだありません — 有効なボットに DM した未知の送信者にはペアリングコードが届きます。",
@@ -2566,6 +2571,7 @@ const ar: Translations = {
     providersTitle: "موفرو الإضافات", memoryProvider: "موفر الذاكرة", contextEngine: "محرك السياق",
     providersSave: "حفظ", rescan: "إعادة الفحص", hide: "إخفاء", show: "إظهار",
     toolsetsTitle: "حزم الأدوات", toolsetsNone: "لا توجد حزم أدوات مسجلة.",
+    filterPlaceholder: "تصفية الإضافات…", filterNoMatch: "لا توجد إضافات تطابق التصفية.",
   },
   pairingView: {
     count: "{platforms} منصة · {pending} معلقة", none: "لا يوجد نشاط اقتران بعد — المرسلون غير المعروفين الذين يراسلون بوتًا مفعّلًا يتلقون رمز اقتران.",
