@@ -551,6 +551,7 @@ async function openSession(session: SessionRow): Promise<void> {
   // P393: stash the outgoing session's draft, restore the target's.
   if (state.current && state.current.id !== session.id) {
     state.drafts.set(state.current.id, el.input.value);
+    persistDrafts();
   }
   state.current = session;
   el.chatTitle.textContent = session.title || session.id.slice(0, 8);
@@ -610,6 +611,34 @@ function renderDayJump(days: { key: string; timestamp: number }[]): void {
 
 /** P388: sidebar collapse toggling, persisted across launches. */
 const SIDEBAR_COLLAPSED_KEY = "ulnclaw.sidebarCollapsed";
+
+/** P395: composer drafts persist across restarts (session id -> text). */
+const DRAFTS_KEY = "ulnclaw.drafts";
+
+function persistDrafts(): void {
+  try {
+    let entries = [...state.drafts.entries()];
+    if (entries.length > 50) entries = entries.slice(entries.length - 50);
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    /* storage full/unavailable — drafts stay in-memory */
+  }
+}
+
+function loadPersistedDrafts(): void {
+  try {
+    const raw = localStorage.getItem(DRAFTS_KEY);
+    if (!raw) return;
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof value === "string") state.drafts.set(id, value);
+      }
+    }
+  } catch {
+    /* corrupt payload — start fresh */
+  }
+}
 
 function toggleSidebar(): void {
   const app = document.getElementById("app")!;
@@ -756,7 +785,10 @@ async function sendTurn(): Promise<void> {
     if (state.composerHistory.length > 50) state.composerHistory.shift();
   }
   state.composerHistoryIndex = null;
-  if (state.current) state.drafts.delete(state.current.id);
+  if (state.current) {
+    state.drafts.delete(state.current.id);
+    persistDrafts();
+  }
   state.busy = true;
   el.send.disabled = true;
   // P390: thinking indicator while the turn streams.
@@ -1751,7 +1783,10 @@ async function start(): Promise<void> {
   };
 
   el.newSession.onclick = async () => {
-    if (state.current) state.drafts.set(state.current.id, el.input.value);
+    if (state.current) {
+      state.drafts.set(state.current.id, el.input.value);
+      persistDrafts();
+    }
     state.current = null;
     el.contextMeter.hidden = true;
     el.dayJump.hidden = true;
@@ -2298,6 +2333,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1") {
     document.getElementById("app")!.classList.add("no-sidebar");
   }
+  // P395: restore persisted composer drafts.
+  loadPersistedDrafts();
   el.statusbar.addEventListener("click", (event) => {
     const seg = (event.target as HTMLElement).closest<HTMLElement>(".statusbar-seg");
     const target = seg?.dataset.target;
