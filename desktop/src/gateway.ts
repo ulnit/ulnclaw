@@ -1147,6 +1147,8 @@ export interface RunRow {
   iterations: number | null;
   stop_requested: boolean;
   approval: RunApproval | null;
+  /** Cron job that spawned the run, if any (P674). */
+  job_id?: string;
 }
 
 export interface MonitoringPayload {
@@ -4285,6 +4287,17 @@ export class GatewayClient {
     } catch (error) {
       return { ok: false, error: String(error) };
     }
+  }
+
+  /** P674: GET /api/jobs/:id/runs — tracked-run history of one job. */
+  async jobRuns(id: string, limit = 20): Promise<RunRow[]> {
+    const response = await fetch(
+      this.endpoint(`/api/jobs/${encodeURIComponent(id)}/runs?limit=${limit}`),
+      { headers: this.headers() },
+    );
+    if (!response.ok) throw new Error(`job runs HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.runs || []) as RunRow[];
   }
 
   /** P673: GET /api/jobs/suggestions — pending automation suggestions. */

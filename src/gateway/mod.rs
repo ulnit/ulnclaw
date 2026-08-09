@@ -339,6 +339,10 @@ pub struct RunState {
     pub stop_requested: bool,
     /// Pending (or last resolved) approval request for this run.
     pub approval: Option<Value>,
+    /// Cron job that spawned this run, if any (P674 — per-job run
+    /// history for the Jobs view and `GET /api/jobs/:id/runs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
 }
 
 /// Shared gateway state.
@@ -6761,6 +6765,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
         .route("/api/jobs/:id/run", post(run_job_now))
+        .route("/api/jobs/:id/runs", get(job_runs))
         .route("/v1/skills", get(skills_list))
         .route("/v1/toolsets", get(toolsets_list))
         .route("/v1/delegations", get(list_delegations_http))
@@ -12730,6 +12735,33 @@ async fn resume_job(State(state): State<Arc<GatewayState>>, Path(id): Path<Strin
     set_job_enabled(&state, &id, true).await
 }
 
+/// `GET /api/jobs/:id/runs` — tracked-run history of one cron job
+/// (P674 — hermes `GET /api/cron/jobs/:id/runs` parity over the live
+/// run registry). Newest first, `?limit=N` (default 20, max 200).
+async fn job_runs(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let limit = params
+        .get("limit")
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(20)
+        .clamp(1, 200);
+    let runs = state.runs.lock().await;
+    let mut matches: Vec<&RunState> = runs
+        .values()
+        .filter(|run| run.job_id.as_deref() == Some(id.as_str()))
+        .collect();
+    matches.sort_by(|a, b| {
+        b.created_at
+            .partial_cmp(&a.created_at)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    matches.truncate(limit);
+    Json(json!({ "runs": matches })).into_response()
+}
+
 /// One suggestion the desktop accepted/dismissed (P673).
 #[derive(Deserialize)]
 struct SuggestionReferenceRequest {
@@ -13023,6 +13055,7 @@ async fn spawn_job_run(
         iterations: None,
         stop_requested: false,
         approval: None,
+        job_id: Some(job.id.clone()),
     };
     state.runs.lock().await.insert(run_id.clone(), run);
     job.last_run = Some(now_secs());
@@ -13928,6 +13961,7 @@ async fn start_run(
         iterations: None,
         stop_requested: false,
         approval: None,
+        job_id: None,
     };
     state.runs.lock().await.insert(run_id.clone(), run.clone());
 
@@ -17014,6 +17048,7 @@ mod tests {
                 iterations: Some(3),
                 stop_requested: false,
                 approval: None,
+                job_id: None,
             },
         );
         state.runs.lock().await.insert(
@@ -17030,6 +17065,7 @@ mod tests {
                 iterations: None,
                 stop_requested: false,
                 approval: None,
+                job_id: None,
             },
         );
 
@@ -17743,6 +17779,107 @@ mod tests {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_job_runs_history_endpoint() {
+        // P674: GET /api/jobs/:id/runs lists the tracked runs spawned
+        // for one cron job, newest first.
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Create a job.
+        let (_, body) = send_json(
+            app.clone(), "POST", "/api/jobs", Some(token),
+            json!({"name": "histogram", "schedule": "1h", "prompt": "say hi"}),
+        )
+        .await;
+        let job_id = body["job"]["id"].as_str().unwrap().to_string();
+
+        // Empty history at first.
+        let (status, body) = get_json(
+            app.clone(), &format!("/api/jobs/{job_id}/runs"), Some(token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["runs"].as_array().unwrap().len(), 0, "{body}");
+
+        // Seed the run registry with two runs for this job + one for
+        // another job.
+        {
+            let mut runs = state.runs.lock().await;
+            runs.insert(
+                "run-old".into(),
+                RunState {
+                    run_id: "run-old".into(),
+                    status: "completed".into(),
+                    session_id: None,
+                    message: "first".into(),
+                    created_at: 1000.0,
+                    finished_at: Some(1010.0),
+                    result: Some("ok".into()),
+                    error: None,
+                    iterations: None,
+                    stop_requested: false,
+                    approval: None,
+                    job_id: Some(job_id.clone()),
+                },
+            );
+            runs.insert(
+                "run-new".into(),
+                RunState {
+                    run_id: "run-new".into(),
+                    status: "failed".into(),
+                    session_id: None,
+                    message: "second".into(),
+                    created_at: 2000.0,
+                    finished_at: Some(2005.0),
+                    result: None,
+                    error: Some("boom".into()),
+                    iterations: None,
+                    stop_requested: false,
+                    approval: None,
+                    job_id: Some(job_id.clone()),
+                },
+            );
+            runs.insert(
+                "run-other".into(),
+                RunState {
+                    run_id: "run-other".into(),
+                    status: "completed".into(),
+                    session_id: None,
+                    message: "other".into(),
+                    created_at: 3000.0,
+                    finished_at: None,
+                    result: None,
+                    error: None,
+                    iterations: None,
+                    stop_requested: false,
+                    approval: None,
+                    job_id: Some("another-job".into()),
+                },
+            );
+        }
+
+        let (status, body) = get_json(
+            app.clone(), &format!("/api/jobs/{job_id}/runs"), Some(token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let rows = body["runs"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{body}");
+        assert_eq!(rows[0]["run_id"], "run-new", "{body}");
+        assert_eq!(rows[0]["status"], "failed", "{body}");
+        assert_eq!(rows[0]["error"], "boom", "{body}");
+        assert_eq!(rows[1]["run_id"], "run-old", "{body}");
+
+        // limit=1 keeps only the newest.
+        let (_, body) = get_json(
+            app.clone(), &format!("/api/jobs/{job_id}/runs?limit=1"), Some(token),
+        )
+        .await;
+        assert_eq!(body["runs"].as_array().unwrap().len(), 1, "{body}");
     }
 
     #[tokio::test]
@@ -22688,6 +22825,7 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
                 iterations: None,
                 stop_requested: false,
                 approval: None,
+                job_id: None,
             },
         );
 

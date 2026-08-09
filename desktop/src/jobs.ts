@@ -97,6 +97,15 @@ export class JobsWidget {
           </menu>
         </form>
       </dialog>
+      <dialog id="jobs-runs">
+        <form method="dialog">
+          <h2 id="jobs-runs-title"></h2>
+          <div id="jobs-runs-list" class="jobs-runs-list"></div>
+          <menu>
+            <button value="cancel" data-i18n="chrome.cancel">Cancel</button>
+          </menu>
+        </form>
+      </dialog>
       <dialog id="jobs-blueprint-form">
         <form method="dialog">
           <h2 id="jobs-blueprint-form-title"></h2>
@@ -453,6 +462,57 @@ export class JobsWidget {
     return this.deliveryTargetIds.has(base);
   }
 
+  /** P674: show the tracked-run history of one job in a dialog. */
+  private async openJobRuns(job: CronJob): Promise<void> {
+    const client = this.client();
+    const dialog = this.root.querySelector("#jobs-runs") as HTMLDialogElement;
+    const title = this.root.querySelector("#jobs-runs-title") as HTMLElement;
+    const list = this.root.querySelector("#jobs-runs-list") as HTMLElement;
+    title.textContent = t.jobs.runsHistoryTitle.replace("{name}", job.name);
+    list.innerHTML = '<p class="jobs-empty">…</p>';
+    dialog.showModal();
+    if (!client) return;
+    try {
+      const runs = await client.jobRuns(job.id, 50);
+      if (!runs.length) {
+        list.innerHTML = "";
+        const empty = document.createElement("p");
+        empty.className = "jobs-empty";
+        empty.textContent = t.jobs.runsEmpty;
+        list.appendChild(empty);
+        return;
+      }
+      list.innerHTML = runs
+        .map((run) => {
+          const status = run.status.replace(/</g, "&lt;");
+          const when = new Date(run.created_at * 1000).toLocaleString();
+          const duration = run.finished_at
+            ? `${Math.max(0, Math.round(run.finished_at - run.created_at))}s`
+            : "—";
+          const error = run.error
+            ? `<div class="job-meta job-delivery-error">${run.error.replace(/</g, "&lt;")}</div>`
+            : "";
+          return `<div class="job-row">
+            <div class="job-body">
+              <div class="job-name-line">
+                <span class="job-name">${status}</span>
+                <span class="job-schedule">${when}</span>
+                <span class="job-skills">${duration}</span>
+              </div>
+              ${error}
+            </div>
+          </div>`;
+        })
+        .join("");
+    } catch (error) {
+      list.innerHTML = "";
+      const failed = document.createElement("p");
+      failed.className = "jobs-empty";
+      failed.textContent = String(error);
+      list.appendChild(failed);
+    }
+  }
+
   /**
    * Open the create dialog, optionally prefilled from an existing job so it
    * can be duplicated with tweaks (P549).
@@ -652,6 +712,8 @@ export class JobsWidget {
       if (!client) return;
       void client.jobRunNow(job.id).then(() => void this.refresh());
     });
+    // P674: per-job tracked-run history dialog.
+    mk("▤", t.jobs.runsHistory, () => void this.openJobRuns(job));
     mk("⧉", t.jobs.duplicate, () => this.openCreateDialog(job));
     mk("✎", t.jobs.edit, () => {
       if (!client) return;
