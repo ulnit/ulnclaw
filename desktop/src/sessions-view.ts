@@ -48,6 +48,8 @@ const MODEL_FILTER_KEY = "ulnclaw.sessions.modelFilter";
 // P481: persisted source quick-filter selection.
 const SOURCE_FILTER_KEY = "ulnclaw.sessions.sourceFilter";
 // P511: persisted set of hidden transcript roles.
+// P677: persisted raw-mode toggle (messages as raw JSON).
+const RAW_MODE_KEY = "ulnclaw.sessions.rawMode";
 const ROLE_VISIBILITY_KEY = "ulnclaw.sessions.hiddenRoles";
 // P463: transcript tail window before the load-full banner appears.
 const TRANSCRIPT_LIMIT = 400;
@@ -90,6 +92,8 @@ export class SessionsViewWidget {
   private modelFilter: string | null = localStorage.getItem(MODEL_FILTER_KEY);
   // P481: source quick-filter selection.
   private sourceFilter: string | null = localStorage.getItem(SOURCE_FILTER_KEY);
+  // P677: raw mode renders every transcript message as JSON.
+  private rawMode = localStorage.getItem(RAW_MODE_KEY) === "1";
   // P511: transcript roles currently hidden from view.
   private hiddenRoles = new Set<string>(
     (localStorage.getItem(ROLE_VISIBILITY_KEY) || "").split(",").filter(Boolean),
@@ -166,6 +170,8 @@ export class SessionsViewWidget {
             <button class="sessions-view-roletoggle" data-role="assistant" data-i18n="sessionsView.roleAssistant">assistant</button>
             <button class="sessions-view-roletoggle" data-role="tool" data-i18n="sessionsView.roleTool">tool</button>
             <button class="sessions-view-roletoggle" data-role="system" data-i18n="sessionsView.roleSystem">system</button>
+            <span class="sessions-view-rolebar-spacer"></span>
+            <button id="sessions-view-rawtoggle" class="sessions-view-roletoggle" data-i18n="sessionsView.rawToggle" data-i18n-title="sessionsView.rawTitle">raw</button>
           </div>
           <div id="sessions-view-transcript" class="sessions-view-transcript" tabindex="0">
             <p class="empty" data-i18n="sessionsView.select"></p>
@@ -226,6 +232,11 @@ export class SessionsViewWidget {
       });
     });
     this.applyRoleVisibility();
+    // P677: raw-mode toggle re-renders the cached transcript window.
+    this.root.querySelector("#sessions-view-rawtoggle")!.addEventListener("click", () => {
+      this.toggleRawMode();
+    });
+    this.applyRawModeChrome();
     this.root.querySelector("#sessions-view-filter")!.addEventListener("input", () => {
       this.renderList();
     });
@@ -1427,6 +1438,36 @@ export class SessionsViewWidget {
   /** P477: ensure one day divider between messages on different calendar
    * days — re-run after any render/prepend/append pass. */
   /** P511: mirror persisted role visibility onto the pane + toggles. */
+  /** P677: flip raw mode, persist it, and re-render the cached window. */
+  private toggleRawMode(): void {
+    this.rawMode = !this.rawMode;
+    localStorage.setItem(RAW_MODE_KEY, this.rawMode ? "1" : "0");
+    this.applyRawModeChrome();
+    const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    if (!this.selected || this.transcriptMessages.length === 0 || !pane) return;
+    const session = this.all.find((candidate) => candidate.id === this.selected);
+    const meta = session
+      ? this.renderTranscriptMeta(session, this.transcriptTotal || this.transcriptMessages.length)
+      : "";
+    pane.innerHTML =
+      meta + this.renderMessages(this.transcriptMessages.slice(this.transcriptStart, this.transcriptEnd));
+    this.syncDayDividers(pane);
+    this.updateDayJump(pane);
+    this.bindCopyButtons(pane);
+    this.findBar?.refresh();
+  }
+
+  /** P677: keep the raw toggle button + pane class in sync. */
+  private applyRawModeChrome(): void {
+    const button = this.root.querySelector("#sessions-view-rawtoggle") as HTMLButtonElement;
+    if (button) {
+      button.classList.toggle("active", this.rawMode);
+      button.setAttribute("aria-pressed", String(this.rawMode));
+    }
+    const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
+    pane?.classList.toggle("raw-mode", this.rawMode);
+  }
+
   private applyRoleVisibility(): void {
     const pane = this.root.querySelector("#sessions-view-transcript") as HTMLElement;
     for (const role of ["user", "assistant", "tool", "system"]) {
@@ -1506,6 +1547,18 @@ export class SessionsViewWidget {
   private renderMessages(messages: MessageRow[]): string {
     if (messages.length === 0) {
       return `<p class="empty">${escapeHtml(t.sessionsView.emptyTranscript)}</p>`;
+    }
+    // P677: raw mode — every message as pretty-printed JSON.
+    if (this.rawMode) {
+      return messages
+        .map((message) => {
+          const tsAttr = message.timestamp ? ` data-ts="${message.timestamp}"` : "";
+          return `
+          <div class="sessions-view-msg sessions-view-msg-${escapeHtml(message.role)}"${tsAttr}>
+            <pre class="sessions-view-raw">${escapeHtml(JSON.stringify(message, null, 2))}</pre>
+          </div>`;
+        })
+        .join("");
     }
     return messages
       .map((message) => {

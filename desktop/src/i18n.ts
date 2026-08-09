@@ -179,7 +179,7 @@ export interface Translations {
     roleShow: string;
     listCsv: string; listCsvTitle: string; listCsvDone: string;
     unreadOnly: string;
-    copyMessageTitle: string; copied: string; copyFailed: string;
+    copyMessageTitle: string; copied: string; copyFailed: string; rawToggle: string; rawTitle: string;
     loadFull: string;
     showEarlier: string;
     loadEarlier: string;
@@ -606,7 +606,7 @@ const en: Translations = {
     clearFilters: "Clear all filters",
     roleShow: "Show:",
     listCsv: "⭳ CSV", listCsvTitle: "Download the filtered session list as CSV", listCsvDone: "Exported {count} sessions to CSV", unreadOnly: "Unread only",
-    copyMessageTitle: "Copy message", copied: "Message copied.", copyFailed: "Copy failed.",
+    copyMessageTitle: "Copy message", copied: "Message copied.", copyFailed: "Copy failed.", rawToggle: "raw", rawTitle: "Render every message as raw JSON",
     loadFull: "Showing the last {count} messages — click to load the full transcript",
     showEarlier: "Show earlier messages ({count} more)",
     loadEarlier: "Load earlier messages ({count} more)",
@@ -1163,7 +1163,7 @@ const zh: Translations = {
     clearFilters: "清除全部筛选",
     roleShow: "显示：",
     listCsv: "⭳ CSV", listCsvTitle: "将过滤后的会话列表下载为 CSV", listCsvDone: "已导出 {count} 个会话到 CSV", unreadOnly: "仅看未读",
-    copyMessageTitle: "复制消息", copied: "消息已复制。", copyFailed: "复制失败。",
+    copyMessageTitle: "复制消息", copied: "消息已复制。", copyFailed: "复制失败。", rawToggle: "原始", rawTitle: "以原始 JSON 显示每条消息",
     loadFull: "当前仅显示最近 {count} 条消息——点击加载完整转录",
     showEarlier: "显示更早的消息（还有 {count} 条）",
     loadEarlier: "加载更早的消息（还有 {count} 条）",
@@ -1720,7 +1720,7 @@ const zhHant: Translations = {
     clearFilters: "清除全部篩選",
     roleShow: "顯示：",
     listCsv: "⭳ CSV", listCsvTitle: "將過濾後的工作階段清單下載為 CSV", listCsvDone: "已匯出 {count} 個工作階段到 CSV", unreadOnly: "僅看未讀",
-    copyMessageTitle: "複製訊息", copied: "訊息已複製。", copyFailed: "複製失敗。",
+    copyMessageTitle: "複製訊息", copied: "訊息已複製。", copyFailed: "複製失敗。", rawToggle: "原始", rawTitle: "以原始 JSON 顯示每則訊息",
     loadFull: "目前僅顯示最近 {count} 則訊息——點選載入完整轉錄",
     showEarlier: "顯示更早的訊息（還有 {count} 則）",
     loadEarlier: "載入更早的訊息（還有 {count} 則）",
@@ -2277,7 +2277,7 @@ const ja: Translations = {
     clearFilters: "すべてのフィルターを解除",
     roleShow: "表示：",
     listCsv: "⭳ CSV", listCsvTitle: "絞り込んだセッション一覧を CSV でダウンロード", listCsvDone: "{count} 件のセッションを CSV にエクスポートしました", unreadOnly: "未読のみ",
-    copyMessageTitle: "メッセージをコピー", copied: "メッセージをコピーしました。", copyFailed: "コピーに失敗しました。",
+    copyMessageTitle: "メッセージをコピー", copied: "メッセージをコピーしました。", copyFailed: "コピーに失敗しました。", rawToggle: "生データ", rawTitle: "すべてのメッセージを生の JSON で表示",
     loadFull: "直近 {count} メッセージのみ表示中 — クリックで全文を読み込む",
     showEarlier: "以前のメッセージを表示（あと {count} 件）",
     loadEarlier: "以前のメッセージを読み込む（あと {count} 件）",
@@ -2834,7 +2834,7 @@ const ar: Translations = {
     clearFilters: "مسح جميع عوامل التصفية",
     roleShow: "عرض:",
     listCsv: "⭳ CSV", listCsvTitle: "تنزيل قائمة الجلسات المصفاة بصيغة CSV", listCsvDone: "تم تصدير {count} جلسة إلى CSV", unreadOnly: "غير المقروءة فقط",
-    copyMessageTitle: "نسخ الرسالة", copied: "تم نسخ الرسالة.", copyFailed: "فشل النسخ.",
+    copyMessageTitle: "نسخ الرسالة", copied: "تم نسخ الرسالة.", copyFailed: "فشل النسخ.", rawToggle: "خام", rawTitle: "عرض كل رسالة بصيغة JSON الخام",
     loadFull: "يتم عرض آخر {count} رسالة فقط — انقر لتحميل النسخة الكاملة",
     showEarlier: "عرض الرسائل السابقة ({count} إضافية)",
     loadEarlier: "تحميل الرسائل السابقة ({count} إضافية)",
