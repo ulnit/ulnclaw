@@ -6507,6 +6507,65 @@ pub mod slack {
         }
     }
 
+    /// P722: generic-mode status-phrase rotation state (hermes
+    /// `long_running_notifications: "generic"` parity).
+    pub struct GenericPhraseCtx {
+        catalog: crate::status_phrases::StatusPhraseCatalog,
+        recent: Vec<String>,
+        picker: crate::status_phrases::DefaultPicker,
+        window: u64,
+        phrase: Option<String>,
+    }
+
+    impl GenericPhraseCtx {
+        /// Load only when Slack's long-running notifications resolve to
+        /// the `generic` visibility mode (hermes `_long_running_mode`).
+        pub fn load() -> Option<Self> {
+            let config = crate::config::UlncLawConfig::load(None).ok()?;
+            let resolved = crate::display_config::resolve(
+                &config.display,
+                Some("slack"),
+                crate::display_config::DisplaySetting::LongRunningNotifications,
+            )?;
+            match resolved {
+                crate::display_config::DisplayValue::Text(mode) if mode == "generic" => {}
+                _ => return None,
+            }
+            let home = crate::config::ulnclaw_home();
+            let catalog =
+                crate::status_phrases::resolve_catalog(&config.display, Some("slack"), &home);
+            Some(Self {
+                catalog,
+                recent: Vec::new(),
+                picker: crate::status_phrases::DefaultPicker::new(),
+                window: u64::MAX,
+                phrase: None,
+            })
+        }
+
+        /// Status line for the current refresh: before 30 s the usual
+        /// "is thinking..."; afterwards one catalog phrase per 30 s
+        /// window (the typing loop refreshes every ~2 s, so rotating
+        /// per window avoids flicker).
+        pub fn status_for(&mut self, elapsed: std::time::Duration) -> String {
+            let secs = elapsed.as_secs();
+            if secs < 30 {
+                return "is thinking...".to_string();
+            }
+            let window = secs / 30;
+            if window != self.window || self.phrase.is_none() {
+                self.window = window;
+                self.phrase = Some(crate::status_phrases::choose_status_phrase(
+                    "status",
+                    Some(&mut self.recent),
+                    &mut |bound| self.picker.index(bound),
+                    Some(&self.catalog),
+                ));
+            }
+            self.phrase.clone().unwrap_or_default()
+        }
+    }
+
     /// hermes `_keep_typing` (Slack flavor): refresh the assistant-thread
     /// status every `interval` (hermes default 2 s) until `stop` flips,
     /// each call bounded so a slow round-trip cannot stall the cadence
@@ -6523,11 +6582,23 @@ pub mod slack {
         let started = std::time::Instant::now();
         let call_timeout =
             std::time::Duration::from_secs_f64((interval.as_secs_f64() - 0.25).clamp(0.25, 1.5));
+        // P722: generic-mode phrase rotation — engaged only when the
+        // display config asks for generic long-running notices AND no
+        // custom typing text is configured (custom text always wins,
+        // hermes typing_status_text precedence).
+        let mut phrase_ctx = if configured.as_deref().map(str::is_empty).unwrap_or(true) {
+            GenericPhraseCtx::load()
+        } else {
+            None
+        };
         loop {
             if *stop.borrow() {
                 break;
             }
-            let status = typing_status_text(started.elapsed(), configured.as_deref());
+            let status = match phrase_ctx.as_mut() {
+                Some(ctx) => ctx.status_for(started.elapsed()),
+                None => typing_status_text(started.elapsed(), configured.as_deref()),
+            };
             let _ = tokio::time::timeout(
                 call_timeout,
                 set_thread_status(&bot_token, &channel, &thread_ts, &status),
@@ -7426,6 +7497,41 @@ mod tests {
         // an empty configured value falls back to the defaults.
         assert_eq!(slack::typing_status_text(Duration::from_secs(90), Some("brewing…")), "brewing…");
         assert_eq!(slack::typing_status_text(Duration::from_secs(0), Some("")), "is thinking...");
+    }
+
+    #[tokio::test]
+    async fn slack_generic_mode_rotates_status_phrases() {
+        // P722: hermes long_running_notifications="generic" parity —
+        // the Slack typing line rotates through the status-phrase
+        // catalog after 30 s, one phrase per 30 s window.
+        use std::time::Duration;
+        let _env_guard = crate::models_dev::test_env_lock();
+        let _home_guard = IsolatedHome::with_config(Some(
+            "[display.platforms.slack]\nlong_running_notifications = \"generic\"\n",
+        ));
+        let mut ctx = slack::GenericPhraseCtx::load().expect("generic mode engages");
+        assert_eq!(ctx.status_for(Duration::from_secs(10)), "is thinking...");
+        let first = ctx.status_for(Duration::from_secs(31));
+        assert!(!first.is_empty());
+        assert_ne!(first, "is thinking...");
+        // Same 30 s window → stable phrase (no 2 s-refresh flicker).
+        assert_eq!(ctx.status_for(Duration::from_secs(45)), first);
+        // Next window → rotates, avoiding immediate repeats.
+        let second = ctx.status_for(Duration::from_secs(61));
+        assert_ne!(second, first);
+    }
+
+    #[tokio::test]
+    async fn slack_generic_mode_disengaged_by_default() {
+        // P722: without the "generic" visibility mode the typing line
+        // keeps the elapsed-time heartbeat.
+        let _env_guard = crate::models_dev::test_env_lock();
+        let _home_guard = IsolatedHome::new();
+        assert!(slack::GenericPhraseCtx::load().is_none());
+        let _home_guard2 = IsolatedHome::with_config(Some(
+            "[display]\nlong_running_notifications = true\n",
+        ));
+        assert!(slack::GenericPhraseCtx::load().is_none());
     }
 
     #[test]

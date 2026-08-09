@@ -1289,6 +1289,16 @@ impl Default for XSearchConfig {
     }
 }
 
+/// Bool-or-visibility-mode value for `long_running_notifications`
+/// (hermes allows `true`/`false` or the `"generic"` visibility mode,
+/// which swaps the elapsed-time heartbeat for generic status phrases).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BoolOrMode {
+    Flag(bool),
+    Mode(String),
+}
+
 /// `[display]` — presentation toggles for GUI hosts (hermes `display.*`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -1341,9 +1351,10 @@ pub struct DisplayConfig {
     #[serde(default)]
     pub interim_assistant_messages: Option<bool>,
     /// Periodic "still working" heartbeats on long turns (hermes
-    /// `display.long_running_notifications`).
+    /// `display.long_running_notifications`); `true`/`false` or the
+    /// `"generic"` visibility mode (status-phrase rotation).
     #[serde(default)]
-    pub long_running_notifications: Option<bool>,
+    pub long_running_notifications: Option<BoolOrMode>,
     /// Queue-depth/iteration detail in busy acknowledgments (hermes
     /// `display.busy_ack_detail`).
     #[serde(default)]
@@ -1360,6 +1371,15 @@ pub struct DisplayConfig {
     /// `display.live_status`).
     #[serde(default)]
     pub live_status: Option<String>,
+    /// Generic status-phrase catalog section (hermes
+    /// `display.status_phrases`): profile-relative YAML paths and/or
+    /// inline phrase lists merged over the built-ins.
+    #[serde(default)]
+    pub status_phrases: Option<crate::status_phrases::StatusPhrasesSection>,
+    /// Legacy alias of `status_phrases` (hermes
+    /// `display.generic_status_phrases`).
+    #[serde(default)]
+    pub generic_status_phrases: Option<crate::status_phrases::StatusPhrasesSection>,
     /// Legacy per-platform tool-progress overrides (hermes
     /// `display.tool_progress_overrides`) — fallback when no
     /// `[display.platforms.<platform>]` entry exists.
@@ -1410,9 +1430,10 @@ pub struct PlatformDisplayOverride {
     #[serde(default)]
     pub interim_assistant_messages: Option<bool>,
     /// Per-platform long-turn heartbeats (hermes
-    /// `display.platforms.<key>.long_running_notifications`).
+    /// `display.platforms.<key>.long_running_notifications`);
+    /// `true`/`false` or `"generic"`.
     #[serde(default)]
-    pub long_running_notifications: Option<bool>,
+    pub long_running_notifications: Option<BoolOrMode>,
     /// Per-platform busy-ack detail (hermes
     /// `display.platforms.<key>.busy_ack_detail`).
     #[serde(default)]
@@ -1429,6 +1450,14 @@ pub struct PlatformDisplayOverride {
     /// `display.platforms.<key>.live_status`).
     #[serde(default)]
     pub live_status: Option<String>,
+    /// Per-platform status-phrase catalog section (hermes
+    /// `display.platforms.<key>.status_phrases`).
+    #[serde(default)]
+    pub status_phrases: Option<crate::status_phrases::StatusPhrasesSection>,
+    /// Per-platform legacy phrase alias (hermes
+    /// `display.platforms.<key>.generic_status_phrases`).
+    #[serde(default)]
+    pub generic_status_phrases: Option<crate::status_phrases::StatusPhrasesSection>,
 }
 
 /// `[dashboard]` — web/desktop dashboard appearance persistence (hermes

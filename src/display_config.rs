@@ -290,8 +290,9 @@ fn override_value(
         DisplaySetting::InterimAssistantMessages => {
             DisplayValue::Flag(override_cfg.interim_assistant_messages?)
         }
-        DisplaySetting::LongRunningNotifications => {
-            DisplayValue::Flag(override_cfg.long_running_notifications?)
+        DisplaySetting::LongRunningNotifications => match override_cfg.long_running_notifications.as_ref()? {
+            crate::config::BoolOrMode::Flag(flag) => DisplayValue::Flag(*flag),
+            crate::config::BoolOrMode::Mode(mode) => DisplayValue::Text(mode.clone()),
         }
         DisplaySetting::BusyAckDetail => DisplayValue::Flag(override_cfg.busy_ack_detail?),
         DisplaySetting::BusySteerAckEnabled => {
@@ -315,8 +316,9 @@ fn global_value(display: &DisplayConfig, setting: DisplaySetting) -> Option<Disp
         DisplaySetting::InterimAssistantMessages => {
             DisplayValue::Flag(display.interim_assistant_messages?)
         }
-        DisplaySetting::LongRunningNotifications => {
-            DisplayValue::Flag(display.long_running_notifications?)
+        DisplaySetting::LongRunningNotifications => match display.long_running_notifications.as_ref()? {
+            crate::config::BoolOrMode::Flag(flag) => DisplayValue::Flag(*flag),
+            crate::config::BoolOrMode::Mode(mode) => DisplayValue::Text(mode.clone()),
         }
         DisplaySetting::BusyAckDetail => DisplayValue::Flag(display.busy_ack_detail?),
         DisplaySetting::BusySteerAckEnabled => DisplayValue::Flag(display.busy_steer_ack_enabled?),
