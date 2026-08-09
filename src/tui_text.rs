@@ -167,6 +167,7 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("PgUp/PgDn", "scroll a page at a time"),
         ("Home/End", "jump to the first / last session"),
         ("Enter", "select and resume the highlighted session"),
+        ("v", "view the highlighted session's full transcript (Esc returns)"),
         ("Type", "live filter over title, preview, id, source, project"),
         ("Backspace", "delete one filter character"),
         ("Esc", "clear the filter; a second press quits"),

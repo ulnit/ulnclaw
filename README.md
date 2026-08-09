@@ -94,7 +94,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # offline db recovery
 ./ulnclaw sessions repair          # repair malformed state.db schema (--check-only)
-./ulnclaw sessions browse          # interactive picker: filter + resume sessions (⌂ project badge, end-reason row markers (✓/∞/⧉/⑂/■; P544), right-hand details pane with first-exchange + last-message preview + message count + end reason + token totals + session duration (P562) + live context-in-use (conversation estimate vs the configured budget; P630), Tab source filter, F2 sort toggle, / transcript FTS search, F4 show/hide archived, F6 rename, F7 fork, F8 archive/unarchive toggle, F9 delete, F10 model filter, F11 export the highlighted transcript to Markdown (P585), Ctrl+U/D details-pane scrolling (plus Ctrl+↑/↓ single-line and Ctrl+Home/End edge jumps; P551) over a deepened two-round conversation preview)
+./ulnclaw sessions browse          # interactive picker: filter + resume sessions (⌂ project badge, end-reason row markers (✓/∞/⧉/⑂/■; P544), right-hand details pane with first-exchange + last-message preview + message count + end reason + token totals + session duration (P562) + live context-in-use (conversation estimate vs the configured budget; P630), Tab source filter, F2 sort toggle, / transcript FTS search, F4 show/hide archived, F6 rename, F7 fork, F8 archive/unarchive toggle, F9 delete, F10 model filter, F11 export the highlighted transcript to Markdown (P585), v opens a full-screen scrollable transcript viewer for the highlighted session (↑/↓/PgUp/PgDn/Home/End, Esc returns; P651), Ctrl+U/D details-pane scrolling (plus Ctrl+↑/↓ single-line and Ctrl+Home/End edge jumps; P551) over a deepened two-round conversation preview)
 ./ulnclaw sessions retitle-skills  # fix titles that leaked /skill scaffolds (--apply)
 ./ulnclaw sessions retitle <id>    # regenerate one session's title via the LLM (--apply; P569)
 ./ulnclaw sessions import <file>   # import sessions from a JSON export (--dry-run to preview; P577)
@@ -408,7 +408,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw sessions export <session-id> --out ./exports --format md|html
 ./ulnclaw sessions recover ./damaged-state.db   # 离线数据库恢复
 ./ulnclaw sessions repair          # 修复受损 state.db 库结构（--check-only）
-./ulnclaw sessions browse          # 交互式会话挑选：过滤并恢复会话（⌂ 项目徽章、行内结束原因标记（✓/∞/⧉/⑂/■；P544）、右侧详情窗格含首轮对话 + 最近消息预览 + 消息数 + 结束原因 + token 总量 + 会话时长（P562）+ 实时上下文占用（对话估算 vs 配置预算；P630）、Tab 来源过滤、F2 排序切换、/ 转录 FTS 搜索、F4 显示/隐藏已归档、F6 重命名、F7 分叉、F8 归档/取消归档切换、F9 删除、F10 模型过滤、F11 导出高亮会话转录为 Markdown（P585）、Ctrl+U/D 详情窗格滚动（另含 Ctrl+↑/↓ 单行滚动与 Ctrl+Home/End 边缘跳转；P551），预览加深至两轮对话）
+./ulnclaw sessions browse          # 交互式会话挑选：过滤并恢复会话（⌂ 项目徽章、行内结束原因标记（✓/∞/⧉/⑂/■；P544）、右侧详情窗格含首轮对话 + 最近消息预览 + 消息数 + 结束原因 + token 总量 + 会话时长（P562）+ 实时上下文占用（对话估算 vs 配置预算；P630）、Tab 来源过滤、F2 排序切换、/ 转录 FTS 搜索、F4 显示/隐藏已归档、F6 重命名、F7 分叉、F8 归档/取消归档切换、F9 删除、F10 模型过滤、F11 导出高亮会话转录为 Markdown（P585）、v 打开高亮会话的全屏可滚动转录查看器（↑/↓/PgUp/PgDn/Home/End，Esc 返回；P651）、Ctrl+U/D 详情窗格滚动（另含 Ctrl+↑/↓ 单行滚动与 Ctrl+Home/End 边缘跳转；P551），预览加深至两轮对话）
 ./ulnclaw sessions retitle-skills  # 修复泄漏 /skill 脚手架的会话标题（--apply）
 ./ulnclaw sessions retitle <id>    # 经 LLM 重新生成单个会话标题（--apply；P569）
 ./ulnclaw sessions import <file>   # 从 JSON 导出文件导入会话（--dry-run 预览；P577）

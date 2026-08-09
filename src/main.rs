@@ -8898,6 +8898,32 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                         context_budget,
                     ))
                 };
+                // P651: full transcript for the in-browser viewer —
+                // every user/system/assistant message (capped so a
+                // giant session cannot blow up the redraw buffer).
+                let transcript_home = home.clone();
+                let transcript = move |id: &str| {
+                    let transcript_store =
+                        SqliteSessionStore::open(transcript_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    let messages = transcript_store
+                        .load_messages(id)
+                        .map_err(|e| e.to_string())?;
+                    let mut exchange: Vec<(String, Option<String>)> = Vec::new();
+                    for message in &messages {
+                        let role = match message.role {
+                            ulnclaw::provider::Role::User => "you",
+                            ulnclaw::provider::Role::Assistant => "assistant",
+                            ulnclaw::provider::Role::System => "system",
+                            _ => continue,
+                        };
+                        exchange.push((role.to_string(), message.content.clone()));
+                        if exchange.len() >= 500 {
+                            break;
+                        }
+                    }
+                    Ok(exchange)
+                };
                 match run_session_browse_tui(
                     rows.clone(),
                     project_by_session.clone(),
@@ -8910,6 +8936,7 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     Some(&fork),
                     Some(&export),
                     Some(&context),
+                    Some(&transcript),
                 ) {
                     Ok(selected) => selected,
                     Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
@@ -9387,6 +9414,7 @@ fn run_session_browse_tui(
     fork: Option<&dyn Fn(&str) -> Result<String, String>>,
     export: Option<&dyn Fn(&str) -> Result<std::path::PathBuf, String>>,
     context: Option<&dyn Fn(&str) -> Option<(usize, usize)>>,
+    transcript: Option<&dyn Fn(&str) -> Result<Vec<(String, Option<String>)>, String>>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -9438,6 +9466,13 @@ fn run_session_browse_tui(
     let mut show_preview = preview.is_some();
     let mut preview_cache: std::collections::HashMap<String, Vec<(String, Option<String>)>> =
         std::collections::HashMap::new();
+    // P651: full-screen transcript viewer — `v` opens the complete
+    // transcript of the highlighted session (scroll keys navigate,
+    // Esc/q returns to the list).
+    let mut transcript_mode = false;
+    let mut transcript_title = String::new();
+    let mut transcript_lines: Vec<String> = Vec::new();
+    let mut transcript_scroll: usize = 0;
     // P630: live context-in-use per highlighted session (used, budget),
     // cached by id so redraws don't re-read the store.
     let mut context_cache: std::collections::HashMap<String, Option<(usize, usize)>> =
@@ -9551,6 +9586,99 @@ fn run_session_browse_tui(
             last_pane_id = highlighted_id.clone();
         }
 
+        // P651: while the transcript viewer is open it owns the screen
+        // — its own draw + key handling, then straight to the next pass.
+        if transcript_mode {
+            let (tcols, trows) = terminal::size().map_err(|e| e.to_string())?;
+            let (tcols, trows) = (tcols as usize, trows as usize);
+            queue!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))
+                .map_err(|e| e.to_string())?;
+            let body_h = trows.saturating_sub(2);
+            let max_scroll = transcript_lines.len().saturating_sub(body_h);
+            if transcript_scroll > max_scroll {
+                transcript_scroll = max_scroll;
+            }
+            if trows >= 3 && tcols >= 20 {
+                let header = format!(
+                    "  {} \u{2014} transcript  (\u{2191}\u{2193}/PgUp/PgDn scroll, Home/End, Esc back)",
+                    transcript_title
+                );
+                queue!(
+                    out,
+                    SetForegroundColor(Color::Green),
+                    Print(header.chars().take(tcols).collect::<String>()),
+                    ResetColor
+                )
+                .map_err(|e| e.to_string())?;
+                for (i, line) in transcript_lines
+                    .iter()
+                    .skip(transcript_scroll)
+                    .take(body_h)
+                    .enumerate()
+                {
+                    queue!(out, cursor::MoveTo(0, (i + 1) as u16))
+                        .map_err(|e| e.to_string())?;
+                    let clipped = line.chars().take(tcols).collect::<String>();
+                    if line.starts_with("\u{2500}\u{2500} ") {
+                        queue!(
+                            out,
+                            SetForegroundColor(Color::Cyan),
+                            Print(clipped),
+                            ResetColor
+                        )
+                        .map_err(|e| e.to_string())?;
+                    } else {
+                        queue!(out, Print(clipped)).map_err(|e| e.to_string())?;
+                    }
+                }
+                let pct = if max_scroll == 0 {
+                    100
+                } else {
+                    (transcript_scroll * 100) / max_scroll
+                };
+                let footer = format!(
+                    " line {}/{} \u{00B7} {}% ",
+                    transcript_scroll + 1,
+                    transcript_lines.len().max(1),
+                    pct
+                );
+                queue!(
+                    out,
+                    cursor::MoveTo(0, trows.saturating_sub(1) as u16),
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(footer),
+                    ResetColor
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            out.flush().map_err(|e| e.to_string())?;
+            match event::read().map_err(|e| e.to_string())? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        transcript_mode = false;
+                    }
+                    KeyCode::Up => {
+                        transcript_scroll = transcript_scroll.saturating_sub(1);
+                    }
+                    KeyCode::Down => {
+                        transcript_scroll = (transcript_scroll + 1).min(max_scroll);
+                    }
+                    KeyCode::PageUp => {
+                        transcript_scroll = transcript_scroll.saturating_sub(body_h);
+                    }
+                    KeyCode::PageDown => {
+                        transcript_scroll = (transcript_scroll + body_h).min(max_scroll);
+                    }
+                    KeyCode::Home => transcript_scroll = 0,
+                    KeyCode::End => transcript_scroll = max_scroll,
+                    _ => {}
+                },
+                Event::Resize(_, _) => {}
+                _ => {}
+            }
+            continue;
+        }
+
         let (cols, rows_h) = terminal::size().map_err(|e| e.to_string())?;
         let (cols, rows_h) = (cols as usize, rows_h as usize);
         queue!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))
@@ -9577,7 +9705,7 @@ fn run_session_browse_tui(
             queue!(
                 out,
                 SetForegroundColor(Color::Yellow),
-                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  Type to filter  Tab source  F10 model  F2 sort  F3 preview  Ctrl+U/D pane  F1 help  F5 reload  F8 archive  Esc quit"),
+                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  v transcript  Type to filter  Tab source  F10 model  F2 sort  F3 preview  Ctrl+U/D pane  F1 help  F5 reload  F8 archive  Esc quit"),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -10354,6 +10482,45 @@ fn run_session_browse_tui(
                                 }
                                 Err(e) => {
                                     notice = Some(format!("Export failed: {e}"));
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('v') if filter.is_empty() => {
+                        // P651: open the full transcript of the
+                        // highlighted session in a scrollable viewer.
+                        if let (Some(transcript_fn), Some(row)) =
+                            (transcript, filtered.get(cursor_idx))
+                        {
+                            match transcript_fn(&row.id) {
+                                Ok(exchange) => {
+                                    let width = 100usize;
+                                    let mut lines: Vec<String> = Vec::new();
+                                    for (role, content) in exchange {
+                                        lines.push(format!("\u{2500}\u{2500} {role}"));
+                                        let text = content.unwrap_or_default();
+                                        if text.trim().is_empty() {
+                                            lines.push("(empty)".to_string());
+                                        } else {
+                                            lines.extend(
+                                                ulnclaw::tui_text::wrap_display_text(
+                                                    &text, width,
+                                                ),
+                                            );
+                                        }
+                                        lines.push(String::new());
+                                    }
+                                    transcript_lines = lines;
+                                    transcript_scroll = 0;
+                                    transcript_title = row
+                                        .title
+                                        .clone()
+                                        .filter(|title| !title.trim().is_empty())
+                                        .unwrap_or_else(|| row.id.clone());
+                                    transcript_mode = true;
+                                }
+                                Err(e) => {
+                                    notice = Some(format!("Transcript failed: {e}"));
                                 }
                             }
                         }
