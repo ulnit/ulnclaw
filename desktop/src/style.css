@@ -1568,6 +1568,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 /* P659: task run-history rows in the detail dialog */
 .kanban-runs { margin-top: 8px; max-height: 160px; overflow-y: auto; }
 .kanban-runs .kanban-event { flex-wrap: wrap; }
+.busy-mode { font-size: 0.9em; opacity: 0.85; }
+.busy-mode:hover { opacity: 1; }
 .kanban-diagnostics { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .kanban-diagnostic {
   border: 1px solid rgba(128,128,128,0.3); border-left-width: 3px;

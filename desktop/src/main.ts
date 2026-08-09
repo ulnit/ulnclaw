@@ -124,6 +124,15 @@ const state = {
   sessionListVisible: [] as SessionRow[],
   sessionCursor: 0,
   busy: false,
+  /** P682: what Enter does while a turn streams (hermes /busy parity);
+   * persisted across restarts. */
+  busyMode: (() => {
+    const saved = localStorage.getItem("ulnclaw.busyMode");
+    return (saved === "steer" || saved === "interrupt" ? saved : "queue") as
+      | "queue" | "steer" | "interrupt";
+  })(),
+  /** P682: prompts queued per session while its turn is streaming. */
+  busyQueue: new Map<string, string[]>(),
   managedPid: null as number | null,
   skills: [] as SkillRow[],
   pendingUploads: [] as { path: string; mime: string; bytes: number }[],
@@ -204,6 +213,7 @@ const el = {
   scrollBottom: document.getElementById("scroll-bottom") as HTMLButtonElement,
   chatTitle: document.getElementById("chat-title")!,
   chatBusy: document.getElementById("chat-busy")!,
+  busyModeBtn: document.getElementById("busy-mode") as HTMLButtonElement,
   sessionInfoDialog: document.getElementById("session-info-dialog") as HTMLDialogElement,
   sessionInfoRows: document.getElementById("session-info-rows")!,
   sessionInfoCopy: document.getElementById("session-info-copy") as HTMLButtonElement,
@@ -1280,6 +1290,62 @@ function refreshCharCount(): void {
   el.charCount.classList.toggle("blocked", limit > 0 && length > limit);
 }
 
+/** P682: busy-mode badge — visible while streaming or while prompts
+ * are queued for the current session; label carries the queue depth. */
+function updateBusyBadge(): void {
+  const count = state.current
+    ? state.busyQueue.get(state.current.id)?.length || 0
+    : 0;
+  el.busyModeBtn.hidden = !state.busy && count === 0;
+  el.busyModeBtn.textContent = count > 0 ? `\u29D7 ${count}` : "\u29D7";
+  el.busyModeBtn.title = fmt(t.busy.title, { mode: t.busy[state.busyMode] });
+}
+
+/** P682 (hermes /busy parity): route a composer submit that arrives
+ * while the session's turn is still streaming — queue it for the next
+ * turn, steer it into the active turn, or interrupt first. */
+function handleBusySubmit(text: string): void {
+  if (!text || !state.current || !state.client) return;
+  const sessionId = state.current.id;
+  if (state.busyMode === "steer") {
+    el.input.value = "";
+    refreshCharCount();
+    void state.client
+      .chat(sessionId, `/steer ${text}`)
+      .then(() => notifySuccess(t.busy.steerSent))
+      .catch((error) => notifyError(String(error)));
+    return;
+  }
+  const queue = state.busyQueue.get(sessionId) || [];
+  queue.push(text);
+  state.busyQueue.set(sessionId, queue);
+  el.input.value = "";
+  refreshCharCount();
+  updateBusyBadge();
+  if (state.busyMode === "interrupt") {
+    void state.client.chat(sessionId, "/stop").catch(() => {});
+    notifySuccess(fmt(t.busy.interruptQueued, { count: String(queue.length) }));
+  } else {
+    notifySuccess(fmt(t.busy.queued, { count: String(queue.length) }));
+  }
+}
+
+/** P682: after a turn ends, feed the session's next queued prompt
+ * back through the normal send path. */
+function flushBusyQueue(): void {
+  updateBusyBadge();
+  if (!state.current || state.busy) return;
+  const sessionId = state.current.id;
+  const queue = state.busyQueue.get(sessionId);
+  if (!queue || queue.length === 0) return;
+  const next = queue.shift()!;
+  if (queue.length === 0) state.busyQueue.delete(sessionId);
+  updateBusyBadge();
+  el.input.value = next;
+  refreshCharCount();
+  void sendTurn();
+}
+
 async function sendTurn(): Promise<void> {
   const text = el.input.value.trim();
   // P466: optional hard limit blocks oversized messages before any dispatch.
@@ -1378,7 +1444,14 @@ async function sendTurn(): Promise<void> {
     }
     return;
   }
-  if ((!text && state.pendingUploads.length === 0) || state.busy || !state.client) return;
+  if (!state.client) return;
+  // P682: while the session's turn is streaming, the busy mode decides
+  // what happens to fresh input (queue | steer | interrupt).
+  if (state.busy) {
+    handleBusySubmit(text);
+    return;
+  }
+  if (!text && state.pendingUploads.length === 0) return;
   if (!state.current) {
     try {
       state.current = await state.client.createSession();
@@ -1412,6 +1485,7 @@ async function sendTurn(): Promise<void> {
     persistDrafts();
   }
   state.busy = true;
+  updateBusyBadge();
   el.send.disabled = true;
   // P390: thinking indicator while the turn streams.
   el.chatBusy.textContent = t.tools.thinking;
@@ -1525,6 +1599,7 @@ async function sendTurn(): Promise<void> {
     turnTimer.stop();
     state.busy = false;
     el.send.disabled = false;
+    flushBusyQueue();
     el.chatBusy.hidden = true;
     el.toolProgress.hidden = true;
     el.toolProgress.textContent = "";
@@ -3177,6 +3252,19 @@ async function start(): Promise<void> {
     else void runArchiveSession();
   };
   el.send.onclick = () => void sendTurn();
+  // P682: cycle the busy behavior (queue -> steer -> interrupt).
+  el.busyModeBtn.onclick = () => {
+    const order: ("queue" | "steer" | "interrupt")[] = ["queue", "steer", "interrupt"];
+    const next = order[(order.indexOf(state.busyMode) + 1) % order.length];
+    state.busyMode = next;
+    try {
+      localStorage.setItem("ulnclaw.busyMode", next);
+    } catch {
+      /* storage unavailable */
+    }
+    notifySuccess(fmt(t.busy.modeChanged, { mode: t.busy[next] }));
+    updateBusyBadge();
+  };
   el.mic.onclick = () => void toggleMic();
   el.attachFile.onclick = () => void openFsPicker();
   el.fsUp.onclick = () => {
