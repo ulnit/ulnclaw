@@ -61,6 +61,11 @@ export class KanbanWidget {
             <label for="kanban-detail-reasoning" data-i18n="kanban.reasoningLabel">Reasoning effort</label>
             <select id="kanban-detail-reasoning"></select>
           </div>
+          <div class="kanban-detail-links">
+            <label data-i18n="kanban.linksLabel">Dependencies</label>
+            <span id="kanban-detail-parents" class="kanban-links-parents"></span>
+            <button id="kanban-detail-link" type="button" data-i18n="kanban.linkAction">Link parent…</button>
+          </div>
           <div class="kanban-detail-model">
             <label for="kanban-detail-model" data-i18n="kanban.modelLabel">Model</label>
             <input id="kanban-detail-model" type="text" placeholder="inherit profile" data-i18n-ph="kanban.modelInherit" />
@@ -633,6 +638,47 @@ export class KanbanWidget {
       }
     }
 
+    // P647: dependency chips — ✕ unlinks a parent; Link parent… adds.
+    const parentsEl = this.root.querySelector("#kanban-detail-parents") as HTMLElement;
+    parentsEl.innerHTML = "";
+    for (const parentId of task.parents) {
+      const chip = document.createElement("span");
+      chip.className = "kanban-chip";
+      chip.textContent = parentId.replace(/^t_/, "").slice(0, 6);
+      chip.title = parentId;
+      const unlink = document.createElement("button");
+      unlink.textContent = "\u2715";
+      unlink.title = t.kanban.unlinkTitle;
+      unlink.onclick = () => {
+        const c = this.client();
+        if (!c) return;
+        void c.kanbanUnlink(task.id, parentId).then((result) => {
+          if (!result.ok) {
+            window.alert(result.error || "unlink failed");
+            return;
+          }
+          void this.refresh();
+          void this.openDetail(task.id);
+        });
+      };
+      chip.appendChild(unlink);
+      parentsEl.appendChild(chip);
+    }
+    (this.root.querySelector("#kanban-detail-link") as HTMLButtonElement).onclick = () => {
+      const c = this.client();
+      if (!c) return;
+      const parent = window.prompt(t.kanban.linkPrompt);
+      if (!parent || !parent.trim()) return;
+      void c.kanbanLink(task.id, parent.trim()).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "link failed");
+          return;
+        }
+        void this.refresh();
+        void this.openDetail(task.id);
+      });
+    };
+
     // P638: task activity trail (hermes event log) — kind + compact
     // payload per event, newest last like the CLI `kanban log`.
     const eventsEl = this.root.querySelector("#kanban-detail-events") as HTMLElement;
@@ -705,6 +751,6 @@ export class KanbanWidget {
     archiveBtn.style.display = detail.task.status === "archived" ? "none" : "";
     const deleteBtn = this.root.querySelector("#kanban-detail-delete") as HTMLButtonElement;
     deleteBtn.style.display = detail.task.status === "archived" ? "" : "none";
-    dialog.showModal();
+    if (!dialog.open) dialog.showModal();
   }
 }

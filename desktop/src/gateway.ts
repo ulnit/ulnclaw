@@ -3718,6 +3718,42 @@ export class GatewayClient {
     return (value?.task || null) as KanbanTask | null;
   }
 
+  /** P647: link this task as a child of parent (existing endpoint). */
+  async kanbanLink(id: string, parentId: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/link`), {
+        headers: this.headers(),
+        method: "POST",
+        body: JSON.stringify({ parent_id: parentId }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P647: remove a parent link from this (child) task. */
+  async kanbanUnlink(id: string, parentId: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/unlink`), {
+        headers: this.headers(),
+        method: "POST",
+        body: JSON.stringify({ parent_id: parentId }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
   /** P646: park a task in the scheduled column. */
   async kanbanSchedule(id: string, reason: string): Promise<{ ok: boolean; error?: string }> {
     try {

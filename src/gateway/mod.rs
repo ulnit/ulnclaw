@@ -22,7 +22,7 @@
 //!     `/:id`, `/:id/folders`, `/:id/primary`, `/:id/archive|restore`),
 //!   - `GET/POST /api/kanban/boards`, `POST /api/kanban/boards/:slug/switch`,
 //!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
-//!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`,
+//!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|unlink|claim`,
 //!     `POST /api/kanban/tasks/:id/set-reasoning`,
 //!     `POST /api/kanban/tasks/:id/set-model`,
 //!     `POST /api/kanban/tasks/:id/edit`,
@@ -6718,6 +6718,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/tasks/:id/unblock", post(kanban::unblock_task))
         .route("/api/kanban/tasks/:id/comment", post(kanban::comment_task))
         .route("/api/kanban/tasks/:id/link", post(kanban::link_task))
+        .route("/api/kanban/tasks/:id/unlink", post(kanban::unlink_task))
         .route("/api/kanban/tasks/:id/claim", post(kanban::claim_task))
         .route("/api/kanban/tasks/:id/set-reasoning", post(kanban::set_reasoning))
         .route("/api/kanban/tasks/:id/set-model", post(kanban::set_model))
@@ -15356,6 +15357,90 @@ mod tests {
         assert!(body["config"]["capture_after_mode"].is_string(), "{body}");
         // Shallow call never carries a health payload.
         assert!(body.get("health").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn test_kanban_unlink_endpoint() {
+        // P647: POST .../unlink removes a parent link (hermes unlink);
+        // the link endpoint existed before but had no inverse.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "parent task"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let parent = body["task"]["id"].as_str().unwrap().to_string();
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "child task"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let child = body["task"]["id"].as_str().unwrap().to_string();
+
+        // Link child -> parent.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{child}/link"), None,
+            json!({"parent_id": parent}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), &format!("/api/kanban/tasks/{child}"), None).await;
+        assert_eq!(body["task"]["parents"], json!([parent]), "{body}");
+
+        // Self-link is refused.
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{child}/link"), None,
+            json!({"parent_id": child}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Unlink removes it.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{child}/unlink"), None,
+            json!({"parent_id": parent}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true, "{body}");
+        let (_, body) = get_json(app.clone(), &format!("/api/kanban/tasks/{child}"), None).await;
+        assert!(body["task"]["parents"].as_array().unwrap().is_empty(), "{body}");
+
+        // Unlink is idempotent store-side (still 200, nothing removed).
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{child}/unlink"), None,
+            json!({"parent_id": parent}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Unknown ids 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks/nope123/unlink", None,
+            json!({"parent_id": parent}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{child}/unlink"), None,
+            json!({"parent_id": "nope123"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

@@ -881,6 +881,27 @@ pub async fn link_task(Path(id): Path<String>, Json(body): Json<LinkBody>) -> Re
     }
 }
 
+/// `POST /api/kanban/tasks/:id/unlink` — remove a parent link from
+/// this (child) task (hermes unlink; idempotent store-side).
+pub async fn unlink_task(Path(id): Path<String>, Json(body): Json<LinkBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let child = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let parent = match resolve(&store, &body.parent_id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.unlink_tasks(&parent, &child) {
+        Ok(()) => Json(json!({"ok": true, "parent_id": parent, "child_id": child})).into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct DispatchBody {
     #[serde(default)]
