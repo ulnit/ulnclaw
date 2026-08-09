@@ -1572,6 +1572,39 @@ impl Dispatcher {
         }
     }
 
+    /// P703: ledger-protected delivery of a turn reply through an
+    /// adapter's own send function (hermes delivery_ledger checkpoint
+    /// parity for the direct-send adapters). The obligation records the
+    /// text before the send and marks delivered after; a crash in
+    /// between leaves a row the next boot's sweep redelivers.
+    pub async fn send_with_ledger<F, Fut>(
+        &self,
+        platform: &str,
+        chat_id: &str,
+        text: &str,
+        send: F,
+    ) where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let session_key = format!("platform-{platform}-{chat_id}");
+        let obligation = crate::delivery_ledger::record_obligation(
+            &self.store,
+            &session_key,
+            platform,
+            chat_id,
+            None,
+            text,
+        );
+        if let Some(id) = &obligation {
+            crate::delivery_ledger::mark_attempting(&self.store, id);
+        }
+        send().await;
+        if let Some(id) = &obligation {
+            crate::delivery_ledger::mark_delivered(&self.store, id);
+        }
+    }
+
     /// Test hook: current queue depth for a chat key.
     #[cfg(test)]
     async fn queued_depth(&self, key: &str) -> usize {
@@ -2970,7 +3003,12 @@ pub mod telegram {
                     // extract_media); the rest is sent as text.
                     let (reply_text, media_paths) = extract_media_tags(&reply);
                     if !reply_text.trim().is_empty() {
-                        send_message(&client, &token, &event.chat_id, &reply_text).await;
+                        // P703: ledger-protected reply delivery.
+                        dispatcher
+                            .send_with_ledger("telegram", &event.chat_id, &reply_text, || {
+                                send_message(&client, &token, &event.chat_id, &reply_text)
+                            })
+                            .await;
                     }
                     for path in &media_paths {
                         if crate::media_cache::mime_for_ext(path).starts_with("image/") {
@@ -4327,7 +4365,12 @@ pub mod discord {
             let reply = outcome.reply;
             let (reply_text, media_paths) = extract_media_tags(&reply);
             if !reply_text.trim().is_empty() {
-                send_channel_message(&token, &event.chat_id, &reply_text).await;
+                // P703: ledger-protected reply delivery.
+                dispatcher
+                    .send_with_ledger("discord", &event.chat_id, &reply_text, || {
+                        send_channel_message(&token, &event.chat_id, &reply_text)
+                    })
+                    .await;
             }
             for path in &media_paths {
                 send_attachment(&token, &event.chat_id, path).await;
@@ -5620,7 +5663,12 @@ pub mod slack {
                     // (hermes files.upload flow); the rest posts as text.
                     let (reply_text, media_paths) = extract_media_tags(&reply);
                     if !reply_text.trim().is_empty() {
-                        post_message(&bot_token, &message_event.chat_id, &reply_text).await;
+                        // P703: ledger-protected reply delivery.
+                        dispatcher
+                            .send_with_ledger("slack", &message_event.chat_id, &reply_text, || {
+                                post_message(&bot_token, &message_event.chat_id, &reply_text)
+                            })
+                            .await;
                     }
                     for path in media_paths {
                         upload_file(&bot_token, &message_event.chat_id, &path).await;
@@ -5750,7 +5798,12 @@ pub mod slack {
             }
             let (reply_text, media_paths) = extract_media_tags(&outcome.reply);
             if !reply_text.trim().is_empty() {
-                deliver_slash_reply(&bot_token, &channel_id, &response_url, &reply_text, true).await;
+                // P703: ledger-protected reply delivery.
+                dispatcher
+                    .send_with_ledger("slack", &channel_id, &reply_text, || {
+                        deliver_slash_reply(&bot_token, &channel_id, &response_url, &reply_text, true)
+                    })
+                    .await;
             }
             for path in media_paths {
                 upload_file(&bot_token, &channel_id, &path).await;
@@ -7389,6 +7442,28 @@ mod tests {
         assert!(captured[1].1.contains("queued turn failed"), "{captured:?}");
 
         unregister_platform_sender_for_tests("testplat");
+    }
+
+    #[tokio::test]
+    async fn send_with_ledger_records_and_delivers() {
+        // P703: the adapter-side ledger wrap records a pending
+        // obligation, runs the send, then marks it delivered.
+        let dispatcher = test_dispatcher();
+        let sent = Arc::new(std::sync::Mutex::new(0u32));
+        let captured = sent.clone();
+        dispatcher
+            .send_with_ledger("testplat", "chat-9", "final answer", move || {
+                let captured = captured.clone();
+                async move {
+                    *captured.lock().unwrap() += 1;
+                }
+            })
+            .await;
+        assert_eq!(*sent.lock().unwrap(), 1);
+        let rows = dispatcher.store.obligation_rows();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].1, "testplat");
+        assert_eq!(rows[0].2, "delivered");
     }
 
     #[tokio::test]
