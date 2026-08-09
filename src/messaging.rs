@@ -41,6 +41,11 @@ pub struct MessagingConfig {
     /// `pair` behavior). Approved codes join the allowlist as a union.
     #[serde(default = "default_pairing")]
     pub pairing: bool,
+    /// Announce gateway restarts to each platform's most recent
+    /// channel on startup (hermes `gateway_restart_notification`
+    /// parity) — a lifecycle ping that the bot is back.
+    #[serde(default = "default_gateway_restart_notification")]
+    pub gateway_restart_notification: bool,
     /// Inject image attachments natively into the user turn as
     /// multimodal content parts (P226, hermes media-injection parity).
     /// When false — or for non-image media — attachments stay path
@@ -151,6 +156,10 @@ fn default_multimodal_injection() -> bool {
 }
 
 fn default_pairing() -> bool {
+    true
+}
+
+fn default_gateway_restart_notification() -> bool {
     true
 }
 
@@ -466,6 +475,27 @@ pub fn platform_sender_names() -> Vec<String> {
     let mut names: Vec<String> = platform_senders().lock().unwrap().keys().cloned().collect();
     names.sort();
     names
+}
+
+/// Announce a gateway restart to each live platform's most recently
+/// active channel (hermes `gateway_restart_notification` parity).
+/// Runs after a short settle delay so platform senders finish
+/// registering and the channel directory reflects the previous run.
+pub async fn announce_gateway_restart(settle: std::time::Duration) {
+    tokio::time::sleep(settle).await;
+    for platform in platform_sender_names() {
+        let Some(sender) = platform_sender(&platform) else {
+            continue;
+        };
+        let Some((_channel_platform, entry)) =
+            crate::channel_directory::list_channels(Some(&platform))
+                .into_iter()
+                .max_by_key(|(_, entry)| entry.updated_at)
+        else {
+            continue;
+        };
+        sender.send_text(&entry.id, "♻ Gateway restarted").await;
+    }
 }
 
 /// One messaging-platform catalog row (lean hermes
@@ -6478,5 +6508,53 @@ mod tests {
         let empty: Vec<(&str, &str, String)> = vec![];
         let out = format_platforms_digest(&empty);
         assert!(out.contains("no messaging platforms"), "{out}");
+    }
+
+    struct RestartCapture {
+        sends: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformSender for RestartCapture {
+        async fn send_text(&self, chat_id: &str, text: &str) {
+            self.sends
+                .lock()
+                .unwrap()
+                .push((chat_id.to_string(), text.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_restart_announcement_targets_latest_channel() {
+        // P684: hermes gateway_restart_notification parity — ping each
+        // live platform's most recently active channel exactly once.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        crate::channel_directory::reset_for_tests();
+
+        let sends = Arc::new(std::sync::Mutex::new(Vec::new()));
+        register_platform_sender(
+            "restart-test",
+            Arc::new(RestartCapture { sends: sends.clone() }),
+        );
+        crate::channel_directory::record_channel("restart-test", "old-chat", "Old", "dm", "m1");
+        // updated_at has second granularity — sleep past the boundary
+        // so the two records are strictly ordered.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        crate::channel_directory::record_channel("restart-test", "new-chat", "New", "dm", "m2");
+
+        announce_gateway_restart(std::time::Duration::from_millis(10)).await;
+
+        let captured = sends.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1, "{captured:?}");
+        assert_eq!(captured[0].0, "new-chat");
+        assert!(captured[0].1.contains("Gateway restarted"), "{captured:?}");
+
+        crate::channel_directory::reset_for_tests();
+        if let Some(home) = prev_home {
+            std::env::set_var("ULNCLAW_HOME", home);
+        }
     }
 }

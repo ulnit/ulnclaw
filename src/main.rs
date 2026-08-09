@@ -2649,6 +2649,15 @@ async fn gateway_cmd(
         });
     }
 
+    // Gateway restart notification (hermes
+    // `gateway_restart_notification` parity): ping each platform's
+    // most recent channel so messaging users see the bot came back.
+    if config.messaging.gateway_restart_notification {
+        tokio::spawn(async move {
+            ulnclaw::messaging::announce_gateway_restart(std::time::Duration::from_secs(5)).await;
+        });
+    }
+
     // Register this instance in the pidfile; a startup failure or a
     // clean shutdown removes it (best-effort — a stale file only
     // weakens the guard, and the liveness check self-heals it).
