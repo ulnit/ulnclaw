@@ -442,6 +442,53 @@ pub fn build_learning_graph(home: &Path) -> Value {
 }
 
 
+/// Chronological learning-journey digest (P667 — the `/journey` slash,
+/// hermes "open the learning journey timeline" in text form). Pure over
+/// the [`build_learning_graph`] payload: newest `limit` events, one per
+/// line, skills and memories intermixed.
+pub fn format_journey_digest(payload: &Value, limit: usize) -> String {
+    let nodes = payload
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if nodes.is_empty() {
+        return "(o_o) no learning yet — skills you teach the agent and approved memory writes land here.\n"
+            .to_string();
+    }
+    let skills = nodes
+        .iter()
+        .filter(|n| n.get("kind").and_then(|v| v.as_str()) == Some("skill"))
+        .count();
+    let memories = nodes.len() - skills;
+
+    let mut sorted = nodes.clone();
+    sorted.sort_by_key(|n| n.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0));
+    let recent: Vec<&Value> = sorted.iter().rev().take(limit).collect();
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "learning journey: {} skill(s), {} memory card(s) — newest first:\n",
+        skills, memories
+    ));
+    for node in recent {
+        let kind = node.get("kind").and_then(|v| v.as_str()).unwrap_or("skill");
+        let glyph = if kind == "memory" { "\u{25c6}" } else { "\u{2726}" };
+        let label = node.get("label").and_then(|v| v.as_str()).unwrap_or("?");
+        let date = crate::learning_graph_render::format_date(
+            node.get("timestamp").and_then(|v| v.as_f64()),
+        );
+        out.push_str(&format!("  {date}  {glyph} {label}\n"));
+    }
+    out
+}
+
+/// Convenience wrapper: build the graph from `home` and format it.
+pub fn journey_digest(home: &Path, limit: usize) -> String {
+    format_journey_digest(&build_learning_graph(home), limit)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,5 +663,26 @@ mod tests {
         assert_eq!(to_int_ts(&json!("1720000000")), Some(1720000000));
         assert_eq!(to_int_ts(&json!(null)), None);
         assert_eq!(to_int_ts(&json!("garbage")), None);
+    }
+
+    #[test]
+    fn journey_digest_empty_and_populated() {
+        let empty = serde_json::json!({"nodes": []});
+        let out = format_journey_digest(&empty, 10);
+        assert!(out.contains("no learning yet"), "{out}");
+
+        let payload = serde_json::json!({"nodes": [
+            {"id": "git-helper", "label": "git-helper", "kind": "skill", "timestamp": 1_700_000_000},
+            {"id": "memory:notes:0", "label": "prefers tabs", "kind": "memory", "timestamp": 1_750_000_000},
+            {"id": "old-skill", "label": "old-skill", "kind": "skill", "timestamp": 1_600_000_000},
+        ]});
+        let out = format_journey_digest(&payload, 2);
+        assert!(out.contains("2 skill(s), 1 memory card(s)"), "{out}");
+        // Newest first, limited to 2 entries.
+        let first = out.lines().nth(1).unwrap();
+        assert!(first.contains("prefers tabs"), "{out}");
+        assert!(!out.contains("old-skill"), "{out}");
+        assert!(out.contains("\u{25c6}"), "{out}");
+        assert!(out.contains("\u{2726}"), "{out}");
     }
 }

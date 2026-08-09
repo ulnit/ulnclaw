@@ -10532,6 +10532,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
   /init [notes]      generate or update AGENTS.md from a project scan
   /agents            active agents + recent delegations
+  /journey           the learning timeline (skills + memory cards)
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /branch [name]   fork this session into a child branch
@@ -11590,6 +11591,13 @@ async fn resolve_gateway_slash(
                     "failed to create the job: {e}"
                 ))),
             }
+        }
+        "/journey" => {
+            // Hermes /journey parity (P667): the learning timeline
+            // (learned skills + approved memory cards) as a digest.
+            let home = crate::config::ulnclaw_home();
+            let digest = crate::learning_graph::journey_digest(&home, 15);
+            Some(GatewaySlash::Direct(digest.trim_end().to_string()))
         }
         "/agents" => {
             // Hermes /agents parity (P666): active agents + recent

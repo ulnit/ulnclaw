@@ -2209,6 +2209,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/suggestions", t.slash.suggestions],
     ["/init", t.slash.init],
     ["/agents", t.slash.agents],
+    ["/journey", t.slash.journey],
   ];
 }
 
