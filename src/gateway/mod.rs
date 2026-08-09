@@ -5362,9 +5362,25 @@ async fn insights(
     }
 }
 
+/// The configured home channel for a platform (P699): the cron
+/// delivery resolver first (process env + legacy aliases), then the
+/// raw `<PLATFORM>_HOME_CHANNEL` form the `/sethome` slash writes.
+fn home_channel_for(platform_id: &str, env_on_disk: &HashMap<String, String>) -> Option<String> {
+    if let Some(home) = crate::cron::delivery::home_target_chat_id(platform_id) {
+        return Some(home);
+    }
+    let var = format!("{}_HOME_CHANNEL", platform_id.to_uppercase());
+    crate::config::get_env_value(&var)
+        .or_else(|| env_on_disk.get(&var).cloned())
+        .filter(|value| !value.trim().is_empty())
+}
+
 /// `GET /api/channels` — messaging-platform inventory: every known
-/// platform with its `[messaging.<platform>].enabled` posture (desktop
-/// Doctor channels panel; hermes ChannelsPage parity).
+/// platform with its `[messaging.<platform>].enabled` posture plus the
+/// runtime state ladder, configured home channel and seen-channel
+/// counts (desktop Doctor channels panel; hermes ChannelsPage parity,
+/// enriched P699). The top-level `directory` lists every channel the
+/// gateway has seen, newest activity first per platform.
 async fn channels_status(State(_state): State<Arc<GatewayState>>) -> Response {
     let result = tokio::task::spawn_blocking(|| {
         let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
@@ -5397,12 +5413,68 @@ async fn channels_status(State(_state): State<Arc<GatewayState>>) -> Response {
             ("raft", m.raft.enabled),
             ("a2a", m.a2a.enabled),
         ];
+        let states: HashMap<String, String> = crate::messaging::platform_state_rows()
+            .into_iter()
+            .map(|(id, _, state)| (id.to_string(), state))
+            .collect();
+        let home = crate::config::ulnclaw_home();
+        let env_on_disk = crate::config::load_env_file(&home.join(".env"));
+        let directory = crate::channel_directory::list_channels(None);
+        let mut known_counts: HashMap<String, usize> = HashMap::new();
+        for (platform, _) in &directory {
+            *known_counts.entry(platform.clone()).or_insert(0) += 1;
+        }
         let rows: Vec<Value> = channels
             .into_iter()
-            .map(|(name, enabled)| json!({"name": name, "enabled": enabled}))
+            .map(|(name, enabled)| {
+                let state = states
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| "disabled".to_string());
+                json!({
+                    "name": name,
+                    "enabled": enabled,
+                    "state": state,
+                    "home_channel": home_channel_for(name, &env_on_disk),
+                    "known_channels": known_counts.get(name).copied().unwrap_or(0),
+                })
+            })
             .collect();
         let enabled_count = rows.iter().filter(|r| r["enabled"] == Value::Bool(true)).count();
-        json!({"channels": rows, "enabled_count": enabled_count})
+        let connected_count = rows
+            .iter()
+            .filter(|r| r["state"].as_str() == Some("connected"))
+            .count();
+        // Seen channels grouped per platform, newest activity first.
+        let mut by_platform: std::collections::BTreeMap<String, Vec<Value>> =
+            std::collections::BTreeMap::new();
+        for (platform, entry) in directory {
+            let updated_iso = chrono::DateTime::from_timestamp(entry.updated_at, 0)
+                .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                .unwrap_or_default();
+            by_platform.entry(platform).or_default().push(json!({
+                "id": entry.id,
+                "name": entry.name,
+                "type": entry.chat_type,
+                "updated_at": entry.updated_at,
+                "updated_iso": updated_iso,
+                "last_message_id": entry.last_message_id,
+            }));
+        }
+        for entries in by_platform.values_mut() {
+            entries.sort_by(|a, b| {
+                b["updated_at"]
+                    .as_i64()
+                    .unwrap_or(0)
+                    .cmp(&a["updated_at"].as_i64().unwrap_or(0))
+            });
+        }
+        json!({
+            "channels": rows,
+            "enabled_count": enabled_count,
+            "connected_count": connected_count,
+            "directory": by_platform,
+        })
     })
     .await;
     match result {
@@ -25035,6 +25107,15 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(names.contains(&"telegram"));
         assert!(names.contains(&"matrix"));
         assert!(body["enabled_count"].as_u64().is_some());
+        // P699: state ladder, home channel and seen-channel counts per
+        // row; connected rollup + directory at the top level.
+        for row in channels {
+            assert!(row["state"].is_string(), "{row}");
+            assert!(row.get("home_channel").is_some(), "{row}");
+            assert!(row["known_channels"].is_u64(), "{row}");
+        }
+        assert!(body["connected_count"].is_u64(), "{body}");
+        assert!(body["directory"].is_object(), "{body}");
     }
 
     #[tokio::test]
