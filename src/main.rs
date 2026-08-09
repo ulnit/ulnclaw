@@ -2833,6 +2833,15 @@ async fn gateway_cmd(
     } else {
         ulnclaw::lifecycle_ledger::mark_exited(&home, Some(1), "serve_error");
     }
+    // P733: cgroup orphan reaper (hermes cgroup_cleanup, which systemd
+    // runs as ExecStopPost after the gateway exits): SIGKILL long-lived
+    // helpers the gateway doesn't track (adb, platform bridges, ...) so
+    // they don't block Restart=always. Runs last, when nothing of ours
+    // should still be draining.
+    let reaped = ulnclaw::cgroup_cleanup::reap_cgroup(None);
+    if reaped > 0 {
+        tracing::info!("[cgroup_cleanup] reaped {reaped} orphaned process(es) from the unit cgroup");
+    }
     result.map_err(|e| e.to_string())
 }
 

@@ -628,6 +628,15 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/cgroup` — P733 cgroup orphan-reaper posture. */
+export interface CgroupInfoPayload {
+  supported: boolean;
+  cgroup_path: string | null;
+  pid_count: number;
+  contains_own_pid: boolean;
+  reap_on_exit: boolean;
+}
+
 /** `GET /api/terminal` — P732 resolved terminal backend config. */
 export interface TerminalInfoPayload {
   backend: string;
@@ -2544,6 +2553,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`status-phrases HTTP ${response.status}`);
     return (await response.json()) as StatusPhrasesPayload;
+  }
+
+  /** GET /api/cgroup — P733 cgroup orphan-reaper posture. */
+  async cgroupInfo(): Promise<CgroupInfoPayload> {
+    const response = await fetch(this.endpoint("/api/cgroup"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`cgroup HTTP ${response.status}`);
+    return (await response.json()) as CgroupInfoPayload;
   }
 
   /** GET /api/terminal — P732 resolved terminal backend config. */

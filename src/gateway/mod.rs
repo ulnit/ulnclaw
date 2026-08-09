@@ -5590,6 +5590,26 @@ async fn terminal_info_api(State(state): State<Arc<GatewayState>>) -> Json<Value
     }))
 }
 
+/// `GET /api/cgroup` — P733 ops surface over the cgroup orphan reaper
+/// (hermes cgroup_cleanup): whether a cgroup v2 hierarchy is visible,
+/// which PIDs currently live in ours, and the reap posture. Read-only —
+/// the actual reap only runs at gateway exit (ExecStopPost semantics).
+async fn cgroup_info_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let path = crate::cgroup_cleanup::own_cgroup_path();
+    let pids = path
+        .as_deref()
+        .map(crate::cgroup_cleanup::read_cgroup_pids)
+        .unwrap_or_default();
+    let own = std::process::id();
+    Json(json!({
+        "supported": cfg!(target_os = "linux"),
+        "cgroup_path": path,
+        "pid_count": pids.len(),
+        "contains_own_pid": pids.contains(&own),
+        "reap_on_exit": true,
+    }))
+}
+
 /// `GET /api/status-phrases` — P731 ops surface over the P722
 /// status-phrase catalogs: the resolved global catalog (built-ins +
 /// conventional profile files + `[display.status_phrases]`), which
@@ -7279,6 +7299,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/display", get(display_settings_api))
         .route("/api/status-phrases", get(status_phrases_api))
         .route("/api/terminal", get(terminal_info_api))
+        .route("/api/cgroup", get(cgroup_info_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -25847,6 +25868,26 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         match prev_env_backend {
             Some(v) => std::env::set_var("TERMINAL_ENV", v),
             None => std::env::remove_var("TERMINAL_ENV"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cgroup_endpoint_shape() {
+        // P733: cgroup surface is auth-gated and reports the hierarchy
+        // posture (path may be absent in containers/CI — shape only).
+        let app = router(test_state());
+        let (status, _) = get_json(app.clone(), "/api/cgroup", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, body) = get_json(app, "/api/cgroup", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["supported"].is_boolean(), "{body}");
+        assert!(body["pid_count"].is_u64(), "{body}");
+        assert!(body["contains_own_pid"].is_boolean(), "{body}");
+        assert_eq!(body["reap_on_exit"], true, "{body}");
+        if cfg!(target_os = "linux") {
+            // On Linux /proc/self/cgroup is always readable; the v2
+            // entry presence is environment dependent.
+            assert!(body["cgroup_path"].is_string() || body["cgroup_path"].is_null(), "{body}");
         }
     }
 

@@ -81,6 +81,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
       </section>
+      <section id="doctor-cgroup" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="cgroupPanel.title">Cgroup reaper</h3>
+        <div id="cgroup-rows"></div>
+      </section>
       <section id="doctor-terminal" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="terminalPanel.title">Terminal</h3>
         <div id="terminal-rows"></div>
@@ -291,6 +295,7 @@ export class DoctorWidget {
     this.loadDisplay().catch(() => undefined);
     this.loadPhrases().catch(() => undefined);
     this.loadTerminal().catch(() => undefined);
+    this.loadCgroup().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2414,6 +2419,44 @@ export class DoctorWidget {
           `${catalog.status_count} ${t.phrasesPanel.statusWord} \u00b7 ${catalog.generic_count} ${t.phrasesPanel.genericWord}`,
         );
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadCgroup(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-cgroup") as HTMLElement;
+    const rows = this.root.querySelector("#cgroup-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.cgroupInfo();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(t.cgroupPanel.supported, payload.supported ? on : off);
+      addRow(t.cgroupPanel.path, payload.cgroup_path ? escapeHtmlDoctor(payload.cgroup_path) : off);
+      const own = payload.contains_own_pid
+        ? ` (${escapeHtmlDoctor(t.cgroupPanel.ownPid)})`
+        : "";
+      addRow(t.cgroupPanel.pidCount, `${payload.pid_count}${own}`);
+      addRow(t.cgroupPanel.reapOnExit, payload.reap_on_exit ? on : off);
       section.hidden = false;
     } catch {
       section.hidden = true;
