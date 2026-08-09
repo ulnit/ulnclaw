@@ -8179,9 +8179,31 @@ pub async fn serve_multiplex(
         state.clone(),
         std::time::Duration::from_secs(crate::drain_control::WATCHER_INTERVAL_SECONDS),
     ));
-    let serve_result = axum::serve(listener, app)
-        .await
-        .map_err(|e| AgentError::config(format!("gateway serve: {}", e)));
+    use std::future::IntoFuture as _;
+    let serve_future = axum::serve(listener, app).into_future();
+    tokio::pin!(serve_future);
+    let serve_result = tokio::select! {
+        result = &mut serve_future => {
+            result.map_err(|e| AgentError::config(format!("gateway serve: {}", e)))
+        }
+        sig = shutdown_signal_arrived() => {
+            // P727: shutdown forensics — durable record of who/what
+            // triggered the shutdown (hermes shutdown_signal_handler):
+            // fast structured snapshot logged immediately plus a
+            // detached ps-walk diagnostic that can't block teardown.
+            let label = crate::shutdown_forensics::signal_name(sig);
+            let forensics = crate::shutdown_forensics::snapshot_shutdown_context(Some(sig));
+            tracing::warn!("[shutdown] {label} received — forensics: {forensics}");
+            let diag_log = crate::shutdown_forensics::diagnostic_log_path(None);
+            crate::shutdown_forensics::spawn_async_diagnostic(&diag_log, &label, 5);
+            // A signal stop is a clean exit — the next life must not
+            // read this as an unclean death.
+            if let Ok(home) = crate::config::ensure_home() {
+                crate::lifecycle_ledger::mark_exited(&home, Some(0), "signal_shutdown");
+            }
+            Ok(())
+        }
+    };
     drain_watcher.abort();
     heartbeat_task.abort();
     if let Some(watchdog) = loop_watchdog.as_mut() {
@@ -8194,6 +8216,27 @@ pub async fn serve_multiplex(
         crate::raft::stop_bridge(handle).await;
     }
     serve_result
+}
+
+/// Wait for SIGTERM/SIGINT and return the received signal number
+/// (hermes `shutdown_signal_handler` entry point).
+#[cfg(unix)]
+async fn shutdown_signal_arrived() -> i32 {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("SIGTERM signal handler installs");
+    let mut sigint =
+        signal(SignalKind::interrupt()).expect("SIGINT signal handler installs");
+    tokio::select! {
+        _ = sigterm.recv() => libc::SIGTERM,
+        _ = sigint.recv() => libc::SIGINT,
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal_arrived() -> i32 {
+    let _ = tokio::signal::ctrl_c().await;
+    2 // SIGINT equivalent
 }
 
 // ---------------------------------------------------------------------------
