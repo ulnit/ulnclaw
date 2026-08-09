@@ -32,6 +32,7 @@ const PLATFORM_SLASH_HELP: &str = "Commands you can send as chat messages:
   /learn <what>    learn a reusable skill from anything you describe
   /sethome         set this chat as the platform home channel
   /usage           this session's token usage
+  /context         context-window usage of this chat's session
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /reload-mcp      reload MCP servers (may ask confirmation)
   /approve, /deny  resolve a pending approval
@@ -148,6 +149,22 @@ pub async fn resolve(
                 Err(e) => format!("insights failed: {e}"),
             };
             Some(PlatformSlashOutcome::Direct(result))
+        }
+        "/context" => {
+            // Lean hermes /context parity for platform chats: session
+            // transcript tokens vs the agent's context budget.
+            let messages: Vec<crate::provider::Message> = store
+                .load_messages(session_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.role != crate::provider::Role::System)
+                .collect();
+            let tokens = crate::context::ContextCompressor::estimate_tokens(&messages);
+            let budget = agent.context_budget_tokens();
+            let pct = if budget > 0 { tokens * 100 / budget } else { 0 };
+            Some(PlatformSlashOutcome::Direct(format!(
+                "context: ~{tokens} tokens of {budget} budget ({pct}% used)"
+            )))
         }
         "/new" | "/reset" => {
             // hermes /new + /reset parity: rotate this chat to a fresh
@@ -364,6 +381,39 @@ mod tests {
             message.contains("greet"),
             "expansion should reference the skill: {message}"
         );
+    }
+
+    #[tokio::test]
+    async fn context_reports_session_usage_vs_budget() {
+        // P695: lean /context parity for platform chats.
+        let (_dir, home, agent, store) = setup();
+        named_session(&store, "platform-telegram-chat-ctx");
+        store
+            .append_message(
+                "platform-telegram-chat-ctx",
+                &crate::provider::Message {
+                    role: crate::provider::Role::User,
+                    content: Some("hello world, this is a context probe".to_string()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        let outcome = resolve(
+            &agent,
+            &store,
+            &home,
+            "platform-telegram-chat-ctx",
+            "/context",
+        )
+        .await;
+        let Some(PlatformSlashOutcome::Direct(reply)) = outcome else {
+            panic!("expected direct reply");
+        };
+        assert!(reply.starts_with("context: ~"), "{reply}");
+        assert!(reply.contains("budget"), "{reply}");
+        assert!(reply.contains("% used"), "{reply}");
     }
 
     #[tokio::test]
