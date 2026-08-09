@@ -2401,10 +2401,22 @@ Use `/resume` with no                      arguments to see available sessions."
             .collect();
         // P714: turn completion is progress (hermes `_touch_activity`).
         crate::session_activity::touch(key, "turn completed", "gateway.turn");
-        // Fire the gateway pre-dispatch observers' counterpart: the
-        // session hooks already cover lifecycle; keep this minimal.
+        // P724: intentional-silence suppression (hermes
+        // response_filters.is_intentional_silence_agent_result) — a
+        // successful turn whose reply is EXACTLY a silence marker is
+        // withheld from the chat; prose merely mentioning a marker is
+        // delivered normally. Empty replies are skipped by every
+        // platform sender.
+        let reply = if crate::response_filters::is_intentional_silence_agent_result(
+            false,
+            &result.content,
+        ) {
+            String::new()
+        } else {
+            result.content
+        };
         Ok(DispatchOutcome {
-            reply: result.content,
+            reply,
             transcript_echoes,
         })
     }

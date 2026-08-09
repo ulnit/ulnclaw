@@ -18,8 +18,8 @@ use crate::cron::{CronJob, JobOrigin};
 pub const SILENT_MARKER: &str = "[SILENT]";
 
 /// Exact whole-line markers that mean "the agent intentionally chose not
-/// to reply" (hermes `LIVE_GATEWAY_SILENT_MARKERS`).
-const SILENT_MARKERS: &[&str] = &["[SILENT]", "SILENT", "NO_REPLY", "NO REPLY"];
+/// to reply" (hermes `LIVE_GATEWAY_SILENT_MARKERS` — canonical set
+/// lives in `crate::response_filters`).
 
 /// Valid delivery platforms — used to validate user-supplied platform
 /// names in cron delivery targets, preventing env var enumeration via
@@ -401,47 +401,12 @@ pub fn resolve_delivery_targets(job: &CronJob) -> Vec<DeliveryTarget> {
     targets
 }
 
-/// Whitespace-collapse + upper-case a silence candidate line (hermes
-/// `_canonical_silence_candidate`).
-fn canonical_silence_candidate(text: &str) -> String {
-    text.trim()
-        .split_whitespace()
-        .map(|word| word.to_uppercase())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Loose silence matcher for autonomous lanes (cron, webhook) — hermes
-/// `gateway.response_filters.is_autonomous_silence_response`. Suppresses
-/// when a marker is the whole response, sits on its own first or last
-/// line, or the bracketed sentinel opens the response ("[SILENT] No
-/// changes detected"). A token buried mid-sentence in a genuine report
-/// is still delivered.
+/// Loose silence matcher for autonomous lanes (cron, webhook) —
+/// delegates to the canonical gateway response filters (hermes
+/// `gateway.response_filters.is_autonomous_silence_response`; shared
+/// marker set so the interactive and autonomous rules never drift).
 pub fn is_cron_silence_response(response: &str) -> bool {
-    let stripped = response.trim();
-    if stripped.is_empty() {
-        return false;
-    }
-    let is_token = |line: &str| SILENT_MARKERS.contains(&canonical_silence_candidate(line).as_str());
-    // Whole response is exactly a token.
-    if is_token(stripped) {
-        return true;
-    }
-    // Marker on its own first or last line.
-    let lines: Vec<&str> = stripped
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    if let (Some(first), Some(last)) = (lines.first(), lines.last()) {
-        if is_token(first) || is_token(last) {
-            return true;
-        }
-    }
-    // Bracketed sentinel used as a same-line prefix — the documented
-    // pattern "[SILENT] No changes detected". Restricted to the
-    // bracketed form so a bare word like "Silent retry succeeded" is
-    // NOT swallowed.
-    stripped.to_uppercase().starts_with("[SILENT]")
+    crate::response_filters::is_autonomous_silence_response(response)
 }
 
 /// Wrap delivered cron output with a job-name header/footer so the user
