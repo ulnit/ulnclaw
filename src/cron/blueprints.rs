@@ -1077,6 +1077,122 @@ pub fn format_no_match(query: &str) -> String {
     msg
 }
 
+/// Outcome of a `/blueprint` invocation (hermes
+/// `BlueprintCommandResult`). `text` is always shown; when `agent_seed`
+/// is set the caller must ALSO run the seed as the next user turn.
+#[derive(Debug, Clone)]
+pub struct BlueprintCommandResult {
+    pub text: String,
+    pub agent_seed: Option<String>,
+}
+
+/// Dispatch a `/blueprint` invocation (hermes `handle_blueprint_command`).
+///
+/// * bare → list the catalog
+/// * `<name>` → resolve forgivingly and seed the agent to ask for each
+///   slot one at a time (the messaging-assistant model)
+/// * `<name> slot=val …` → fill + create the cron job directly
+pub fn handle_blueprint_command(args: &str) -> BlueprintCommandResult {
+    let tokens = tokenize_blueprint_args(args);
+    let Some(query) = tokens.first() else {
+        return BlueprintCommandResult {
+            text: format_catalog(),
+            agent_seed: None,
+        };
+    };
+    let (blueprint, candidates) = match_blueprint(query);
+    let Some(blueprint) = blueprint else {
+        let text = if candidates.is_empty() {
+            format_no_match(query)
+        } else {
+            format_candidates(query, &candidates)
+        };
+        return BlueprintCommandResult { text, agent_seed: None };
+    };
+    let values: std::collections::HashMap<String, String> = tokens[1..]
+        .iter()
+        .filter_map(|tok| {
+            let tok = tok.as_str();
+            let eq = tok.find('=')?;
+            let key = tok[..eq].trim();
+            let value = tok[eq + 1..].trim();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect();
+    if values.is_empty() {
+        return BlueprintCommandResult {
+            text: format!(
+                "Setting up '{}' ({}). I'll ask you a couple of things…",
+                blueprint.title,
+                humanize_schedule(&blueprint)
+            ),
+            agent_seed: Some(build_blueprint_seed(&blueprint)),
+        };
+    }
+    let filled = match fill_blueprint(&blueprint, &values) {
+        Ok(filled) => filled,
+        Err(e) => {
+            return BlueprintCommandResult {
+                text: format!(
+                    "Can't set up '{}': {e}\nOr just run /blueprint {} and I'll ask you for the values.",
+                    blueprint.title, blueprint.key
+                ),
+                agent_seed: None,
+            }
+        }
+    };
+    let schedule = match crate::cron::parse_schedule(&filled.schedule) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return BlueprintCommandResult {
+                text: format!("failed to create the job: invalid schedule: {e}"),
+                agent_seed: None,
+            }
+        }
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let deliver = crate::cron::delivery::normalize_deliver_value(Some(
+        &serde_json::Value::String(filled.deliver.clone()),
+    ));
+    let job = crate::cron::CronJob {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: filled.name,
+        schedule: filled.schedule.clone(),
+        prompt: filled.prompt,
+        skills: filled.skills,
+        enabled: true,
+        repeat: None,
+        next_run: crate::cron::next_run(&schedule),
+        created_at: now,
+        last_run: None,
+        last_status: None,
+        deliver: Some(deliver),
+        origin: None,
+        last_delivery_error: None,
+    };
+    match crate::cron::CronStore::open_default()
+        .and_then(|store| store.add(&job))
+    {
+        Ok(()) => BlueprintCommandResult {
+            text: format!(
+                "Scheduled '{}' ({}), delivering to {}. Ask me to list, pause, or remove it any time.",
+                blueprint.title, filled.schedule, filled.deliver
+            ),
+            agent_seed: None,
+        },
+        Err(e) => BlueprintCommandResult {
+            text: format!("failed to create the job: {e}"),
+            agent_seed: None,
+        },
+    }
+}
+
 /// Quote-aware tokenizer for `slot=value` arguments (the shlex.split
 /// step in hermes `handle_blueprint_command`).
 pub fn tokenize_blueprint_args(args: &str) -> Vec<String> {
@@ -1282,6 +1398,35 @@ mod tests {
         assert!(rendered.contains("which one"));
         let no_match = format_no_match("morning-breif");
         assert!(no_match.contains("Did you mean"));
+    }
+
+    #[test]
+    fn handle_command_catalog_seed_and_errors() {
+        // Bare -> catalog.
+        let result = handle_blueprint_command("");
+        assert!(result.text.contains("Automation Blueprints"));
+        assert!(result.agent_seed.is_none());
+
+        // Name only -> agent seed.
+        let result = handle_blueprint_command("habit");
+        assert!(result.text.contains("Setting up 'Habit check-in'"), "{}", result.text);
+        let seed = result.agent_seed.expect("seed set");
+        assert!(seed.contains("(habit)"));
+
+        // Ambiguous -> candidates, no seed.
+        let result = handle_blueprint_command("week");
+        assert!(result.text.contains("matches several blueprints"));
+        assert!(result.agent_seed.is_none());
+
+        // Unknown -> suggestion, no seed.
+        let result = handle_blueprint_command("zzzz");
+        assert!(result.text.contains("No automation blueprint matches"));
+        assert!(result.agent_seed.is_none());
+
+        // Inline validation error -> direct text, no seed.
+        let result = handle_blueprint_command("morning-brief time=99:99");
+        assert!(result.text.contains("Can't set up"), "{}", result.text);
+        assert!(result.agent_seed.is_none());
     }
 
     #[test]
