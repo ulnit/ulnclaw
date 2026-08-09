@@ -25,7 +25,8 @@
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`,
 //!     `POST /api/kanban/tasks/:id/set-reasoning`,
 //!     `POST /api/kanban/tasks/:id/set-model`,
-//!     `POST /api/kanban/tasks/:id/edit`
+//!     `POST /api/kanban/tasks/:id/edit`,
+//!     `POST /api/kanban/tasks/:id/archive`, `DELETE /api/kanban/tasks/:id`
 //!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
@@ -6553,7 +6554,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/boards/:slug/switch", post(kanban::switch_board))
         .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))
         .route("/api/kanban/dispatch", post(kanban::dispatch))
-        .route("/api/kanban/tasks/:id", get(kanban::get_task))
+        .route("/api/kanban/tasks/:id", get(kanban::get_task).delete(kanban::delete_task))
         .route("/api/kanban/tasks/:id/complete", post(kanban::complete_task))
         .route("/api/kanban/tasks/:id/block", post(kanban::block_task))
         .route("/api/kanban/tasks/:id/unblock", post(kanban::unblock_task))
@@ -6563,6 +6564,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/tasks/:id/set-reasoning", post(kanban::set_reasoning))
         .route("/api/kanban/tasks/:id/set-model", post(kanban::set_model))
         .route("/api/kanban/tasks/:id/edit", post(kanban::edit_task))
+        .route("/api/kanban/tasks/:id/archive", post(kanban::archive_task))
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
         .route("/api/jobs/:id/run", post(run_job_now))
@@ -15111,6 +15113,80 @@ mod tests {
         let (status, _) = send_json(
             app.clone(), "POST", "/api/kanban/tasks/nope123/set-reasoning", None,
             json!({"reasoning_effort": "high"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kanban_archive_delete_endpoints() {
+        // P640: POST .../archive parks a task; DELETE purges archived
+        // tasks only (hermes archive / archive --rm).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "archive me"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let id = body["task"]["id"].as_str().unwrap().to_string();
+
+        // Deleting a non-archived task is refused.
+        let (status, body) = send_json(
+            app.clone(), "DELETE", &format!("/api/kanban/tasks/{id}"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("archived before deletion"), "{body}");
+
+        // Archive it.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/archive"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["status"], "archived", "{body}");
+
+        // Archiving again fails the transition.
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/archive"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Now deletion succeeds.
+        let (status, body) = send_json(
+            app.clone(), "DELETE", &format!("/api/kanban/tasks/{id}"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true, "{body}");
+        let (status, _) = get_json(app.clone(), &format!("/api/kanban/tasks/{id}"), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Unknown ids 404 on both.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks/nope123/archive", None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = send_json(
+            app.clone(), "DELETE", "/api/kanban/tasks/nope123", None, json!(null),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);

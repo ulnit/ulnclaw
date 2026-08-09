@@ -538,6 +538,47 @@ pub async fn unblock_task(Path(id): Path<String>) -> Response {
     }
 }
 
+/// `POST /api/kanban/tasks/:id/archive` — park a task out of the
+/// active board (hermes archive). In-flight runs close as reclaimed
+/// and archived parents immediately unblock their children.
+pub async fn archive_task(Path(id): Path<String>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.archive_task(&id) {
+        Ok(task) => Json(json!({
+            "object": "ulnclaw.kanban.task",
+            "task": task_json(&store, &task),
+        }))
+        .into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+/// `DELETE /api/kanban/tasks/:id` — permanently purge an archived
+/// task and every related row (hermes `kanban archive --rm`). Safety
+/// guard: only archived tasks can be deleted.
+pub async fn delete_task(Path(id): Path<String>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.delete_archived_task(&id) {
+        Ok(true) => Json(json!({ "ok": true })).into_response(),
+        Ok(false) => super::bad_request("task must be archived before deletion", None),
+        Err(e) => super::server_error(&e.to_string()),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct EditTaskBody {
     /// New title; blank is rejected, omitted keeps the current one.

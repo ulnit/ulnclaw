@@ -3633,6 +3633,40 @@ export class GatewayClient {
     return (value?.task || null) as KanbanTask | null;
   }
 
+  /** P640: archive a task (park it off the active board). */
+  async kanbanArchive(id: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/archive`), {
+        headers: this.headers(),
+        method: "POST",
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P640: permanently purge an archived task. */
+  async kanbanDelete(id: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}`), {
+        headers: this.headers(),
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
   /** P639: rewrite a task's title/body (either may be omitted). */
   async kanbanEdit(
     id: string,

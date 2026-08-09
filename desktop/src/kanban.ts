@@ -20,7 +20,7 @@ const COLUMNS: { key: "todo" | "doing" | "blocked" | "done"; statuses: string[] 
   { key: "todo", statuses: ["todo", "ready", "scheduled"] },
   { key: "doing", statuses: ["running"] },
   { key: "blocked", statuses: ["blocked"] },
-  { key: "done", statuses: ["done"] },
+  { key: "done", statuses: ["done", "archived"] },
 ];
 
 export class KanbanWidget {
@@ -78,6 +78,8 @@ export class KanbanWidget {
           </div>
           <menu>
             <button id="kanban-detail-edit" type="button" data-i18n="kanban.editAction">Edit</button>
+            <button id="kanban-detail-archive" type="button" data-i18n="kanban.archiveAction">Archive</button>
+            <button id="kanban-detail-delete" type="button" data-i18n="kanban.deleteAction">Delete</button>
             <button id="kanban-detail-claim" value="claim" data-i18n="kanban.claim">Claim</button>
             <button id="kanban-detail-unblock" value="unblock" data-i18n="kanban.unblock">Unblock</button>
             <button id="kanban-detail-block" value="block" data-i18n="kanban.blockEllipsis">Block…</button>
@@ -117,6 +119,38 @@ export class KanbanWidget {
       if (!title || !title.trim()) return;
       void client.kanbanCreateTask(title.trim()).then((task) => {
         if (task) void this.refresh();
+      });
+    };
+
+    // P640: archive / purge from the detail dialog.
+    (this.root.querySelector("#kanban-detail-archive") as HTMLButtonElement).onclick = () => {
+      const dialogEl = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
+      const taskId = dialogEl.dataset.taskId || "";
+      const client = this.client();
+      if (!taskId || !client) return;
+      if (!window.confirm(t.kanban.archiveConfirm)) return;
+      void client.kanbanArchive(taskId).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "archive failed");
+          return;
+        }
+        dialogEl.close();
+        void this.refresh();
+      });
+    };
+    (this.root.querySelector("#kanban-detail-delete") as HTMLButtonElement).onclick = () => {
+      const dialogEl = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
+      const taskId = dialogEl.dataset.taskId || "";
+      const client = this.client();
+      if (!taskId || !client) return;
+      if (!window.confirm(t.kanban.deleteConfirm)) return;
+      void client.kanbanDelete(taskId).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "delete failed");
+          return;
+        }
+        dialogEl.close();
+        void this.refresh();
       });
     };
 
@@ -363,6 +397,25 @@ export class KanbanWidget {
       unblock.onclick = act(() => client!.kanbanUnblock(task.id));
       actions.appendChild(unblock);
     }
+    if (task.status !== "archived") {
+      const archive = document.createElement("button");
+      archive.textContent = "\uD83D\uDCE6";
+      archive.title = t.kanban.archiveAction;
+      archive.onclick = act(() => {
+        if (!window.confirm(t.kanban.archiveConfirm)) return Promise.resolve();
+        return client!.kanbanArchive(task.id);
+      });
+      actions.appendChild(archive);
+    } else {
+      const purge = document.createElement("button");
+      purge.textContent = "\uD83D\uDDD1";
+      purge.title = t.kanban.deleteAction;
+      purge.onclick = act(() => {
+        if (!window.confirm(t.kanban.deleteConfirm)) return Promise.resolve();
+        return client!.kanbanDelete(task.id);
+      });
+      actions.appendChild(purge);
+    }
     // P571: duplicate the task (title + body) with a localized suffix.
     const dup = document.createElement("button");
     dup.textContent = "\u29C9";
@@ -569,6 +622,10 @@ export class KanbanWidget {
     completeBtn.style.display = detail.task.status === "done" ? "none" : "";
     const claimBtn = this.root.querySelector("#kanban-detail-claim") as HTMLButtonElement;
     claimBtn.style.display = detail.task.status === "done" ? "none" : "";
+    const archiveBtn = this.root.querySelector("#kanban-detail-archive") as HTMLButtonElement;
+    archiveBtn.style.display = detail.task.status === "archived" ? "none" : "";
+    const deleteBtn = this.root.querySelector("#kanban-detail-delete") as HTMLButtonElement;
+    deleteBtn.style.display = detail.task.status === "archived" ? "" : "none";
     dialog.showModal();
   }
 }

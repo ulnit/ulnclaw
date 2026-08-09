@@ -110,6 +110,7 @@ export interface Translations {
     reasoningLabel: string; reasoningInherit: string;
     modelLabel: string; modelInherit: string; providerOptional: string; applyAction: string;
     eventsTitle: string; editAction: string; saveAction: string;
+    archiveAction: string; deleteAction: string; archiveConfirm: string; deleteConfirm: string;
   };
   projects: {
     addFolder: string; archive: string; restore: string; bindBoard: string;
@@ -501,6 +502,7 @@ const en: Translations = {
     reasoningLabel: "Reasoning effort", reasoningInherit: "inherit profile",
     modelLabel: "Model", modelInherit: "inherit profile", providerOptional: "provider (optional)", applyAction: "Apply",
     eventsTitle: "Activity", editAction: "Edit", saveAction: "Save",
+    archiveAction: "Archive", deleteAction: "Delete", archiveConfirm: "Archive this task? It leaves the active board; children unblock.", deleteConfirm: "Permanently delete this archived task and all its comments, events and attachments?", 
   },
   projects: {
     addFolder: "Add folder", archive: "Archive", restore: "Restore",
@@ -1049,6 +1051,7 @@ const zh: Translations = {
     reasoningLabel: "推理强度", reasoningInherit: "跟随配置",
     modelLabel: "模型", modelInherit: "跟随配置", providerOptional: "provider（可选）", applyAction: "应用",
     eventsTitle: "活动记录", editAction: "编辑", saveAction: "保存",
+    archiveAction: "归档", deleteAction: "删除", archiveConfirm: "归档该任务？它将离开活动看板，其子任务随之解除阻塞。", deleteConfirm: "永久删除该已归档任务及其全部评论、事件与附件？", 
   },
   projects: {
     addFolder: "添加文件夹", archive: "归档", restore: "恢复",
@@ -1597,6 +1600,7 @@ const zhHant: Translations = {
     reasoningLabel: "推理強度", reasoningInherit: "跟隨設定檔",
     modelLabel: "模型", modelInherit: "跟隨設定檔", providerOptional: "provider（選填）", applyAction: "套用",
     eventsTitle: "活動記錄", editAction: "編輯", saveAction: "儲存",
+    archiveAction: "歸檔", deleteAction: "刪除", archiveConfirm: "歸檔該工作？它將離開活動看板，其子工作隨之解除阻塞。", deleteConfirm: "永久刪除該已歸檔工作及其全部留言、事件與附件？", 
   },
   projects: {
     addFolder: "新增資料夾", archive: "封存", restore: "還原",
@@ -2145,6 +2149,7 @@ const ja: Translations = {
     reasoningLabel: "推論の深さ", reasoningInherit: "プロファイルに従う",
     modelLabel: "モデル", modelInherit: "プロファイルに従う", providerOptional: "プロバイダー（任意）", applyAction: "適用",
     eventsTitle: "アクティビティ", editAction: "編集", saveAction: "保存",
+    archiveAction: "アーカイブ", deleteAction: "削除", archiveConfirm: "このタスクをアーカイブしますか？アクティブなボードから外れ、子タスクのブロックは解除されます。", deleteConfirm: "このアーカイブ済みタスクとそのコメント・イベント・添付をすべて完全に削除しますか？", 
   },
   projects: {
     addFolder: "フォルダを追加", archive: "アーカイブ", restore: "復元",
@@ -2693,6 +2698,7 @@ const ar: Translations = {
     reasoningLabel: "جهد الاستدلال", reasoningInherit: "وراثة الملف الشخصي",
     modelLabel: "النموذج", modelInherit: "وراثة الملف الشخصي", providerOptional: "المزود (اختياري)", applyAction: "تطبيق",
     eventsTitle: "النشاط", editAction: "تعديل", saveAction: "حفظ",
+    archiveAction: "أرشفة", deleteAction: "حذف", archiveConfirm: "أرشفة هذه المهمة؟ ستغادر اللوحة النشطة ويُرفع الحجب عن مهامها الفرعية.", deleteConfirm: "حذف هذه المهمة المؤرشفة نهائيًا مع كل تعليقاتها وأحداثها ومرفقاتها؟", 
   },
   projects: {
     addFolder: "إضافة مجلد", archive: "أرشفة", restore: "استعادة",
