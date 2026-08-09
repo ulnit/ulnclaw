@@ -3645,6 +3645,28 @@ export class GatewayClient {
     return Boolean(value?.ok);
   }
 
+  /** P652: create a board (slug required; name + workdir optional). */
+  async kanbanCreateBoard(
+    slug: string,
+    name?: string,
+    defaultWorkdir?: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint("/api/kanban/boards"), {
+        headers: { ...this.headers(), "content-type": "application/json" },
+        method: "POST",
+        body: JSON.stringify({ slug, name: name || null, default_workdir: defaultWorkdir || null }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
   async kanbanTasks(board?: string): Promise<KanbanTask[]> {
     const query = board ? `?board=${encodeURIComponent(board)}&limit=500` : "?limit=500";
     const value = await this.kanbanJson(`/api/kanban/tasks${query}`);

@@ -43,6 +43,7 @@ export class KanbanWidget {
     this.root.innerHTML = `
       <header id="kanban-header">
         <select id="kanban-board" title="Switch board" data-i18n-title="kanban.switchBoard"></select>
+        <button id="kanban-board-new" class="ghost" title="New board" data-i18n-title="kanban.newBoardAction">+</button>
         <span id="kanban-counts" class="kanban-counts"></span>
         <span id="kanban-dispatch-status" class="config-note"></span>
         <span class="spacer"></span>
@@ -131,6 +132,24 @@ export class KanbanWidget {
       void client.kanbanSwitchBoard(select.value).then(() => {
         this.board = select.value;
         void this.refresh();
+      });
+    };
+    // P652: create a board from the toolbar, then switch onto it.
+    (this.root.querySelector("#kanban-board-new") as HTMLButtonElement).onclick = () => {
+      const client = this.client();
+      if (!client) return;
+      const slug = window.prompt(t.kanban.newBoardPrompt);
+      if (!slug || !slug.trim()) return;
+      const name = window.prompt(t.kanban.newBoardNamePrompt) || "";
+      void client.kanbanCreateBoard(slug.trim(), name.trim() || undefined).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "board creation failed");
+          return;
+        }
+        void client.kanbanSwitchBoard(slug.trim()).then(() => {
+          this.board = slug.trim();
+          void this.refresh();
+        });
       });
     };
     (this.root.querySelector("#kanban-refresh") as HTMLButtonElement).onclick = () =>
