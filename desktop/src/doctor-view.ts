@@ -99,6 +99,14 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="systemPanel.title">System</h3>
         <div id="system-rows"></div>
       </section>
+      <section id="doctor-sync" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="syncPanel.title">Skills sync</h3>
+        <div id="sync-rows"></div>
+        <div class="kanban-detail-model">
+          <button id="sync-fetch-remote" type="button" data-i18n="syncPanel.fetchRemote">Fetch remote</button>
+        </div>
+        <div id="sync-remote"></div>
+      </section>
       <section id="doctor-secrets" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="secretsPanel.title">Secret sources</h3>
         <div id="secrets-rows"></div>
@@ -237,6 +245,7 @@ export class DoctorWidget {
     this.loadSystem().catch(() => undefined);
     this.loadComputerUse().catch(() => undefined);
     this.loadSecrets().catch(() => undefined);
+    this.loadSync().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
     this.loadBackups().catch(() => undefined);
     this.loadCheckpoints().catch(() => undefined);
@@ -795,6 +804,106 @@ export class DoctorWidget {
       section.hidden = false;
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** Skills sync (P643): device identity, gate, opt-ins (hermes
+   * `ulnclaw sync status` parity); remote manifest on demand. */
+  private async loadSync(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-sync") as HTMLElement;
+    const rows = this.root.querySelector("#sync-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const info = await client.syncStatus();
+      const v = t.syncPanel;
+      const entries: [string, string][] = [
+        [v.device, `${info.device_name || v.unnamed} \u00B7 ${info.device_id.slice(0, 12)}`],
+        [
+          v.gate,
+          info.gate === "active"
+            ? `${v.gateActive} \u00B7 ${info.base_url}`
+            : `${v.gateInert}${info.gate_reason ? ` \u2014 ${info.gate_reason}` : ""}`,
+        ],
+        [v.optedIn, info.opted_in.length > 0 ? info.opted_in.join(", ") : v.noneOptedIn],
+      ];
+      rows.innerHTML = "";
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        valueEl.title = value;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
+      const btn = this.root.querySelector("#sync-fetch-remote") as HTMLButtonElement;
+      btn.style.display = info.gate === "active" ? "" : "none";
+      btn.onclick = () => void this.fetchSyncRemote();
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** P643: on-demand remote manifest — skill names, origin devices,
+   * file counts. */
+  private async fetchSyncRemote(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const v = t.syncPanel;
+    const btn = this.root.querySelector("#sync-fetch-remote") as HTMLButtonElement;
+    const remote = this.root.querySelector("#sync-remote") as HTMLElement;
+    btn.disabled = true;
+    btn.textContent = v.fetching;
+    try {
+      const info = await client.syncStatus(true);
+      remote.innerHTML = "";
+      if (!info.remote || !info.remote.available) {
+        const note = document.createElement("div");
+        note.className = "config-note";
+        note.textContent = `${v.remoteUnavailable}: ${info.remote?.error || "unknown"}`;
+        remote.appendChild(note);
+        return;
+      }
+      const skills = info.remote.skills || {};
+      const names = Object.keys(skills);
+      if (names.length === 0) {
+        const note = document.createElement("div");
+        note.className = "config-note";
+        note.textContent = v.remoteEmpty;
+        remote.appendChild(note);
+        return;
+      }
+      for (const name of names) {
+        const skill = skills[name];
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = name;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = `${v.fromWord} ${skill.device} \u00B7 ${skill.files} ${v.filesWord}`;
+        row.append(labelEl, valueEl);
+        remote.appendChild(row);
+      }
+    } catch (error) {
+      remote.innerHTML = "";
+      const note = document.createElement("div");
+      note.className = "config-note";
+      note.textContent = String(error);
+      remote.appendChild(note);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = v.fetchRemote;
     }
   }
 

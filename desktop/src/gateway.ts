@@ -418,6 +418,20 @@ export interface HealthDetailed {
   runs_tracked: number;
 }
 
+export interface SyncStatus {
+  device_id: string;
+  device_name: string;
+  gate: "active" | "inert" | string;
+  gate_reason: string | null;
+  base_url: string;
+  opted_in: string[];
+  remote?: {
+    available: boolean;
+    skills?: Record<string, { device: string; files: number }>;
+    error?: string;
+  };
+}
+
 export interface SecretsStatus {
   order: string[];
   preserve_existing: string[];
@@ -1781,6 +1795,16 @@ export class GatewayClient {
     } catch {
       return null;
     }
+  }
+
+  /** GET /api/sync — skills-sync posture (P643). */
+  async syncStatus(remote = false): Promise<SyncStatus> {
+    const query = remote ? "?remote=true" : "";
+    const response = await fetch(this.endpoint(`/api/sync${query}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as SyncStatus;
   }
 
   /** GET /api/secrets — secret-source posture, never values (P642). */

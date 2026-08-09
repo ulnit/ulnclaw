@@ -32,6 +32,8 @@
 //!     health report with `?deep=true`) for the desktop Doctor panel
 //!   - `GET  /api/secrets` — external secret-source posture (read-only,
 //!     never secret values) for the desktop Doctor panel
+//!   - `GET  /api/sync` — skills-sync posture (remote manifest with
+//!     `?remote=true`) for the desktop Doctor panel
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
 //!   - `GET/PUT /api/fast` — Priority Processing (service_tier) toggle
@@ -5464,6 +5466,64 @@ async fn egress_status(State(_state): State<Arc<GatewayState>>) -> Response {
     }
 }
 
+#[derive(Deserialize, Default)]
+struct SyncQuery {
+    /// Fetch the remote manifest (network); off by default so the
+    /// panel loads instantly.
+    #[serde(default)]
+    remote: Option<bool>,
+}
+
+/// `GET /api/sync` — skills-sync posture for the desktop Doctor panel
+/// (hermes `ulnclaw sync status` parity): device identity, gate,
+/// opted-in skills; `?remote=true` additionally fetches the remote
+/// manifest (skill names + origin devices + file counts).
+async fn sync_status(Query(query): Query<SyncQuery>) -> Response {
+    use crate::skills_sync;
+    let config = match crate::config::UlncLawConfig::load(None) {
+        Ok(c) => c,
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let home = crate::config::ulnclaw_home();
+    let cfg = &config.sync;
+    let state = skills_sync::load_state(&home);
+    let device_name = if !state.device_name.is_empty() {
+        state.device_name.clone()
+    } else {
+        cfg.device_name.clone()
+    };
+    let gate_reason = skills_sync::inert_reason(cfg);
+    let mut payload = json!({
+        "device_id": state.device_id,
+        "device_name": device_name,
+        "gate": if gate_reason.is_some() { "inert" } else { "active" },
+        "gate_reason": gate_reason,
+        "base_url": cfg.base_url,
+        "opted_in": state.enabled,
+    });
+    if query.remote.unwrap_or(false) && gate_reason.is_none() {
+        match skills_sync::read_manifest(cfg, &config.oauth, &home).await {
+            Ok(manifest) => {
+                let skills: serde_json::Map<String, Value> = manifest
+                    .skills
+                    .iter()
+                    .map(|(name, skill)| {
+                        (
+                            name.clone(),
+                            json!({ "device": skill.device, "files": skill.files.len() }),
+                        )
+                    })
+                    .collect();
+                payload["remote"] = json!({ "available": true, "skills": skills });
+            }
+            Err(e) => {
+                payload["remote"] = json!({ "available": false, "error": e.to_string() });
+            }
+        }
+    }
+    Json(payload).into_response()
+}
+
 /// `GET /api/secrets` — external secret-source status for the
 /// desktop Doctor panel (hermes `ulnclaw secrets status` parity):
 /// source order + per-source posture. Strictly read-only — secret
@@ -6537,6 +6597,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/system", get(system_info))
         .route("/api/computer-use", get(computer_use_status))
         .route("/api/secrets", get(secrets_status))
+        .route("/api/sync", get(sync_status))
         .route("/api/pairing", get(pairing_status))
         .route("/api/pairing/approve", post(pairing_approve))
         .route("/api/pairing/revoke", post(pairing_revoke))
@@ -15204,6 +15265,34 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_status_endpoint() {
+        // P643: GET /api/sync reports device identity + gate + opt-ins
+        // (remote manifest fetch is opt-in and network-bound).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = get_json(app.clone(), "/api/sync", None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["device_id"].is_string(), "{body}");
+        // Empty base_url -> inert gate.
+        assert_eq!(body["gate"], "inert", "{body}");
+        assert!(body["gate_reason"].is_string(), "{body}");
+        assert!(body["opted_in"].as_array().unwrap().is_empty(), "{body}");
+        assert!(body.get("remote").is_none(), "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
