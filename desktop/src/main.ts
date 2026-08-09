@@ -2206,6 +2206,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/rollback", t.slash.rollback],
     ["/blueprint", t.slash.blueprint],
     ["/cron", t.slash.cron],
+    ["/suggestions", t.slash.suggestions],
   ];
 }
 

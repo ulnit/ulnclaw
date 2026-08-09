@@ -10529,6 +10529,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /kanban <title>  add a task to the current kanban board
   /blueprint [name] [slot=val…]  automation blueprints: catalog, guided setup, or direct create
   /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
+  /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /branch [name]   fork this session into a child branch
@@ -11587,6 +11588,14 @@ async fn resolve_gateway_slash(
                     "failed to create the job: {e}"
                 ))),
             }
+        }
+        "/suggestions" => {
+            // Hermes /suggestions parity (P664): pending automation
+            // suggestions with accept/dismiss; `accept` schedules the
+            // job into the shared cron store.
+            Some(GatewaySlash::Direct(
+                crate::cron::suggestions::handle_suggestions_command(rest),
+            ))
         }
         "/cron" => {
             // Hermes /cron parity (P663): manage scheduled jobs inline.
@@ -15466,6 +15475,50 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("manual|smart|off"));
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_suggestions_catalog_accept() {
+        // P664: gateway twin of /suggestions — seed the catalog, review
+        // the pending list, accept one into the shared cron store.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = test_state();
+
+        // Seed the curated catalog.
+        match resolve_gateway_slash(&state, "sess-1", "/suggestions catalog").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.starts_with("Added "), "{text}")
+            }
+            _ => panic!("expected catalog reply"),
+        }
+
+        // Pending list shows numbered entries.
+        match resolve_gateway_slash(&state, "sess-1", "/suggestions").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("1. "), "{text}")
+            }
+            _ => panic!("expected pending list"),
+        }
+
+        // Accept #1 -> a real cron job lands in the shared store.
+        match resolve_gateway_slash(&state, "sess-1", "/suggestions accept 1").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.starts_with("Scheduled "), "{text}")
+            }
+            _ => panic!("expected accept reply"),
+        }
+        let cron = crate::cron::CronStore::open_default().expect("cron store");
+        let jobs = cron.list().expect("cron list");
+        assert_eq!(jobs.len(), 1, "{jobs:?}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
