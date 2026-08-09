@@ -581,6 +581,33 @@ export interface StallWatchRow {
   stalled: boolean;
 }
 
+/** One platform row of GET /api/channels (P699 deepening; P720). */
+export interface ChannelStatusRow {
+  name: string;
+  enabled: boolean;
+  state: string;
+  home_channel: string | null;
+  known_channels: number;
+}
+
+/** One seen-channel directory entry (newest activity first). */
+export interface ChannelDirectoryEntry {
+  id: string;
+  name: string;
+  type: string;
+  updated_at: number;
+  updated_iso: string;
+  last_message_id: string;
+}
+
+/** GET /api/channels payload (P699; typed P720). */
+export interface ChannelsStatusPayload {
+  channels: ChannelStatusRow[];
+  enabled_count: number;
+  connected_count: number;
+  directory: Record<string, ChannelDirectoryEntry[]>;
+}
+
 /** GET /api/stall-watch payload (P716). */
 export interface StallWatchPayload {
   timeout_seconds: number;
@@ -1947,6 +1974,13 @@ export class GatewayClient {
     const response = await fetch(this.endpoint("/metrics"), { headers: this.headers() });
     if (!response.ok) throw new Error(`metrics HTTP ${response.status}`);
     return response.text();
+  }
+
+  /** GET /api/channels — full P699 ops payload (P720 typing). */
+  async channelsStatus(): Promise<ChannelsStatusPayload> {
+    const response = await fetch(this.endpoint("/api/channels"), { headers: this.headers() });
+    if (!response.ok) throw new Error(`channels HTTP ${response.status}`);
+    return (await response.json()) as ChannelsStatusPayload;
   }
 
   /** GET /api/channels — messaging-platform enabled posture. */

@@ -1737,35 +1737,73 @@ export class DoctorWidget {
           rows.appendChild(row);
         }
       } else {
-        const channels = await client.channels();
-        const enabled = channels.filter((channel) => channel.enabled);
-        const disabled = channels.filter((channel) => !channel.enabled);
+        // P720: deepened channels panel over the P699 payload — state
+        // ladder, home channel and known-channel counts per enabled
+        // platform, plus the newest seen-channel per platform.
+        const status = await client.channelsStatus();
+        const enabled = status.channels.filter((channel) => channel.enabled);
+        const disabled = status.channels.filter((channel) => !channel.enabled);
 
-        const enabledRow = document.createElement("div");
-        enabledRow.className = "monitoring-row";
-        const enabledLabel = document.createElement("span");
-        enabledLabel.className = "monitoring-label";
-        enabledLabel.textContent = t.channelsPanel.enabled;
-        const enabledValue = document.createElement("span");
-        enabledValue.className = "monitoring-value";
-        enabledValue.innerHTML = enabled.length
-          ? enabled
-              .map((channel) => `<span class="models-view-badge ok">${escapeHtmlDoctor(channel.name)}</span>`)
-              .join(" ")
-          : escapeHtmlDoctor(t.channelsPanel.noneEnabled);
-        enabledRow.append(enabledLabel, enabledValue);
-        rows.appendChild(enabledRow);
+        const addRow = (label: string, valueHtml: string): void => {
+          const row = document.createElement("div");
+          row.className = "monitoring-row";
+          const labelEl = document.createElement("span");
+          labelEl.className = "monitoring-label";
+          labelEl.textContent = label;
+          const valueEl = document.createElement("span");
+          valueEl.className = "monitoring-value";
+          valueEl.innerHTML = valueHtml;
+          row.append(labelEl, valueEl);
+          rows.appendChild(row);
+        };
 
-        const disabledRow = document.createElement("div");
-        disabledRow.className = "monitoring-row";
-        const disabledLabel = document.createElement("span");
-        disabledLabel.className = "monitoring-label";
-        disabledLabel.textContent = t.channelsPanel.disabled;
-        const disabledValue = document.createElement("span");
-        disabledValue.className = "monitoring-value channels-disabled";
-        disabledValue.textContent = disabled.map((channel) => channel.name).join(", ");
-        disabledRow.append(disabledLabel, disabledValue);
-        rows.appendChild(disabledRow);
+        addRow(
+          t.channelsPanel.summary,
+          escapeHtmlDoctor(
+            t.channelsPanel.summaryValue
+              .replace("{connected}", String(status.connected_count))
+              .replace("{enabled}", String(status.enabled_count)),
+          ),
+        );
+
+        if (enabled.length) {
+          for (const channel of enabled) {
+            const cls =
+              channel.state === "connected"
+                ? "ok"
+                : channel.state === "not_configured"
+                  ? "warn"
+                  : "";
+            const badge = `<span class="models-view-badge ${cls}">${escapeHtmlDoctor(channel.state || "?")}</span>`;
+            const home = channel.home_channel
+              ? ` \u00b7 ${escapeHtmlDoctor(t.channelsPanel.homeChannel)}: ${escapeHtmlDoctor(channel.home_channel)}`
+              : "";
+            const known = ` \u00b7 ${escapeHtmlDoctor(
+              t.channelsPanel.knownChannels.replace("{count}", String(channel.known_channels)),
+            )}`;
+            addRow(channel.name, `${badge}${home}${known}`);
+          }
+        } else {
+          addRow(t.channelsPanel.enabled, escapeHtmlDoctor(t.channelsPanel.noneEnabled));
+        }
+
+        if (disabled.length) {
+          const names = disabled.map((channel) => escapeHtmlDoctor(channel.name)).join(", ");
+          addRow(t.channelsPanel.disabled, `<span class="channels-disabled">${names}</span>`);
+        }
+
+        const directoryPlatforms = Object.keys(status.directory || {}).slice(0, 6);
+        for (const platform of directoryPlatforms) {
+          const entries = status.directory[platform] || [];
+          if (!entries.length) continue;
+          const newest = entries[0];
+          const label = newest.name && newest.name !== newest.id ? newest.name : newest.id;
+          const kind = newest.type ? ` (${escapeHtmlDoctor(newest.type)})` : "";
+          addRow(
+            t.channelsPanel.recent,
+            `${escapeHtmlDoctor(platform)} \u2192 ${escapeHtmlDoctor(label)}${kind} \u00b7 ${escapeHtmlDoctor(newest.updated_iso)}`,
+          );
+        }
       }
 
       section.hidden = false;
