@@ -1468,6 +1468,23 @@ fn persist_reasoning_effort(
     Ok(normalized)
 }
 
+/// Working directory a session-scoped command should operate on
+/// (P631): the session's recorded cwd when it has one, else the gateway
+/// process cwd (hermes falls back to TERMINAL_CWD the same way).
+fn session_cwd(state: &GatewayState, session_id: &str) -> std::path::PathBuf {
+    state
+        .store
+        .get_session_row(session_id)
+        .ok()
+        .flatten()
+        .and_then(|row| row.cwd.clone())
+        .filter(|cwd| !cwd.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        })
+}
+
 /// Persist `agent.service_tier` in config.toml ("fast" or "normal";
 /// hermes `/fast --global`). Shared by the `/fast` slash command and
 /// `PUT /api/fast` (P625). Returns the normalized value written.
@@ -10265,6 +10282,9 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /kanban <title>  add a task to the current kanban board
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
+  /branch [name]   fork this session into a child branch
+  /diff [working|staged|all|session] [--stat]  git changes in the session cwd
+  /rollback [N|hash]  list or restore filesystem checkpoints for the session cwd
   /<bundle>        invoke a skill bundle (ulnclaw bundles)";
 
 /// A user message that counts as a real conversational turn for slash
@@ -10996,6 +11016,236 @@ async fn resolve_gateway_slash(
                 reply.push_str(&echo);
             }
             Some(GatewaySlash::Direct(reply))
+        }
+        "/branch" => {
+            // Hermes /branch parity: fork the current session into a
+            // child branch (same mechanics as POST /api/sessions/:id/fork,
+            // which the desktop /fork composer command already uses).
+            let source = match state.store.get_session_row(session_id) {
+                Ok(Some(row)) => row,
+                Ok(None) => {
+                    return Some(GatewaySlash::Direct(format!(
+                        "session {session_id} not found"
+                    )))
+                }
+                Err(e) => return Some(GatewaySlash::Direct(format!("branch failed: {e}"))),
+            };
+            let messages = state.store.load_messages(session_id).unwrap_or_default();
+            if messages.is_empty() {
+                return Some(GatewaySlash::Direct(
+                    "no conversation to branch yet".to_string(),
+                ));
+            }
+            let fork_id = format!(
+                "api_{}_{}",
+                now_secs() as u64,
+                &uuid::Uuid::new_v4().simple().to_string()[..8]
+            );
+            if let Err(e) = state.store.end_session(session_id, "branched") {
+                return Some(GatewaySlash::Direct(format!("branch failed: {e}")));
+            }
+            if let Err(e) = state.store.create_named_session(
+                &fork_id,
+                "gateway",
+                source.model.as_deref(),
+                Some(session_id),
+            ) {
+                return Some(GatewaySlash::Direct(format!("branch failed: {e}")));
+            }
+            for message in &messages {
+                if let Err(e) = state.store.append_message(&fork_id, message) {
+                    return Some(GatewaySlash::Direct(format!(
+                        "branch copy failed: {e}"
+                    )));
+                }
+            }
+            let name = rest.trim();
+            let title = if name.is_empty() {
+                format!("{} branch", source.title.as_deref().unwrap_or("branch"))
+            } else {
+                name.to_string()
+            };
+            match crate::session::sqlite::sanitize_title(&title) {
+                Ok(cleaned) => {
+                    if let Some(cleaned) = cleaned {
+                        if let Err(e) = state.store.set_session_title(&fork_id, &cleaned) {
+                            return Some(GatewaySlash::Direct(format!(
+                                "branch created but title rejected: {e}"
+                            )));
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!(
+                        "branch created but title rejected: {e}"
+                    )))
+                }
+            }
+            Some(GatewaySlash::Direct(format!(
+                "branched session {fork_id} \u{2014} {title}; resume it with /open {}",
+                &fork_id[..fork_id.len().min(12)]
+            )))
+        }
+        "/diff" => {
+            // Hermes /diff parity: git changes in the session's cwd —
+            // working (default), staged, all, or the cumulative
+            // checkpoint-baseline "session" diff; --stat limits to the
+            // summary. Chat surfaces are not pagers, so the body is
+            // capped.
+            let cwd = session_cwd(&state, session_id);
+            let mut stat_only = false;
+            let mut mode_raw = "working";
+            for token in rest.split_whitespace() {
+                match token.to_ascii_lowercase().as_str() {
+                    "--stat" | "stat" => stat_only = true,
+                    "staged" | "--staged" | "cached" | "--cached" => mode_raw = "staged",
+                    "all" | "--all" | "head" => mode_raw = "all",
+                    "session" => mode_raw = "session",
+                    "working" => {}
+                    other => {
+                        return Some(GatewaySlash::Direct(format!(
+                            "unknown /diff argument: {other} (expected working|staged|all|session [--stat])"
+                        )))
+                    }
+                }
+            }
+            let (stat, diff, untracked): (String, String, Vec<String>);
+            if mode_raw == "session" {
+                let config = state.agent.context().config.clone();
+                let home = state.agent.context().home.clone();
+                if !config.checkpoints.enabled {
+                    return Some(GatewaySlash::Direct(
+                        "checkpoints are not enabled ([checkpoints] enabled = true)"
+                            .to_string(),
+                    ));
+                }
+                let manager = crate::checkpoint::CheckpointManager::new(
+                    home.join("checkpoints"),
+                    &config.checkpoints,
+                );
+                let dir = cwd.to_string_lossy().to_string();
+                let result = manager.session_diff(&dir).await;
+                if result["success"] != json!(true) {
+                    return Some(GatewaySlash::Direct(format!(
+                        "session diff failed: {}",
+                        result["error"].as_str().unwrap_or("unknown error")
+                    )));
+                }
+                stat = result["stat"].as_str().unwrap_or_default().to_string();
+                diff = result["diff"].as_str().unwrap_or_default().to_string();
+                untracked = Vec::new();
+            } else {
+                let mode = match crate::git_diff::DiffMode::parse(mode_raw) {
+                    Some(mode) => mode,
+                    None => {
+                        return Some(GatewaySlash::Direct(format!(
+                            "unknown diff mode: {mode_raw}"
+                        )))
+                    }
+                };
+                let dir = cwd.clone();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    crate::git_diff::collect_working_diff(&dir, mode, &[])
+                })
+                .await;
+                match outcome {
+                    Ok(Ok(result)) => {
+                        stat = result.stat;
+                        diff = result.diff;
+                        untracked = result.untracked;
+                        if result.empty {
+                            return Some(GatewaySlash::Direct(
+                                "no changes in the working tree".to_string(),
+                            ));
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        return Some(GatewaySlash::Direct(format!("diff failed: {e}")))
+                    }
+                    Err(e) => return Some(GatewaySlash::Direct(format!("diff failed: {e}"))),
+                }
+            }
+            if stat.trim().is_empty() && diff.trim().is_empty() {
+                return Some(GatewaySlash::Direct("no changes".to_string()));
+            }
+            let mut out = Vec::new();
+            if !stat.trim().is_empty() {
+                out.push(stat.trim_end().to_string());
+            }
+            if !stat_only {
+                if !untracked.is_empty() {
+                    let shown: Vec<String> = untracked
+                        .iter()
+                        .take(15)
+                        .map(|path| format!("+ {path}"))
+                        .collect();
+                    let mut block = format!("untracked:\n{}", shown.join("\n"));
+                    if untracked.len() > 15 {
+                        block.push_str(&format!("\n\u{2026} and {} more", untracked.len() - 15));
+                    }
+                    out.push(block);
+                }
+                if !diff.trim().is_empty() {
+                    out.push(crate::title_generator::truncate_chars(
+                        diff.trim_end(),
+                        4000,
+                    ));
+                }
+            }
+            Some(GatewaySlash::Direct(out.join("\n\n")))
+        }
+        "/rollback" => {
+            // Hermes /rollback parity: list or restore filesystem
+            // checkpoints for the session's cwd (checkpoint store in
+            // <home>/checkpoints; a pre-rollback snapshot is taken
+            // automatically so the undo is itself undoable).
+            let config = state.agent.context().config.clone();
+            if !config.checkpoints.enabled {
+                return Some(GatewaySlash::Direct(
+                    "checkpoints are not enabled ([checkpoints] enabled = true)".to_string(),
+                ));
+            }
+            let home = state.agent.context().home.clone();
+            let manager = crate::checkpoint::CheckpointManager::new(
+                home.join("checkpoints"),
+                &config.checkpoints,
+            );
+            let cwd = session_cwd(&state, session_id);
+            let dir = cwd.to_string_lossy().to_string();
+            let arg = rest.trim();
+            if arg.is_empty() {
+                let checkpoints = manager.list_checkpoints(&dir).await;
+                return Some(GatewaySlash::Direct(
+                    crate::checkpoint::format_checkpoint_list(&checkpoints, &dir),
+                ));
+            }
+            let checkpoints = manager.list_checkpoints(&dir).await;
+            if checkpoints.is_empty() {
+                return Some(GatewaySlash::Direct(format!(
+                    "no checkpoints found for {dir}"
+                )));
+            }
+            let target = match arg.parse::<usize>() {
+                Ok(index) if index >= 1 && index <= checkpoints.len() => {
+                    checkpoints[index - 1].hash.clone()
+                }
+                Ok(index) => {
+                    return Some(GatewaySlash::Direct(format!(
+                        "invalid checkpoint number: {index} (1-{})",
+                        checkpoints.len()
+                    )))
+                }
+                Err(_) => arg.to_string(),
+            };
+            match manager.restore(&dir, &target, None).await {
+                Ok(result) => Some(GatewaySlash::Direct(format!(
+                    "restored {} to checkpoint {} ({})",
+                    dir,
+                    result["restored_to"].as_str().unwrap_or("?"),
+                    result["reason"].as_str().unwrap_or("unknown").trim()
+                ))),
+                Err(e) => Some(GatewaySlash::Direct(format!("rollback failed: {e}"))),
+            }
         }
         "/verbose" => {
             // Show or persist agent.verbose (takes effect for new runs).
@@ -14518,6 +14768,77 @@ mod tests {
             ApprovalRouter::new(),
         )
         .expect("state builds")
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_branch_diff_rollback() {
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        // /branch guards an empty transcript.
+        let empty_sid = state
+            .store
+            .create_session("branch-empty", Some("fake-stream"), None)
+            .expect("session created");
+        let reply = post_chat(app.clone(), &empty_sid, "/branch").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("no conversation"), "{reply}");
+
+        // Seed an exchange, then branch with an explicit name.
+        let sid = state
+            .store
+            .create_session("branch-src", Some("fake-stream"), None)
+            .expect("session created");
+        let reply = post_chat(app.clone(), &sid, "hello").await;
+        assert_eq!(reply["response"], "Hello");
+        let reply = post_chat(app.clone(), &sid, "/branch experiment").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("branched session"), "{text}");
+        assert!(text.contains("experiment"), "{text}");
+
+        // Parent ends as branched; the child carries the copied history.
+        let parent = state.store.get_session_row(&sid).unwrap().unwrap();
+        assert_eq!(parent.end_reason.as_deref(), Some("branched"));
+        let child = state
+            .store
+            .list_session_rows(20)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.title.as_deref() == Some("experiment"))
+            .expect("child session exists");
+        assert_eq!(child.parent_session_id.as_deref(), Some(sid.as_str()));
+        assert_eq!(state.store.load_messages(&child.id).unwrap().len(), 2);
+
+        // /diff on a session whose cwd is not a git repo reports the
+        // failure; unknown arguments are rejected up front.
+        let temp = tempfile::tempdir().unwrap();
+        let did = state
+            .store
+            .create_session(
+                "diff-src",
+                Some("fake-stream"),
+                Some(temp.path().to_str().unwrap()),
+            )
+            .expect("session created");
+        let reply = post_chat(app.clone(), &did, "/diff").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("diff failed"), "{reply}");
+        let reply = post_chat(app.clone(), &did, "/diff bogus").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("unknown /diff argument"), "{reply}");
+
+        // /rollback while checkpoints stay disabled (the default).
+        let reply = post_chat(app.clone(), &did, "/rollback").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("not enabled"), "{reply}");
     }
 
     #[tokio::test]
