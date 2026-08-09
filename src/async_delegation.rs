@@ -389,6 +389,70 @@ pub fn read_result(home: &Path, id: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&content).ok()
 }
 
+/// Humanize a millisecond duration (`5s`, `3m`, `2h`, `4d`).
+fn human_ms(ms: i64) -> String {
+    let secs = (ms / 1000).max(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
+}
+
+/// Text digest of active + recently finished delegations (P666 — the
+/// `/agents` slash, hermes "show active agents and running tasks").
+/// Pure over a record slice so REPL and gateway share one formatter.
+pub fn format_agents_digest(records: &[DelegationRecord]) -> String {
+    if records.is_empty() {
+        return "(o_o) no agents running and no recent delegations.\n".to_string();
+    }
+    let now = now_ms();
+    let running: Vec<&DelegationRecord> = records
+        .iter()
+        .filter(|r| r.status == STATUS_RUNNING)
+        .collect();
+    let finished: Vec<&DelegationRecord> = records
+        .iter()
+        .filter(|r| r.status != STATUS_RUNNING)
+        .take(10)
+        .collect();
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "agents: {} running, {} finished (recent)\n",
+        running.len(),
+        finished.len()
+    ));
+    if !running.is_empty() {
+        out.push_str("running:\n");
+        for record in &running {
+            let elapsed = human_ms(now - record.created_ms);
+            out.push_str(&format!(
+                "  {}  {} task(s)  elapsed {}  ({})\n",
+                record.id, record.tasks, elapsed, record.parent_session_key
+            ));
+        }
+    }
+    if !finished.is_empty() {
+        out.push_str("recent:\n");
+        for record in &finished {
+            let when = record
+                .finished_ms
+                .map(|ms| format!("{} ago", human_ms(now - ms)))
+                .unwrap_or_else(|| "unknown".to_string());
+            out.push_str(&format!(
+                "  {}  {:<9}  {} task(s)  finished {}\n",
+                record.id, record.status, record.tasks, when
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -769,5 +833,39 @@ mod tests {
         assert!(report.contains("done 1"));
         assert!(report.contains("2. [error] t2"));
         assert!(report.contains("error: bad"));
+    }
+
+    #[test]
+    fn agents_digest_empty_and_populated() {
+        let out = format_agents_digest(&[]);
+        assert!(out.contains("no agents running"), "{out}");
+
+        let now = now_ms();
+        let records = vec![
+            DelegationRecord {
+                id: "del_running".into(),
+                parent_session_key: "sess-1".into(),
+                tasks: 3,
+                status: STATUS_RUNNING.to_string(),
+                created_ms: now - 120_000,
+                finished_ms: None,
+                log_dir: PathBuf::from("/tmp/x"),
+            },
+            DelegationRecord {
+                id: "del_done".into(),
+                parent_session_key: "sess-2".into(),
+                tasks: 2,
+                status: STATUS_COMPLETED.to_string(),
+                created_ms: now - 600_000,
+                finished_ms: Some(now - 60_000),
+                log_dir: PathBuf::from("/tmp/y"),
+            },
+        ];
+        let out = format_agents_digest(&records);
+        assert!(out.contains("1 running"), "{out}");
+        assert!(out.contains("del_running"), "{out}");
+        assert!(out.contains("elapsed 2m"), "{out}");
+        assert!(out.contains("del_done"), "{out}");
+        assert!(out.contains("1m ago"), "{out}");
     }
 }

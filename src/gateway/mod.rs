@@ -10531,6 +10531,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
   /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
   /init [notes]      generate or update AGENTS.md from a project scan
+  /agents            active agents + recent delegations
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /branch [name]   fork this session into a child branch
@@ -11589,6 +11590,17 @@ async fn resolve_gateway_slash(
                     "failed to create the job: {e}"
                 ))),
             }
+        }
+        "/agents" => {
+            // Hermes /agents parity (P666): active agents + recent
+            // delegations digest (live registry; the Runs view shows
+            // the durable history).
+            let records = crate::async_delegation::list_delegations();
+            Some(GatewaySlash::Direct(
+                crate::async_delegation::format_agents_digest(&records)
+                    .trim_end()
+                    .to_string(),
+            ))
         }
         "/init" => {
             // Hermes /init parity (P665): generate or update AGENTS.md
