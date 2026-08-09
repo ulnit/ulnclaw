@@ -6022,6 +6022,128 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/x-search-settings` — P758: x_search server-tool knobs
+/// for the shell: the Responses-API model, optional reasoning effort,
+/// request timeout (30s floor) and transient-failure retries.
+async fn x_search_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let x_search =
+        crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+            .map(|c| c.x_search)
+            .unwrap_or_default();
+    Json(json!({
+        "model": x_search.model,
+        "reasoning_effort": x_search.reasoning_effort,
+        "timeout_seconds": x_search.timeout_seconds,
+        "retries": x_search.retries,
+    }))
+}
+
+/// `PUT /api/x-search-settings` — P758: persist x_search server-tool
+/// knobs from the shell. Body: `{"key": "model"|"reasoning_effort"|
+/// "timeout_seconds"|"retries", "value": ...|null}` — null removes
+/// the key (falls back to the default). `reasoning_effort` accepts
+/// empty/low/medium/high/xhigh; the timeout is floored at 30s.
+/// Applies to new x_search calls.
+async fn update_x_search_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["model", "reasoning_effort", "timeout_seconds", "retries"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown x_search key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "model" => {
+                    let text = v.as_str().map(str::trim).unwrap_or("");
+                    if text.is_empty() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "x_search.model must be a non-empty model name" })),
+                        );
+                    }
+                    raw = Some(text.to_string());
+                }
+                "reasoning_effort" => {
+                    let text = v.as_str().map(str::trim).map(str::to_lowercase).unwrap_or_default();
+                    if !matches!(text.as_str(), "" | "low" | "medium" | "high" | "xhigh") {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "x_search.reasoning_effort must be one of low|medium|high|xhigh (or empty)" })),
+                        );
+                    }
+                    raw = Some(text);
+                }
+                "timeout_seconds" => {
+                    let Some(number) = v.as_u64() else {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "x_search.timeout_seconds must be an integer of at least 30" })),
+                        );
+                    };
+                    if number < 30 {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "x_search.timeout_seconds must be at least 30" })),
+                        );
+                    }
+                    raw = Some(number.to_string());
+                }
+                "retries" => {
+                    if !v.is_u64() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "x_search.retries must be a non-negative integer" })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    let dotted = format!("x_search.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(_) => crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true)
+            .map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/kanban-settings` — P757: kanban dispatcher knobs for
 /// the shell: in-gateway dispatch switch and cadence, worker
 /// concurrency cap, worktree workspaces, child auto-promotion and the
@@ -8895,6 +9017,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/cron-settings", get(cron_settings_api).put(update_cron_settings_api))
         .route("/api/voice-settings", get(voice_settings_api).put(update_voice_settings_api))
         .route("/api/kanban-settings", get(kanban_settings_api).put(update_kanban_settings_api))
+        .route("/api/x-search-settings", get(x_search_settings_api).put(update_x_search_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -20157,6 +20280,86 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/kanban-settings", Some("sekret")).await;
         assert_eq!(body["max_spawn"], 2, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_x_search_settings_editor() {
+        // P758: GET /api/x-search-settings surfaces the x_search knobs;
+        // PUT persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: grok-4.5, no effort pin, 180s timeout, 2 retries.
+        let (status, body) = get_json(app.clone(), "/api/x-search-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["model"], "grok-4.5", "{body}");
+        assert_eq!(body["reasoning_effort"], "", "{body}");
+        assert_eq!(body["timeout_seconds"], 180, "{body}");
+        assert_eq!(body["retries"], 2, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("model", json!("grok-4.1-fast")),
+            ("reasoning_effort", json!("high")),
+            ("timeout_seconds", json!(300)),
+            ("retries", json!(0)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/x-search-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/x-search-settings", Some("sekret")).await;
+        assert_eq!(body["model"], "grok-4.1-fast", "{body}");
+        assert_eq!(body["reasoning_effort"], "high", "{body}");
+        assert_eq!(body["timeout_seconds"], 300, "{body}");
+        assert_eq!(body["retries"], 0, "{body}");
+
+        // Validation: blank model, bad effort, sub-floor timeout.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/x-search-settings", Some("sekret"),
+            json!({ "key": "model", "value": "  " }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/x-search-settings", Some("sekret"),
+            json!({ "key": "reasoning_effort", "value": "ultra" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/x-search-settings", Some("sekret"),
+            json!({ "key": "timeout_seconds", "value": 5 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/x-search-settings", Some("sekret"),
+            json!({ "key": "reasoning_effort", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/x-search-settings", Some("sekret")).await;
+        assert_eq!(body["reasoning_effort"], "", "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

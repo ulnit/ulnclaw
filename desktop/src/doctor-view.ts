@@ -223,6 +223,17 @@ export class DoctorWidget {
           <span id="kanban-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-x-search-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="xSearchPanel.title">X search</h3>
+        <div id="x-search-rows"></div>
+        <div id="x-search-editor" class="monitoring-row" hidden>
+          <select id="x-search-key" class="ghost"></select>
+          <input id="x-search-value" class="ghost" />
+          <button id="x-search-apply" class="ghost mcp-add-btn" data-i18n="xSearchPanel.apply">Apply</button>
+          <button id="x-search-clear" class="ghost mcp-add-btn" data-i18n="xSearchPanel.clear">Clear</button>
+          <span id="x-search-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -485,6 +496,7 @@ export class DoctorWidget {
     this.loadCronSettings().catch(() => undefined);
     this.loadVoiceSettings().catch(() => undefined);
     this.loadKanbanSettings().catch(() => undefined);
+    this.loadXSearchSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2568,6 +2580,81 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadXSearchSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-x-search-settings") as HTMLElement;
+    const rows = this.root.querySelector("#x-search-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.xSearchSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const dflt = t.agentSettingsPanel.defaultWord;
+      addRow(t.xSearchPanel.model, escapeHtmlDoctor(payload.model));
+      addRow(
+        t.xSearchPanel.reasoning,
+        payload.reasoning_effort.trim() !== ""
+          ? escapeHtmlDoctor(payload.reasoning_effort)
+          : escapeHtmlDoctor(dflt),
+      );
+      addRow(t.xSearchPanel.timeout, `${payload.timeout_seconds}s`);
+      addRow(t.xSearchPanel.retries, String(payload.retries));
+      // P758: x_search editor — pick a key, type the value, Apply
+      // persists through PUT /api/x-search-settings, Clear removes the
+      // override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#x-search-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#x-search-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#x-search-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#x-search-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#x-search-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#x-search-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["model", "reasoning_effort", "timeout_seconds", "retries"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | number | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateXSearchSetting(keySel.value, value);
+            await this.loadXSearchSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number = /^\d+$/.test(raw) ? Number(raw) : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

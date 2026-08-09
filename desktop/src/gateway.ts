@@ -628,6 +628,14 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/x-search-settings` — P758 x_search server-tool knobs. */
+export interface XSearchSettingsPayload {
+  model: string;
+  reasoning_effort: string;
+  timeout_seconds: number;
+  retries: number;
+}
+
 /** `GET /api/kanban-settings` — P757 kanban dispatcher knobs. */
 export interface KanbanSettingsPayload {
   dispatch_in_gateway: boolean;
@@ -4106,6 +4114,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/x-search-settings — P758 x_search knobs. */
+  async xSearchSettings(): Promise<XSearchSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/x-search-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`x-search-settings HTTP ${response.status}`);
+    return (await response.json()) as XSearchSettingsPayload;
+  }
+
+  /** P758: PUT /api/x-search-settings — persist an x_search knob; null
+   * removes the override. */
+  async updateXSearchSetting(
+    key: string,
+    value: string | number | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/x-search-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `x-search-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/kanban-settings — P757 kanban dispatcher knobs. */
