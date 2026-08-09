@@ -678,6 +678,55 @@ pub fn platform_configured(section: &serde_json::Value, entry: &PlatformCatalogE
     })
 }
 
+/// Per-platform posture rows for the chat digest (P669 — hermes
+/// `/platforms` parity): `(id, name, state)` where state is
+/// `connected` / `not_configured` / `disabled`.
+pub fn platform_state_rows() -> Vec<(&'static str, &'static str, String)> {
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let messaging_value = serde_json::to_value(&config.messaging).unwrap_or(Value::Null);
+    platform_catalog()
+        .into_iter()
+        .map(|entry| {
+            let section = messaging_value.get(entry.id).cloned().unwrap_or(Value::Null);
+            let enabled = section.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+            let configured = platform_configured(&section, &entry);
+            let state = if !enabled {
+                "disabled"
+            } else if !configured {
+                "not_configured"
+            } else {
+                "connected"
+            };
+            (entry.id, entry.name, state.to_string())
+        })
+        .collect()
+}
+
+/// Text digest of messaging-platform posture (P669 — the `/platforms`
+/// slash, shared by REPL and gateway). Pure over the rows from
+/// [`platform_state_rows`].
+pub fn format_platforms_digest(rows: &[(&str, &str, String)]) -> String {
+    if rows.is_empty() {
+        return "(o_o) no messaging platforms in the catalog.\n".to_string();
+    }
+    let connected = rows.iter().filter(|r| r.2 == "connected").count();
+    let mut out = String::new();
+    out.push_str(&format!(
+        "messaging platforms: {} of {} connected\n",
+        connected,
+        rows.len()
+    ));
+    for (id, name, state) in rows {
+        let glyph = match state.as_str() {
+            "connected" => "\u{2713}",
+            "not_configured" => "\u{26a0}",
+            _ => "\u{25cb}",
+        };
+        out.push_str(&format!("  {glyph} {:<14} {:<14} {id}\n", name, state));
+    }
+    out
+}
+
 /// Parse a reply to a pending slash-confirm prompt (hermes gateway/run.py
 /// intercept keyword table). Slash-command forms and plain text both work;
 /// `!`-prefixed replies (Slack-style) are accepted verbatim.
@@ -6408,5 +6457,26 @@ mod tests {
         .await;
         assert_eq!(out.as_deref(), Some("done:always"));
         crate::slash_confirm::clear_all_for_tests();
+    }
+
+    #[test]
+    fn platforms_digest_counts_and_glyphs() {
+        // P669: /platforms digest formatting.
+        let rows: Vec<(&str, &str, String)> = vec![
+            ("telegram", "Telegram", "connected".to_string()),
+            ("discord", "Discord", "disabled".to_string()),
+            ("slack", "Slack", "not_configured".to_string()),
+        ];
+        let out = format_platforms_digest(&rows);
+        assert!(out.contains("1 of 3 connected"), "{out}");
+        assert!(out.contains("Telegram"), "{out}");
+        assert!(out.contains("connected"), "{out}");
+        assert!(out.contains("not_configured"), "{out}");
+        assert!(out.contains("\u{2713}"), "{out}");
+        assert!(out.contains("\u{26a0}"), "{out}");
+
+        let empty: Vec<(&str, &str, String)> = vec![];
+        let out = format_platforms_digest(&empty);
+        assert!(out.contains("no messaging platforms"), "{out}");
     }
 }

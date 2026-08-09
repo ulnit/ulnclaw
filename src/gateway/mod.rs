@@ -10534,6 +10534,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /agents            active agents + recent delegations
   /journey           the learning timeline (skills + memory cards)
   /snapshot [create [label]|list|restore <id>|prune [keep]]  state snapshots
+  /platforms         messaging-platform connection posture
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /branch [name]   fork this session into a child branch
@@ -11592,6 +11593,13 @@ async fn resolve_gateway_slash(
                     "failed to create the job: {e}"
                 ))),
             }
+        }
+        "/platforms" => {
+            // Hermes /platforms parity (P669): messaging-platform
+            // posture digest (same catalog as /api/messaging/platforms).
+            let rows = crate::messaging::platform_state_rows();
+            let digest = crate::messaging::format_platforms_digest(&rows);
+            Some(GatewaySlash::Direct(digest.trim_end().to_string()))
         }
         "/snapshot" => {
             // Hermes /snapshot parity (P668): create/list/restore/prune
