@@ -221,6 +221,7 @@ pub mod slash_access;
 pub mod signal;
 pub mod simplex;
 pub mod sms;
+pub mod streaming_tts;
 pub mod stt;
 pub mod tts;
 pub mod teams;
