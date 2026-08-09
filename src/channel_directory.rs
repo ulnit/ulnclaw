@@ -127,6 +127,18 @@ fn now_secs() -> i64 {
 /// event through the dispatcher). Non-empty names refresh stale ones;
 /// `updated_at` always advances; the inbound message id is remembered
 /// for reaction targeting.
+/// Recorded chat type for a platform/chat, if any (P718 scope
+/// derivation for slash-access gating; empty/unset → `None`).
+pub fn chat_type_for(platform: &str, id: &str) -> Option<String> {
+    let dir = state().lock().unwrap();
+    let entries = dir.platforms.get(&platform.to_lowercase())?;
+    entries
+        .iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| entry.chat_type.clone())
+        .filter(|chat_type| !chat_type.is_empty())
+}
+
 pub fn record_channel(platform: &str, id: &str, name: &str, chat_type: &str, message_id: &str) {
     if platform.is_empty() || id.is_empty() {
         return;

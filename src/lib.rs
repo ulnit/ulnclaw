@@ -209,6 +209,7 @@ pub mod session_stall;
 pub mod skin;
 pub mod skill_usage;
 pub mod skills;
+pub mod slash_access;
 pub mod signal;
 pub mod simplex;
 pub mod sms;

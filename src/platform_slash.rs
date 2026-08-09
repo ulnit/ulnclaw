@@ -23,6 +23,7 @@ pub enum PlatformSlashOutcome {
 
 const PLATFORM_SLASH_HELP: &str = "Commands you can send as chat messages:
   /help            this list
+  /whoami          your identity as the gateway sees it
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this chat's session

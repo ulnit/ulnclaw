@@ -52,6 +52,13 @@ pub struct MessagingConfig {
     /// references the agent inspects with vision_analyze/read_file.
     #[serde(default = "default_multimodal_injection")]
     pub multimodal_injection: bool,
+    /// Per-platform slash command access control (hermes
+    /// `slash_access`, P718): of the users allowed to talk, which can
+    /// run which slash commands. Keyed by platform id; platforms
+    /// without an entry keep the legacy ungated behavior.
+    #[serde(default)]
+    pub slash_access:
+        std::collections::HashMap<String, crate::slash_access::SlashAccessScopeConfig>,
     /// WhatsApp Cloud webhook platform (mounted on the gateway router).
     #[serde(default)]
     pub whatsapp_cloud: crate::webhook_platforms::WhatsAppCloudConfig,
@@ -1605,6 +1612,39 @@ impl Dispatcher {
         format!("platform-{}-{}", event.platform, event.chat_id)
     }
 
+    /// P718: hermes `_check_slash_access` — resolve the platform +
+    /// scope policy and deny non-admins commands outside their
+    /// allowlist. Unknown `/…` text is never gated (users legitimately
+    /// send paths); skill/bundle slashes stay ungated agent turns.
+    fn slash_gate_denial(&self, event: &MessageEvent) -> Option<String> {
+        let cmd_word = event.text.trim().split_whitespace().next()?;
+        let canonical = crate::slash_access::normalize_command(cmd_word);
+        if !crate::slash_access::is_known_command(&canonical) {
+            return None;
+        }
+        let chat_type =
+            crate::channel_directory::chat_type_for(&event.platform, &event.chat_id);
+        let scope = crate::slash_access::scope_for_chat_type(chat_type.as_deref());
+        let policy = crate::slash_access::policy_for(
+            self.agent
+                .context()
+                .config
+                .messaging
+                .slash_access
+                .get(&event.platform),
+            scope,
+        );
+        if policy.can_run(Some(&event.sender_id), &canonical) {
+            return None;
+        }
+        tracing::info!(
+            "slash command /{canonical} denied for {}:{} (not admin, not in user_allowed_commands)",
+            event.platform,
+            event.sender_id,
+        );
+        Some(crate::slash_access::denial_message(&canonical, &policy))
+    }
+
     /// Run one agent turn for the event's chat; returns the reply text
     /// plus transcript echoes (hermes `_echo_pending_stt_transcripts_once`).
     pub async fn handle_event(self: &Arc<Self>, event: MessageEvent) -> Result<DispatchOutcome> {
@@ -1638,6 +1678,32 @@ impl Dispatcher {
             "",
             &event.message_id,
         );
+        // P718: per-platform slash access control (hermes
+        // slash_access) — of the users allowed to talk, which can run
+        // which commands. Applied before every command intercept so
+        // gating can't be bypassed; plain chat and unknown /text are
+        // unaffected.
+        if let Some(denied) = self.slash_gate_denial(&event) {
+            return Ok(DispatchOutcome {
+                reply: denied,
+                transcript_echoes: Vec::new(),
+            });
+        }
+        // Identity floor command (hermes /whoami) — always allowed.
+        if event.text.trim() == "/whoami" {
+            let name = if event.sender_name.is_empty() {
+                "(unknown)"
+            } else {
+                &event.sender_name
+            };
+            return Ok(DispatchOutcome {
+                reply: format!(
+                    "you are {name} ({}) on {} in chat {}",
+                    event.sender_id, event.platform, event.chat_id
+                ),
+                transcript_echoes: Vec::new(),
+            });
+        }
         // Exec-approval intercept (hermes `/approve` + `/deny` slash
         // commands): resolves a pending blocking approval while the
         // blocked turn holds the busy flag, so it must run before the
@@ -7967,6 +8033,105 @@ mod tests {
         clear_pending_inbound_for_tests();
     }
 
+    /// Dispatcher whose platform `testplat` has a slash-access policy:
+    /// admin `u-admin`, non-admins may run only `/usage` (+ floor).
+    fn gated_test_dispatcher() -> (Arc<Dispatcher>, Arc<SqliteSessionStore>) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let provider = Arc::new(
+            crate::provider::openai::OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let mut config = crate::config::UlncLawConfig::default();
+        config.messaging.slash_access.insert(
+            "testplat".into(),
+            crate::slash_access::SlashAccessScopeConfig {
+                allow_admin_from: vec!["u-admin".into()],
+                user_allowed_commands: vec!["usage".into()],
+                ..Default::default()
+            },
+        );
+        let context = crate::tools::context::ToolContext::default().with_config(config);
+        let agent = crate::agent::Agent::new(provider, crate::tools::ToolRegistry::new())
+            .with_store(store.clone())
+            .with_context(context);
+        (Dispatcher::new(Arc::new(agent), store.clone()), store)
+    }
+
+    #[tokio::test]
+    async fn slash_access_gates_platform_commands() {
+        // P718: hermes slash_access — with an admin listed, non-admins
+        // keep the floor (/help, /whoami) + their allowlist and get a
+        // ⛔ denial elsewhere; admins run anything; unknown /text and
+        // plain chat are never gated.
+        let _env_guard = crate::models_dev::test_env_lock();
+        // The channel directory persists to ULNCLAW_HOME — isolate it
+        // so this test's group-scope recording can't leak into other
+        // runs.
+        let home_dir = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("ULNCLAW_HOME", home_dir.path());
+        crate::channel_directory::reset_for_tests();
+        let (dispatcher, store) = gated_test_dispatcher();
+        // The /title arm needs a session row under this chat's key.
+        store
+            .create_named_session("platform-testplat-chat-1", "testplat", None, None)
+            .expect("named session");
+
+        // Allowlisted command passes — the /usage handler's own
+        // token-census reply proves it ran (gating let it through).
+        let outcome = dispatcher.handle_event(test_event("/usage", "m1")).await.unwrap();
+        assert!(outcome.reply.contains("messages:"), "{}", outcome.reply);
+        // Floor commands always pass.
+        let outcome = dispatcher.handle_event(test_event("/help", "m2")).await.unwrap();
+        assert!(outcome.reply.contains("/skills"), "{}", outcome.reply);
+        let outcome = dispatcher.handle_event(test_event("/whoami", "m3")).await.unwrap();
+        assert!(
+            outcome.reply.contains("you are User (u1) on testplat in chat chat-1"),
+            "{}",
+            outcome.reply
+        );
+        // Anything else is denied with the ⛔ copy + allowed preview.
+        let outcome = dispatcher
+            .handle_event(test_event("/title nope", "m4"))
+            .await
+            .unwrap();
+        assert!(
+            outcome.reply.starts_with("\u{26d4} /title is admin-only here."),
+            "{}",
+            outcome.reply
+        );
+        assert!(outcome.reply.contains("/usage"), "{}", outcome.reply);
+
+        // The admin runs the same command through.
+        let mut admin_event = test_event("/title Admin chat", "m5");
+        admin_event.sender_id = "u-admin".into();
+        let outcome = dispatcher.handle_event(admin_event).await.unwrap();
+        assert!(outcome.reply.contains("title set"), "{}", outcome.reply);
+
+        // Group scope: marking the chat a group with no group admin
+        // list disables gating for that scope (hermes backward-compat).
+        crate::channel_directory::record_channel("testplat", "chat-1", "", "group", "");
+        let outcome = dispatcher
+            .handle_event(test_event("/title Group chat", "m6"))
+            .await
+            .unwrap();
+        assert!(outcome.reply.contains("title set"), "{}", outcome.reply);
+
+        // Unknown /text stays an ordinary agent message: it reaches
+        // the turn (the unreachable provider then fails the turn).
+        let result = dispatcher.handle_event(test_event("/usr/bin/foo", "m7")).await;
+        assert!(result.is_err(), "unknown slash text must reach the agent");
+        std::env::remove_var("ULNCLAW_HOME");
+        crate::channel_directory::reset_for_tests();
+    }
+
     #[tokio::test]
     async fn send_with_ledger_records_and_delivers() {
         // P703: the adapter-side ledger wrap records a pending
@@ -8044,3 +8209,4 @@ mod tests {
         }
     }
 }
+
