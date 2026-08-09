@@ -660,9 +660,18 @@ pub async fn whatsapp_handle_webhook(
         }
         let reply = outcome.reply;
         let (reply_text, media_paths) = crate::messaging::extract_media_tags(&reply);
-        if let Err(e) = whatsapp_send(&client, cfg, &event.chat_id, &reply_text).await {
-            eprintln!("[whatsapp_cloud] reply failed: {e}");
-        }
+        // P704: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("whatsapp_cloud", &event.chat_id, &reply_text, || async {
+                match whatsapp_send(&client, cfg, &event.chat_id, &reply_text).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[whatsapp_cloud] reply failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
         for path in &media_paths {
             match whatsapp_upload_media(&client, cfg, path).await {
                 Ok(media_id) => {
@@ -3088,11 +3097,19 @@ pub async fn bluebubbles_handle_webhook(
     }
     let (reply_text, media_paths) = crate::messaging::extract_media_tags(&outcome.reply);
     if !reply_text.trim().is_empty() {
-        if let Err(e) =
-            bluebubbles_send_text(&client, cfg, cache, &event.chat_id, &reply_text).await
-        {
-            eprintln!("[bluebubbles] reply failed: {e}");
-        }
+        // P704: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("bluebubbles", &event.chat_id, &reply_text, || async {
+                match bluebubbles_send_text(&client, cfg, cache, &event.chat_id, &reply_text).await
+                {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[bluebubbles] reply failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
     for path in &media_paths {
         if let Err(e) = bluebubbles_send_attachment(&client, cfg, cache, &event.chat_id, path).await

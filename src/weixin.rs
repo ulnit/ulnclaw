@@ -2307,7 +2307,13 @@ async fn dispatch_event(
         runner.handle.deliver_media_path(chat_id, path).await;
     }
     if !reply_text.trim().is_empty() {
-        runner.handle.send_text(chat_id, &reply_text, runner.cfg.split_multiline_messages).await;
+        // P704: ledger-protected reply delivery.
+        runner
+            .dispatcher
+            .send_with_ledger("weixin", chat_id, &reply_text, || {
+                runner.handle.send_text(chat_id, &reply_text, runner.cfg.split_multiline_messages)
+            })
+            .await;
     }
 }
 

@@ -1660,7 +1660,13 @@ async fn dispatch_inbound(
         runner.handle.deliver_media_path(chat_id, path).await;
     }
     if !reply_text.trim().is_empty() {
-        runner.handle.send_text(chat_id, &reply_text).await;
+        // P704: ledger-protected reply delivery (sender id "qq").
+        runner
+            .dispatcher
+            .send_with_ledger("qq", chat_id, &reply_text, || {
+                runner.handle.send_text(chat_id, &reply_text)
+            })
+            .await;
     }
 }
 

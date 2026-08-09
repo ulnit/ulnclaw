@@ -1347,11 +1347,18 @@ async fn dispatch_email(
     full_reply.push_str(&outcome.reply);
     let (reply_text, media_paths) = crate::messaging::extract_media_tags(&full_reply);
     if !reply_text.trim().is_empty() || !media_paths.is_empty() {
-        if let Err(e) =
-            send_email(runtime, &inbound.sender_addr, &reply_text, &media_paths).await
-        {
-            eprintln!("[email] reply to {} failed: {e}", inbound.sender_addr);
-        }
+        // P704: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("email", &inbound.sender_addr, &reply_text, || async {
+                match send_email(runtime, &inbound.sender_addr, &reply_text, &media_paths).await {
+                    Ok(_) => true,
+                    Err(e) => {
+                        eprintln!("[email] reply to {} failed: {e}", inbound.sender_addr);
+                        false
+                    }
+                }
+            })
+            .await;
     }
 }
 

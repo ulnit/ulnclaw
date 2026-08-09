@@ -1605,6 +1605,44 @@ impl Dispatcher {
         }
     }
 
+    /// P704: ledger-protected delivery for adapters whose send reports
+    /// success/failure — the obligation is marked `delivered` on true
+    /// and `failed` (definitive rejection; retried on the next boot)
+    /// on false.
+    pub async fn try_send_with_ledger<F, Fut>(
+        &self,
+        platform: &str,
+        chat_id: &str,
+        text: &str,
+        send: F,
+    ) -> bool
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let session_key = format!("platform-{platform}-{chat_id}");
+        let obligation = crate::delivery_ledger::record_obligation(
+            &self.store,
+            &session_key,
+            platform,
+            chat_id,
+            None,
+            text,
+        );
+        if let Some(id) = &obligation {
+            crate::delivery_ledger::mark_attempting(&self.store, id);
+        }
+        let ok = send().await;
+        if let Some(id) = &obligation {
+            if ok {
+                crate::delivery_ledger::mark_delivered(&self.store, id);
+            } else {
+                crate::delivery_ledger::mark_failed(&self.store, id, "send reported failure");
+            }
+        }
+        ok
+    }
+
     /// Test hook: current queue depth for a chat key.
     #[cfg(test)]
     async fn queued_depth(&self, key: &str) -> usize {
@@ -7464,6 +7502,25 @@ mod tests {
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].1, "testplat");
         assert_eq!(rows[0].2, "delivered");
+    }
+
+    #[tokio::test]
+    async fn try_send_with_ledger_marks_delivered_or_failed() {
+        // P704: the Result-aware ledger wrap marks delivered on success
+        // and failed on a definitive send rejection.
+        let dispatcher = test_dispatcher();
+        let ok = dispatcher
+            .try_send_with_ledger("testplat", "chat-8", "good reply", || async { true })
+            .await;
+        assert!(ok);
+        let ok = dispatcher
+            .try_send_with_ledger("testplat", "chat-8", "bad reply", || async { false })
+            .await;
+        assert!(!ok);
+        let rows = dispatcher.store.obligation_rows();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].2, "delivered");
+        assert_eq!(rows[1].2, "failed");
     }
 
     #[tokio::test]

@@ -709,12 +709,21 @@ async fn handle_ws_event(
         runtime.send_media(&channel_id, path, "").await;
     }
     if !reply_text.trim().is_empty() {
-        if let Err(e) = runtime
-            .send_post(&channel_id, &reply_text, thread_id.as_deref())
-            .await
-        {
-            eprintln!("[mattermost] reply failed: {e}");
-        }
+        // P704: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("mattermost", &channel_id, &reply_text, || async {
+                match runtime
+                    .send_post(&channel_id, &reply_text, thread_id.as_deref())
+                    .await
+                {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[mattermost] reply failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
 }
 

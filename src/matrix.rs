@@ -773,9 +773,18 @@ async fn handle_room_event(
         runtime.send_media(room_id, path).await;
     }
     if !reply_text.trim().is_empty() {
-        if let Err(e) = runtime.send_text(room_id, &reply_text).await {
-            eprintln!("[matrix] reply to {room_id} failed: {e}");
-        }
+        // P704: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("matrix", room_id, &reply_text, || async {
+                match runtime.send_text(room_id, &reply_text).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[matrix] reply to {room_id} failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
 }
 
@@ -839,9 +848,18 @@ async fn handle_media_message(
         runtime.send_media(room_id, path).await;
     }
     if !reply_text.trim().is_empty() {
-        if let Err(e) = runtime.send_text(room_id, &reply_text).await {
-            eprintln!("[matrix] reply to {room_id} failed: {e}");
-        }
+        // P704: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("matrix", room_id, &reply_text, || async {
+                match runtime.send_text(room_id, &reply_text).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[matrix] reply to {room_id} failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
 }
 

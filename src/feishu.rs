@@ -1112,9 +1112,18 @@ pub(crate) async fn handle_message_event(
         }
     }
     if !reply_text.trim().is_empty() {
-        if let Err(e) = api.send_text(&chat_id, &reply_text).await {
-            eprintln!("[feishu] reply failed: {e}");
-        }
+    // P704: ledger-protected reply delivery.
+    dispatcher
+        .try_send_with_ledger("feishu", &chat_id, &reply_text, || async {
+            match api.send_text(&chat_id, &reply_text).await {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("[feishu] reply failed: {e}");
+                    false
+                }
+            }
+        })
+        .await;
     }
 
     // hermes `on_processing_complete`: remove the Typing badge; on
@@ -1212,9 +1221,18 @@ pub(crate) async fn handle_reaction_event(
     full.push_str(&outcome.reply);
     let (reply_text, _media_paths) = crate::messaging::extract_media_tags(&full);
     if !reply_text.trim().is_empty() {
-        if let Err(e) = api.send_text(&chat_id, &reply_text).await {
-            eprintln!("[feishu] reaction reply failed: {e}");
-        }
+    // P704: ledger-protected reply delivery.
+    dispatcher
+        .try_send_with_ledger("feishu", &chat_id, &reply_text, || async {
+            match api.send_text(&chat_id, &reply_text).await {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("[feishu] reaction reply failed: {e}");
+                    false
+                }
+            }
+        })
+        .await;
     }
 }
 
@@ -1652,9 +1670,18 @@ pub(crate) async fn handle_card_action(
         full.push_str(&outcome.reply);
         let (reply_text, _media_paths) = crate::messaging::extract_media_tags(&full);
         if !reply_text.trim().is_empty() {
-            if let Err(e) = api.send_text(&chat_id, &reply_text).await {
-                eprintln!("[feishu] card action reply failed: {e}");
-            }
+        // P704: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("feishu", &chat_id, &reply_text, || async {
+                match api.send_text(&chat_id, &reply_text).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[feishu] card action reply failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
         }
     });
     eprintln!(

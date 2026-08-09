@@ -1056,11 +1056,19 @@ async fn handle_inbound(
     }
     let (reply_text, media_paths) = crate::messaging::extract_media_tags(&outcome.reply);
     if !reply_text.trim().is_empty() {
-        if let Err(e) =
-            signal_send_text(client, cfg, http_url, &inbound.chat_id, &reply_text).await
-        {
-            eprintln!("[signal] reply failed: {e}");
-        }
+        // P704: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("signal", &inbound.chat_id, &reply_text, || async {
+                match signal_send_text(client, cfg, http_url, &inbound.chat_id, &reply_text).await
+                {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[signal] reply failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
     if !media_paths.is_empty() {
         if let Err(e) = signal_send_with_attachments(
