@@ -2,7 +2,7 @@
 // (same kanban.db the CLI `ulnclaw kanban` and the agent kanban_* tools
 // use) as a four-column card wall with quick actions.
 
-import type { GatewayClient, KanbanBoard, KanbanTask } from "./gateway";
+import type { FsEntry, GatewayClient, KanbanBoard, KanbanTask } from "./gateway";
 import { fmt, t } from "./i18n";
 
 function escapeHtmlKanban(text: string): string {
@@ -46,6 +46,7 @@ export class KanbanWidget {
         <button id="kanban-board-new" class="ghost" title="New board" data-i18n-title="kanban.newBoardAction">+</button>
         <button id="kanban-board-rename" class="ghost" title="Rename board" data-i18n-title="kanban.renameBoardAction">\u270E</button>
         <button id="kanban-board-remove" class="ghost" title="Remove board" data-i18n-title="kanban.removeBoardAction">\uD83D\uDDD1</button>
+        <button id="kanban-board-workdir" class="ghost" title="Set board workdir" data-i18n-title="kanban.workdirAction">\uD83D\uDCC1</button>
         <span id="kanban-counts" class="kanban-counts"></span>
         <span id="kanban-dispatch-status" class="config-note"></span>
         <span class="spacer"></span>
@@ -125,6 +126,21 @@ export class KanbanWidget {
             <button value="cancel" data-i18n="kanban.close">Close</button>
           </menu>
         </form>
+      </dialog>
+      <dialog id="kanban-workdir">
+        <form method="dialog">
+          <h2 data-i18n="kanban.workdirTitle">Board workdir</h2>
+          <div id="kanban-workdir-current" class="kanban-workdir-current"></div>
+          <input id="kanban-workdir-path" type="text" spellcheck="false" />
+          <div id="kanban-workdir-entries" class="kanban-workdir-entries"></div>
+          <div id="kanban-workdir-status" class="config-note"></div>
+          <menu>
+            <button id="kanban-workdir-up" type="button" data-i18n="kanban.workdirUp">Up</button>
+            <button id="kanban-workdir-clear" type="button" data-i18n="kanban.workdirClear">Clear</button>
+            <button id="kanban-workdir-save" value="save" class="primary" data-i18n="kanban.workdirUse">Use this directory</button>
+            <button value="cancel" data-i18n="kanban.close">Close</button>
+          </menu>
+        </form>
       </dialog>`;
 
     const select = this.root.querySelector("#kanban-board") as HTMLSelectElement;
@@ -182,6 +198,48 @@ export class KanbanWidget {
           return;
         }
         this.board = "";
+        void this.refresh();
+      });
+    };
+    // P654: set / clear the board default workdir (hermes boards
+    // set-workdir parity) through a gateway-fs directory browser.
+    (this.root.querySelector("#kanban-board-workdir") as HTMLButtonElement).onclick = () =>
+      this.openWorkdirDialog();
+    (this.root.querySelector("#kanban-workdir-up") as HTMLButtonElement).onclick = () => {
+      const pathInput = this.root.querySelector("#kanban-workdir-path") as HTMLInputElement;
+      const trimmed = pathInput.value.replace(/\/+$/, "");
+      const parent = trimmed.length > 1 ? trimmed.replace(/\/[^/]+$/, "") || "/" : "/";
+      void this.renderWorkdirEntries(parent);
+    };
+    (this.root.querySelector("#kanban-workdir-clear") as HTMLButtonElement).onclick = () => {
+      const client = this.client();
+      const dialog = this.root.querySelector("#kanban-workdir") as HTMLDialogElement;
+      const slug = dialog.dataset.slug || "";
+      if (!client || !slug) return;
+      void client.kanbanSetBoardWorkdir(slug, null).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "workdir update failed");
+          return;
+        }
+        dialog.close();
+        void this.refresh();
+      });
+    };
+    (this.root.querySelector("#kanban-workdir-save") as HTMLButtonElement).onclick = (event) => {
+      event.preventDefault();
+      const client = this.client();
+      const dialog = this.root.querySelector("#kanban-workdir") as HTMLDialogElement;
+      const slug = dialog.dataset.slug || "";
+      const path = (
+        this.root.querySelector("#kanban-workdir-path") as HTMLInputElement
+      ).value.trim();
+      if (!client || !slug || !path) return;
+      void client.kanbanSetBoardWorkdir(slug, path).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "workdir update failed");
+          return;
+        }
+        dialog.close();
         void this.refresh();
       });
     };
@@ -407,6 +465,63 @@ export class KanbanWidget {
     }
   }
 
+  /** P654: open the board-workdir directory browser (hermes boards
+   * set-workdir parity), seeded from the board's current workdir. */
+  private openWorkdirDialog(): void {
+    const select = this.root.querySelector("#kanban-board") as HTMLSelectElement;
+    const slug = select.value;
+    const client = this.client();
+    if (!client || !slug) return;
+    const dialog = this.root.querySelector("#kanban-workdir") as HTMLDialogElement;
+    dialog.dataset.slug = slug;
+    const current = this.boards.find((b) => b.slug === slug)?.default_workdir || "";
+    this.root.querySelector("#kanban-workdir-current")!.textContent = current
+      ? fmt(t.kanban.workdirCurrent, { path: current })
+      : t.kanban.workdirNone;
+    (this.root.querySelector("#kanban-workdir-status")!).textContent = "";
+    void this.renderWorkdirEntries(current || undefined).then(() => {
+      if (!dialog.open) dialog.showModal();
+    });
+  }
+
+  private async renderWorkdirEntries(start?: string): Promise<void> {
+    const client = this.client();
+    const pathInput = this.root.querySelector("#kanban-workdir-path") as HTMLInputElement;
+    const list = this.root.querySelector("#kanban-workdir-entries")!;
+    const status = this.root.querySelector("#kanban-workdir-status")!;
+    list.innerHTML = "";
+    status.textContent = "";
+    if (!client) return;
+    let path = (start || "").trim();
+    if (!path) {
+      try {
+        ({ cwd: path } = await client.fsDefaultCwd());
+      } catch (error) {
+        status.textContent = fmt(t.kanban.workdirFailed, { error });
+        return;
+      }
+    }
+    let entries: FsEntry[];
+    try {
+      ({ entries } = await client.fsList(path));
+    } catch (error) {
+      status.textContent = fmt(t.kanban.workdirFailed, { error });
+      return;
+    }
+    pathInput.value = path;
+    const dirs = entries.filter((entry) => entry.isDirectory);
+    for (const entry of dirs) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "fs-entry dir";
+      button.textContent = "\uD83D\uDCC1 " + entry.name;
+      button.title = entry.path;
+      button.onclick = () => void this.renderWorkdirEntries(entry.path);
+      list.appendChild(button);
+    }
+    if (dirs.length === 0) status.textContent = t.kanban.workdirEmpty;
+  }
+
   private renderBoards(): void {
     const select = this.root.querySelector("#kanban-board") as HTMLSelectElement;
     select.innerHTML = "";
@@ -415,6 +530,9 @@ export class KanbanWidget {
       option.value = board.slug;
       option.textContent = `${board.name} (${board.open_tasks} open)`;
       option.selected = board.current;
+      if (board.default_workdir) {
+        option.title = `${board.slug}: ${board.default_workdir}`;
+      }
       select.appendChild(option);
     }
     const counts = this.root.querySelector("#kanban-counts")!;

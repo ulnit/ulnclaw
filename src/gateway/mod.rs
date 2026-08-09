@@ -22,6 +22,7 @@
 //!     `/:id`, `/:id/folders`, `/:id/primary`, `/:id/archive|restore`),
 //!   - `GET/POST /api/kanban/boards`, `POST /api/kanban/boards/:slug/switch`,
 //!     `POST /api/kanban/boards/:slug/rename`, `DELETE /api/kanban/boards/:slug`,
+//!     `POST /api/kanban/boards/:slug/workdir`,
 //!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|unlink|claim`,
 //!     `POST /api/kanban/tasks/:id/set-reasoning`,
@@ -6712,6 +6713,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/boards", get(kanban::list_boards).post(kanban::create_board))
         .route("/api/kanban/boards/:slug/switch", post(kanban::switch_board))
         .route("/api/kanban/boards/:slug/rename", post(kanban::rename_board))
+        .route("/api/kanban/boards/:slug/workdir", post(kanban::set_board_workdir))
         .route("/api/kanban/boards/:slug", delete(kanban::remove_board))
         .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))
         .route("/api/kanban/dispatch", post(kanban::dispatch))
@@ -15451,6 +15453,81 @@ mod tests {
         // Removing it again 404s.
         let (status, _) = send_json(
             app.clone(), "DELETE", "/api/kanban/boards/temp-board", None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kanban_board_workdir_endpoint() {
+        // P654: POST /api/kanban/boards/:slug/workdir sets or clears
+        // the board default workdir (hermes boards set-workdir),
+        // validating that the path is an existing directory.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/boards", None,
+            json!({"slug": "wd-board"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        // Set to an existing directory -> stored canonicalized.
+        let workdir = dir.path().join("work");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let expected = std::fs::canonicalize(&workdir).unwrap();
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/wd-board/workdir", None,
+            json!({"workdir": workdir.to_str().unwrap()}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["default_workdir"].as_str(),
+            expected.to_str(),
+            "{body}"
+        );
+
+        // Missing directory or a plain file -> 400.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/wd-board/workdir", None,
+            json!({"workdir": dir.path().join("nope").to_str().unwrap()}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let file_path = dir.path().join("file.txt");
+        std::fs::write(&file_path, "x").unwrap();
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/wd-board/workdir", None,
+            json!({"workdir": file_path.to_str().unwrap()}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null / empty workdir clears it.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/wd-board/workdir", None,
+            json!({"workdir": null}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["default_workdir"].is_null(), "{body}");
+
+        // Unknown board -> 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/nope/workdir", None,
+            json!({"workdir": null}),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);

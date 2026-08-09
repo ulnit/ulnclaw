@@ -178,6 +178,65 @@ pub async fn remove_board(Path(slug): Path<String>) -> Response {
     }
 }
 
+#[derive(Deserialize)]
+pub struct SetBoardWorkdirBody {
+    pub workdir: Option<String>,
+}
+
+/// `POST /api/kanban/boards/:slug/workdir` — set or clear a board's
+/// default working directory (hermes `boards set-workdir`). An empty
+/// or absent `workdir` clears it; otherwise the path (a leading `~`
+/// expands to the home directory) must resolve to an existing
+/// directory, stored canonicalized.
+pub async fn set_board_workdir(Path(slug): Path<String>, Json(body): Json<SetBoardWorkdirBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let requested = body
+        .workdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|w| !w.is_empty());
+    let resolved: Option<String> = match requested {
+        None => None,
+        Some(raw) => {
+            let expanded = if raw == "~" {
+                match dirs::home_dir() {
+                    Some(home) => home,
+                    None => std::path::PathBuf::from(raw),
+                }
+            } else if let Some(rest) = raw.strip_prefix("~/") {
+                match dirs::home_dir() {
+                    Some(home) => home.join(rest),
+                    None => std::path::PathBuf::from(raw),
+                }
+            } else {
+                std::path::PathBuf::from(raw)
+            };
+            match std::fs::canonicalize(&expanded) {
+                Ok(path) if path.is_dir() => Some(path.to_string_lossy().into_owned()),
+                _ => {
+                    return super::bad_request(
+                        &format!("kanban: workdir {raw} is not an existing directory"),
+                        None,
+                    )
+                }
+            }
+        }
+    };
+    match store.set_board_workdir(&slug, resolved.as_deref()) {
+        Ok(()) => Json(json!({ "ok": true, "slug": slug, "default_workdir": resolved })).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                return super::not_found(&msg);
+            }
+            super::bad_request(&msg, None)
+        }
+    }
+}
+
 /// `GET /api/kanban/tasks` — tasks on a board (default: current board).
 pub async fn list_tasks(Query(query): Query<ListTasksQuery>) -> Response {
     let store = match store() {

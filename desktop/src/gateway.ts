@@ -241,6 +241,8 @@ export interface KanbanBoard {
   current: boolean;
   open_tasks: number;
   total_tasks: number;
+  /** P654: board default working directory (may be unset). */
+  default_workdir?: string | null;
 }
 
 export interface KanbanDispatchResult {
@@ -3692,6 +3694,30 @@ export class GatewayClient {
         method: "POST",
         body: JSON.stringify({ slug, name: name || null, default_workdir: defaultWorkdir || null }),
       });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P654: set or clear a board default workdir (null/"" clears). */
+  async kanbanSetBoardWorkdir(
+    slug: string,
+    workdir: string | null,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(
+        this.endpoint(`/api/kanban/boards/${encodeURIComponent(slug)}/workdir`),
+        {
+          headers: { ...this.headers(), "content-type": "application/json" },
+          method: "POST",
+          body: JSON.stringify({ workdir: workdir || null }),
+        },
+      );
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
         return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
