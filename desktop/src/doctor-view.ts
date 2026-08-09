@@ -77,6 +77,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="stallWatch.title">Stall watch</h3>
         <div id="stall-watch-rows"></div>
       </section>
+      <section id="doctor-lifecycle" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="lifecyclePanel.title">Lifecycle</h3>
+        <div id="lifecycle-rows"></div>
+      </section>
       <section id="doctor-drain" class="doctor-monitoring" hidden>
         <h3 class="config-section"><span data-i18n="drainPanel.title">Drain control</span>
           <button id="drain-begin" class="ghost mcp-add-btn" data-i18n="drainPanel.begin">Begin drain</button>
@@ -271,6 +275,7 @@ export class DoctorWidget {
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
     this.loadDrain().catch(() => undefined);
+    this.loadLifecycle().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2342,6 +2347,75 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadLifecycle(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-lifecycle") as HTMLElement;
+    const rows = this.root.querySelector("#lifecycle-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.lifecycle();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const label = payload.previous_exit_label;
+      const exitBadge =
+        label === "clean"
+          ? `<span class="models-view-badge ok">${escapeHtmlDoctor(t.lifecyclePanel.clean)}</span>`
+          : label === "unclean"
+            ? `<span class="models-view-badge warn">${escapeHtmlDoctor(t.lifecyclePanel.unclean)}</span>`
+            : escapeHtmlDoctor(t.lifecyclePanel.unknown);
+      addRow(t.lifecyclePanel.previousExit, exitBadge);
+      if (payload.sentinel) {
+        const reason = payload.sentinel.exit_reason ?? "";
+        const code =
+          payload.sentinel.exit_code === null || payload.sentinel.exit_code === undefined
+            ? ""
+            : ` \u00b7 ${payload.sentinel.exit_code}`;
+        if (reason || code) {
+          addRow(
+            t.lifecyclePanel.exitReason,
+            `${escapeHtmlDoctor(reason)}${escapeHtmlDoctor(code)}`,
+          );
+        }
+      }
+      if (payload.heartbeat.present) {
+        const age =
+          payload.heartbeat.age_seconds === null || payload.heartbeat.age_seconds === undefined
+            ? "?"
+            : `${Math.round(payload.heartbeat.age_seconds)}s`;
+        const pid = payload.heartbeat.payload?.pid;
+        addRow(
+          t.lifecyclePanel.heartbeat,
+          `${escapeHtmlDoctor(age)}${pid !== undefined ? ` \u00b7 pid ${pid}` : ""}`,
+        );
+      } else {
+        addRow(t.lifecyclePanel.heartbeat, escapeHtmlDoctor(t.lifecyclePanel.heartbeatMissing));
+      }
+      const artifact = (meta: { present: boolean; bytes?: number }): string =>
+        meta.present
+          ? `${escapeHtmlDoctor(t.lifecyclePanel.present)} \u00b7 ${meta.bytes ?? 0} B`
+          : escapeHtmlDoctor(t.lifecyclePanel.absent);
+      addRow(t.lifecyclePanel.watchdogDump, artifact(payload.shutdown_watchdog_dump));
+      addRow(t.lifecyclePanel.diagnosticLog, artifact(payload.shutdown_diagnostic_log));
       section.hidden = false;
     } catch {
       section.hidden = true;

@@ -105,6 +105,11 @@ fn read_sentinel(home: &Path) -> Option<Value> {
     serde_json::from_str(&raw).ok()
 }
 
+/// Public sentinel snapshot for ops surfaces (P729 `/api/lifecycle`).
+pub fn sentinel_snapshot(home: &Path) -> Option<Value> {
+    read_sentinel(home)
+}
+
 fn write_sentinel(home: &Path, payload: Value) {
     let path = sentinel_path(home);
     if let Some(parent) = path.parent() {

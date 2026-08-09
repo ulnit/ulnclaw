@@ -609,6 +609,26 @@ export interface ChannelsStatusPayload {
 }
 
 /** GET /api/stall-watch payload (P716). */
+/** `GET /api/lifecycle` — P729 lifecycle ledger + shutdown backstops. */
+export interface LifecyclePayload {
+  previous_exit_label: "clean" | "unclean" | "unknown" | string;
+  sentinel: {
+    phase?: string;
+    pid?: number;
+    exit_code?: number | null;
+    exit_reason?: string;
+    exited_at?: string;
+    started_at?: string;
+  } | null;
+  heartbeat: {
+    present: boolean;
+    payload?: { pid?: number; updated_at?: string; start_time?: number; mem?: Record<string, unknown> };
+    age_seconds?: number | null;
+  };
+  shutdown_watchdog_dump: { present: boolean; bytes?: number };
+  shutdown_diagnostic_log: { present: boolean; bytes?: number };
+}
+
 /** `GET /api/drain` — P728 drain-marker contract ops surface. */
 export interface DrainStatusPayload {
   requested: boolean;
@@ -2464,6 +2484,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`dead-targets HTTP ${response.status}`);
     return (await response.json()) as DeadTargetsPayload;
+  }
+
+  /** GET /api/lifecycle — P729 lifecycle ledger + heartbeat + dumps. */
+  async lifecycle(): Promise<LifecyclePayload> {
+    const response = await fetch(this.endpoint("/api/lifecycle"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`lifecycle HTTP ${response.status}`);
+    return (await response.json()) as LifecyclePayload;
   }
 
   /** GET /api/drain — P728 drain-marker status. */

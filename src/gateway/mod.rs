@@ -5552,6 +5552,52 @@ async fn dead_targets_api() -> Json<Value> {
     Json(json!({ "targets": targets, "count": count }))
 }
 
+/// `GET /api/lifecycle` — P729 ops surface over the lifecycle ledger
+/// + shutdown backstops: prior-exit label, sentinel payload, loop
+/// heartbeat freshness (P726), and the shutdown forensics artifacts
+/// (P726/P727 dumps) so the desktop shell can show how the last life
+/// ended and whether the current one is beating.
+async fn lifecycle_api() -> Json<Value> {
+    let home = crate::config::ulnclaw_home();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+
+    let heartbeat_path = crate::shutdown_watchdog::heartbeat_path(Some(&home));
+    let heartbeat = match std::fs::read_to_string(&heartbeat_path) {
+        Ok(raw) => {
+            let payload: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+            let age = payload
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                .map(|parsed| (now - parsed.timestamp() as f64).max(0.0));
+            json!({ "present": true, "payload": payload, "age_seconds": age })
+        }
+        Err(_) => json!({ "present": false }),
+    };
+
+    let artifact = |path: std::path::PathBuf| -> Value {
+        match std::fs::metadata(&path) {
+            Ok(meta) => json!({ "present": true, "bytes": meta.len() }),
+            Err(_) => json!({ "present": false }),
+        }
+    };
+
+    Json(json!({
+        "previous_exit_label": crate::lifecycle_ledger::prior_exit_label(&home),
+        "sentinel": crate::lifecycle_ledger::sentinel_snapshot(&home),
+        "heartbeat": heartbeat,
+        "shutdown_watchdog_dump": artifact(
+            crate::shutdown_watchdog::shutdown_watchdog_dump_path(Some(&home)),
+        ),
+        "shutdown_diagnostic_log": artifact(
+            crate::shutdown_forensics::diagnostic_log_path(Some(&home)),
+        ),
+    }))
+}
+
 /// `GET /api/drain` — P728 ops surface over the P725 drain-marker
 /// contract: marker presence/payload, instantiation epoch, staleness,
 /// and whether the gateway drain flag is currently set.
@@ -7045,6 +7091,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
                 .post(drain_begin_api)
                 .delete(drain_cancel_api),
         )
+        .route("/api/lifecycle", get(lifecycle_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -25560,6 +25607,46 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(body["obligations"].is_array(), "{body}");
         assert!(body["counts"].is_object(), "{body}");
         assert_eq!(body["outstanding"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_lifecycle_endpoint_shape() {
+        // P729: lifecycle ops surface — prior exit label, sentinel,
+        // heartbeat freshness, forensics artifact presence.
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+
+        // Seed a heartbeat so the freshness path has data.
+        crate::shutdown_watchdog::write_loop_heartbeat(Some(temp.path()), None);
+
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/lifecycle", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["previous_exit_label"], "unknown", "{body}");
+        assert!(body["sentinel"].is_null(), "{body}");
+        assert_eq!(body["heartbeat"]["present"], true, "{body}");
+        assert!(
+            body["heartbeat"]["age_seconds"].as_f64().unwrap() < 30.0,
+            "{body}"
+        );
+        assert_eq!(body["heartbeat"]["payload"]["pid"], std::process::id(), "{body}");
+        assert_eq!(body["shutdown_watchdog_dump"]["present"], false, "{body}");
+        assert_eq!(body["shutdown_diagnostic_log"]["present"], false, "{body}");
+
+        // After a recorded exit the sentinel surfaces.
+        crate::lifecycle_ledger::record_startup(temp.path());
+        crate::lifecycle_ledger::mark_exited(temp.path(), Some(75), "restart_drain");
+        let app = router(test_state());
+        let (_, body) = get_json(app, "/api/lifecycle", Some("sekret")).await;
+        assert_eq!(body["previous_exit_label"], "clean", "{body}");
+        assert_eq!(body["sentinel"]["exit_reason"], "restart_drain", "{body}");
+
+        match prev {
+            Some(home) => std::env::set_var("ULNCLAW_HOME", home),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]
