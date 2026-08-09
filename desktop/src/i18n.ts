@@ -109,6 +109,7 @@ export interface Translations {
     filterPlaceholder: string; filterNoMatch: string;
     reasoningLabel: string; reasoningInherit: string;
     modelLabel: string; modelInherit: string; providerOptional: string; applyAction: string;
+    eventsTitle: string;
   };
   projects: {
     addFolder: string; archive: string; restore: string; bindBoard: string;
@@ -499,6 +500,7 @@ const en: Translations = {
     filterPlaceholder: "Filter tasks…", filterNoMatch: "No tasks match the filter.",
     reasoningLabel: "Reasoning effort", reasoningInherit: "inherit profile",
     modelLabel: "Model", modelInherit: "inherit profile", providerOptional: "provider (optional)", applyAction: "Apply",
+    eventsTitle: "Activity",
   },
   projects: {
     addFolder: "Add folder", archive: "Archive", restore: "Restore",
@@ -1046,6 +1048,7 @@ const zh: Translations = {
     filterPlaceholder: "筛选任务…", filterNoMatch: "没有匹配筛选条件的任务。",
     reasoningLabel: "推理强度", reasoningInherit: "跟随配置",
     modelLabel: "模型", modelInherit: "跟随配置", providerOptional: "provider（可选）", applyAction: "应用",
+    eventsTitle: "活动记录",
   },
   projects: {
     addFolder: "添加文件夹", archive: "归档", restore: "恢复",
@@ -1593,6 +1596,7 @@ const zhHant: Translations = {
     filterPlaceholder: "篩選任務…", filterNoMatch: "沒有匹配篩選條件的任務。",
     reasoningLabel: "推理強度", reasoningInherit: "跟隨設定檔",
     modelLabel: "模型", modelInherit: "跟隨設定檔", providerOptional: "provider（選填）", applyAction: "套用",
+    eventsTitle: "活動記錄",
   },
   projects: {
     addFolder: "新增資料夾", archive: "封存", restore: "還原",
@@ -2140,6 +2144,7 @@ const ja: Translations = {
     filterPlaceholder: "タスクを絞り込み…", filterNoMatch: "条件に一致するタスクがありません。",
     reasoningLabel: "推論の深さ", reasoningInherit: "プロファイルに従う",
     modelLabel: "モデル", modelInherit: "プロファイルに従う", providerOptional: "プロバイダー（任意）", applyAction: "適用",
+    eventsTitle: "アクティビティ",
   },
   projects: {
     addFolder: "フォルダを追加", archive: "アーカイブ", restore: "復元",
@@ -2687,6 +2692,7 @@ const ar: Translations = {
     filterPlaceholder: "تصفية المهام…", filterNoMatch: "لا توجد مهام تطابق التصفية.",
     reasoningLabel: "جهد الاستدلال", reasoningInherit: "وراثة الملف الشخصي",
     modelLabel: "النموذج", modelInherit: "وراثة الملف الشخصي", providerOptional: "المزود (اختياري)", applyAction: "تطبيق",
+    eventsTitle: "النشاط",
   },
   projects: {
     addFolder: "إضافة مجلد", archive: "أرشفة", restore: "استعادة",

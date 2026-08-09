@@ -66,6 +66,7 @@ export class KanbanWidget {
           </div>
           <pre id="kanban-detail-body" class="kanban-detail-body"></pre>
           <div id="kanban-detail-attachments" class="kanban-detail-attachments"></div>
+          <div id="kanban-detail-events" class="kanban-events"></div>
           <div id="kanban-detail-comments" class="kanban-comments"></div>
           <div class="kanban-detail-compose">
             <input id="kanban-comment-input" type="text" placeholder="Add a comment…" data-i18n-ph="kanban.addComment" />
@@ -451,6 +452,35 @@ export class KanbanWidget {
           .join("");
     } else {
       attachEl.innerHTML = "";
+    }
+
+    // P638: task activity trail (hermes event log) — kind + compact
+    // payload per event, newest last like the CLI `kanban log`.
+    const eventsEl = this.root.querySelector("#kanban-detail-events") as HTMLElement;
+    eventsEl.innerHTML = "";
+    if (detail.events.length > 0) {
+      const heading = document.createElement("h3");
+      heading.className = "config-section";
+      heading.textContent = t.kanban.eventsTitle;
+      eventsEl.appendChild(heading);
+      for (const event of detail.events) {
+        const row = document.createElement("div");
+        row.className = "kanban-event";
+        const when = new Date(event.created_at * 1000).toLocaleString();
+        const payloadEntries = Object.entries(event.payload || {});
+        const payloadText = payloadEntries
+          .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+          .join(" ");
+        const head = document.createElement("span");
+        head.className = "kanban-event-head";
+        head.textContent = payloadText ? `${event.kind} — ${payloadText}` : event.kind;
+        const stamp = document.createElement("span");
+        stamp.className = "kanban-event-when";
+        stamp.textContent = when;
+        row.appendChild(head);
+        row.appendChild(stamp);
+        eventsEl.appendChild(row);
+      }
     }
 
     const comments = this.root.querySelector("#kanban-detail-comments")!;

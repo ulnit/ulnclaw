@@ -278,10 +278,17 @@ export interface KanbanComment {
   created_at: number;
 }
 
+export interface KanbanTaskEvent {
+  kind: string;
+  payload: Record<string, unknown>;
+  created_at: number;
+}
+
 export interface KanbanDetail {
   task: KanbanTask;
   comments: KanbanComment[];
   attachments: { kind: string; value: string }[];
+  events: KanbanTaskEvent[];
 }
 
 export interface ProjectFolder {
