@@ -96,6 +96,14 @@ export class DoctorWidget {
       <section id="doctor-display" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="displayPanel.title">Display settings</h3>
         <div id="display-rows"></div>
+        <div id="display-editor" class="monitoring-row" hidden>
+          <select id="display-edit-platform" class="ghost"></select>
+          <select id="display-edit-key" class="ghost"></select>
+          <input id="display-edit-value" class="ghost" />
+          <button id="display-edit-apply" class="ghost mcp-add-btn" data-i18n="displayPanel.apply">Apply</button>
+          <button id="display-edit-clear" class="ghost mcp-add-btn" data-i18n="displayPanel.clear">Clear</button>
+          <span id="display-edit-status" class="monitoring-value"></span>
+        </div>
       </section>
       <section id="doctor-lifecycle" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="lifecyclePanel.title">Lifecycle</h3>
@@ -2626,6 +2634,52 @@ export class DoctorWidget {
           : "";
         addRow(platform.platform, `${custom}${escapeHtmlDoctor(summary)}`);
       }
+      // P738: override editor — pick platform + key, type a value,
+      // Apply persists through PUT /api/display, Clear removes the
+      // override. The panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#display-editor") as HTMLElement;
+      const platformSel = this.root.querySelector("#display-edit-platform") as HTMLSelectElement;
+      const keySel = this.root.querySelector("#display-edit-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#display-edit-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#display-edit-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#display-edit-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#display-edit-status") as HTMLElement;
+      if (!platformSel.dataset.wired) {
+        const platforms = [t.displayPanel.global, ...payload.platforms.map((p) => p.platform)];
+        platformSel.innerHTML = "";
+        for (const name of platforms) {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          platformSel.appendChild(option);
+        }
+        keySel.innerHTML = "";
+        for (const key of payload.overrideable_keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | number | boolean | null): Promise<void> => {
+          const platform = platformSel.value === t.displayPanel.global ? null : platformSel.value;
+          statusEl.textContent = "";
+          try {
+            await client.updateDisplay(platform, keySel.value, value);
+            await this.loadDisplay();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number | boolean =
+            raw === "true" ? true : raw === "false" ? false : /^-?\d+$/.test(raw) ? Number(raw) : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        platformSel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

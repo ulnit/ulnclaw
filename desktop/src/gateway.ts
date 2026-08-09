@@ -2595,6 +2595,24 @@ export class GatewayClient {
     return (await response.json()) as TerminalInfoPayload;
   }
 
+  /** PUT /api/display — P738 persist a display override (null removes). */
+  async updateDisplay(
+    platform: string | null,
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/display"), {
+      method: "PUT",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ platform, key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `display PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; removed: boolean };
+  }
+
   /** GET /api/display — P730 resolved per-platform display settings. */
   async displaySettings(): Promise<DisplaySettingsPayload> {
     const response = await fetch(this.endpoint("/api/display"), {

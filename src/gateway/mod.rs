@@ -5628,6 +5628,96 @@ async fn hooks_info_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> 
     Json(json!({ "hooks": hooks, "count": count }))
 }
 
+/// `PUT /api/display` — P738: persist display overrides from the
+/// shell (hermes display_config edits). Body:
+/// `{"platform": "telegram"|null, "key": "tool_progress",
+///    "value": "verbose"|true|123|null}` — a null value removes the
+/// override. Global overrides land under `[display]`, per-platform
+/// ones under `[display.platforms.<platform>]`. Keys are validated
+/// against the twelve overridable display settings.
+async fn update_display_api(
+    State(_state): State<Arc<GatewayState>>,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    let valid_keys: Vec<&str> = crate::display_config::DisplaySetting::all()
+        .iter()
+        .map(|setting| setting.key())
+        .collect();
+    if !valid_keys.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown display key '{key}'"), "valid_keys": valid_keys })),
+        );
+    }
+    let platform = body
+        .get("platform")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    if let Some(name) = platform {
+        if name.contains('.') {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "platform name must not contain '.'" })),
+            );
+        }
+    }
+    let dotted = match platform {
+        Some(name) => format!("display.platforms.{name}.{key}"),
+        None => format!("display.{key}"),
+    };
+    let value = body.get("value");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                // Unsetting a key that is not set is not an error for
+                // the shell — the override simply stays absent.
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => {
+            let raw = match v {
+                Value::Bool(b) => b.to_string(),
+                Value::Number(n) => n.to_string(),
+                Value::String(t) => t.clone(),
+                other => other.to_string(),
+            };
+            crate::config_cmd::set_config_value(&dotted, &raw, true).map(|_| ())
+        }
+    };
+    match result {
+        Ok(()) => {
+            let removed = matches!(value, None | Some(Value::Null));
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "platform": platform,
+                    "key": key,
+                    "removed": removed,
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/status-phrases` — P731 ops surface over the P722
 /// status-phrase catalogs: the resolved global catalog (built-ins +
 /// conventional profile files + `[display.status_phrases]`), which
@@ -7314,7 +7404,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
                 .delete(drain_cancel_api),
         )
         .route("/api/lifecycle", get(lifecycle_api))
-        .route("/api/display", get(display_settings_api))
+        .route("/api/display", get(display_settings_api).put(update_display_api))
         .route("/api/status-phrases", get(status_phrases_api))
         .route("/api/terminal", get(terminal_info_api))
         .route("/api/cgroup", get(cgroup_info_api))
@@ -25929,6 +26019,87 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
     }
 
     #[tokio::test]
+    async fn test_display_put_persists_and_removes_overrides() {
+        // P738: the display editor surface persists per-platform and
+        // global overrides into the config file and removes them with
+        // a null value.
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("config.toml"), "").unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+
+        let app = router(test_state());
+        // Auth gate.
+        let (status, _) = put_json(
+            app.clone(),
+            "/api/display",
+            r#"{"key": "tool_progress", "value": "verbose"}"#,
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        // Global override.
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/display",
+            r#"{"key": "tool_progress", "value": "verbose"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        // Per-platform override.
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/display",
+            r#"{"platform": "telegram", "key": "tool_preview_length", "value": 400}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let written = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(written.contains("tool_progress"), "{written}");
+        assert!(written.contains("telegram"), "{written}");
+        assert!(written.contains("400"), "{written}");
+        // The GET surface now sees the override.
+        let (_, body) = get_json(app.clone(), "/api/display", Some("sekret")).await;
+        let tg = body["platforms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["platform"] == "telegram")
+            .cloned()
+            .expect("telegram row");
+        assert_eq!(tg["has_overrides"], true, "{tg}");
+        // Unknown key is rejected.
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/display",
+            r#"{"key": "nope", "value": 1}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        // Removal via null value.
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/display",
+            r#"{"platform": "telegram", "key": "tool_preview_length", "value": null}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let written = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(!written.contains("tool_preview_length"), "{written}");
+
+        match prev_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_hooks_endpoint_shape() {
         // P736: hooks surface is auth-gated and lists loaded hooks
         // (empty unless <home>/hooks carries discovered hooks).
@@ -26392,6 +26563,20 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let request = axum::http::Request::builder()
             .uri(uri)
             .method("POST")
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    async fn put_json(app: Router, uri: &str, body: &str, token: &str) -> (StatusCode, Value) {
+        let request = axum::http::Request::builder()
+            .uri(uri)
+            .method("PUT")
             .header("authorization", format!("Bearer {}", token))
             .header("content-type", "application/json")
             .body(axum::body::Body::from(body.to_string()))

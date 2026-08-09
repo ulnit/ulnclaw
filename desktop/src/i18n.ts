@@ -343,7 +343,7 @@ export interface Translations {
   stallWatch: { title: string; timeout: string; disabled: string; pending: string; empty: string; stalled: string; };
   drainPanel: { title: string; begin: string; cancel: string; drainRequested: string; draining: string; principal: string; requestedAt: string; suppress: string; epoch: string; stale: string; };
   lifecyclePanel: { title: string; previousExit: string; clean: string; unclean: string; unknown: string; exitReason: string; heartbeat: string; heartbeatMissing: string; watchdogDump: string; diagnosticLog: string; present: string; absent: string; };
-  displayPanel: { title: string; noneEnabled: string; progress: string; preview: string; heartbeats: string; busyDetail: string; live: string; custom: string; };
+  displayPanel: { title: string; noneEnabled: string; progress: string; preview: string; heartbeats: string; busyDetail: string; live: string; custom: string; global: string; apply: string; clear: string; };
   phrasesPanel: { title: string; catalog: string; statusWord: string; genericWord: string; sample: string; conventional: string; configSection: string; };
   hooksPanel: { title: string; count: string; };
   cgroupPanel: { title: string; supported: string; path: string; pidCount: string; ownPid: string; reapOnExit: string; };
@@ -851,7 +851,7 @@ const en: Translations = {
   stallWatch: { title: "Stall watch", timeout: "Stall timeout", disabled: "watcher disabled", pending: "Parked inbound", empty: "(none — no parked messages)", stalled: "STALLED" },
   drainPanel: { title: "Drain control", begin: "Begin drain", cancel: "Cancel drain", drainRequested: "Drain requested", draining: "Drain flag", principal: "Principal", requestedAt: "Requested at", suppress: "Suppress shutdown notice", epoch: "Epoch", stale: "STALE (prior instantiation)" },
   lifecyclePanel: { title: "Lifecycle", previousExit: "Previous exit", clean: "clean", unclean: "UNCLEAN", unknown: "unknown", exitReason: "Exit reason", heartbeat: "Loop heartbeat", heartbeatMissing: "(no heartbeat yet)", watchdogDump: "Shutdown watchdog dump", diagnosticLog: "Shutdown diagnostic log", present: "present", absent: "absent" },
-  displayPanel: { title: "Display settings", noneEnabled: "(no channels enabled — showing tier defaults)", progress: "progress", preview: "preview", heartbeats: "heartbeats", busyDetail: "busy-detail", live: "live", custom: "custom" },
+  displayPanel: { title: "Display settings", global: "Global", apply: "Apply", clear: "Clear", noneEnabled: "(no channels enabled — showing tier defaults)", progress: "progress", preview: "preview", heartbeats: "heartbeats", busyDetail: "busy-detail", live: "live", custom: "custom" },
   phrasesPanel: { title: "Status phrases", catalog: "Resolved catalog", statusWord: "status", genericWord: "generic", sample: "Sample", conventional: "Profile phrase files", configSection: "Config section" },
   hooksPanel: { title: "Event hooks", count: "Loaded hooks" },
   cgroupPanel: { title: "Cgroup reaper", supported: "Supported", path: "Cgroup path", pidCount: "PIDs in cgroup", ownPid: "incl. gateway", reapOnExit: "Reap orphans on exit" },
@@ -1436,7 +1436,7 @@ const zh: Translations = {
   stallWatch: { title: "停顿监视", timeout: "停顿超时", disabled: "看门狗已禁用", pending: "排队入站", empty: "（无——没有排队的消息）", stalled: "已停顿" },
   drainPanel: { title: "排空控制", begin: "开始排空", cancel: "取消排空", drainRequested: "排空请求", draining: "排空标志", principal: "发起者", requestedAt: "请求时间", suppress: "静默关机通知", epoch: "实例纪元", stale: "陈旧（来自上一实例）" },
   lifecyclePanel: { title: "生命周期", previousExit: "上次退出", clean: "干净", unclean: "非正常", unknown: "未知", exitReason: "退出原因", heartbeat: "环心跳", heartbeatMissing: "（尚无心跳）", watchdogDump: "关机看门狗转储", diagnosticLog: "关机诊断日志", present: "存在", absent: "不存在" },
-  displayPanel: { title: "显示设置", noneEnabled: "（未启用任何频道——展示层级默认值）", progress: "进度", preview: "预览", heartbeats: "心跳", busyDetail: "忙碌细节", live: "实时", custom: "自定义" },
+  displayPanel: { title: "显示设置", global: "全局", apply: "应用", clear: "清除", noneEnabled: "（未启用任何频道——展示层级默认值）", progress: "进度", preview: "预览", heartbeats: "心跳", busyDetail: "忙碌细节", live: "实时", custom: "自定义" },
   phrasesPanel: { title: "状态短语", catalog: "解析后目录", statusWord: "条状态", genericWord: "条通用", sample: "样例", conventional: "profile 短语文件", configSection: "配置小节" },
   hooksPanel: { title: "事件钩子", count: "已加载钩子" },
   cgroupPanel: { title: "Cgroup 回收器", supported: "支持", path: "Cgroup 路径", pidCount: "cgroup 内进程数", ownPid: "含网关自身", reapOnExit: "退出时回收孤儿进程" },
@@ -2021,7 +2021,7 @@ const zhHant: Translations = {
   stallWatch: { title: "停頓監視", timeout: "停頓逾時", disabled: "看門狗已停用", pending: "排隊入站", empty: "（無——沒有排隊的訊息）", stalled: "已停頓" },
   drainPanel: { title: "排空控制", begin: "開始排空", cancel: "取消排空", drainRequested: "排空請求", draining: "排空標誌", principal: "發起者", requestedAt: "請求時間", suppress: "靜默關機通知", epoch: "實例紀元", stale: "陳舊（來自上一實例）" },
   lifecyclePanel: { title: "生命週期", previousExit: "上次退出", clean: "乾淨", unclean: "非正常", unknown: "未知", exitReason: "退出原因", heartbeat: "環心跳", heartbeatMissing: "（尚無心跳）", watchdogDump: "關機看門狗轉儲", diagnosticLog: "關機診斷日誌", present: "存在", absent: "不存在" },
-  displayPanel: { title: "顯示設定", noneEnabled: "（未啟用任何頻道——展示層級預設值）", progress: "進度", preview: "預覽", heartbeats: "心跳", busyDetail: "忙碌細節", live: "即時", custom: "自訂" },
+  displayPanel: { title: "顯示設定", global: "全域", apply: "套用", clear: "清除", noneEnabled: "（未啟用任何頻道——展示層級預設值）", progress: "進度", preview: "預覽", heartbeats: "心跳", busyDetail: "忙碌細節", live: "即時", custom: "自訂" },
   phrasesPanel: { title: "狀態短語", catalog: "解析後目錄", statusWord: "條狀態", genericWord: "條通用", sample: "範例", conventional: "profile 短語檔案", configSection: "配置小節" },
   hooksPanel: { title: "事件掛鉤", count: "已載入掛鉤" },
   cgroupPanel: { title: "Cgroup 回收器", supported: "支援", path: "Cgroup 路徑", pidCount: "cgroup 內程序數", ownPid: "含閘道自身", reapOnExit: "結束時回收孤兒程序" },
@@ -2606,7 +2606,7 @@ const ja: Translations = {
   stallWatch: { title: "ストール監視", timeout: "ストールタイムアウト", disabled: "ウォッチドッグ無効", pending: "滞留受信", empty: "（なし——滞留メッセージなし）", stalled: "ストール" },
   drainPanel: { title: "ドレイン制御", begin: "ドレイン開始", cancel: "ドレイン取消", drainRequested: "ドレイン要求", draining: "ドレインフラグ", principal: "実行者", requestedAt: "要求時刻", suppress: "シャットダウン通知を抑制", epoch: "インスタンスエポック", stale: "失効（前回のインスタンス）" },
   lifecyclePanel: { title: "ライフサイクル", previousExit: "前回の終了", clean: "正常", unclean: "異常", unknown: "不明", exitReason: "終了理由", heartbeat: "ループハートビート", heartbeatMissing: "（まだハートビートなし）", watchdogDump: "シャットダウンウォッチドッグダンプ", diagnosticLog: "シャットダウン診断ログ", present: "あり", absent: "なし" },
-  displayPanel: { title: "表示設定", noneEnabled: "（チャネル未启用——階層デフォルトを表示）", progress: "進捗", preview: "プレビュー", heartbeats: "ハートビート", busyDetail: "詳細", live: "ライブ", custom: "カスタム" },
+  displayPanel: { title: "表示設定", global: "グローバル", apply: "適用", clear: "クリア", noneEnabled: "（チャネル未启用——階層デフォルトを表示）", progress: "進捗", preview: "プレビュー", heartbeats: "ハートビート", busyDetail: "詳細", live: "ライブ", custom: "カスタム" },
   phrasesPanel: { title: "ステータスフレーズ", catalog: "解決済みカタログ", statusWord: "ステータス", genericWord: "汎用", sample: "サンプル", conventional: "プロファイルフレーズファイル", configSection: "設定セクション" },
   hooksPanel: { title: "イベントフック", count: "読み込み済みフック" },
   cgroupPanel: { title: "Cgroup リーパー", supported: "対応", path: "Cgroup パス", pidCount: "cgroup 内 PID 数", ownPid: "ゲートウェイ含む", reapOnExit: "終了時に孤立プロセスを回収" },
@@ -3191,7 +3191,7 @@ const ar: Translations = {
   stallWatch: { title: "مراقبة التوقف", timeout: "مهلة التوقف", disabled: "المراقب معطل", pending: "رسائل منتظرة", empty: "(لا شيء — لا رسائل منتظرة)", stalled: "متوقف" },
   drainPanel: { title: "التحكم في التفريغ", begin: "بدء التفريغ", cancel: "إلغاء التفريغ", drainRequested: "طلب التفريغ", draining: "علامة التفريغ", principal: "مصدر الطلب", requestedAt: "وقت الطلب", suppress: "كتم إشعار الإيقاف", epoch: "حقبة التشغيل", stale: "قديم (من تشغيل سابق)" },
   lifecyclePanel: { title: "دورة الحياة", previousExit: "الخروج السابق", clean: "نظيف", unclean: "غير نظيف", unknown: "غير معروف", exitReason: "سبب الخروج", heartbeat: "نبض الحلقة", heartbeatMissing: "(لا نبض بعد)", watchdogDump: "سجل مراقب الإيقاف", diagnosticLog: "سجل تشخيص الإيقاف", present: "موجود", absent: "غير موجود" },
-  displayPanel: { title: "إعدادات العرض", noneEnabled: "(لا قنوات مفعلة — عرض الافتراضيات)", progress: "التقدم", preview: "المعاينة", heartbeats: "النبض", busyDetail: "تفاصيل الانشغال", live: "مباشر", custom: "مخصص" },
+  displayPanel: { title: "إعدادات العرض", global: "عام", apply: "تطبيق", clear: "مسح", noneEnabled: "(لا قنوات مفعلة — عرض الافتراضيات)", progress: "التقدم", preview: "المعاينة", heartbeats: "النبض", busyDetail: "تفاصيل الانشغال", live: "مباشر", custom: "مخصص" },
   phrasesPanel: { title: "عبارات الحالة", catalog: "الفهرس المحلول", statusWord: "حالة", genericWord: "عامة", sample: "عينة", conventional: "ملفات العبارات", configSection: "قسم الإعداد" },
   hooksPanel: { title: "خطافات الأحداث", count: "الخطافات المحملة" },
   cgroupPanel: { title: "منظف cgroup", supported: "مدعوم", path: "مسار cgroup", pidCount: "عدد العمليات في cgroup", ownPid: "بما فيها البوابة", reapOnExit: "تنظيف العمليات اليتيمة عند الخروج" },
