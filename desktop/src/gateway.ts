@@ -628,6 +628,12 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/logging-settings` — P754 gateway logging knobs. */
+export interface LoggingSettingsPayload {
+  memory_monitor: boolean;
+  memory_monitor_interval_secs: number;
+}
+
 /** `GET /api/tool-output-settings` — P753 tool-output truncation limits. */
 export interface ToolOutputSettingsPayload {
   max_bytes: number;
@@ -4072,6 +4078,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/logging-settings — P754 gateway logging knobs. */
+  async loggingSettings(): Promise<LoggingSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/logging-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`logging-settings HTTP ${response.status}`);
+    return (await response.json()) as LoggingSettingsPayload;
+  }
+
+  /** P754: PUT /api/logging-settings — persist a logging knob; null
+   * removes the override. */
+  async updateLoggingSetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/logging-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `logging-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/tool-output-settings — P753 truncation limits. */

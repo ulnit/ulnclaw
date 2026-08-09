@@ -6022,6 +6022,88 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/logging-settings` — P754: gateway logging knobs for the
+/// shell: the periodic `[MEMORY] rss=...` monitor switch and its
+/// cadence.
+async fn logging_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let logging =
+        crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+            .map(|c| c.logging)
+            .unwrap_or_default();
+    Json(json!({
+        "memory_monitor": logging.memory_monitor,
+        "memory_monitor_interval_secs": logging.memory_monitor_interval_secs,
+    }))
+}
+
+/// `PUT /api/logging-settings` — P754: persist gateway logging knobs
+/// from the shell. Body: `{"key": "memory_monitor"|
+/// "memory_monitor_interval_secs", "value": ...|null}` — null removes
+/// the key (falls back to the default). The interval must be a
+/// positive number of seconds. Applies after gateway restart.
+async fn update_logging_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["memory_monitor", "memory_monitor_interval_secs"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown logging key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    if let Some(v) = value {
+        if !v.is_null() {
+            let ok = if key == "memory_monitor" {
+                v.is_boolean()
+            } else {
+                v.as_u64().map(|n| n >= 1).unwrap_or(false)
+            };
+            if !ok {
+                let expected = if key == "memory_monitor" { "a boolean" } else { "a positive integer" };
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("logging key '{key}' must be {expected}") })),
+                );
+            }
+        }
+    }
+    let dotted = format!("logging.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => crate::config_cmd::set_config_value(&dotted, &v.to_string(), true).map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/tool-output-settings` — P753: tool-output truncation
 /// limits for the shell: terminal stdout/stderr byte cap, file-read
 /// line cap and per-line length cap (resolved values — zeros are
@@ -8512,6 +8594,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/checkpoints/settings", get(checkpoint_settings_api).put(update_checkpoint_settings_api))
         .route("/api/security-settings", get(security_settings_api).put(update_security_settings_api))
         .route("/api/tool-output-settings", get(tool_output_settings_api).put(update_tool_output_settings_api))
+        .route("/api/logging-settings", get(logging_settings_api).put(update_logging_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -19466,6 +19549,72 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/tool-output-settings", Some("sekret")).await;
         assert_eq!(body["max_bytes"], 100_000, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_logging_settings_editor() {
+        // P754: GET /api/logging-settings surfaces the memory-monitor
+        // knobs; PUT persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: monitor on, 300s cadence.
+        let (status, body) = get_json(app.clone(), "/api/logging-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["memory_monitor"], true, "{body}");
+        assert_eq!(body["memory_monitor_interval_secs"], 300, "{body}");
+
+        // Persist both knobs.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/logging-settings", Some("sekret"),
+            json!({ "key": "memory_monitor", "value": false }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/logging-settings", Some("sekret"),
+            json!({ "key": "memory_monitor_interval_secs", "value": 60 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/logging-settings", Some("sekret")).await;
+        assert_eq!(body["memory_monitor"], false, "{body}");
+        assert_eq!(body["memory_monitor_interval_secs"], 60, "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/logging-settings", Some("sekret"),
+            json!({ "key": "memory_monitor", "value": "on" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/logging-settings", Some("sekret"),
+            json!({ "key": "memory_monitor_interval_secs", "value": 0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/logging-settings", Some("sekret"),
+            json!({ "key": "memory_monitor", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/logging-settings", Some("sekret")).await;
+        assert_eq!(body["memory_monitor"], true, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
