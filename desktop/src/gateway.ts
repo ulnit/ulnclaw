@@ -628,6 +628,13 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/delegation-settings` — P748 sub-agent delegation limits. */
+export interface DelegationSettingsPayload {
+  max_concurrent_children: number;
+  child_max_iterations: number;
+  max_depth: number;
+}
+
 /** `GET /api/web-settings` — P747 web-tool backend selection. */
 export interface WebSettingsPayload {
   search_backend: string | null;
@@ -4011,6 +4018,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/delegation-settings — P748 delegation limits. */
+  async delegationSettings(): Promise<DelegationSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/delegation-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`delegation-settings HTTP ${response.status}`);
+    return (await response.json()) as DelegationSettingsPayload;
+  }
+
+  /** P748: PUT /api/delegation-settings — persist a delegation limit;
+   * null removes the override. */
+  async updateDelegationSetting(
+    key: string,
+    value: number | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/delegation-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `delegation-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/web-settings — P747 web-tool backend selection. */

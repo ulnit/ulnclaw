@@ -110,6 +110,17 @@ export class DoctorWidget {
           <span id="web-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-delegation-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="delegationPanel.title">Delegation</h3>
+        <div id="delegation-settings-rows"></div>
+        <div id="delegation-settings-editor" class="monitoring-row" hidden>
+          <select id="delegation-settings-key" class="ghost"></select>
+          <input id="delegation-settings-value" class="ghost" />
+          <button id="delegation-settings-apply" class="ghost mcp-add-btn" data-i18n="delegationPanel.apply">Apply</button>
+          <button id="delegation-settings-clear" class="ghost mcp-add-btn" data-i18n="delegationPanel.clear">Clear</button>
+          <span id="delegation-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -362,6 +373,7 @@ export class DoctorWidget {
     this.loadGatewaySettings().catch(() => undefined);
     this.loadAgentSettings().catch(() => undefined);
     this.loadWebSettings().catch(() => undefined);
+    this.loadDelegationSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2445,6 +2457,77 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadDelegationSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-delegation-settings") as HTMLElement;
+    const rows = this.root.querySelector("#delegation-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.delegationSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      addRow(t.delegationPanel.children, String(payload.max_concurrent_children));
+      addRow(t.delegationPanel.childIterations, String(payload.child_max_iterations));
+      addRow(t.delegationPanel.maxDepth, String(payload.max_depth));
+      // P748: delegation limits editor — pick a key, type the value,
+      // Apply persists through PUT /api/delegation-settings, Clear
+      // removes the override; the panel re-renders from disk state.
+      const editor = this.root.querySelector("#delegation-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#delegation-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#delegation-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#delegation-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#delegation-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#delegation-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["max_concurrent_children", "child_max_iterations", "max_depth"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: number | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateDelegationSetting(keySel.value, value);
+            await this.loadDelegationSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+            statusEl.textContent = t.delegationPanel.invalidNumber;
+            return;
+          }
+          void applyEdit(Number(raw));
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

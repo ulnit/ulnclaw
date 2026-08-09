@@ -5956,6 +5956,85 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/delegation-settings` — P748: sub-agent delegation limits
+/// for the shell: concurrent children, child iteration budget and the
+/// maximum nesting depth.
+async fn delegation_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let delegation =
+        crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+            .map(|c| c.delegation)
+            .unwrap_or_default();
+    Json(json!({
+        "max_concurrent_children": delegation.max_concurrent_children,
+        "child_max_iterations": delegation.child_max_iterations,
+        "max_depth": delegation.max_depth,
+    }))
+}
+
+/// `PUT /api/delegation-settings` — P748: persist delegation limits
+/// from the shell. Body: `{"key": "max_concurrent_children"|
+/// "child_max_iterations"|"max_depth", "value": ...|null}` — null
+/// removes the key (falls back to the default). Values must be
+/// positive integers. Applies to new runs.
+async fn update_delegation_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "max_concurrent_children",
+        "child_max_iterations",
+        "max_depth",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown delegation key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    if let Some(v) = value {
+        if !v.is_null() && !v.as_u64().map(|n| n >= 1).unwrap_or(false) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("delegation key '{key}' must be a positive integer") })),
+            );
+        }
+    }
+    let dotted = format!("delegation.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => crate::config_cmd::set_config_value(&dotted, &v.to_string(), true).map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/web-settings` — P747: web-tool backend selection for the
 /// shell: the configured search/extract backends (null = unset), the
 /// allowed search values, and which provider credentials are present in
@@ -7971,6 +8050,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/gateway-settings", get(gateway_settings_api).put(update_gateway_settings_api))
         .route("/api/agent-settings", get(agent_settings_api).put(update_agent_settings_api))
         .route("/api/web-settings", get(web_settings_api).put(update_web_settings_api))
+        .route("/api/delegation-settings", get(delegation_settings_api).put(update_delegation_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -18475,6 +18555,76 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/web-settings", Some("sekret")).await;
         assert_eq!(body["search_backend"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delegation_settings_editor() {
+        // P748: GET /api/delegation-settings surfaces delegation
+        // limits; PUT persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: 3 children, 30 iterations each, depth 1.
+        let (status, body) = get_json(app.clone(), "/api/delegation-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["max_concurrent_children"], 3, "{body}");
+        assert_eq!(body["child_max_iterations"], 30, "{body}");
+        assert_eq!(body["max_depth"], 1, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("max_concurrent_children", json!(5)),
+            ("child_max_iterations", json!(60)),
+            ("max_depth", json!(2)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/delegation-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/delegation-settings", Some("sekret")).await;
+        assert_eq!(body["max_concurrent_children"], 5, "{body}");
+        assert_eq!(body["child_max_iterations"], 60, "{body}");
+        assert_eq!(body["max_depth"], 2, "{body}");
+
+        // Validation: zero, wrong types, unknown keys.
+        for payload in [
+            json!({ "key": "max_depth", "value": 0 }),
+            json!({ "key": "child_max_iterations", "value": "many" }),
+            json!({ "key": "yolo", "value": 1 }),
+        ] {
+            let (status, _) = send_json(
+                app.clone(), "PUT", "/api/delegation-settings", Some("sekret"), payload,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/delegation-settings", Some("sekret"),
+            json!({ "key": "max_concurrent_children", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/delegation-settings", Some("sekret")).await;
+        assert_eq!(body["max_concurrent_children"], 3, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
