@@ -237,6 +237,7 @@ pub mod yuanbao_proto;
 pub mod yuanbao_sticker;
 pub mod wecom;
 pub mod whatsapp;
+pub mod whatsapp_identity;
 pub mod whatsapp_bridge;
 pub mod weixin;
 pub mod video_gen_backends;

@@ -279,11 +279,7 @@ pub async fn run(
         resolved.bridge_url = format!("http://127.0.0.1:{}", resolved.bridge_port);
     }
     let home = crate::config::ulnclaw_home();
-    let session_path = if resolved.session_path.is_empty() {
-        home.join("platforms").join("whatsapp").join("session")
-    } else {
-        std::path::PathBuf::from(&resolved.session_path)
-    };
+    let session_path = session_dir_for(&resolved);
     let spawn_enabled = resolved.auto_spawn
         && crate::whatsapp_bridge::is_local_bridge_target(
             &resolved.bridge_url,
@@ -407,6 +403,20 @@ async fn run_session(
     }
 }
 
+/// Effective bridge session directory (P719: the lid-mapping lookup
+/// for identity canonicalisation shares the exact path the bridge is
+/// spawned with).
+fn session_dir_for(cfg: &ResolvedWhatsapp) -> std::path::PathBuf {
+    if cfg.session_path.is_empty() {
+        crate::config::ulnclaw_home()
+            .join("platforms")
+            .join("whatsapp")
+            .join("session")
+    } else {
+        std::path::PathBuf::from(&cfg.session_path)
+    }
+}
+
 /// Process one bridge message object (hermes `_build_message_event` +
 /// dispatch + read receipt).
 async fn handle_bridge_message(
@@ -418,17 +428,33 @@ async fn handle_bridge_message(
     if !should_process(data) {
         return;
     }
-    let chat_id = data
+    let raw_chat_id = data
         .get("chatId")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
     let is_group = data.get("isGroup").and_then(|v| v.as_bool()).unwrap_or(false);
-    let sender_id = data
+    let raw_sender_id = data
         .get("senderId")
         .and_then(|v| v.as_str())
-        .unwrap_or(&chat_id)
+        .unwrap_or(&raw_chat_id)
         .to_string();
+    // P719: canonical WhatsApp identity (hermes whatsapp_identity) —
+    // collapse phone-JID/LID aliases so session keys, allowlists and
+    // pairing agree on one stable identity per human. Group/broadcast
+    // addresses are chat addresses, not user identities, and pass
+    // through untouched.
+    let session_dir = session_dir_for(&runtime.cfg);
+    let chat_id = if crate::whatsapp_identity::is_user_identifier(&raw_chat_id) {
+        crate::whatsapp_identity::canonical_whatsapp_identifier(&raw_chat_id, &session_dir)
+    } else {
+        raw_chat_id.clone()
+    };
+    let sender_id = if crate::whatsapp_identity::is_user_identifier(&raw_sender_id) {
+        crate::whatsapp_identity::canonical_whatsapp_identifier(&raw_sender_id, &session_dir)
+    } else {
+        raw_sender_id.clone()
+    };
     let sender_name = data
         .get("senderName")
         .and_then(|v| v.as_str())
@@ -667,7 +693,10 @@ async fn send_read_receipt(runtime: &Arc<Runtime>, key: &Value) {
 /// hermes `/send` — `{chatId, message}`.
 async fn send_text(runtime: &Arc<Runtime>, chat_id: &str, text: &str) -> Result<(), String> {
     let url = format!("{}/send", runtime.cfg.bridge_url);
-    let payload = json!({ "chatId": chat_id, "message": text });
+    // P719: bare phone numbers crash Baileys' jidDecode — send with a
+    // fully-qualified JID (hermes to_whatsapp_jid).
+    let target = crate::whatsapp_identity::to_whatsapp_jid(chat_id);
+    let payload = json!({ "chatId": target, "message": text });
     let resp = runtime
         .client
         .post(&url)
@@ -693,7 +722,7 @@ async fn send_media(
 ) {
     let url = format!("{}/send-media", runtime.cfg.bridge_url);
     let payload = json!({
-        "to": chat_id,
+        "to": crate::whatsapp_identity::to_whatsapp_jid(chat_id),
         "path": path.to_string_lossy(),
         "mediaType": send_media_type(&path.to_string_lossy()),
         "caption": caption,
@@ -863,16 +892,30 @@ async fn sender_allowed(
     sender_name: &str,
     chat_id: &str,
 ) -> bool {
+    // P719: match any known alias of the sender (phone-JID vs LID)
+    // against the allowlist / pairing records (hermes
+    // `expand_whatsapp_aliases` authorisation semantics).
+    let aliases = crate::whatsapp_identity::expand_whatsapp_aliases(
+        sender_id,
+        &session_dir_for(&runtime.cfg),
+    );
+    let alias_match = |candidate: &str| {
+        let normalized = crate::whatsapp_identity::normalize_whatsapp_identifier(candidate);
+        aliases.contains(candidate) || (!normalized.is_empty() && aliases.contains(&normalized))
+    };
     if runtime
         .cfg
         .allowed_users
         .iter()
-        .any(|u| u == sender_id || u == "*")
+        .any(|u| u == "*" || alias_match(u))
     {
         return true;
     }
     if let Some(store) = pairing {
-        if store.is_approved("whatsapp", sender_id) {
+        if aliases
+            .iter()
+            .any(|alias| store.is_approved("whatsapp", alias))
+        {
             return true;
         }
         if let Some(code_msg) =
