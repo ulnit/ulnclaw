@@ -501,7 +501,14 @@ export interface InsightsReport {
   };
 }
 
-/** GET /health/detailed payload (open probe; P365). */
+/** One readiness probe inside GET /health/detailed (P697/P702). */
+export interface ReadinessCheck {
+  status: string;
+  detail?: string;
+  [key: string]: unknown;
+}
+
+/** GET /health/detailed payload (open probe; P365, enriched P697+). */
 export interface HealthDetailed {
   status: string;
   service: string;
@@ -511,6 +518,16 @@ export interface HealthDetailed {
   auth_required: boolean;
   sessions_total_at_least: number;
   runs_tracked: number;
+  readiness?: { status: string; checks?: Record<string, ReadinessCheck> };
+  gateway_state?: string;
+  active_agents?: number;
+  gateway_busy?: boolean;
+  gateway_drainable?: boolean;
+  restart_loop_tripped?: boolean;
+  previous_exit_label?: string;
+  updated_at?: string;
+  uptime_seconds?: number;
+  pid?: number;
 }
 
 export interface SyncStatus {

@@ -61,6 +61,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="monitoring.title">Gateway monitoring</h3>
         <div id="monitoring-rows"></div>
       </section>
+      <section id="doctor-gateway-health" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="gatewayHealth.title">Gateway health</h3>
+        <div id="gateway-health-rows"></div>
+      </section>
       <section id="doctor-browser" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
         <div id="browser-rows"></div>
@@ -243,6 +247,7 @@ export class DoctorWidget {
       this.run().catch(() => undefined);
     }
     this.loadMonitoring().catch(() => undefined);
+    this.loadGatewayHealth().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2014,6 +2019,117 @@ export class DoctorWidget {
           },
         );
       }
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** P702: bounded readiness report from GET /health/detailed
+   * (hermes readiness parity surfaced in the shell; P697 gateway side). */
+  private async loadGatewayHealth(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-gateway-health") as HTMLElement;
+    const rows = this.root.querySelector("#gateway-health-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const detailed = await client.healthDetailed();
+      if (!detailed || !detailed.readiness) {
+        section.hidden = true;
+        return;
+      }
+      rows.innerHTML = "";
+      const badge = (status: string): string => {
+        const cls = status === "ok" ? "ok" : "warn";
+        const label = status === "ok" ? t.gatewayHealth.ok : t.gatewayHealth.degraded;
+        return `<span class="models-view-badge ${cls}">${escapeHtmlDoctor(label)}</span>`;
+      };
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      addRow(t.gatewayHealth.overall, badge(detailed.readiness.status));
+
+      const checks = detailed.readiness.checks ?? {};
+      const checkNames: [string, string][] = [
+        ["state_db", t.gatewayHealth.stateDb],
+        ["config", t.gatewayHealth.config],
+        ["model", t.gatewayHealth.model],
+        ["disk", t.gatewayHealth.disk],
+        ["gateway", t.gatewayHealth.gateway],
+        ["background_queues", t.gatewayHealth.queues],
+      ];
+      for (const [key, label] of checkNames) {
+        const check = checks[key];
+        if (!check) continue;
+        let extra = "";
+        if (key === "disk" && typeof check.used_percent === "number") {
+          extra = ` \u00b7 ${t.gatewayHealth.usedPercent.replace("{pct}", String(check.used_percent))}`;
+        }
+        if (key === "gateway") {
+          const connected = check.connected_platforms;
+          const total = check.platforms;
+          if (typeof connected === "number" && typeof total === "number") {
+            extra = ` \u00b7 ${t.gatewayHealth.connectedPlatforms.replace("{connected}", String(connected)).replace("{total}", String(total))}`;
+          }
+        }
+        if (key === "background_queues") {
+          const runs = check.active_api_runs;
+          const queued = check.queued_prompts;
+          if (typeof runs === "number" && typeof queued === "number") {
+            extra = ` \u00b7 ${t.gatewayHealth.queueCounts.replace("{runs}", String(runs)).replace("{queued}", String(queued))}`;
+          }
+        }
+        const detail = typeof check.detail === "string" && check.detail
+          ? ` \u00b7 ${escapeHtmlDoctor(check.detail)}`
+          : "";
+        addRow(label, `${badge(check.status)}${extra}${detail}`);
+      }
+
+      addRow(
+        t.gatewayHealth.gatewayState,
+        escapeHtmlDoctor(detailed.gateway_state ?? "?") +
+          (detailed.gateway_busy ? ` \u00b7 ${t.gatewayHealth.busy}` : ""),
+      );
+      if (typeof detailed.active_agents === "number") {
+        addRow(t.gatewayHealth.activeAgents, String(detailed.active_agents));
+      }
+      if (typeof detailed.uptime_seconds === "number") {
+        addRow(t.gatewayHealth.uptime, this.fmtUptime(detailed.uptime_seconds));
+      }
+      if (typeof detailed.pid === "number") {
+        addRow(t.gatewayHealth.pid, String(detailed.pid));
+      }
+      addRow(
+        t.gatewayHealth.restartLoop,
+        detailed.restart_loop_tripped
+          ? `<span class="models-view-badge warn">${escapeHtmlDoctor(t.gatewayHealth.tripped)}</span>`
+          : escapeHtmlDoctor(t.gatewayHealth.calm),
+      );
+      if (detailed.previous_exit_label) {
+        const label =
+          detailed.previous_exit_label === "clean"
+            ? t.gatewayHealth.exitClean
+            : detailed.previous_exit_label === "unclean"
+              ? t.gatewayHealth.exitUnclean
+              : t.gatewayHealth.exitUnknown;
+        const cls = detailed.previous_exit_label === "unclean" ? "warn" : "ok";
+        addRow(
+          t.gatewayHealth.previousExit,
+          `<span class="models-view-badge ${cls}">${escapeHtmlDoctor(label)}</span>`,
+        );
+      }
+      section.hidden = false;
     } catch {
       section.hidden = true;
     }

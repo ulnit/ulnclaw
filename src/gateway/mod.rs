@@ -8231,6 +8231,9 @@ async fn health_detailed(State(state): State<Arc<GatewayState>>) -> Json<Value> 
             crate::restart_loop_guard::DEFAULT_WINDOW_SECONDS,
             None,
         ),
+        "previous_exit_label": crate::lifecycle_ledger::prior_exit_label(
+            &crate::config::ulnclaw_home(),
+        ),
         "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "uptime_seconds": state.started_at.elapsed().as_secs(),
         "pid": std::process::id(),
@@ -15540,6 +15543,13 @@ mod tests {
         assert!(body["updated_at"].is_string(), "{body}");
         // The breaker reads the real home, so assert shape not value.
         assert!(body["restart_loop_tripped"].is_boolean(), "{body}");
+        assert!(
+            matches!(
+                body["previous_exit_label"].as_str(),
+                Some("clean") | Some("unclean") | Some("unknown")
+            ),
+            "{body}"
+        );
         // Compat fields the desktop already reads survive.
         assert_eq!(body["service"], "ulnclaw-gateway");
         assert_eq!(body["model"], "test-model");

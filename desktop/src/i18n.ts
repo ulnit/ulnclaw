@@ -68,7 +68,7 @@ export interface Translations {
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string; settingsPersonality: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string; statusTokens: string; statusCtx: string; statusKanban: string;
-    scrollBottom: string; dotAuthOn: string; dotAuthOff: string; dotRuns: string; dotLatency: string; tabApprovals: string; healthRestored: string; healthLost: string;
+    scrollBottom: string; dotAuthOn: string; dotAuthOff: string; dotRuns: string; dotLatency: string; dotRestartLoop: string; dotUncleanExit: string; tabApprovals: string; healthRestored: string; healthLost: string;
     shortcuts: string; shortcutsTitle: string; shortcutsClose: string;
     scModelPicker: string; scNewSession: string; scCycle: string; scSessionPicker: string;
     scArchive: string; scExport: string; scFileTree: string; scQuickEntry: string;
@@ -337,6 +337,7 @@ export interface Translations {
   metricsPanel: { title: string; summary: string; };
   egressPanel: { title: string; };
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; test: string; stateConnected: string; stateNotConfigured: string; };
+  gatewayHealth: { title: string; ok: string; degraded: string; overall: string; stateDb: string; config: string; model: string; disk: string; gateway: string; queues: string; usedPercent: string; connectedPlatforms: string; queueCounts: string; gatewayState: string; busy: string; activeAgents: string; uptime: string; pid: string; restartLoop: string; tripped: string; calm: string; previousExit: string; exitClean: string; exitUnclean: string; exitUnknown: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -445,7 +446,7 @@ const en: Translations = {
     replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save", restartGateway: "Restart gateway", restartDone: "Gateway restarted.", restartFailed: "Gateway restart timed out.", restartUnavailable: "The gateway is not managed here — restart it where it runs.",
     settingsTheme: "Theme", settingsFont: "Font", settingsPersonality: "Personality",
     statusUp: "up {duration}", statusSessions: "{count} sessions", statusRuns: "{count} runs", statusPlugins: "{count} plugins", statusTokens: "{tokens} tok · {calls} tool calls", statusCtx: "ctx {pct}%", statusKanban: "kanban {todo} todo · {doing} doing · {blocked} blocked",
-    scrollBottom: "Scroll to bottom", dotAuthOn: "auth required", dotAuthOff: "open access", dotRuns: "{count} runs", dotLatency: "{ms} ms probe",
+    scrollBottom: "Scroll to bottom", dotAuthOn: "auth required", dotAuthOff: "open access", dotRuns: "{count} runs", dotLatency: "{ms} ms probe", dotRestartLoop: "restart loop!", dotUncleanExit: "previous exit unclean",
     tabApprovals: "{count} waiting for approval",
     healthRestored: "Gateway is reachable again.", healthLost: "Gateway is unreachable.",
     shortcuts: "Keyboard shortcuts", shortcutsTitle: "Keyboard shortcuts", shortcutsClose: "Close",
@@ -834,6 +835,7 @@ const en: Translations = {
   metricsPanel: { title: "Prometheus metrics", summary: "Show raw /metrics exposition" },
   egressPanel: { title: "Egress proxy" },
   channelsPanel: { title: "Messaging channels", enabled: "Enabled", disabled: "Disabled", noneEnabled: "(none)", test: "Test", stateConnected: "connected", stateNotConfigured: "not configured" },
+  gatewayHealth: { title: "Gateway health", ok: "ok", degraded: "degraded", overall: "Overall", stateDb: "Session store", config: "Config", model: "Model", disk: "Disk", gateway: "Platforms", queues: "Background queues", usedPercent: "{pct}% used", connectedPlatforms: "{connected}/{total} connected", queueCounts: "{runs} active \u00b7 {queued} queued", gatewayState: "Gateway state", busy: "busy", activeAgents: "Active turns", uptime: "Uptime", pid: "PID", restartLoop: "Restart-loop breaker", tripped: "TRIPPED", calm: "calm", previousExit: "Previous exit", exitClean: "clean", exitUnclean: "unclean", exitUnknown: "unknown" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1019,7 +1021,7 @@ const zh: Translations = {
     replayOnboarding: "重放引导", cancel: "取消", save: "保存", restartGateway: "重启网关", restartDone: "网关已重启。", restartFailed: "网关重启超时。", restartUnavailable: "此环境不管理网关——请在网关运行处重启。",
     settingsTheme: "主题", settingsFont: "字体", settingsPersonality: "人格",
     statusUp: "运行 {duration}", statusSessions: "{count} 会话", statusRuns: "{count} 运行", statusPlugins: "{count} 插件", statusTokens: "{tokens} tok · {calls} 次工具调用", statusCtx: "上下文 {pct}%", statusKanban: "看板 {todo} 待办 · {doing} 进行 · {blocked} 受阻",
-    scrollBottom: "滚动到底部", dotAuthOn: "需鉴权", dotAuthOff: "开放访问", dotRuns: "{count} 运行", dotLatency: "探针延迟 {ms} 毫秒",
+    scrollBottom: "滚动到底部", dotAuthOn: "需鉴权", dotAuthOff: "开放访问", dotRuns: "{count} 运行", dotLatency: "探针延迟 {ms} 毫秒", dotRestartLoop: "重启循环！", dotUncleanExit: "上次非正常退出",
     tabApprovals: "{count} 个等待审批",
     healthRestored: "网关已恢复连接。", healthLost: "网关连接丢失。",
     shortcuts: "键盘快捷键", shortcutsTitle: "键盘快捷键", shortcutsClose: "关闭",
@@ -1408,6 +1410,7 @@ const zh: Translations = {
   metricsPanel: { title: "Prometheus 指标", summary: "显示 /metrics 原始输出" },
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "消息通道", enabled: "已启用", disabled: "未启用", noneEnabled: "（无）", test: "测试", stateConnected: "已连接", stateNotConfigured: "未配置" },
+  gatewayHealth: { title: "网关健康", ok: "正常", degraded: "降级", overall: "总体状态", stateDb: "会话存储", config: "配置", model: "模型", disk: "磁盘", gateway: "平台", queues: "后台队列", usedPercent: "已用 {pct}%", connectedPlatforms: "已连接 {connected}/{total}", queueCounts: "活动 {runs} \u00b7 排队 {queued}", gatewayState: "网关状态", busy: "忙碌", activeAgents: "活动回合", uptime: "运行时长", pid: "PID", restartLoop: "重启循环断路器", tripped: "已触发", calm: "平静", previousExit: "上次退出", exitClean: "干净", exitUnclean: "非正常", exitUnknown: "未知" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -1593,7 +1596,7 @@ const zhHant: Translations = {
     replayOnboarding: "重播引導", cancel: "取消", save: "儲存", restartGateway: "重啟閘道", restartDone: "閘道已重啟。", restartFailed: "閘道重啟逾時。", restartUnavailable: "此環境不管理閘道——請在閘道執行處重啟。",
     settingsTheme: "主題", settingsFont: "字型", settingsPersonality: "人格",
     statusUp: "執行 {duration}", statusSessions: "{count} 工作階段", statusRuns: "{count} 執行", statusPlugins: "{count} 外掛", statusTokens: "{tokens} tok · {calls} 次工具呼叫", statusCtx: "上下文 {pct}%", statusKanban: "看板 {todo} 待辦 · {doing} 進行 · {blocked} 受阻",
-    scrollBottom: "捲動到底部", dotAuthOn: "需鑑權", dotAuthOff: "開放存取", dotRuns: "{count} 執行", dotLatency: "探針延遲 {ms} 毫秒",
+    scrollBottom: "捲動到底部", dotAuthOn: "需鑑權", dotAuthOff: "開放存取", dotRuns: "{count} 執行", dotLatency: "探針延遲 {ms} 毫秒", dotRestartLoop: "重啟循環！", dotUncleanExit: "上次非正常結束",
     tabApprovals: "{count} 個等待審批",
     healthRestored: "閘道已恢復連線。", healthLost: "閘道連線丟失。",
     shortcuts: "鍵盤快捷鍵", shortcutsTitle: "鍵盤快捷鍵", shortcutsClose: "關閉",
@@ -1982,6 +1985,7 @@ const zhHant: Translations = {
   metricsPanel: { title: "Prometheus 指標", summary: "顯示 /metrics 原始輸出" },
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "訊息通道", enabled: "已啟用", disabled: "未啟用", noneEnabled: "（無）", test: "測試", stateConnected: "已連線", stateNotConfigured: "未設定" },
+  gatewayHealth: { title: "閘道健康", ok: "正常", degraded: "降級", overall: "總體狀態", stateDb: "工作階段儲存", config: "設定", model: "模型", disk: "磁碟", gateway: "平台", queues: "背景佇列", usedPercent: "已用 {pct}%", connectedPlatforms: "已連線 {connected}/{total}", queueCounts: "活動 {runs} \u00b7 排隊 {queued}", gatewayState: "閘道狀態", busy: "忙碌", activeAgents: "活動回合", uptime: "執行時長", pid: "PID", restartLoop: "重啟循環斷路器", tripped: "已觸發", calm: "平靜", previousExit: "上次結束", exitClean: "乾淨", exitUnclean: "非正常", exitUnknown: "未知" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2167,7 +2171,7 @@ const ja: Translations = {
     replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存", restartGateway: "ゲートウェイを再起動", restartDone: "ゲートウェイを再起動しました。", restartFailed: "ゲートウェイの再起動がタイムアウトしました。", restartUnavailable: "この環境はゲートウェイを管理していません — 実行場所で再起動してください。",
     settingsTheme: "テーマ", settingsFont: "フォント", settingsPersonality: "パーソナリティ",
     statusUp: "稼働 {duration}", statusSessions: "{count} セッション", statusRuns: "{count} 実行", statusPlugins: "{count} プラグイン", statusTokens: "{tokens} tok · {calls} ツール呼び出し", statusCtx: "コンテキスト {pct}%", statusKanban: "カンバン {todo} 未着手 · {doing} 進行中 · {blocked} ブロック",
-    scrollBottom: "一番下へスクロール", dotAuthOn: "認証必須", dotAuthOff: "オープンアクセス", dotRuns: "{count} 実行", dotLatency: "プローブ遅延 {ms} ms",
+    scrollBottom: "一番下へスクロール", dotAuthOn: "認証必須", dotAuthOff: "オープンアクセス", dotRuns: "{count} 実行", dotLatency: "プローブ遅延 {ms} ms", dotRestartLoop: "再起動ループ！", dotUncleanExit: "前回異常終了",
     tabApprovals: "{count} 件が承認待ち",
     healthRestored: "ゲートウェイが再び到達可能になりました。", healthLost: "ゲートウェイに到達できません。",
     shortcuts: "キーボードショートカット", shortcutsTitle: "キーボードショートカット", shortcutsClose: "閉じる",
@@ -2556,6 +2560,7 @@ const ja: Translations = {
   metricsPanel: { title: "Prometheus メトリクス", summary: "/metrics 生の出力を表示" },
   egressPanel: { title: "エグレスプロキシ" },
   channelsPanel: { title: "メッセージングチャネル", enabled: "有効", disabled: "無効", noneEnabled: "（なし）", test: "テスト", stateConnected: "接続済み", stateNotConfigured: "未設定" },
+  gatewayHealth: { title: "ゲートウェイヘルス", ok: "正常", degraded: "劣化", overall: "全体状態", stateDb: "セッションストア", config: "設定", model: "モデル", disk: "ディスク", gateway: "プラットフォーム", queues: "バックグラウンドキュー", usedPercent: "使用率 {pct}%", connectedPlatforms: "接続済み {connected}/{total}", queueCounts: "実行中 {runs} \u00b7 キュー {queued}", gatewayState: "ゲートウェイ状態", busy: "ビジー", activeAgents: "実行中ターン", uptime: "稼働時間", pid: "PID", restartLoop: "再起動ループ遮断器", tripped: "トリップ済み", calm: "正常", previousExit: "前回の終了", exitClean: "正常終了", exitUnclean: "異常終了", exitUnknown: "不明" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -2741,7 +2746,7 @@ const ar: Translations = {
     replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ", restartGateway: "إعادة تشغيل البوابة", restartDone: "تمت إعادة تشغيل البوابة.", restartFailed: "انتهت مهلة إعادة تشغيل البوابة.", restartUnavailable: "البوابة غير مُدارة هنا — أعد تشغيلها حيث تعمل.",
     settingsTheme: "السمة", settingsFont: "الخط", settingsPersonality: "الشخصية",
     statusUp: "يعمل منذ {duration}", statusSessions: "{count} جلسة", statusRuns: "{count} تشغيل", statusPlugins: "{count} إضافة", statusTokens: "{tokens} رمز · {calls} استدعاء أداة", statusCtx: "السياق {pct}%", statusKanban: "كانبان {todo} منتظرة · {doing} قيد التنفيذ · {blocked} محظورة",
-    scrollBottom: "التمرير إلى الأسفل", dotAuthOn: "المصادقة مطلوبة", dotAuthOff: "وصول مفتوح", dotRuns: "{count} تشغيل", dotLatency: "زمن الاستجابة {ms} مث",
+    scrollBottom: "التمرير إلى الأسفل", dotAuthOn: "المصادقة مطلوبة", dotAuthOff: "وصول مفتوح", dotRuns: "{count} تشغيل", dotLatency: "زمن الاستجابة {ms} مث", dotRestartLoop: "حلقة إعادة تشغيل!", dotUncleanExit: "الخروج السابق غير نظيف",
     tabApprovals: "{count} بانتظار الموافقة",
     healthRestored: "عادت البوابة قابلة للوصول.", healthLost: "البوابة غير قابلة للوصول.",
     shortcuts: "اختصارات لوحة المفاتيح", shortcutsTitle: "اختصارات لوحة المفاتيح", shortcutsClose: "إغلاق",
@@ -3130,6 +3135,7 @@ const ar: Translations = {
   metricsPanel: { title: "مقاييس Prometheus", summary: "عرض إخراج /metrics الخام" },
   egressPanel: { title: "وكيل الخروج" },
   channelsPanel: { title: "قنوات المراسلة", enabled: "مفعلة", disabled: "معطلة", noneEnabled: "(لا شيء)", test: "اختبار", stateConnected: "متصل", stateNotConfigured: "غير مهيأ" },
+  gatewayHealth: { title: "صحة البوابة", ok: "سليم", degraded: "متدهور", overall: "الحالة العامة", stateDb: "مخزن الجلسات", config: "الإعدادات", model: "النموذج", disk: "القرص", gateway: "المنصات", queues: "قوائم الخلفية", usedPercent: "الاستخدام {pct}%", connectedPlatforms: "متصل {connected}/{total}", queueCounts: "نشطة {runs} \u00b7 في الانتظار {queued}", gatewayState: "حالة البوابة", busy: "مشغولة", activeAgents: "الأدوار النشطة", uptime: "مدة التشغيل", pid: "PID", restartLoop: "قاطع حلقة إعادة التشغيل", tripped: "مفصول", calm: "هادئ", previousExit: "الخروج السابق", exitClean: "نظيف", exitUnclean: "غير نظيف", exitUnknown: "غير معروف" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

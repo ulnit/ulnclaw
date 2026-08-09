@@ -2134,11 +2134,19 @@ async function pollHealth(): Promise<void> {
     // P365: enrich the dot tooltip with the detailed open probe.
     const detailed = await state.client.healthDetailed();
     if (detailed) {
+      const ops: string[] = [];
+      if (detailed.gateway_state) ops.push(detailed.gateway_state);
+      if (typeof detailed.uptime_seconds === "number") {
+        ops.push(formatUptime(detailed.uptime_seconds));
+      }
+      if (detailed.restart_loop_tripped) ops.push(t.chrome.dotRestartLoop);
+      if (detailed.previous_exit_label === "unclean") ops.push(t.chrome.dotUncleanExit);
       el.dot.title = [
         `${detailed.service} v${detailed.version}`,
         `${detailed.provider}/${detailed.model}`,
         detailed.auth_required ? t.chrome.dotAuthOn : t.chrome.dotAuthOff,
         t.chrome.dotRuns.replace("{count}", String(detailed.runs_tracked)),
+        ...ops,
         t.chrome.dotLatency.replace("{ms}", String(probeLatencyMs)),
       ].join(" · ");
     }
