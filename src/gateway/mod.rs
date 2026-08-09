@@ -405,6 +405,12 @@ pub struct GatewayState {
     /// P679: restart/drain flag — `/restart` sets it; while set, new
     /// runs are refused (hermes drain_control parity).
     pub restart: Arc<std::sync::atomic::AtomicBool>,
+    /// P680: per-session queued prompts (`/queue`) flushed as agent
+    /// turns after the current turn finishes (hermes queue parity).
+    pub queued_prompts:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<String>>>>,
+    /// P680: sessions with an active queue-drain task.
+    pub queue_draining: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// P679: exit hook invoked once the restart drain completes
     /// (default: `std::process::exit` with the service-restart code;
     /// tests replace it with a recorder).
@@ -440,6 +446,8 @@ impl GatewayState {
             oauth_sessions: Arc::new(Mutex::new(HashMap::new())),
             restart: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             restart_exit: Arc::new(|code| std::process::exit(code)),
+            queued_prompts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            queue_draining: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }))
     }
 }
@@ -498,6 +506,59 @@ pub fn gateway_supervised() -> bool {
             .as_deref(),
         Some("1") | Some("true") | Some("yes") | Some("on")
     )
+}
+
+/// P680: run a session's queued prompts sequentially as agent turns
+/// (hermes `/queue` overflow FIFO flushed between turns). At most one
+/// drain task per session; the tail re-arms if prompts race in.
+pub fn spawn_queue_drain(state: &Arc<GatewayState>, session_id: &str) {
+    {
+        let mut draining = state.queue_draining.lock().unwrap();
+        if draining.contains(session_id) {
+            return;
+        }
+        draining.insert(session_id.to_string());
+    }
+    let state = state.clone();
+    let session_id = session_id.to_string();
+    tokio::spawn(async move {
+        loop {
+            let next = {
+                let mut queues = state.queued_prompts.lock().unwrap();
+                queues.get_mut(&session_id).and_then(|queue| queue.pop_front())
+            };
+            let Some(prompt) = next else { break };
+            let history = state
+                .store
+                .load_messages(&session_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.role != Role::System)
+                .collect::<Vec<_>>();
+            let history_arg = if history.is_empty() { None } else { Some(history) };
+            let override_model = session_model_override(&state, &session_id);
+            let outcome = await_with_model_override(
+                override_model,
+                state.agent.run_with_session(&prompt, history_arg, Some(&session_id)),
+            )
+            .await;
+            if let Err(e) = outcome {
+                tracing::warn!("queued turn for {session_id} failed: {e}");
+            }
+        }
+        state.queue_draining.lock().unwrap().remove(&session_id);
+        // Re-arm when prompts raced in while we were exiting.
+        let pending = state
+            .queued_prompts
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .map(|queue| !queue.is_empty())
+            .unwrap_or(false);
+        if pending {
+            spawn_queue_drain(&state, &session_id);
+        }
+    });
 }
 
 /// One in-flight provider OAuth device-flow session (P350).
@@ -8685,6 +8746,8 @@ struct SseState {
     started: bool,
     pending: std::collections::VecDeque<axum::response::sse::Event>,
     finished: bool,
+    /// P680: session whose queued prompts flush after a clean turn end.
+    flush: Option<(Arc<GatewayState>, String)>,
 }
 
 /// Stream an agent run as OpenAI-compatible SSE chunks.
@@ -8729,6 +8792,9 @@ fn stream_agent_response(
         started: false,
         pending: std::collections::VecDeque::new(),
         finished: false,
+        flush: session_id
+            .clone()
+            .map(|sid| (state.clone(), sid)),
     };
 
     let stream = futures::stream::unfold(sse_state, |mut st| async move {
@@ -8805,6 +8871,11 @@ fn stream_agent_response(
                         Some(handle) => handle.await,
                         None => Ok(Err(AgentError::provider("agent task vanished"))),
                     };
+                    if matches!(outcome, Ok(Ok(_))) {
+                        if let Some((flush_state, flush_session)) = st.flush.as_ref() {
+                            spawn_queue_drain(flush_state, flush_session);
+                        }
+                    }
                     let (finish_reason, usage, error_text) = match outcome {
                         Ok(Ok(result)) => (
                             "stop",
@@ -10677,6 +10748,8 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
   /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
   /background <prompt>  run a prompt in a background tracked run
+  /queue [clear|<prompt>]  queue a prompt for the next turn (no interrupt)
+  /steer <prompt>    inject a message after the next tool call (no interrupt)
   /approve [once|session|always] [run-id]  approve a pending dangerous command
   /deny [run-id]     deny a pending dangerous command
   /init [notes]      generate or update AGENTS.md from a project scan
@@ -11350,6 +11423,67 @@ async fn resolve_gateway_slash(
             } else {
                 "no running run found for this session.".to_string()
             }))
+        }
+        "/queue" => {
+            // P680 (hermes /queue parity): FIFO prompts run as agent
+            // turns after the current turn finishes.
+            if rest == "clear" {
+                let removed = state
+                    .queued_prompts
+                    .lock()
+                    .unwrap()
+                    .remove(session_id)
+                    .map(|queue| queue.len())
+                    .unwrap_or(0);
+                return Some(GatewaySlash::Direct(format!(
+                    "cleared {removed} queued prompt(s)."
+                )));
+            }
+            if rest.is_empty() {
+                let queued = state
+                    .queued_prompts
+                    .lock()
+                    .unwrap()
+                    .get(session_id)
+                    .cloned()
+                    .unwrap_or_default();
+                return Some(GatewaySlash::Direct(if queued.is_empty() {
+                    "nothing queued for this session. usage: /queue <prompt>".to_string()
+                } else {
+                    let mut text = format!("{} queued prompt(s):", queued.len());
+                    for (index, prompt) in queued.iter().enumerate() {
+                        text.push_str(&format!(
+                            "\n  {}. {}",
+                            index + 1,
+                            crate::gateway::truncate_for_ui(prompt, 120)
+                        ));
+                    }
+                    text
+                }));
+            }
+            let depth = {
+                let mut queues = state.queued_prompts.lock().unwrap();
+                let queue = queues.entry(session_id.to_string()).or_default();
+                queue.push_back(rest.to_string());
+                queue.len()
+            };
+            Some(GatewaySlash::Direct(format!(
+                "queued for the next turn (depth {depth}): {}",
+                crate::gateway::truncate_for_ui(rest, 120)
+            )))
+        }
+        "/steer" => {
+            // P680 (hermes /steer parity): inject a message after the
+            // next tool call of the session's active turn.
+            if rest.is_empty() {
+                return Some(GatewaySlash::Direct(
+                    "usage: /steer <prompt> — injected after the next tool call without interrupting".to_string(),
+                ));
+            }
+            let depth = state.agent.steer_message(session_id, rest.to_string()).await;
+            Some(GatewaySlash::Direct(format!(
+                "steered (depth {depth}) — the message is injected after the next tool call"
+            )))
         }
         "/restart" => {
             // P679 (hermes /restart parity): drain active runs, then
@@ -12390,6 +12524,8 @@ async fn session_chat(
     match outcome {
         Ok(result) => {
             state.metrics.record_run(&result.usage, result.tool_calls.len());
+            // P680: flush queued prompts as follow-up turns.
+            spawn_queue_drain(&state, &id);
             Json(json!({
                 "session_id": id,
                 "response": result.content,
@@ -16085,6 +16221,79 @@ mod tests {
         );
         let remaining = drain_active_runs(&state, std::time::Duration::from_millis(300)).await;
         assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_queue_and_steer() {
+        // P680: /queue bookkeeping (enqueue/list/clear) and /steer
+        // hand-off into the agent's steer inbox.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = test_state();
+
+        // Empty queue usage line.
+        match resolve_gateway_slash(&state, "sess-q", "/queue").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("nothing queued"), "{text}")
+            }
+            _ => panic!("expected direct reply"),
+        }
+
+        // Enqueue two prompts (FIFO).
+        match resolve_gateway_slash(&state, "sess-q", "/queue first follow-up").await {
+            Some(GatewaySlash::Direct(text)) => assert!(text.contains("depth 1"), "{text}"),
+            _ => panic!("expected enqueue reply"),
+        }
+        match resolve_gateway_slash(&state, "sess-q", "/queue second follow-up").await {
+            Some(GatewaySlash::Direct(text)) => assert!(text.contains("depth 2"), "{text}"),
+            _ => panic!("expected enqueue reply"),
+        }
+
+        // Listing shows both in order.
+        match resolve_gateway_slash(&state, "sess-q", "/queue").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("2 queued prompt(s)"), "{text}");
+                let first = text.find("first follow-up").unwrap();
+                let second = text.find("second follow-up").unwrap();
+                assert!(first < second, "{text}");
+            }
+            _ => panic!("expected list reply"),
+        }
+
+        // /steer hands the message to the agent inbox.
+        match resolve_gateway_slash(&state, "sess-q", "/steer take the tests path").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("steered (depth 1)"), "{text}")
+            }
+            _ => panic!("expected steer reply"),
+        }
+        let drained = state.agent.drain_steer_messages("sess-q").await;
+        assert_eq!(drained, vec!["take the tests path".to_string()]);
+
+        // /steer without a prompt prints usage.
+        match resolve_gateway_slash(&state, "sess-q", "/steer").await {
+            Some(GatewaySlash::Direct(text)) => assert!(text.contains("usage:"), "{text}"),
+            _ => panic!("expected usage reply"),
+        }
+
+        // Clear empties the queue.
+        match resolve_gateway_slash(&state, "sess-q", "/queue clear").await {
+            Some(GatewaySlash::Direct(text)) => assert!(text.contains("cleared 2"), "{text}"),
+            _ => panic!("expected clear reply"),
+        }
+
+        // Queue-drain on an empty queue is a no-op.
+        spawn_queue_drain(&state, "sess-q");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(state.queue_draining.lock().unwrap().is_empty());
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

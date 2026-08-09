@@ -2219,6 +2219,8 @@ function gatewaySlashCommands(): [string, string][] {
     ["/deny", t.slash.deny],
     ["/background", t.slash.background],
     ["/restart", t.slash.restart],
+    ["/queue", t.slash.queue],
+    ["/steer", t.slash.steer],
   ];
 }
 

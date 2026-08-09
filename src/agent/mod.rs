@@ -226,6 +226,10 @@ pub struct Agent {
     /// Consecutive smart-approval guardian DENY verdicts (circuit breaker,
     /// hermes `approvals.denial_breaker_threshold`). Any approval resets.
     smart_denial_streak: std::sync::atomic::AtomicU64,
+    /// P680: per-session steer inboxes — `/steer` drops messages here
+    /// and the session's active turn injects them after the next tool
+    /// batch (hermes `/steer` parity).
+    steer_inboxes: tokio::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<String>>>,
 }
 
 /// One fallback provider slot (hermes `fallback_providers` entry).
@@ -269,12 +273,33 @@ impl Agent {
             fallback_specs: Vec::new(),
             fallback_active: tokio::sync::Mutex::new(None),
             smart_denial_streak: std::sync::atomic::AtomicU64::new(0),
+            steer_inboxes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
     /// The configured fallback specs (for child-agent inheritance).
     pub fn fallback_specs(&self) -> Vec<String> {
         self.fallback_specs.clone()
+    }
+
+    /// P680: enqueue a steering message for the session's active turn
+    /// (hermes `/steer`): injected after the next tool batch without
+    /// interrupting the run. Returns the pending steer depth.
+    pub async fn steer_message(&self, session_id: &str, message: String) -> usize {
+        let mut inboxes = self.steer_inboxes.lock().await;
+        let inbox = inboxes.entry(session_id.to_string()).or_default();
+        inbox.push_back(message);
+        inbox.len()
+    }
+
+    /// P680: drain the session's pending steer messages (the active
+    /// turn calls this after every tool batch).
+    pub async fn drain_steer_messages(&self, session_id: &str) -> Vec<String> {
+        let mut inboxes = self.steer_inboxes.lock().await;
+        inboxes
+            .remove(session_id)
+            .map(|inbox| inbox.into_iter().collect())
+            .unwrap_or_default()
     }
 
     /// Configure the fallback chain from `"provider:model"` specs (hermes
@@ -953,6 +978,26 @@ impl Agent {
                     store
                         .update_usage(sid, 0, 0, response.tool_calls.len() as u32)
                         .ok();
+                }
+
+                // P680: /steer injection (hermes steer parity) —
+                // messages queued while this turn was running are
+                // delivered right after the tool batch, before the
+                // next model call.
+                if let Some(sid) = session_id.as_deref() {
+                    for steered in self.drain_steer_messages(sid).await {
+                        let steer_turn = Message {
+                            role: Role::User,
+                            content: Some(steered),
+                            tool_calls: None,
+                            tool_call_id: None,
+                            name: None,
+                        };
+                        messages.push(steer_turn);
+                        if let Some(store) = self.store.as_ref() {
+                            store.append_message(sid, messages.last().unwrap()).ok();
+                        }
+                    }
                 }
 
                 let callbacks = self.callbacks.lock().await;
@@ -1662,6 +1707,7 @@ impl SubAgentRunner for Agent {
             fallback_specs: Vec::new(),
             fallback_active: tokio::sync::Mutex::new(None),
             smart_denial_streak: std::sync::atomic::AtomicU64::new(0),
+            steer_inboxes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         };
         // Children inherit the fallback chain configuration.
         let child = child.with_fallback_specs(&self.fallback_specs());
@@ -1732,6 +1778,7 @@ impl CronRunner for Agent {
             fallback_specs: Vec::new(),
             fallback_active: tokio::sync::Mutex::new(None),
             smart_denial_streak: std::sync::atomic::AtomicU64::new(0),
+            steer_inboxes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         };
         let cron_agent = cron_agent.with_fallback_specs(&self.fallback_specs());
         // Hermes cron approval context: unattended run — the approval gate
@@ -1780,6 +1827,26 @@ mod tests {
         assert_eq!(parse_fallback_spec("openai"), None);
         assert_eq!(parse_fallback_spec(":model"), None);
         assert_eq!(parse_fallback_spec("provider:"), None);
+    }
+
+    #[tokio::test]
+    async fn steer_inbox_queues_and_drains_per_session() {
+        // P680: /steer messages accumulate per session and drain
+        // atomically (the active turn picks them up after a tool
+        // batch).
+        let (provider, _) = counting(Some("ok"));
+        let agent = Agent::new(provider, ToolRegistry::new());
+        assert_eq!(agent.steer_message("s1", "slow down".to_string()).await, 1);
+        assert_eq!(
+            agent.steer_message("s1", "also check tests".to_string()).await,
+            2
+        );
+        assert_eq!(agent.steer_message("s2", "other session".to_string()).await, 1);
+        let drained = agent.drain_steer_messages("s1").await;
+        assert_eq!(drained, vec!["slow down".to_string(), "also check tests".to_string()]);
+        // Draining again yields nothing; s2 keeps its message.
+        assert!(agent.drain_steer_messages("s1").await.is_empty());
+        assert_eq!(agent.drain_steer_messages("s2").await.len(), 1);
     }
 
     struct CountingProvider {
