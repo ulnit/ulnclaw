@@ -420,6 +420,7 @@ mod tests {
     async fn new_rotates_platform_chat_to_fresh_session() {
         // P692: hermes /new parity — rotate the chat to a fresh
         // session id; the old transcript stays saved.
+        let _guard = crate::messaging::remap_test_lock();
         crate::messaging::clear_session_remappings_for_tests();
         let (_dir, home, agent, store) = setup();
         let outcome = resolve(&agent, &store, &home, "platform-telegram-chat-9", "/new").await;

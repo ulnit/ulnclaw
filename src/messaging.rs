@@ -383,6 +383,16 @@ pub(crate) fn clear_session_remappings_for_tests() {
     session_remappings().lock().unwrap().clear();
 }
 
+/// Test hook: the remap table is process-global, so tests that clear
+/// or rewrite entries race when run in parallel — serialize them.
+#[cfg(test)]
+pub(crate) fn remap_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 /// Per-chat conversation runner: one session per platform+chat
 /// (hermes gateway session routing).
 pub struct Dispatcher {
@@ -390,6 +400,9 @@ pub struct Dispatcher {
     store: Arc<SqliteSessionStore>,
     /// Per-chat in-flight guard: one turn at a time per chat.
     busy: Arc<Mutex<HashMap<String, bool>>>,
+    /// Per-chat FIFO of messages that arrived while a turn was busy
+    /// (hermes busy-policy queue parity) — drained after each turn.
+    queued: Arc<Mutex<HashMap<String, std::collections::VecDeque<MessageEvent>>>>,
 }
 
 /// Result of one dispatched platform message (hermes run-turn output):
@@ -1348,6 +1361,7 @@ impl Dispatcher {
             agent,
             store,
             busy: Arc::new(Mutex::new(HashMap::new())),
+            queued: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1465,8 +1479,18 @@ impl Dispatcher {
         {
             let mut busy = self.busy.lock().await;
             if *busy.get(&key).unwrap_or(&false) {
+                // hermes busy-policy queue parity: park the message;
+                // it runs right after the current turn settles.
+                let depth = {
+                    let mut queued = self.queued.lock().await;
+                    let queue = queued.entry(key.clone()).or_default();
+                    queue.push_back(event.clone());
+                    queue.len()
+                };
                 return Ok(DispatchOutcome {
-                    reply: "(the previous message is still being processed — please wait)".into(),
+                    reply: format!(
+                        "(queued \u{2014} message {depth} in queue; runs after the current turn)"
+                    ),
                     transcript_echoes: Vec::new(),
                 });
             }
@@ -1478,8 +1502,67 @@ impl Dispatcher {
             session_key: key.clone(),
         };
         let result = MESSAGING_CTX.scope(chat_ref, self.run_turn(&key, &event)).await;
+        // Keep the busy flag while draining queued follow-ups so new
+        // inbound messages queue instead of interleaving.
+        self.drain_queued(&key).await;
         self.busy.lock().await.insert(key, false);
         result
+    }
+
+    /// Run queued follow-up messages one by one (hermes busy-policy
+    /// queue parity); replies go out through the platform sender.
+    async fn drain_queued(&self, key: &str) {
+        loop {
+            let next = self
+                .queued
+                .lock()
+                .await
+                .get_mut(key)
+                .and_then(std::collections::VecDeque::pop_front);
+            let Some(event) = next else {
+                return;
+            };
+            let chat_ref = PlatformChatRef {
+                platform: event.platform.clone(),
+                chat_id: event.chat_id.clone(),
+                session_key: key.to_string(),
+            };
+            let outcome = MESSAGING_CTX.scope(chat_ref, self.run_turn(key, &event)).await;
+            let sender = platform_sender(&event.platform);
+            match outcome {
+                Ok(result) => {
+                    if let Some(sender) = sender {
+                        for echo in &result.transcript_echoes {
+                            sender.send_text(&event.chat_id, echo).await;
+                        }
+                        if !result.reply.is_empty() {
+                            sender.send_text(&event.chat_id, &result.reply).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let Some(sender) = sender {
+                        sender
+                            .send_text(
+                                &event.chat_id,
+                                &format!("(queued turn failed: {e})"),
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Test hook: current queue depth for a chat key.
+    #[cfg(test)]
+    async fn queued_depth(&self, key: &str) -> usize {
+        self.queued
+            .lock()
+            .await
+            .get(key)
+            .map(std::collections::VecDeque::len)
+            .unwrap_or(0)
     }
 
     /// `/reload-mcp` from a messaging platform (hermes
@@ -7044,7 +7127,7 @@ mod tests {
         // confirm survives (not stale yet).
         dispatcher.busy.lock().await.insert(key.clone(), true);
         let outcome = dispatcher.handle_event(test_event("hello", "m2")).await.unwrap();
-        assert!(outcome.reply.contains("still being processed"));
+        assert!(outcome.reply.contains("queued"), "{}", outcome.reply);
         assert!(crate::slash_confirm::get_pending(&key).is_some());
         dispatcher.busy.lock().await.insert(key.clone(), false);
         crate::slash_confirm::clear_all_for_tests();
@@ -7179,12 +7262,13 @@ mod tests {
     #[tokio::test]
     async fn resume_lists_switches_and_guards() {
         // P686: hermes /resume parity on the platform dispatch path.
+        let _guard = remap_test_lock();
         clear_session_remappings_for_tests();
         let dispatcher = test_dispatcher();
         let event = test_event("/resume", "m1");
 
         // No titled sessions yet.
-        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-2", &event).await.unwrap();
         assert!(outcome.reply.contains("No named sessions found"), "{}", outcome.reply);
 
         // Seed titled sessions (newest first).
@@ -7195,7 +7279,7 @@ mod tests {
         store.set_session_title("sess-b", "Beta work").unwrap();
 
         // Listing is numbered, newest first.
-        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-2", &event).await.unwrap();
         assert!(outcome.reply.contains("Named Sessions"), "{}", outcome.reply);
         let alpha_pos = outcome.reply.find("Alpha work").unwrap();
         let beta_pos = outcome.reply.find("Beta work").unwrap();
@@ -7204,38 +7288,89 @@ mod tests {
 
         // Switch by number.
         let event = test_event("/resume 2", "m2");
-        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-2", &event).await.unwrap();
         assert!(outcome.reply.contains("Resumed session **Alpha work**"), "{}", outcome.reply);
-        assert_eq!(effective_session_id_for("platform-testplat-chat-1"), "sess-a");
+        assert_eq!(effective_session_id_for("platform-testplat-chat-2"), "sess-a");
 
         // Already on it.
         let event = test_event("/resume Alpha work", "m3");
-        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-2", &event).await.unwrap();
         assert!(outcome.reply.contains("Already on session"), "{}", outcome.reply);
 
         // Switch by title with bracket stripping, then by id prefix.
         let event = test_event("/resume <Beta work>", "m4");
-        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-2", &event).await.unwrap();
         assert!(outcome.reply.contains("Resumed session **Beta work**"), "{}", outcome.reply);
         let event = test_event("/resume sess-a", "m5");
-        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-2", &event).await.unwrap();
         assert!(outcome.reply.contains("Resumed session **Alpha work**"), "{}", outcome.reply);
 
         // Unknown target + out-of-range index.
         let event = test_event("/resume ghost", "m6");
-        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-2", &event).await.unwrap();
         assert!(outcome.reply.contains("No session found matching"), "{}", outcome.reply);
         let event = test_event("/resume 99", "m7");
-        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-2", &event).await.unwrap();
         assert!(outcome.reply.contains("out of range"), "{}", outcome.reply);
         clear_session_remappings_for_tests();
     }
 
     #[tokio::test]
     async fn resume_dispatches_through_handle_event() {
+        let _guard = remap_test_lock();
+        clear_session_remappings_for_tests();
         let dispatcher = test_dispatcher();
         let outcome = dispatcher.handle_event(test_event("/resume", "m1")).await.unwrap();
         assert!(outcome.reply.contains("No named sessions found"), "{}", outcome.reply);
+    }
+
+    struct QueueCapture {
+        sends: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformSender for QueueCapture {
+        async fn send_text(&self, chat_id: &str, text: &str) {
+            self.sends
+                .lock()
+                .unwrap()
+                .push((chat_id.to_string(), text.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn busy_messages_queue_and_drain() {
+        // P696: hermes busy-policy queue parity — messages arriving
+        // mid-turn are queued with an ack, then drained in FIFO order
+        // through the platform sender.
+        let dispatcher = test_dispatcher();
+        let key = "platform-testplat-chat-1".to_string();
+        let sends = Arc::new(std::sync::Mutex::new(Vec::new()));
+        register_platform_sender(
+            "testplat",
+            Arc::new(QueueCapture { sends: sends.clone() }),
+        );
+
+        // Force the busy state as if a turn were in flight.
+        dispatcher.busy.lock().await.insert(key.clone(), true);
+        let outcome = dispatcher.handle_event(test_event("queued one", "m1")).await.unwrap();
+        assert!(outcome.reply.contains("queued"), "{}", outcome.reply);
+        assert!(outcome.reply.contains("message 1 in queue"), "{}", outcome.reply);
+        let outcome = dispatcher.handle_event(test_event("queued two", "m2")).await.unwrap();
+        assert!(outcome.reply.contains("message 2 in queue"), "{}", outcome.reply);
+        assert_eq!(dispatcher.queued_depth(&key).await, 2);
+
+        // Drain: the test provider is unreachable, so each queued turn
+        // fails and reports through the sender.
+        dispatcher.busy.lock().await.insert(key.clone(), false);
+        dispatcher.drain_queued(&key).await;
+        assert_eq!(dispatcher.queued_depth(&key).await, 0);
+        let captured = sends.lock().unwrap().clone();
+        assert_eq!(captured.len(), 2, "{captured:?}");
+        assert!(captured[0].1.contains("queued turn failed"), "{captured:?}");
+        assert!(captured[1].1.contains("queued turn failed"), "{captured:?}");
+
+        unregister_platform_sender_for_tests("testplat");
     }
 
     #[tokio::test]
