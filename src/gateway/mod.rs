@@ -8152,9 +8152,18 @@ pub async fn serve_multiplex(
     } else {
         None
     };
+    // P725: external drain-marker watcher (hermes drain_control):
+    // the dashboard writes/removes `<home>/.drain_request.json`;
+    // presence stamped with the current instantiation epoch flips the
+    // drain flag so new runs are refused.
+    let drain_watcher = tokio::spawn(crate::drain_control::run_drain_watcher(
+        state.clone(),
+        std::time::Duration::from_secs(crate::drain_control::WATCHER_INTERVAL_SECONDS),
+    ));
     let serve_result = axum::serve(listener, app)
         .await
         .map_err(|e| AgentError::config(format!("gateway serve: {}", e)));
+    drain_watcher.abort();
     if let Some(handle) = stall_watcher {
         handle.abort();
     }

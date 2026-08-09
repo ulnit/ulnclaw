@@ -103,6 +103,7 @@ pub mod cwd_placeholder;
 pub mod computer_use;
 pub mod credential_pool;
 pub mod discord_tool;
+pub mod drain_control;
 pub mod feishu_doc_tool;
 pub mod spotify_auth;
 pub mod spotify_tool;
