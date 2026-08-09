@@ -76,6 +76,40 @@ pub fn load_env_file(path: &Path) -> HashMap<String, String> {
     map
 }
 
+/// Keys applied by the last `reload_env` — the removal set when a key
+/// disappears from `.env` (never clobbers unrelated environment; the
+/// hermes known-keys removal policy).
+fn reload_applied_keys() -> &'static std::sync::Mutex<std::collections::BTreeSet<String>> {
+    static KEYS: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    KEYS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()))
+}
+
+/// Re-read `<home>/.env` into the process environment (hermes
+/// `reload_env` parity): adds/updates vars that changed and removes
+/// vars a previous reload applied that are gone from the file now.
+/// Returns the number of vars updated or removed.
+pub fn reload_env() -> usize {
+    let env_file = ulnclaw_home().join(".env");
+    let vars = load_env_file(&env_file);
+    let mut count = 0;
+    for (key, value) in &vars {
+        if std::env::var(key).ok().as_deref() != Some(value.as_str()) {
+            std::env::set_var(key, value);
+            count += 1;
+        }
+    }
+    let mut applied = reload_applied_keys().lock().unwrap();
+    for key in applied.iter() {
+        if !vars.contains_key(key) && std::env::var(key).is_ok() {
+            std::env::remove_var(key);
+            count += 1;
+        }
+    }
+    *applied = vars.keys().cloned().collect();
+    count
+}
+
 /// Config-aware env lookup: process env first, then `~/.ulnclaw/.env`.
 /// Port of hermes' `get_env_value`.
 pub fn get_env_value(name: &str) -> Option<String> {
@@ -1650,5 +1684,42 @@ description = "Speaks in poems"
         .unwrap();
         assert!(!parsed.kanban.auto_decompose);
         assert_eq!(parsed.kanban.auto_decompose_per_tick, 1);
+    }
+
+    #[test]
+    fn reload_env_applies_and_removes_dotenv_keys() {
+        // P689: hermes reload_env parity.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        std::env::remove_var("ULNCLAW_RELOAD_A");
+        std::env::remove_var("ULNCLAW_RELOAD_B");
+
+        std::fs::write(dir.path().join(".env"), "ULNCLAW_RELOAD_A=1\n").unwrap();
+        let count = super::reload_env();
+        assert!(count >= 1, "{count}");
+        assert_eq!(std::env::var("ULNCLAW_RELOAD_A").ok().as_deref(), Some("1"));
+
+        // Update + add.
+        std::fs::write(
+            dir.path().join(".env"),
+            "ULNCLAW_RELOAD_A=2\nULNCLAW_RELOAD_B=x\n",
+        )
+        .unwrap();
+        super::reload_env();
+        assert_eq!(std::env::var("ULNCLAW_RELOAD_A").ok().as_deref(), Some("2"));
+        assert_eq!(std::env::var("ULNCLAW_RELOAD_B").ok().as_deref(), Some("x"));
+
+        // Removal: B disappears from the file -> removed from the env.
+        std::fs::write(dir.path().join(".env"), "ULNCLAW_RELOAD_A=2\n").unwrap();
+        super::reload_env();
+        assert_eq!(std::env::var("ULNCLAW_RELOAD_A").ok().as_deref(), Some("2"));
+        assert!(std::env::var("ULNCLAW_RELOAD_B").is_err());
+
+        std::env::remove_var("ULNCLAW_RELOAD_A");
+        if let Some(home) = prev {
+            std::env::set_var("ULNCLAW_HOME", home);
+        }
     }
 }

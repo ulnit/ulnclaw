@@ -10788,6 +10788,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /goal [text|status|show|pause|resume|clear]  standing goal (Ralph loop) control
   /learn <what>      learn a reusable skill from anything you describe
   /moa <prompt>      one-shot Mixture-of-Agents synthesis (default preset)
+  /reload            reload <home>/.env vars into the running gateway
   /subgoal [text|remove N|clear]  extra criteria on the active goal
   /reload-mcp [confirm]  rebuild the MCP tool surface (confirm when gated)
   /skills          list skills (invoke one: /<skill-name> [instruction])
@@ -11456,6 +11457,14 @@ async fn resolve_gateway_slash(
             Some(GatewaySlash::AgentTurn(
                 crate::learn_prompt::build_learn_prompt(rest),
             ))
+        }
+        "/reload" => {
+            // hermes /reload parity: re-read <home>/.env into the
+            // process env so new keys are picked up without restart.
+            let count = crate::config::reload_env();
+            Some(GatewaySlash::Direct(format!(
+                "\u{2713} Reloaded .env — {count} variable(s) updated. Provider/model                  config changes still need a gateway restart."
+            )))
         }
         "/moa" => {
             // hermes /moa parity (REPL /moa twin): one prompt through
@@ -16325,6 +16334,33 @@ mod tests {
         assert!(digest.contains("1 reference(s)"), "{digest}");
         assert!(digest.contains("aggregator openai:gpt-x"), "{digest}");
         assert!(digest.contains("/moa <prompt>"), "{digest}");
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_reload_reports_count() {
+        // P689: /reload re-reads <home>/.env into the process env.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        std::fs::write(dir.path().join(".env"), "ULNCLAW_RELOAD_GW=1\n").unwrap();
+        std::env::remove_var("ULNCLAW_RELOAD_GW");
+
+        let state = test_state();
+        match resolve_gateway_slash(&state, "sess-1", "/reload").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("Reloaded .env"), "{text}");
+                assert!(text.contains("1 variable(s)"), "{text}");
+            }
+            _ => panic!("expected /reload to answer directly"),
+        }
+        assert_eq!(std::env::var("ULNCLAW_RELOAD_GW").ok().as_deref(), Some("1"));
+
+        std::env::remove_var("ULNCLAW_RELOAD_GW");
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]
