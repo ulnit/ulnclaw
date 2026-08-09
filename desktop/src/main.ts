@@ -2207,6 +2207,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/blueprint", t.slash.blueprint],
     ["/cron", t.slash.cron],
     ["/suggestions", t.slash.suggestions],
+    ["/init", t.slash.init],
   ];
 }
 

@@ -10530,6 +10530,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /blueprint [name] [slot=val…]  automation blueprints: catalog, guided setup, or direct create
   /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
   /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
+  /init [notes]      generate or update AGENTS.md from a project scan
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /branch [name]   fork this session into a child branch
@@ -11588,6 +11589,14 @@ async fn resolve_gateway_slash(
                     "failed to create the job: {e}"
                 ))),
             }
+        }
+        "/init" => {
+            // Hermes /init parity (P665): generate or update AGENTS.md
+            // from a scan of the session cwd — prompt-injection turn.
+            let cwd = session_cwd(&state, session_id);
+            let extra = rest.trim().to_string();
+            let prompt = crate::init_command::build_init_prompt_for_cwd(Some(&cwd), &extra);
+            Some(GatewaySlash::AgentTurn(prompt))
         }
         "/suggestions" => {
             // Hermes /suggestions parity (P664): pending automation
@@ -15519,6 +15528,32 @@ mod tests {
         let cron = crate::cron::CronStore::open_default().expect("cron store");
         let jobs = cron.list().expect("cron list");
         assert_eq!(jobs.len(), 1, "{jobs:?}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_init_seeds_agents_md_turn() {
+        // P665: /init expands to an AgentTurn carrying the scan prompt
+        // (fresh-generation variant when no AGENTS.md exists).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = test_state();
+        match resolve_gateway_slash(&state, "sess-1", "/init focus on tests").await {
+            Some(GatewaySlash::AgentTurn(prompt)) => {
+                assert!(prompt.contains("[/init]"), "{prompt}");
+                assert!(prompt.contains("generate an AGENTS.md"), "{prompt}");
+                assert!(prompt.contains("USER NOTES"), "{prompt}");
+                assert!(prompt.contains("focus on tests"), "{prompt}");
+            }
+            _ => panic!("expected agent turn"),
+        }
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

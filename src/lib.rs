@@ -142,6 +142,7 @@ pub mod hermes_time;
 pub mod homeassistant;
 pub mod hook_output_spill;
 pub mod insights;
+pub mod init_command;
 pub mod iron_proxy;
 pub mod irc;
 pub mod mattermost;
