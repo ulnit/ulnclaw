@@ -628,6 +628,16 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/web-settings` — P747 web-tool backend selection. */
+export interface WebSettingsPayload {
+  search_backend: string | null;
+  extract_backend: string | null;
+  search_backends: string[];
+  tavily_key_configured: boolean;
+  brave_key_configured: boolean;
+  searxng_url_configured: boolean;
+}
+
 /** `GET /api/agent-settings` — P746 agent behavior snapshot. */
 export interface AgentSettingsPayload {
   max_iterations: number;
@@ -4001,6 +4011,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/web-settings — P747 web-tool backend selection. */
+  async webSettings(): Promise<WebSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/web-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`web-settings HTTP ${response.status}`);
+    return (await response.json()) as WebSettingsPayload;
+  }
+
+  /** P747: PUT /api/web-settings — persist a web-tool backend choice;
+   * null removes the override. */
+  async updateWebSetting(
+    key: string,
+    value: string | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/web-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `web-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/agent-settings — P746 agent behavior snapshot. */

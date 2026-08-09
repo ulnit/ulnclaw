@@ -5956,6 +5956,104 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/web-settings` — P747: web-tool backend selection for the
+/// shell: the configured search/extract backends (null = unset), the
+/// allowed search values, and which provider credentials are present in
+/// the environment (flags only, never values) so operators can see
+/// what `auto` would pick — tavily → brave → searxng → duckduckgo.
+async fn web_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let web = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .map(|c| c.web)
+        .unwrap_or_default();
+    let env_set = |name: &str| {
+        crate::config::get_env_value(name)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    };
+    Json(json!({
+        "search_backend": web.search_backend,
+        "extract_backend": web.extract_backend,
+        "search_backends": ["auto", "duckduckgo", "tavily", "brave", "searxng"],
+        "tavily_key_configured": env_set("TAVILY_API_KEY"),
+        "brave_key_configured": env_set("BRAVE_API_KEY"),
+        "searxng_url_configured": env_set("SEARXNG_URL"),
+    }))
+}
+
+/// `PUT /api/web-settings` — P747: persist web-tool backend selection
+/// from the shell. Body: `{"key": "search_backend"|"extract_backend",
+/// "value": ...|null}` — null removes the key (falls back to `auto` /
+/// the built-in extract). `search_backend` is validated against the
+/// known backends; `extract_backend` stays free-form (hermes parity).
+/// Applies to new runs.
+async fn update_web_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["search_backend", "extract_backend"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown web key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let text = v.as_str().map(str::trim).unwrap_or("");
+            if key == "search_backend" {
+                if !matches!(text, "auto" | "duckduckgo" | "ddgs" | "tavily" | "brave" | "searxng") {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "web.search_backend must be one of auto|duckduckgo|tavily|brave|searxng" })),
+                    );
+                }
+            } else if text.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "web.extract_backend must be a non-empty backend name" })),
+                );
+            }
+            raw = Some(text.to_string());
+        }
+    }
+    let dotted = format!("web.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(_) => crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true)
+            .map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/agent-settings` — P746: agent behavior snapshot for the
 /// shell: iteration budget, concurrency knobs, context budget, logging
 /// and environment probe — plus pointers to the surfaces that own the
@@ -7872,6 +7970,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/approvals/settings", put(update_approvals_settings_api))
         .route("/api/gateway-settings", get(gateway_settings_api).put(update_gateway_settings_api))
         .route("/api/agent-settings", get(agent_settings_api).put(update_agent_settings_api))
+        .route("/api/web-settings", get(web_settings_api).put(update_web_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -18299,6 +18398,83 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/agent-settings", Some("sekret")).await;
         assert_eq!(body["max_iterations"], 90, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_web_settings_editor() {
+        // P747: GET /api/web-settings surfaces backend selection +
+        // credential flags; PUT persists with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: nothing configured, allowed values surface.
+        let (status, body) = get_json(app.clone(), "/api/web-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["search_backend"], Value::Null, "{body}");
+        assert_eq!(body["extract_backend"], Value::Null, "{body}");
+        assert_eq!(
+            body["search_backends"],
+            json!(["auto", "duckduckgo", "tavily", "brave", "searxng"]),
+            "{body}"
+        );
+
+        // Persist both knobs.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/web-settings", Some("sekret"),
+            json!({ "key": "search_backend", "value": "tavily" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/web-settings", Some("sekret"),
+            json!({ "key": "extract_backend", "value": "firecrawl" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/web-settings", Some("sekret")).await;
+        assert_eq!(body["search_backend"], "tavily", "{body}");
+        assert_eq!(body["extract_backend"], "firecrawl", "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/web-settings", Some("sekret"),
+            json!({ "key": "search_backend", "value": "bing" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/web-settings", Some("sekret"),
+            json!({ "key": "extract_backend", "value": "  " }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/web-settings", Some("sekret"),
+            json!({ "key": "yolo", "value": "x" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/web-settings", Some("sekret"),
+            json!({ "key": "search_backend", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/web-settings", Some("sekret")).await;
+        assert_eq!(body["search_backend"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

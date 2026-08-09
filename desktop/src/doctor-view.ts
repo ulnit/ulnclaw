@@ -99,6 +99,17 @@ export class DoctorWidget {
           <span id="agent-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-web-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="webSettingsPanel.title">Web search</h3>
+        <div id="web-settings-rows"></div>
+        <div id="web-settings-editor" class="monitoring-row" hidden>
+          <select id="web-settings-key" class="ghost"></select>
+          <input id="web-settings-value" class="ghost" />
+          <button id="web-settings-apply" class="ghost mcp-add-btn" data-i18n="webSettingsPanel.apply">Apply</button>
+          <button id="web-settings-clear" class="ghost mcp-add-btn" data-i18n="webSettingsPanel.clear">Clear</button>
+          <span id="web-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -350,6 +361,7 @@ export class DoctorWidget {
     this.loadGatewayHealth().catch(() => undefined);
     this.loadGatewaySettings().catch(() => undefined);
     this.loadAgentSettings().catch(() => undefined);
+    this.loadWebSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2433,6 +2445,84 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadWebSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-web-settings") as HTMLElement;
+    const rows = this.root.querySelector("#web-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.webSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.webSettingsPanel.searchBackend,
+        payload.search_backend !== null
+          ? escapeHtmlDoctor(payload.search_backend)
+          : escapeHtmlDoctor(t.webSettingsPanel.autoWord),
+      );
+      addRow(
+        t.webSettingsPanel.extractBackend,
+        payload.extract_backend !== null
+          ? escapeHtmlDoctor(payload.extract_backend)
+          : escapeHtmlDoctor(t.webSettingsPanel.autoWord),
+      );
+      addRow(t.webSettingsPanel.tavilyKey, payload.tavily_key_configured ? on : off);
+      addRow(t.webSettingsPanel.braveKey, payload.brave_key_configured ? on : off);
+      addRow(t.webSettingsPanel.searxngUrl, payload.searxng_url_configured ? on : off);
+      // P747: web-tool backend editor — pick a key, type the value,
+      // Apply persists through PUT /api/web-settings, Clear removes the
+      // override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#web-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#web-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#web-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#web-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#web-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#web-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["search_backend", "extract_backend"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateWebSetting(keySel.value, value);
+            await this.loadWebSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueInput.value.trim());
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;
