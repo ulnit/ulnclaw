@@ -349,6 +349,7 @@ export interface Translations {
   portalPanel: { title: string; status: string; loggedIn: string; expired: string; expires: string; unknown: string; scope: string; refreshToken: string; portalUrl: string; };
   cgroupPanel: { title: string; supported: string; path: string; pidCount: string; ownPid: string; reapOnExit: string; };
   terminalPanel: { title: string; backend: string; envOverride: string; configuredCwd: string; placeholder: string; notSet: string; resolvedCwd: string; mountWorkspace: string; container: string; image: string; sshHost: string; timeouts: string; foregroundMax: string; envPassthrough: string; sessionCwd: string; apply: string; clear: string; };
+  approvalsPanel: { title: string; mode: string; timeout: string; cronMode: string; smartPolicy: string; breaker: string; denyRules: string; mcpReloadConfirm: string; apply: string; clear: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -858,6 +859,7 @@ const en: Translations = {
   portalPanel: { title: "Portal auth", status: "Status", loggedIn: "logged in", expired: "expired", expires: "Expires", unknown: "unknown", scope: "Scope", refreshToken: "Refresh token", portalUrl: "Portal URL" },
   cgroupPanel: { title: "Cgroup reaper", supported: "Supported", path: "Cgroup path", pidCount: "PIDs in cgroup", ownPid: "incl. gateway", reapOnExit: "Reap orphans on exit" },
   terminalPanel: { title: "Terminal", backend: "Backend", envOverride: "env override", configuredCwd: "Configured cwd", placeholder: "placeholder", notSet: "not set", resolvedCwd: "Resolved messaging cwd", mountWorkspace: "Docker cwd mount", container: "Container", image: "Image", sshHost: "SSH host", timeouts: "Timeouts", foregroundMax: "fg max", envPassthrough: "Env passthrough vars", sessionCwd: "Session cwd", apply: "Apply", clear: "Clear" },
+  approvalsPanel: { title: "Approvals", mode: "Mode", timeout: "Decision timeout", cronMode: "Cron mode", smartPolicy: "Smart policy", breaker: "Denial breaker", denyRules: "Deny rules", mcpReloadConfirm: "MCP reload confirm", apply: "Apply", clear: "Clear" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1444,6 +1446,7 @@ const zh: Translations = {
   portalPanel: { title: "门户认证", status: "状态", loggedIn: "已登录", expired: "已过期", expires: "到期时间", unknown: "未知", scope: "作用域", refreshToken: "刷新令牌", portalUrl: "门户地址" },
   cgroupPanel: { title: "Cgroup 回收器", supported: "支持", path: "Cgroup 路径", pidCount: "cgroup 内进程数", ownPid: "含网关自身", reapOnExit: "退出时回收孤儿进程" },
   terminalPanel: { title: "终端", backend: "后端", envOverride: "环境变量覆盖", configuredCwd: "配置的工作目录", placeholder: "占位符", notSet: "未设置", resolvedCwd: "解析后的消息目录", mountWorkspace: "Docker cwd 挂载", container: "容器", image: "镜像", sshHost: "SSH 主机", timeouts: "超时", foregroundMax: "前台上限", envPassthrough: "环境变量透传数", sessionCwd: "会话工作目录", apply: "应用", clear: "清除" },
+  approvalsPanel: { title: "审批", mode: "模式", timeout: "决策超时", cronMode: "定时模式", smartPolicy: "智能策略", breaker: "连续拒绝熔断", denyRules: "拒绝规则", mcpReloadConfirm: "MCP 重载确认", apply: "应用", clear: "清除" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2030,6 +2033,7 @@ const zhHant: Translations = {
   portalPanel: { title: "門戶認證", status: "狀態", loggedIn: "已登入", expired: "已過期", expires: "到期時間", unknown: "未知", scope: "作用域", refreshToken: "重新整理權杖", portalUrl: "門戶位址" },
   cgroupPanel: { title: "Cgroup 回收器", supported: "支援", path: "Cgroup 路徑", pidCount: "cgroup 內程序數", ownPid: "含閘道自身", reapOnExit: "結束時回收孤兒程序" },
   terminalPanel: { title: "終端", backend: "後端", envOverride: "環境變數覆蓋", configuredCwd: "配置的工作目錄", placeholder: "佔位符", notSet: "未設定", resolvedCwd: "解析後的消息目錄", mountWorkspace: "Docker cwd 掛載", container: "容器", image: "映像", sshHost: "SSH 主機", timeouts: "逾時", foregroundMax: "前台上限", envPassthrough: "環境變數透傳數", sessionCwd: "工作階段目錄", apply: "套用", clear: "清除" },
+  approvalsPanel: { title: "審批", mode: "模式", timeout: "決策逾時", cronMode: "排程模式", smartPolicy: "智慧策略", breaker: "連續拒絕熔斷", denyRules: "拒絕規則", mcpReloadConfirm: "MCP 重載確認", apply: "套用", clear: "清除" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2616,6 +2620,7 @@ const ja: Translations = {
   portalPanel: { title: "ポータル認証", status: "状態", loggedIn: "ログイン済み", expired: "期限切れ", expires: "有効期限", unknown: "不明", scope: "スコープ", refreshToken: "リフレッシュトークン", portalUrl: "ポータル URL" },
   cgroupPanel: { title: "Cgroup リーパー", supported: "対応", path: "Cgroup パス", pidCount: "cgroup 内 PID 数", ownPid: "ゲートウェイ含む", reapOnExit: "終了時に孤立プロセスを回収" },
   terminalPanel: { title: "ターミナル", backend: "バックエンド", envOverride: "環境変数オーバーライド", configuredCwd: "設定された cwd", placeholder: "プレースホルダ", notSet: "未設定", resolvedCwd: "解決済みメッセージング cwd", mountWorkspace: "Docker cwd マウント", container: "コンテナ", image: "イメージ", sshHost: "SSH ホスト", timeouts: "タイムアウト", foregroundMax: "前台最大", envPassthrough: "環境変数パススルー数", sessionCwd: "セッション cwd", apply: "適用", clear: "クリア" },
+  approvalsPanel: { title: "承認", mode: "モード", timeout: "判断タイムアウト", cronMode: "cron モード", smartPolicy: "スマートポリシー", breaker: "拒否ブレーカー", denyRules: "拒否ルール", mcpReloadConfirm: "MCP リロード確認", apply: "適用", clear: "クリア" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3202,6 +3207,7 @@ const ar: Translations = {
   portalPanel: { title: "مصادقة البوابة", status: "الحالة", loggedIn: "مسجل الدخول", expired: "منتهي", expires: "ينتهي في", unknown: "غير معروف", scope: "النطاق", refreshToken: "رمز التحديث", portalUrl: "عنوان البوابة" },
   cgroupPanel: { title: "منظف cgroup", supported: "مدعوم", path: "مسار cgroup", pidCount: "عدد العمليات في cgroup", ownPid: "بما فيها البوابة", reapOnExit: "تنظيف العمليات اليتيمة عند الخروج" },
   terminalPanel: { title: "الطرفية", backend: "الخلفية", envOverride: "تجاوز بيئي", configuredCwd: "مسار العمل المكون", placeholder: "عنصر نائب", notSet: "غير معين", resolvedCwd: "مسار المراسلة المحلول", mountWorkspace: "تحميل cwd في Docker", container: "الحاوية", image: "الصورة", sshHost: "مضيف SSH", timeouts: "المهلات", foregroundMax: "الحد الأقصى الأمامي", envPassthrough: "متغيرات التمرير البيئي", sessionCwd: "مسار الجلسة", apply: "تطبيق", clear: "مسح" },
+  approvalsPanel: { title: "الموافقات", mode: "الوضع", timeout: "مهلة القرار", cronMode: "وضع المهام", smartPolicy: "السياسة الذكية", breaker: "قاطع الرفض", denyRules: "قواعد الرفض", mcpReloadConfirm: "تأكيد إعادة تحميل MCP", apply: "تطبيق", clear: "مسح" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

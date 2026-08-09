@@ -1912,13 +1912,20 @@ async fn reasoning_set(Json(body): Json<Value>) -> Response {
 /// values (P635; hermes approval-mode-menu backend parity).
 async fn approvals_get() -> Json<Value> {
     let path = crate::config_cmd::config_path();
-    let mode = crate::config::UlncLawConfig::load(Some(&path))
-        .map(|c| c.approvals.mode)
-        .unwrap_or_else(|_| "manual".to_string());
+    let approvals = crate::config::UlncLawConfig::load(Some(&path))
+        .map(|c| c.approvals)
+        .unwrap_or_default();
     Json(json!({
-        "mode": mode,
+        "mode": approvals.mode,
         "modes": ["manual", "smart", "off"],
         "note": "manual prompts a human; smart asks the auxiliary guardian first; off auto-approves except approvals.deny rules",
+        "timeout": approvals.timeout,
+        "cron_mode": approvals.cron_mode,
+        "cron_modes": ["deny", "approve"],
+        "smart_policy": approvals.smart_policy,
+        "denial_breaker_threshold": approvals.denial_breaker_threshold,
+        "deny": approvals.deny,
+        "mcp_reload_confirm": approvals.mcp_reload_confirm,
     }))
 }
 
@@ -1935,6 +1942,138 @@ async fn approvals_set(Json(body): Json<Value>) -> Response {
         .into_response(),
         Err(e) if e.contains("must be one of") => bad_request(&e, None),
         Err(e) => server_error(&e),
+    }
+}
+
+/// `PUT /api/approvals/settings` — P744: persist the approvals knobs
+/// the mode switch does not cover. Body: `{"key": "timeout"|
+/// "cron_mode"|"smart_policy"|"denial_breaker_threshold"|"deny"|
+/// "mcp_reload_confirm", "value": ...|null}` — null removes the key
+/// (falls back to the default). Values are type-checked before the
+/// config file is touched; `deny` takes an array of command globs.
+async fn update_approvals_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "timeout",
+        "cron_mode",
+        "smart_policy",
+        "denial_breaker_threshold",
+        "deny",
+        "mcp_reload_confirm",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown approvals key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    // Serialize the payload value into the raw config form, validating
+    // per-key types first. `deny` becomes an inline TOML array.
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "timeout" | "denial_breaker_threshold" => {
+                    if !v.is_u64() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("approvals key '{key}' must be a non-negative integer") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "cron_mode" => match v.as_str() {
+                    Some("deny") | Some("approve") => {
+                        raw = Some(v.as_str().unwrap().to_string());
+                    }
+                    _ => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "approvals.cron_mode must be one of deny|approve" })),
+                        )
+                    }
+                },
+                "smart_policy" => {
+                    if !v.is_string() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "approvals.smart_policy must be a string" })),
+                        );
+                    }
+                    raw = Some(v.as_str().unwrap_or_default().to_string());
+                }
+                "mcp_reload_confirm" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "approvals.mcp_reload_confirm must be a boolean" })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "deny" => {
+                    let items = match v.as_array() {
+                        Some(items) => items,
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "approvals.deny must be an array of command globs" })),
+                            )
+                        }
+                    };
+                    let mut list: Vec<toml::Value> = Vec::new();
+                    for item in items {
+                        let text = item.as_str().map(str::trim).unwrap_or("");
+                        if text.is_empty() {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "approvals.deny entries must be non-empty strings" })),
+                            );
+                        }
+                        list.push(toml::Value::String(text.to_string()));
+                    }
+                    raw = Some(toml::Value::Array(list).to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    let dotted = format!("approvals.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(_) => crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true)
+            .map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
     }
 }
 
@@ -7471,6 +7610,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/reasoning", get(reasoning_get).put(reasoning_set))
         .route("/api/fast", get(fast_get).put(fast_set))
         .route("/api/approvals", get(approvals_get).put(approvals_set))
+        .route("/api/approvals/settings", put(update_approvals_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -17628,6 +17768,97 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("manual|smart|off"));
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approvals_settings_editor() {
+        // P744: PUT /api/approvals/settings persists the knobs the mode
+        // switch does not cover; GET /api/approvals surfaces them.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults surface in the extended GET.
+        let (status, body) = get_json(app.clone(), "/api/approvals", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["timeout"], 300, "{body}");
+        assert_eq!(body["cron_mode"], "deny", "{body}");
+        assert_eq!(body["denial_breaker_threshold"], 3, "{body}");
+        assert_eq!(body["mcp_reload_confirm"], true, "{body}");
+        assert_eq!(body["deny"], json!([]), "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("timeout", json!(600)),
+            ("cron_mode", json!("approve")),
+            ("smart_policy", json!("be strict")),
+            ("denial_breaker_threshold", json!(5)),
+            ("mcp_reload_confirm", json!(false)),
+            ("deny", json!(["sudo *", "rm -rf /"])),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/approvals/settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/approvals", Some("sekret")).await;
+        assert_eq!(body["timeout"], 600, "{body}");
+        assert_eq!(body["cron_mode"], "approve", "{body}");
+        assert_eq!(body["smart_policy"], "be strict", "{body}");
+        assert_eq!(body["denial_breaker_threshold"], 5, "{body}");
+        assert_eq!(body["mcp_reload_confirm"], false, "{body}");
+        assert_eq!(body["deny"], json!(["sudo *", "rm -rf /"]), "{body}");
+
+        // Validation: unknown key, bad enum, wrong types.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/approvals/settings", Some("sekret"),
+            json!({ "key": "yolo", "value": 1 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/approvals/settings", Some("sekret"),
+            json!({ "key": "cron_mode", "value": "maybe" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/approvals/settings", Some("sekret"),
+            json!({ "key": "timeout", "value": "soon" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/approvals/settings", Some("sekret"),
+            json!({ "key": "deny", "value": "sudo *" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/approvals/settings", Some("sekret"),
+            json!({ "key": "timeout", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/approvals", Some("sekret")).await;
+        assert_eq!(body["timeout"], 300, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

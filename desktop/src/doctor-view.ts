@@ -121,6 +121,17 @@ export class DoctorWidget {
           <span id="display-edit-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-approvals" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="approvalsPanel.title">Approvals</h3>
+        <div id="approvals-rows"></div>
+        <div id="approvals-editor" class="monitoring-row" hidden>
+          <select id="approvals-edit-key" class="ghost"></select>
+          <input id="approvals-edit-value" class="ghost" />
+          <button id="approvals-edit-apply" class="ghost mcp-add-btn" data-i18n="approvalsPanel.apply">Apply</button>
+          <button id="approvals-edit-clear" class="ghost mcp-add-btn" data-i18n="approvalsPanel.clear">Clear</button>
+          <span id="approvals-edit-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-lifecycle" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="lifecyclePanel.title">Lifecycle</h3>
         <div id="lifecycle-rows"></div>
@@ -323,6 +334,7 @@ export class DoctorWidget {
     this.loadDisplay().catch(() => undefined);
     this.loadPhrases().catch(() => undefined);
     this.loadTerminal().catch(() => undefined);
+    this.loadApprovals().catch(() => undefined);
     this.loadCgroup().catch(() => undefined);
     this.loadHooks().catch(() => undefined);
     this.loadPortal().catch(() => undefined);
@@ -2397,6 +2409,119 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadApprovals(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-approvals") as HTMLElement;
+    const rows = this.root.querySelector("#approvals-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.approvalsGet();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.approvalsPanel.mode,
+        `<span class="models-view-badge ok">${escapeHtmlDoctor(payload.mode)}</span>`,
+      );
+      addRow(t.approvalsPanel.timeout, `${payload.timeout}s`);
+      addRow(t.approvalsPanel.cronMode, escapeHtmlDoctor(payload.cron_mode));
+      addRow(
+        t.approvalsPanel.smartPolicy,
+        payload.smart_policy.trim().length > 0
+          ? escapeHtmlDoctor(payload.smart_policy)
+          : escapeHtmlDoctor(off),
+      );
+      addRow(t.approvalsPanel.breaker, String(payload.denial_breaker_threshold));
+      addRow(
+        t.approvalsPanel.denyRules,
+        payload.deny.length > 0
+          ? escapeHtmlDoctor(payload.deny.join(", "))
+          : escapeHtmlDoctor(off),
+      );
+      addRow(
+        t.approvalsPanel.mcpReloadConfirm,
+        payload.mcp_reload_confirm ? on : off,
+      );
+      // P744: approvals settings editor — pick a key, type the value,
+      // Apply persists through PUT /api/approvals/settings, Clear removes
+      // the override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#approvals-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#approvals-edit-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#approvals-edit-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#approvals-edit-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#approvals-edit-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#approvals-edit-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = [
+          "timeout",
+          "cron_mode",
+          "smart_policy",
+          "denial_breaker_threshold",
+          "deny",
+          "mcp_reload_confirm",
+        ];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (
+          value: string | number | boolean | string[] | null,
+        ): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.approvalsSettingsSet(keySel.value, value);
+            await this.loadApprovals();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          let parsed: string | number | boolean | string[];
+          if (keySel.value === "deny") {
+            parsed = raw
+              .split(",")
+              .map((item) => item.trim())
+              .filter((item) => item.length > 0);
+          } else if (raw === "true") {
+            parsed = true;
+          } else if (raw === "false") {
+            parsed = false;
+          } else if (/^-?\d+$/.test(raw)) {
+            parsed = Number(raw);
+          } else {
+            parsed = raw;
+          }
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

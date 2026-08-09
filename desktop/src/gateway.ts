@@ -1261,11 +1261,19 @@ export interface ModelInfoPayload {
   capabilities: { vision: boolean; reasoning: boolean; tools: boolean } | null;
 }
 
-/** P635: approvals mode state (GET /api/approvals). */
+/** P635: approvals mode state (GET /api/approvals), extended with the
+ * full settings snapshot in P744. */
 export interface ApprovalsPayload {
   mode: string;
   modes: string[];
   note?: string;
+  timeout: number;
+  cron_mode: string;
+  cron_modes: string[];
+  smart_policy: string;
+  denial_breaker_threshold: number;
+  deny: string[];
+  mcp_reload_confirm: boolean;
 }
 
 /** P626: Priority Processing state (GET /api/fast). */
@@ -3960,6 +3968,25 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** P744: PUT /api/approvals/settings — persist an approvals knob
+   * (timeout, cron_mode, smart_policy, denial_breaker_threshold, deny,
+   * mcp_reload_confirm); null removes the override. */
+  async approvalsSettingsSet(
+    key: string,
+    value: string | number | boolean | string[] | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/approvals/settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `approvals settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** P626: GET /api/fast — Priority Processing state. */
