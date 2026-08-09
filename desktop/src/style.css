@@ -251,6 +251,7 @@ dialog menu button.danger { background: var(--bad); border-color: var(--bad); co
 }
 #kanban-header .spacer { flex: 1; }
 .kanban-counts { opacity: 0.65; font-size: 0.85em; }
+.kanban-stats { opacity: 0.55; font-size: 0.75em; font-family: var(--mono, monospace); }
 #kanban-columns {
   flex: 1; display: grid; grid-template-columns: repeat(4, 1fr);
   gap: 10px; padding: 12px; overflow: auto; align-items: start;

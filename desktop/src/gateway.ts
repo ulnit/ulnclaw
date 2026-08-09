@@ -337,6 +337,14 @@ export interface CronJob {
   last_delivery_error?: string | null;
 }
 
+/** P660: GET /api/kanban/stats payload (hermes board_stats). */
+export interface KanbanBoardStats {
+  by_status: { status: string; count: number }[];
+  by_assignee: { assignee: string; statuses: { status: string; count: number }[] }[];
+  oldest_ready_age_seconds: number | null;
+  now: number;
+}
+
 /** P659: one run in a kanban task's run history. */
 export interface KanbanTaskRun {
   id: number;
@@ -3976,6 +3984,19 @@ export class GatewayClient {
       return { ok: true };
     } catch (error) {
       return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P660: per-status + per-assignee counts for the current board. */
+  async kanbanBoardStats(): Promise<KanbanBoardStats | null> {
+    try {
+      const response = await fetch(this.endpoint("/api/kanban/stats"), {
+        headers: this.headers(),
+      });
+      if (!response.ok) return null;
+      return (await response.json()) as KanbanBoardStats;
+    } catch {
+      return null;
     }
   }
 

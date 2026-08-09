@@ -2,7 +2,7 @@
 // (same kanban.db the CLI `ulnclaw kanban` and the agent kanban_* tools
 // use) as a four-column card wall with quick actions.
 
-import type { FsEntry, GatewayClient, KanbanBoard, KanbanTask, KanbanTaskRun } from "./gateway";
+import type { FsEntry, GatewayClient, KanbanBoard, KanbanBoardStats, KanbanTask, KanbanTaskRun } from "./gateway";
 import { fmt, t } from "./i18n";
 
 function escapeHtmlKanban(text: string): string {
@@ -48,6 +48,7 @@ export class KanbanWidget {
         <button id="kanban-board-remove" class="ghost" title="Remove board" data-i18n-title="kanban.removeBoardAction">\uD83D\uDDD1</button>
         <button id="kanban-board-workdir" class="ghost" title="Set board workdir" data-i18n-title="kanban.workdirAction">\uD83D\uDCC1</button>
         <span id="kanban-counts" class="kanban-counts"></span>
+        <span id="kanban-stats" class="kanban-stats"></span>
         <span id="kanban-dispatch-status" class="config-note"></span>
         <span class="spacer"></span>
         <input id="kanban-filter" type="search" data-i18n-ph="kanban.filterPlaceholder" />
@@ -483,14 +484,16 @@ export class KanbanWidget {
   async refresh(): Promise<void> {
     const client = this.client();
     if (!client) return;
-    const [boards, tasks] = await Promise.all([
+    const [boards, tasks, stats] = await Promise.all([
       client.kanbanBoards(),
       client.kanbanTasks(),
+      client.kanbanBoardStats(),
     ]);
     this.boards = boards || [];
     this.tasks = tasks || [];
     this.renderBoards();
     this.renderColumns();
+    this.renderStats(stats);
   }
 
   /** Re-render cached data after a locale switch (P251). */
@@ -499,6 +502,37 @@ export class KanbanWidget {
       this.renderBoards();
       this.renderColumns();
     }
+  }
+
+  /** P660: compact per-status counts + oldest-ready age strip below
+   * the toolbar (hermes `kanban stats` parity). */
+  private renderStats(stats: KanbanBoardStats | null): void {
+    const el = this.root.querySelector("#kanban-stats")!;
+    if (!stats) {
+      el.textContent = "";
+      return;
+    }
+    const counts = new Map(stats.by_status.map((row) => [row.status, row.count]));
+    const order = ["todo", "ready", "scheduled", "running", "blocked", "done", "archived"];
+    const always = new Set(["todo", "ready", "running", "done"]);
+    const parts: string[] = [];
+    for (const status of order) {
+      const count = counts.get(status) || 0;
+      if (count > 0 || always.has(status)) parts.push(`${status} ${count}`);
+    }
+    let line = parts.join(" · ");
+    if (stats.oldest_ready_age_seconds !== null) {
+      const age = this.formatAge(stats.oldest_ready_age_seconds);
+      line += " · " + fmt(t.kanban.statsOldestReady, { age });
+    }
+    el.textContent = line;
+  }
+
+  private formatAge(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+    return `${Math.floor(seconds / 86400)}d`;
   }
 
   /** P654: open the board-workdir directory browser (hermes boards
