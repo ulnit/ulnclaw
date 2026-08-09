@@ -65,6 +65,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="gatewayHealth.title">Gateway health</h3>
         <div id="gateway-health-rows"></div>
       </section>
+      <section id="doctor-delivery-ledger" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="deliveryLedger.title">Delivery ledger</h3>
+        <div id="delivery-ledger-rows"></div>
+      </section>
       <section id="doctor-browser" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
         <div id="browser-rows"></div>
@@ -248,6 +252,7 @@ export class DoctorWidget {
     }
     this.loadMonitoring().catch(() => undefined);
     this.loadGatewayHealth().catch(() => undefined);
+    this.loadDeliveryLedger().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2127,6 +2132,55 @@ export class DoctorWidget {
         addRow(
           t.gatewayHealth.previousExit,
           `<span class="models-view-badge ${cls}">${escapeHtmlDoctor(label)}</span>`,
+        );
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** P706: crash-safe delivery ledger rows (P700-P705 parity). */
+  private async loadDeliveryLedger(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-delivery-ledger") as HTMLElement;
+    const rows = this.root.querySelector("#delivery-ledger-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const ledger = await client.deliveryLedger();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const stateBadge = (state: string): string => {
+        const cls = state === "delivered" ? "ok" : state === "pending" ? "" : "warn";
+        return `<span class="models-view-badge ${cls}">${escapeHtmlDoctor(state)}</span>`;
+      };
+      addRow(t.deliveryLedger.outstanding, String(ledger.outstanding));
+      const counts = Object.entries(ledger.counts)
+        .map(([state, count]) => `${escapeHtmlDoctor(state)}: ${count}`)
+        .join(" \u00b7 ");
+      addRow(t.deliveryLedger.byState, counts || escapeHtmlDoctor(t.deliveryLedger.empty));
+      const recent = ledger.obligations
+        .filter((obligation) => obligation.state !== "delivered")
+        .slice(0, 5);
+      for (const obligation of recent) {
+        const when = new Date(obligation.updated_at * 1000).toLocaleString();
+        addRow(
+          `${obligation.platform} \u2192 ${obligation.chat_id}`,
+          `${stateBadge(obligation.state)} \u00b7 ${t.deliveryLedger.attempts.replace("{n}", String(obligation.attempts))} \u00b7 ${escapeHtmlDoctor(when)}`,
         );
       }
       section.hidden = false;

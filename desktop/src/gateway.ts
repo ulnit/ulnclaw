@@ -530,6 +530,26 @@ export interface HealthDetailed {
   pid?: number;
 }
 
+/** One delivery-obligation row (P700 ledger; P706 ops surface). */
+export interface ObligationRow {
+  obligation_id: string;
+  session_key: string;
+  platform: string;
+  chat_id: string;
+  state: string;
+  attempts: number;
+  created_at: number;
+  updated_at: number;
+  last_error: string | null;
+}
+
+/** GET /api/delivery-ledger payload (P706). */
+export interface DeliveryLedgerPayload {
+  obligations: ObligationRow[];
+  counts: Record<string, number>;
+  outstanding: number;
+}
+
 export interface SyncStatus {
   device_id: string;
   device_name: string;
@@ -2337,6 +2357,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`monitoring HTTP ${response.status}`);
     return (await response.json()) as MonitoringPayload;
+  }
+
+  /** GET /api/delivery-ledger — P706 crash-safe delivery ledger rows. */
+  async deliveryLedger(): Promise<DeliveryLedgerPayload> {
+    const response = await fetch(this.endpoint("/api/delivery-ledger"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`delivery-ledger HTTP ${response.status}`);
+    return (await response.json()) as DeliveryLedgerPayload;
   }
 
   /** GET /api/webhooks/subscriptions — dynamic webhook routes. */

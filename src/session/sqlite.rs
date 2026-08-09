@@ -1061,6 +1061,38 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// Recent obligation rows, newest first (P706 ops surface; hermes
+    /// ledger inspection). Content is omitted — the surface reports
+    /// state and counts, not message bodies.
+    pub fn list_obligations(&self, limit: usize) -> Vec<serde_json::Value> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT obligation_id, session_key, platform, chat_id, state, attempts,
+                    created_at, updated_at, last_error
+             FROM delivery_obligations ORDER BY updated_at DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![limit as i64], |row| {
+            Ok(serde_json::json!({
+                "obligation_id": row.get::<_, String>(0)?,
+                "session_key": row.get::<_, String>(1)?,
+                "platform": row.get::<_, String>(2)?,
+                "chat_id": row.get::<_, String>(3)?,
+                "state": row.get::<_, String>(4)?,
+                "attempts": row.get::<_, i64>(5)?,
+                "created_at": row.get::<_, f64>(6)?,
+                "updated_at": row.get::<_, f64>(7)?,
+                "last_error": row.get::<_, Option<String>>(8)?,
+            }))
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    }
+
     /// Test/inspection hook: all obligation rows ordered oldest first.
     #[cfg(test)]
     pub fn obligation_rows(&self) -> Vec<(String, String, String, i64)> {

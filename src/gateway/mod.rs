@@ -5493,6 +5493,38 @@ async fn channels_status(State(_state): State<Arc<GatewayState>>) -> Response {
     }
 }
 
+/// `GET /api/delivery-ledger` — P706 ops surface over the P700
+/// delivery-obligation ledger: recent rows (newest first) with state,
+/// attempts and routing, plus per-state counts. Bodies are omitted —
+/// the surface reports state and counts, not message content (hermes
+/// ledger inspection parity).
+async fn delivery_ledger_api(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let rows = state.store.list_obligations(200);
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for row in &rows {
+        let key = row
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        *counts.entry(key).or_insert(0) += 1;
+    }
+    let outstanding = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.get("state").and_then(Value::as_str),
+                Some("pending") | Some("attempting") | Some("failed")
+            )
+        })
+        .count();
+    Json(json!({
+        "obligations": rows,
+        "counts": counts,
+        "outstanding": outstanding,
+    }))
+}
+
 /// Build one messaging-platform payload row (lean hermes
 /// `_messaging_platform_payload` parity): enabled from
 /// `[messaging.<id>].enabled`, configured from the catalog's
@@ -6873,6 +6905,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/mcp/catalog/install", post(mcp_catalog_install))
         .route("/api/insights", get(insights))
         .route("/api/channels", get(channels_status))
+        .route("/api/delivery-ledger", get(delivery_ledger_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -25158,6 +25191,20 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         }
         assert!(body["connected_count"].is_u64(), "{body}");
         assert!(body["directory"].is_object(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn test_delivery_ledger_endpoint_shape() {
+        // P706: the ledger ops surface is auth-gated and reports rows +
+        // per-state counts (empty store → empty report).
+        let app = router(test_state());
+        let (status, _) = get_json(app.clone(), "/api/delivery-ledger", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, body) = get_json(app, "/api/delivery-ledger", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["obligations"].is_array(), "{body}");
+        assert!(body["counts"].is_object(), "{body}");
+        assert_eq!(body["outstanding"], 0);
     }
 
     #[tokio::test]

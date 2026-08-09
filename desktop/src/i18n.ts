@@ -338,6 +338,7 @@ export interface Translations {
   egressPanel: { title: string; };
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; test: string; stateConnected: string; stateNotConfigured: string; };
   gatewayHealth: { title: string; ok: string; degraded: string; overall: string; stateDb: string; config: string; model: string; disk: string; gateway: string; queues: string; usedPercent: string; connectedPlatforms: string; queueCounts: string; gatewayState: string; busy: string; activeAgents: string; uptime: string; pid: string; restartLoop: string; tripped: string; calm: string; previousExit: string; exitClean: string; exitUnclean: string; exitUnknown: string; };
+  deliveryLedger: { title: string; outstanding: string; byState: string; empty: string; attempts: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -836,6 +837,7 @@ const en: Translations = {
   egressPanel: { title: "Egress proxy" },
   channelsPanel: { title: "Messaging channels", enabled: "Enabled", disabled: "Disabled", noneEnabled: "(none)", test: "Test", stateConnected: "connected", stateNotConfigured: "not configured" },
   gatewayHealth: { title: "Gateway health", ok: "ok", degraded: "degraded", overall: "Overall", stateDb: "Session store", config: "Config", model: "Model", disk: "Disk", gateway: "Platforms", queues: "Background queues", usedPercent: "{pct}% used", connectedPlatforms: "{connected}/{total} connected", queueCounts: "{runs} active \u00b7 {queued} queued", gatewayState: "Gateway state", busy: "busy", activeAgents: "Active turns", uptime: "Uptime", pid: "PID", restartLoop: "Restart-loop breaker", tripped: "TRIPPED", calm: "calm", previousExit: "Previous exit", exitClean: "clean", exitUnclean: "unclean", exitUnknown: "unknown" },
+  deliveryLedger: { title: "Delivery ledger", outstanding: "Outstanding", byState: "By state", empty: "(none)", attempts: "{n} attempt(s)" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1411,6 +1413,7 @@ const zh: Translations = {
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "消息通道", enabled: "已启用", disabled: "未启用", noneEnabled: "（无）", test: "测试", stateConnected: "已连接", stateNotConfigured: "未配置" },
   gatewayHealth: { title: "网关健康", ok: "正常", degraded: "降级", overall: "总体状态", stateDb: "会话存储", config: "配置", model: "模型", disk: "磁盘", gateway: "平台", queues: "后台队列", usedPercent: "已用 {pct}%", connectedPlatforms: "已连接 {connected}/{total}", queueCounts: "活动 {runs} \u00b7 排队 {queued}", gatewayState: "网关状态", busy: "忙碌", activeAgents: "活动回合", uptime: "运行时长", pid: "PID", restartLoop: "重启循环断路器", tripped: "已触发", calm: "平静", previousExit: "上次退出", exitClean: "干净", exitUnclean: "非正常", exitUnknown: "未知" },
+  deliveryLedger: { title: "投递台账", outstanding: "待投递", byState: "按状态", empty: "（无）", attempts: "{n} 次尝试" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -1986,6 +1989,7 @@ const zhHant: Translations = {
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "訊息通道", enabled: "已啟用", disabled: "未啟用", noneEnabled: "（無）", test: "測試", stateConnected: "已連線", stateNotConfigured: "未設定" },
   gatewayHealth: { title: "閘道健康", ok: "正常", degraded: "降級", overall: "總體狀態", stateDb: "工作階段儲存", config: "設定", model: "模型", disk: "磁碟", gateway: "平台", queues: "背景佇列", usedPercent: "已用 {pct}%", connectedPlatforms: "已連線 {connected}/{total}", queueCounts: "活動 {runs} \u00b7 排隊 {queued}", gatewayState: "閘道狀態", busy: "忙碌", activeAgents: "活動回合", uptime: "執行時長", pid: "PID", restartLoop: "重啟循環斷路器", tripped: "已觸發", calm: "平靜", previousExit: "上次結束", exitClean: "乾淨", exitUnclean: "非正常", exitUnknown: "未知" },
+  deliveryLedger: { title: "投遞台账", outstanding: "待投遞", byState: "按狀態", empty: "（無）", attempts: "{n} 次嘗試" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2561,6 +2565,7 @@ const ja: Translations = {
   egressPanel: { title: "エグレスプロキシ" },
   channelsPanel: { title: "メッセージングチャネル", enabled: "有効", disabled: "無効", noneEnabled: "（なし）", test: "テスト", stateConnected: "接続済み", stateNotConfigured: "未設定" },
   gatewayHealth: { title: "ゲートウェイヘルス", ok: "正常", degraded: "劣化", overall: "全体状態", stateDb: "セッションストア", config: "設定", model: "モデル", disk: "ディスク", gateway: "プラットフォーム", queues: "バックグラウンドキュー", usedPercent: "使用率 {pct}%", connectedPlatforms: "接続済み {connected}/{total}", queueCounts: "実行中 {runs} \u00b7 キュー {queued}", gatewayState: "ゲートウェイ状態", busy: "ビジー", activeAgents: "実行中ターン", uptime: "稼働時間", pid: "PID", restartLoop: "再起動ループ遮断器", tripped: "トリップ済み", calm: "正常", previousExit: "前回の終了", exitClean: "正常終了", exitUnclean: "異常終了", exitUnknown: "不明" },
+  deliveryLedger: { title: "配信レッジャー", outstanding: "未配信", byState: "状態別", empty: "（なし）", attempts: "{n} 回試行" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3136,6 +3141,7 @@ const ar: Translations = {
   egressPanel: { title: "وكيل الخروج" },
   channelsPanel: { title: "قنوات المراسلة", enabled: "مفعلة", disabled: "معطلة", noneEnabled: "(لا شيء)", test: "اختبار", stateConnected: "متصل", stateNotConfigured: "غير مهيأ" },
   gatewayHealth: { title: "صحة البوابة", ok: "سليم", degraded: "متدهور", overall: "الحالة العامة", stateDb: "مخزن الجلسات", config: "الإعدادات", model: "النموذج", disk: "القرص", gateway: "المنصات", queues: "قوائم الخلفية", usedPercent: "الاستخدام {pct}%", connectedPlatforms: "متصل {connected}/{total}", queueCounts: "نشطة {runs} \u00b7 في الانتظار {queued}", gatewayState: "حالة البوابة", busy: "مشغولة", activeAgents: "الأدوار النشطة", uptime: "مدة التشغيل", pid: "PID", restartLoop: "قاطع حلقة إعادة التشغيل", tripped: "مفصول", calm: "هادئ", previousExit: "الخروج السابق", exitClean: "نظيف", exitUnclean: "غير نظيف", exitUnknown: "غير معروف" },
+  deliveryLedger: { title: "سجل التسليم", outstanding: "معلقة", byState: "حسب الحالة", empty: "(لا شيء)", attempts: "{n} محاولة" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",
