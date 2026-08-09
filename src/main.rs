@@ -1323,7 +1323,20 @@ enum SessionAction {
     /// List recent sessions
     List { #[arg(long, default_value = "20")] limit: usize },
     /// Show a session's messages
-    Show { id: String },
+    Show {
+        id: String,
+        /// Raw mode: every message with timestamp, tool name/id and
+        /// tool_calls — no decoration, grep-friendly (hermes trace
+        /// display parity)
+        #[arg(long)]
+        raw: bool,
+        /// Emit the transcript as a JSON array (implies raw detail)
+        #[arg(long)]
+        json: bool,
+        /// Prefix each message with its timestamp in the pretty view
+        #[arg(long)]
+        timestamps: bool,
+    },
     /// Full-text search across sessions
     Search { query: Vec<String> },
     /// Export a session as verifiable Markdown (hermes session export)
@@ -8845,14 +8858,35 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                 );
             }
         }
-        SessionAction::Show { id } => {
+        SessionAction::Show { id, raw, json, timestamps } => {
             let id = resolve_session_or_err(&store, &id)?;
+            if raw || json {
+                // P740: raw mode renders from the timestamped load so
+                // tool calls, tool ids and times are all visible.
+                let messages = store
+                    .load_messages_with_timestamps(&id)
+                    .map_err(|e| e.to_string())?;
+                if messages.is_empty() {
+                    return Err(format!("session '{}' not found", id));
+                }
+                print!("{}", ulnclaw::session::export::render_session_raw(&messages, json));
+                return Ok(());
+            }
             let Some(session) = store.load_session(&id).map_err(|e| e.to_string())? else {
                 return Err(format!("session '{}' not found", id));
             };
-            for message in &session.messages {
-                let content = message.content.as_deref().unwrap_or("");
-                println!("── {} ──\n{}", message.role, content);
+            if timestamps {
+                let stamped = store
+                    .load_messages_with_timestamps(&id)
+                    .map_err(|e| e.to_string())?;
+                for (ts, message) in &stamped {
+                    println!("{}", ulnclaw::session::export::render_show_line(*ts, message, true));
+                }
+            } else {
+                for message in &session.messages {
+                    let content = message.content.as_deref().unwrap_or("");
+                    println!("── {} ──\n{}", message.role, content);
+                }
             }
         }
         SessionAction::Search { query } => {

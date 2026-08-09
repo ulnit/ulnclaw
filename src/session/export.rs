@@ -439,6 +439,83 @@ pub fn write_session_export(
     Ok(path)
 }
 
+/// P740: raw-mode session rendering (hermes trace-display parity) —
+/// every message with timestamp, role, tool name/id and tool_calls
+/// JSON; no decoration, stable and grep-friendly. With `json` the
+/// transcript renders as a JSON array instead (one object per message).
+pub fn render_session_raw(
+    messages: &[(f64, crate::provider::Message)],
+    json: bool,
+) -> String {
+    if json {
+        let rows: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|(ts, message)| {
+                serde_json::json!({
+                    "timestamp": ts,
+                    "time": crate::message_timestamps::format_message_timestamp(*ts),
+                    "role": message.role.to_string(),
+                    "content": message.content,
+                    "name": message.name,
+                    "tool_call_id": message.tool_call_id,
+                    "tool_calls": message.tool_calls,
+                })
+            })
+            .collect();
+        return serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    }
+    let mut out = String::new();
+    for (ts, message) in messages {
+        let time = crate::message_timestamps::format_message_timestamp(*ts);
+        let mut header = format!("[{time}] role={}", message.role);
+        if let Some(name) = &message.name {
+            header.push_str(&format!(" tool={name}"));
+        }
+        if let Some(id) = &message.tool_call_id {
+            header.push_str(&format!(" tool_call_id={id}"));
+        }
+        if let Some(calls) = &message.tool_calls {
+            header.push_str(&format!(" tool_calls={}", calls.len()));
+        }
+        out.push_str(&header);
+        out.push('\n');
+        if let Some(content) = &message.content {
+            if !content.is_empty() {
+                out.push_str(content);
+                if !content.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+        if let Some(calls) = &message.tool_calls {
+            for call in calls {
+                out.push_str(&format!(
+                    "  tool_call id={} function={} arguments={}\n",
+                    call.id, call.function.name, call.function.arguments
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// P740: pretty-view line for `sessions show` with an optional
+/// timestamp prefix (`--timestamps`).
+pub fn render_show_line(
+    ts: f64,
+    message: &crate::provider::Message,
+    with_timestamp: bool,
+) -> String {
+    let content = message.content.as_deref().unwrap_or("");
+    if with_timestamp {
+        let time = crate::message_timestamps::format_message_timestamp(ts);
+        format!("── {} [{}] ──\n{}", message.role, time, content)
+    } else {
+        format!("── {} ──\n{}", message.role, content)
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,4 +683,92 @@ mod tests {
 
         assert!(write_session_export(dir.path(), &session, "pdf").is_err());
     }
+
+    #[test]
+    fn test_render_session_raw_text() {
+        use crate::provider::{FunctionCall, Message, Role, ToolCall};
+        let messages = vec![
+            (
+                1770700000.0,
+                Message {
+                    role: Role::User,
+                    content: Some("hello".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            ),
+            (
+                1770700010.0,
+                Message {
+                    role: Role::Assistant,
+                    content: Some("".into()),
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_1".into(),
+                        call_type: "function".into(),
+                        function: FunctionCall {
+                            name: "search".into(),
+                            arguments: "{\"q\":\"x\"}".into(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                    name: None,
+                },
+            ),
+            (
+                1770700020.0,
+                Message {
+                    role: Role::Tool,
+                    content: Some("results".into()),
+                    tool_calls: None,
+                    tool_call_id: Some("call_1".into()),
+                    name: Some("search".into()),
+                },
+            ),
+        ];
+        let out = super::render_session_raw(&messages, false);
+        assert!(out.contains("role=user"), "{out}");
+        assert!(out.contains("hello"), "{out}");
+        assert!(out.contains("tool_calls=1"), "{out}");
+        assert!(out.contains("function=search"), "{out}");
+        assert!(out.contains("tool_call_id=call_1"), "{out}");
+        assert!(out.contains("results"), "{out}");
+    }
+
+    #[test]
+    fn test_render_session_raw_json() {
+        use crate::provider::{Message, Role};
+        let messages = vec![(
+            1770700000.0,
+            Message {
+                role: Role::User,
+                content: Some("hi".into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        )];
+        let out = super::render_session_raw(&messages, true);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed[0]["role"], "user");
+        assert_eq!(parsed[0]["content"], "hi");
+        assert!(parsed[0]["timestamp"].is_number());
+    }
+
+    #[test]
+    fn test_render_show_line_timestamp_toggle() {
+        use crate::provider::{Message, Role};
+        let message = Message {
+            role: Role::User,
+            content: Some("text".into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        let plain = super::render_show_line(1770700000.0, &message, false);
+        let stamped = super::render_show_line(1770700000.0, &message, true);
+        assert!(plain.starts_with("── user ──"), "{plain}");
+        assert!(stamped.contains("user ["), "{stamped}");
+    }
+
 }
