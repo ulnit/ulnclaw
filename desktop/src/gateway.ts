@@ -628,6 +628,18 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/security-settings` — P752 security posture knobs. */
+export interface SecuritySettingsPayload {
+  allow_private_urls: boolean;
+  tirith_enabled: boolean;
+  tirith_path: string;
+  tirith_timeout: number;
+  tirith_fail_open: boolean;
+  tirith_enabled_env_override: boolean;
+  tirith_path_env_override: boolean;
+  tirith_timeout_env_override: boolean;
+}
+
 /** `GET /api/checkpoints/settings` — P751 checkpoint store knobs. */
 export interface CheckpointSettingsPayload {
   enabled: boolean;
@@ -4053,6 +4065,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/security-settings — P752 security posture knobs. */
+  async securitySettings(): Promise<SecuritySettingsPayload> {
+    const response = await fetch(this.endpoint("/api/security-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`security-settings HTTP ${response.status}`);
+    return (await response.json()) as SecuritySettingsPayload;
+  }
+
+  /** P752: PUT /api/security-settings — persist a security knob; null
+   * removes the override. */
+  async updateSecuritySetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/security-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `security-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/checkpoints/settings — P751 checkpoint store knobs. */

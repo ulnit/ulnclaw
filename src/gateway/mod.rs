@@ -6022,6 +6022,116 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/security-settings` — P752: security posture knobs for
+/// the shell: the SSRF private-URL allowance and the tirith pre-exec
+/// scanner settings (enabled, binary path, timeout, fail-open). Env
+/// overrides (TIRITH_ENABLED/TIRITH_BIN/TIRITH_TIMEOUT) are flagged
+/// but never leaked.
+async fn security_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let security =
+        crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+            .map(|c| c.security)
+            .unwrap_or_default();
+    let env_set = |name: &str| {
+        std::env::var(name)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    };
+    Json(json!({
+        "allow_private_urls": security.allow_private_urls,
+        "tirith_enabled": security.tirith_enabled,
+        "tirith_path": security.tirith_path,
+        "tirith_timeout": security.tirith_timeout,
+        "tirith_fail_open": security.tirith_fail_open,
+        "tirith_enabled_env_override": env_set("TIRITH_ENABLED"),
+        "tirith_path_env_override": env_set("TIRITH_BIN"),
+        "tirith_timeout_env_override": env_set("TIRITH_TIMEOUT"),
+    }))
+}
+
+/// `PUT /api/security-settings` — P752: persist security posture knobs
+/// from the shell. Body: `{"key": "allow_private_urls"|"tirith_enabled"|
+/// "tirith_path"|"tirith_timeout"|"tirith_fail_open", "value": ...|null}`
+/// — null removes the key (falls back to the default). Booleans and
+/// positive integers are type-checked; `tirith_path` must be a
+/// non-empty string. Applies to new runs.
+async fn update_security_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "allow_private_urls",
+        "tirith_enabled",
+        "tirith_path",
+        "tirith_timeout",
+        "tirith_fail_open",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown security key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    if let Some(v) = value {
+        if !v.is_null() {
+            let ok = match key.as_str() {
+                "allow_private_urls" | "tirith_enabled" | "tirith_fail_open" => v.is_boolean(),
+                "tirith_path" => v.as_str().map(|t| !t.trim().is_empty()).unwrap_or(false),
+                "tirith_timeout" => v.as_u64().map(|n| n >= 1).unwrap_or(false),
+                _ => false,
+            };
+            if !ok {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("invalid value for security key '{key}'") })),
+                );
+            }
+        }
+    }
+    let dotted = format!("security.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => {
+            let raw = match v {
+                Value::Bool(b) => b.to_string(),
+                Value::Number(n) => n.to_string(),
+                Value::String(t) => t.clone(),
+                other => other.to_string(),
+            };
+            crate::config_cmd::set_config_value(&dotted, &raw, true).map(|_| ())
+        }
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/checkpoints/settings` — P751: checkpoint store knobs for
 /// the shell: master switch, per-project snapshot cap, total store
 /// size ceiling, per-file skip size, retention window and auto-prune
@@ -8324,6 +8434,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/delegation-settings", get(delegation_settings_api).put(update_delegation_settings_api))
         .route("/api/model-catalog", get(model_catalog_api).put(update_model_catalog_api))
         .route("/api/checkpoints/settings", get(checkpoint_settings_api).put(update_checkpoint_settings_api))
+        .route("/api/security-settings", get(security_settings_api).put(update_security_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -19123,6 +19234,90 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/checkpoints/settings", Some("sekret")).await;
         assert_eq!(body["enabled"], false, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_security_settings_editor() {
+        // P752: GET /api/security-settings surfaces the posture knobs;
+        // PUT persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: SSRF block on, tirith on with a 5s timeout and
+        // fail-open.
+        let (status, body) = get_json(app.clone(), "/api/security-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["allow_private_urls"], false, "{body}");
+        assert_eq!(body["tirith_enabled"], true, "{body}");
+        assert_eq!(body["tirith_path"], "tirith", "{body}");
+        assert_eq!(body["tirith_timeout"], 5, "{body}");
+        assert_eq!(body["tirith_fail_open"], true, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("allow_private_urls", json!(true)),
+            ("tirith_enabled", json!(false)),
+            ("tirith_path", json!("/opt/tirith/bin/tirith")),
+            ("tirith_timeout", json!(15)),
+            ("tirith_fail_open", json!(false)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/security-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/security-settings", Some("sekret")).await;
+        assert_eq!(body["allow_private_urls"], true, "{body}");
+        assert_eq!(body["tirith_enabled"], false, "{body}");
+        assert_eq!(body["tirith_path"], "/opt/tirith/bin/tirith", "{body}");
+        assert_eq!(body["tirith_timeout"], 15, "{body}");
+        assert_eq!(body["tirith_fail_open"], false, "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/security-settings", Some("sekret"),
+            json!({ "key": "tirith_path", "value": "  " }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/security-settings", Some("sekret"),
+            json!({ "key": "tirith_timeout", "value": 0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/security-settings", Some("sekret"),
+            json!({ "key": "allow_private_urls", "value": "yes" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/security-settings", Some("sekret"),
+            json!({ "key": "tirith_timeout", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/security-settings", Some("sekret")).await;
+        assert_eq!(body["tirith_timeout"], 5, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
