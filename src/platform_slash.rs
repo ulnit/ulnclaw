@@ -31,6 +31,7 @@ const PLATFORM_SLASH_HELP: &str = "Commands you can send as chat messages:
   /new             start a fresh session (old one stays saved)
   /learn <what>    learn a reusable skill from anything you describe
   /sethome         set this chat as the platform home channel
+  /footer [on|off|status]  toggle the runtime-metadata footer
   /usage           this session's token usage
   /context         context-window usage of this chat's session
   /insights [N] [--days N] [--source S]   usage analytics across sessions
@@ -109,6 +110,26 @@ pub async fn resolve(
                     ))),
                 }
             }
+        }
+        "/footer" => {
+            // P715: hermes /footer — toggle the runtime-metadata
+            // footer; persists to config.toml and latches this
+            // process. Platform key best-effort from the session id
+            // (platform-<name>-<chat>).
+            let platform_key = session_id
+                .strip_prefix("platform-")
+                .map(|rest| rest.split('-').next().unwrap_or("").to_string())
+                .filter(|s| !s.is_empty());
+            let display = &agent.context().config.display;
+            let model = agent.context().config.model.model.clone();
+            Some(PlatformSlashOutcome::Direct(
+                crate::runtime_footer::handle_footer_command(
+                    rest,
+                    display,
+                    platform_key.as_deref(),
+                    Some(&model),
+                ),
+            ))
         }
         "/usage" => {
             let Some(row) = store.get_session_row(session_id).ok().flatten() else {
@@ -531,4 +552,52 @@ mod tests {
             std::env::set_var("ULNCLAW_HOME", prev);
         }
     }
+
+    #[tokio::test]
+    async fn footer_command_toggles_and_reports() {
+        // P715: /footer — status reports the effective state, on
+        // persists to config.toml and latches the process, unknown
+        // args answer usage. Env-global home + latch: serialize.
+        let _env_guard = crate::models_dev::test_env_lock();
+        crate::runtime_footer::clear_enabled_latch_for_tests();
+        let (dir, home, agent, store) = setup();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let outcome = resolve(&agent, &store, &home, "platform-telegram-chat-1", "/footer status")
+            .await
+            .expect("footer status resolves");
+        match outcome {
+            PlatformSlashOutcome::Direct(reply) => {
+                assert!(reply.contains("runtime footer: off"), "{reply}");
+                assert!(reply.contains("model, context_pct, cwd"), "{reply}");
+                assert!(reply.contains("telegram"), "{reply}");
+            }
+            other => panic!("expected Direct, got {other:?}"),
+        }
+
+        let outcome = resolve(&agent, &store, &home, "platform-telegram-chat-1", "/footer on")
+            .await
+            .expect("footer on resolves");
+        match outcome {
+            PlatformSlashOutcome::Direct(reply) => {
+                assert!(reply.starts_with("runtime footer enabled"), "{reply}");
+            }
+            other => panic!("expected Direct, got {other:?}"),
+        }
+        assert_eq!(crate::runtime_footer::enabled_latch(), Some(true));
+
+        let outcome = resolve(&agent, &store, &home, "platform-telegram-chat-1", "/footer sideways")
+            .await
+            .expect("footer bad arg resolves");
+        match outcome {
+            PlatformSlashOutcome::Direct(reply) => {
+                assert_eq!(reply, "usage: /footer [on|off|status]")
+            }
+            other => panic!("expected Direct, got {other:?}"),
+        }
+
+        std::env::remove_var("ULNCLAW_HOME");
+        crate::runtime_footer::clear_enabled_latch_for_tests();
+    }
 }
+

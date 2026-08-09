@@ -190,6 +190,7 @@ pub mod raft;
 pub mod readiness;
 pub mod redact;
 pub mod restart_loop_guard;
+pub mod runtime_footer;
 pub mod secret_scope;
 pub mod secrets;
 pub mod secrets_cache;

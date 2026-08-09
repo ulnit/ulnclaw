@@ -1305,6 +1305,27 @@ pub struct DisplayConfig {
     /// Petdex mascot display settings (hermes `display.pet.*`).
     #[serde(default)]
     pub pet: PetDisplayConfig,
+    /// Runtime-metadata footer appended to the final reply of an agent
+    /// turn (hermes `display.runtime_footer`). Off by default to keep
+    /// replies minimal; toggle live with `/footer on|off`.
+    #[serde(default)]
+    pub runtime_footer: crate::runtime_footer::RuntimeFooterConfig,
+    /// Per-platform display overrides (hermes
+    /// `display.platforms.<platform>`).
+    #[serde(default)]
+    pub platforms: std::collections::HashMap<String, PlatformDisplayOverride>,
+}
+
+/// `[display.platforms.<platform>]` — per-platform display overrides
+/// (hermes `display.platforms.<key>`). Only keys present override the
+/// global `[display]` values.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlatformDisplayOverride {
+    /// Partial runtime-footer override (hermes
+    /// `display.platforms.<key>.runtime_footer`).
+    #[serde(default)]
+    pub runtime_footer: crate::runtime_footer::RuntimeFooterOverride,
 }
 
 /// `[dashboard]` — web/desktop dashboard appearance persistence (hermes
