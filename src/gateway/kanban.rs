@@ -38,6 +38,8 @@ fn task_json(store: &KanbanStore, task: &crate::kanban::Task) -> Value {
         "title": task.title,
         "body": task.body,
         "assignee": task.assignee,
+        "model": task.model,
+        "provider": task.provider,
         "status": task.status,
         "priority": task.priority,
         "created_by": task.created_by,
@@ -532,6 +534,43 @@ pub async fn unblock_task(Path(id): Path<String>) -> Response {
     };
     match store.unblock_task(&id) {
         Ok(task) => Json(json!({"object": "ulnclaw.kanban.task", "task": task_json(&store, &task)})).into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct SetModelBody {
+    /// Model to pin; null / empty clears the override (and the
+    /// provider with it). Takes effect on the next dispatch.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Optional provider pin; requires a model (hermes contract).
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
+/// `POST /api/kanban/tasks/:id/set-model` — pin (or clear) the
+/// per-task model/provider override (hermes `kanban set-model
+/// [--provider P]`). Takes effect on the next dispatch.
+pub async fn set_model(Path(id): Path<String>, Json(body): Json<SetModelBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let model = body.model.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let provider = body.provider.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    // resolve() already 404'd unknown ids; what remains (terminal
+    // task, provider-without-model) is a caller error -> 400.
+    match store.set_model(&id, model, provider) {
+        Ok(task) => Json(json!({
+            "object": "ulnclaw.kanban.task",
+            "task": task_json(&store, &task),
+        }))
+        .into_response(),
         Err(e) => super::bad_request(&e.to_string(), None),
     }
 }

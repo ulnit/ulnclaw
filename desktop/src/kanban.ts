@@ -58,6 +58,12 @@ export class KanbanWidget {
             <label for="kanban-detail-reasoning" data-i18n="kanban.reasoningLabel">Reasoning effort</label>
             <select id="kanban-detail-reasoning"></select>
           </div>
+          <div class="kanban-detail-model">
+            <label for="kanban-detail-model" data-i18n="kanban.modelLabel">Model</label>
+            <input id="kanban-detail-model" type="text" placeholder="inherit profile" data-i18n-ph="kanban.modelInherit" />
+            <input id="kanban-detail-provider" type="text" placeholder="provider (optional)" data-i18n-ph="kanban.providerOptional" />
+            <button id="kanban-detail-model-apply" type="button" data-i18n="kanban.applyAction">Apply</button>
+          </div>
           <pre id="kanban-detail-body" class="kanban-detail-body"></pre>
           <div id="kanban-detail-attachments" class="kanban-detail-attachments"></div>
           <div id="kanban-detail-comments" class="kanban-comments"></div>
@@ -279,6 +285,13 @@ export class KanbanWidget {
       reasoning.textContent = `\u26A1 ${task.reasoning_effort}`;
       meta.appendChild(reasoning);
     }
+    if (task.model) {
+      const model = document.createElement("span");
+      model.className = "kanban-chip";
+      model.title = t.kanban.modelLabel;
+      model.textContent = `\uD83E\uDDE0 ${task.model}`;
+      meta.appendChild(model);
+    }
     if (task.children.length > 0) {
       const sub = document.createElement("span");
       sub.className = "kanban-chip";
@@ -400,6 +413,30 @@ export class KanbanWidget {
       if (!c) return;
       const value = reasoningSelect.value === "" ? null : reasoningSelect.value;
       void c.kanbanSetReasoning(task.id, value).then(() => void this.refresh());
+    };
+
+    // P637: per-task model/provider pin (hermes kanban set-model);
+    // empty model clears both. Provider without a model is refused.
+    const modelInput = this.root.querySelector("#kanban-detail-model") as HTMLInputElement;
+    const providerInput = this.root.querySelector(
+      "#kanban-detail-provider",
+    ) as HTMLInputElement;
+    modelInput.value = task.model || "";
+    providerInput.value = task.provider || "";
+    (this.root.querySelector("#kanban-detail-model-apply") as HTMLButtonElement).onclick = () => {
+      const c = this.client();
+      if (!c) return;
+      const model = modelInput.value.trim();
+      const provider = providerInput.value.trim();
+      void c
+        .kanbanSetModel(task.id, model === "" ? null : model, provider === "" ? null : provider)
+        .then((result) => {
+          if (!result.ok) {
+            window.alert(result.error || "set-model failed");
+            return;
+          }
+          void this.refresh();
+        });
     };
 
     const attachEl = this.root.querySelector("#kanban-detail-attachments") as HTMLElement;

@@ -220,6 +220,8 @@ export interface KanbanTask {
   title: string;
   body: string;
   assignee: string | null;
+  model: string | null;
+  provider: string | null;
   status: string;
   priority: number;
   created_by: string;
@@ -3622,6 +3624,32 @@ export class GatewayClient {
       body: JSON.stringify({ reasoning_effort: effort }),
     });
     return (value?.task || null) as KanbanTask | null;
+  }
+
+  /**
+   * P637: pin (or clear, model=null) the per-task model/provider
+   * override. Returns the server error message, if any, so the UI can
+   * surface the provider-requires-model contract.
+   */
+  async kanbanSetModel(
+    id: string,
+    model: string | null,
+    provider: string | null,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/set-model`), {
+        headers: this.headers(),
+        method: "POST",
+        body: JSON.stringify({ model, provider }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        return { ok: false, error: body?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
   }
 
   // ---- Projects registry (shared with the `ulnclaw project` CLI) ----

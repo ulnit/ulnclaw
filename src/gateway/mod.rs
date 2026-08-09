@@ -23,7 +23,8 @@
 //!   - `GET/POST /api/kanban/boards`, `POST /api/kanban/boards/:slug/switch`,
 //!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`,
-//!     `POST /api/kanban/tasks/:id/set-reasoning`
+//!     `POST /api/kanban/tasks/:id/set-reasoning`,
+//!     `POST /api/kanban/tasks/:id/set-model`
 //!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
@@ -6559,6 +6560,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/tasks/:id/link", post(kanban::link_task))
         .route("/api/kanban/tasks/:id/claim", post(kanban::claim_task))
         .route("/api/kanban/tasks/:id/set-reasoning", post(kanban::set_reasoning))
+        .route("/api/kanban/tasks/:id/set-model", post(kanban::set_model))
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
         .route("/api/jobs/:id/run", post(run_job_now))
@@ -15107,6 +15109,93 @@ mod tests {
         let (status, _) = send_json(
             app.clone(), "POST", "/api/kanban/tasks/nope123/set-reasoning", None,
             json!({"reasoning_effort": "high"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kanban_set_model_endpoint() {
+        // P637: POST /api/kanban/tasks/:id/set-model pins (and clears)
+        // the per-task model/provider override.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "model pin test"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let id = body["task"]["id"].as_str().unwrap().to_string();
+        assert!(body["task"]["model"].is_null(), "{body}");
+
+        // Pin model + provider.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/set-model"), None,
+            json!({"model": "gpt-5", "provider": "openai"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["model"], "gpt-5", "{body}");
+        assert_eq!(body["task"]["provider"], "openai", "{body}");
+        let (_, body) = get_json(app.clone(), &format!("/api/kanban/tasks/{id}"), None).await;
+        assert_eq!(body["task"]["model"], "gpt-5", "{body}");
+
+        // Provider without model -> 400 (hermes contract).
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/set-model"), None,
+            json!({"provider": "anthropic"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("provider override requires a model"), "{body}");
+
+        // Empty model clears model + provider.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/set-model"), None,
+            json!({"model": ""}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["task"]["model"].is_null(), "{body}");
+        assert!(body["task"]["provider"].is_null(), "{body}");
+
+        // Terminal task -> 400.
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/complete"), None,
+            json!({"result": "done"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/set-model"), None,
+            json!({"model": "gpt-5"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already terminal"), "{body}");
+
+        // Unknown task -> 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks/nope123/set-model", None,
+            json!({"model": "gpt-5"}),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
