@@ -168,6 +168,7 @@ pub mod moa;
 pub mod learning_graph;
 pub mod learning_graph_render;
 pub mod learning_mutations;
+pub mod lifecycle_ledger;
 pub mod line;
 pub mod logs;
 pub mod model_inventory;

@@ -2048,6 +2048,12 @@ async fn gateway_stop() -> Response {
     let pid = std::process::id();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(300));
+        // P701: an intentional stop is a clean exit — mark the
+        // sentinel before the SIGTERM so the next boot does not read
+        // this as an unclean death.
+        if let Ok(home) = crate::config::ensure_home() {
+            crate::lifecycle_ledger::mark_exited(&home, Some(0), "api_stop");
+        }
         unsafe {
             libc::kill(pid as i32, libc::SIGTERM);
         }
@@ -12033,6 +12039,13 @@ async fn resolve_gateway_slash(
                 // and the supervisor restart.
                 if let Ok(home) = crate::config::ensure_home() {
                     let _ = std::fs::remove_file(crate::gateway_pidfile::pidfile_path(&home));
+                    // P701: a restart drain is a clean exit — the next
+                    // life must not read this as an unclean death.
+                    crate::lifecycle_ledger::mark_exited(
+                        &home,
+                        Some(GATEWAY_SERVICE_RESTART_EXIT_CODE),
+                        "restart_drain",
+                    );
                 }
                 (draining.restart_exit)(GATEWAY_SERVICE_RESTART_EXIT_CODE);
             });

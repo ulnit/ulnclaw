@@ -2552,6 +2552,10 @@ async fn gateway_cmd(
         gateway.port = port;
     }
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    // P701: lifecycle ledger — report any unclean previous death
+    // (SIGKILL / OOM / host death) before claiming the sentinel for
+    // this life (hermes lifecycle_ledger record_startup).
+    ulnclaw::lifecycle_ledger::record_startup(&home);
     // P698: restart-loop breaker — a stale pidfile (file present but the
     // recorded process dead) means the previous instance died without a
     // clean shutdown. Captured before the --replace kill so a deliberate
@@ -2688,6 +2692,10 @@ async fn gateway_cmd(
         });
     }
 
+    // P701: lifecycle heartbeat — the sentinel carries a memory sample
+    // so a later unclean-death report can classify OOM cycles.
+    ulnclaw::lifecycle_ledger::start_heartbeat(home.clone());
+
     // Register this instance in the pidfile; a startup failure or a
     // clean shutdown removes it (best-effort — a stale file only
     // weakens the guard, and the liveness check self-heals it).
@@ -2708,6 +2716,9 @@ async fn gateway_cmd(
         // Clean shutdown: clear the crash-boot history so only genuine
         // crashes accumulate in the breaker window (hermes clear()).
         ulnclaw::restart_loop_guard::clear(&home);
+        ulnclaw::lifecycle_ledger::mark_exited(&home, Some(0), "graceful_shutdown");
+    } else {
+        ulnclaw::lifecycle_ledger::mark_exited(&home, Some(1), "serve_error");
     }
     result.map_err(|e| e.to_string())
 }
