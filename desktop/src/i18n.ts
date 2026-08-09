@@ -90,7 +90,7 @@ export interface Translations {
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
   /** P624: context-window breakdown popup in the chat header. */
   contextUsage: { title: string; noData: string; freeSpace: string; window: string };
-  slash: { help: string; skills: string; tools: string; recap: string; title: string; retitle: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; insights: string; compress: string; skillFallback: string; resume: string; doctor: string; runs: string; projects: string; config: string; webhooks: string; models: string; plugins: string; archive: string; unarchive: string; exportSession: string; forkSession: string; search: string; open: string; openNotFound: string; status: string; context: string; whoami: string; version: string; commands: string; profile: string; model: string; reasoning: string; memory: string; sessions: string; stop: string; retry: string; undo: string; verbose: string; yolo: string; personality: string; goal: string; subgoal: string; reloadMcp: string; fast: string; branch: string; diff: string; rollback: string; blueprint: string; cron: string; suggestions: string; init: string; agents: string; journey: string; snapshot: string; platforms: string; curator: string; bundles: string; toolsets: string; approve: string; deny: string; background: string; restart: string; queue: string; steer: string; approvals: string; debug: string; image: string; learn: string; moa: string; reload: string };
+  slash: { help: string; skills: string; tools: string; recap: string; title: string; retitle: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; insights: string; compress: string; skillFallback: string; resume: string; doctor: string; runs: string; projects: string; config: string; webhooks: string; models: string; plugins: string; archive: string; unarchive: string; exportSession: string; forkSession: string; search: string; open: string; openNotFound: string; status: string; context: string; whoami: string; version: string; commands: string; profile: string; model: string; reasoning: string; memory: string; sessions: string; stop: string; retry: string; undo: string; verbose: string; yolo: string; personality: string; goal: string; subgoal: string; reloadMcp: string; fast: string; branch: string; diff: string; rollback: string; blueprint: string; cron: string; suggestions: string; init: string; agents: string; journey: string; snapshot: string; platforms: string; curator: string; bundles: string; toolsets: string; approve: string; deny: string; background: string; restart: string; queue: string; steer: string; approvals: string; debug: string; image: string; learn: string; moa: string; reload: string; history: string };
   /** P682: composer busy-behavior toggle (hermes /busy parity). */
   busy: { titlePlain: string; title: string; queue: string; steer: string; interrupt: string; queued: string; steerSent: string; interruptQueued: string; modeChanged: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
@@ -487,6 +487,7 @@ const en: Translations = {
     learn: "learn a reusable skill from anything you describe",
     moa: "one-shot Mixture-of-Agents synthesis (default preset)",
     reload: "reload <home>/.env vars into the running gateway",
+    history: "recent transcript of this session (tool chatter collapsed)",
   },
   busy: {
     titlePlain: "Busy behavior",
@@ -1058,6 +1059,7 @@ const zh: Translations = {
     learn: "从你描述的任何内容学习可复用技能",
     moa: "一次性 MoA（多模型合议）合成（默认预设）",
     reload: "把 <home>/.env 变量重新载入运行中的网关",
+    history: "本会话最近转录（工具消息折叠）",
   },
   busy: {
     titlePlain: "忙碌时行为",
@@ -1629,6 +1631,7 @@ const zhHant: Translations = {
     learn: "從你描述的任何內容學習可重用技能",
     moa: "一次性 MoA（多模型合議）合成（預設）",
     reload: "把 <home>/.env 變數重新載入執行中的閘道",
+    history: "本工作階段最近轉錄（工具訊息折疊）",
   },
   busy: {
     titlePlain: "忙碌時行為",
@@ -2200,6 +2203,7 @@ const ja: Translations = {
     learn: "説明したものから再利用可能なスキルを学習",
     moa: "Mixture-of-Agents ワンショット合成（既定プリセット）",
     reload: "実行中のゲートウェイに <home>/.env 変数を再読み込み",
+    history: "このセッションの最近のトランスクリプト（ツール表示を折りたたみ）",
   },
   busy: {
     titlePlain: "ビジー時の動作",
@@ -2771,6 +2775,7 @@ const ar: Translations = {
     learn: "تعلّم مهارة قابلة لإعادة الاستخدام من أي شيء تصفه",
     moa: "توليف لمرة واحدة عبر مزيج الوكلاء (الإعداد الافتراضي)",
     reload: "إعادة تحميل متغيرات <home>/.env في البوابة قيد التشغيل",
+    history: "النسخة الأخيرة من هذه الجلسة (طي رسائل الأدوات)",
   },
   busy: {
     titlePlain: "السلوك أثناء الانشغال",

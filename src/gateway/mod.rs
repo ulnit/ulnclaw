@@ -10789,6 +10789,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /learn <what>      learn a reusable skill from anything you describe
   /moa <prompt>      one-shot Mixture-of-Agents synthesis (default preset)
   /reload            reload <home>/.env vars into the running gateway
+  /history [N]       recent transcript of this session (tool chatter collapsed)
   /subgoal [text|remove N|clear]  extra criteria on the active goal
   /reload-mcp [confirm]  rebuild the MCP tool surface (confirm when gated)
   /skills          list skills (invoke one: /<skill-name> [instruction])
@@ -10838,6 +10839,21 @@ fn is_real_user_turn(message: &Message) -> bool {
             .filter(|text| !text.is_empty())
             .map(|text| !text.starts_with('/'))
             .unwrap_or(false)
+}
+
+/// Collapse a transcript message into one display line (hermes
+/// /history preview semantics): whitespace runs become single spaces,
+/// capped at 300 chars + ellipsis.
+fn flatten_for_history(content: Option<&str>) -> String {
+    let flat: String = content
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    match flat.char_indices().nth(300) {
+        Some((idx, _)) => format!("{}…", &flat[..idx]),
+        None => flat,
+    }
 }
 
 /// `/moa` no-args digest: configured presets (lean `print_moa_presets`
@@ -11457,6 +11473,61 @@ async fn resolve_gateway_slash(
             Some(GatewaySlash::AgentTurn(
                 crate::learn_prompt::build_learn_prompt(rest),
             ))
+        }
+        "/history" => {
+            // hermes /history parity (lean): recent transcript of this
+            // session; tool calls/results collapse into hidden counts.
+            let limit = rest
+                .split_whitespace()
+                .next()
+                .and_then(|token| token.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 200);
+            let messages = state.store.load_messages(session_id).unwrap_or_default();
+            if messages.is_empty() {
+                return Some(GatewaySlash::Direct(
+                    "(._.) No conversation history yet.".to_string(),
+                ));
+            }
+            let start = messages.len().saturating_sub(limit);
+            let mut lines = vec![format!(
+                "conversation history ({session_id}, last {} of {} messages):",
+                messages.len() - start,
+                messages.len()
+            )];
+            let mut hidden_tools = 0usize;
+            for message in &messages[start..] {
+                let is_user = message.role == Role::User;
+                let is_assistant_text = message.role == Role::Assistant
+                    && message
+                        .content
+                        .as_deref()
+                        .map(|c| !c.trim().is_empty())
+                        .unwrap_or(false);
+                if is_user || is_assistant_text {
+                    if hidden_tools > 0 {
+                        lines.push(format!(
+                            "  [tools] ({hidden_tools} tool messages hidden)"
+                        ));
+                        hidden_tools = 0;
+                    }
+                    let (glyph, label) = if is_user {
+                        ("\u{1F464}", "user")
+                    } else {
+                        ("\u{1F916}", "assistant")
+                    };
+                    lines.push(format!(
+                        "  {glyph} {label}: {}",
+                        flatten_for_history(message.content.as_deref())
+                    ));
+                } else {
+                    hidden_tools += 1;
+                }
+            }
+            if hidden_tools > 0 {
+                lines.push(format!("  [tools] ({hidden_tools} tool messages hidden)"));
+            }
+            Some(GatewaySlash::Direct(lines.join("\n")))
         }
         "/reload" => {
             // hermes /reload parity: re-read <home>/.env into the
@@ -16334,6 +16405,65 @@ mod tests {
         assert!(digest.contains("1 reference(s)"), "{digest}");
         assert!(digest.contains("aggregator openai:gpt-x"), "{digest}");
         assert!(digest.contains("/moa <prompt>"), "{digest}");
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_history_collapses_tool_messages() {
+        // P690: /history renders the recent transcript, tool chatter
+        // collapsed into hidden counts.
+        let state = test_state();
+        let sid = "sess-history";
+        state.store.create_named_session(sid, "test", None, None).unwrap();
+        let mk = |role: Role, content: &str| Message {
+            role,
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        state.store.append_message(sid, &mk(Role::User, "hello\nworld")).unwrap();
+        state
+            .store
+            .append_message(
+                sid,
+                &Message {
+                    role: Role::Assistant,
+                    content: None,
+                    tool_calls: Some(vec![]),
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .unwrap();
+        state.store.append_message(sid, &mk(Role::Tool, "tool output")).unwrap();
+        state.store.append_message(sid, &mk(Role::Assistant, "the answer")).unwrap();
+
+        match resolve_gateway_slash(&state, sid, "/history").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("last 4 of 4 messages"), "{text}");
+                assert!(text.contains("user: hello world"), "{text}");
+                assert!(text.contains("[tools] (2 tool messages hidden)"), "{text}");
+                assert!(text.contains("assistant: the answer"), "{text}");
+            }
+            _ => panic!("expected /history to answer directly"),
+        }
+
+        // Empty session.
+        match resolve_gateway_slash(&state, "sess-ghost", "/history").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("No conversation history"), "{text}");
+            }
+            _ => panic!("expected /history to answer directly"),
+        }
+
+        // Limit clamps the window.
+        match resolve_gateway_slash(&state, sid, "/history 2").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("last 2 of 4 messages"), "{text}");
+                assert!(!text.contains("user: hello"), "{text}");
+            }
+            _ => panic!("expected /history to answer directly"),
+        }
     }
 
     #[tokio::test]
