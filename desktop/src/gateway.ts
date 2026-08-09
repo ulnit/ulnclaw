@@ -864,6 +864,11 @@ export interface OAuthStatus {
   scopes: string;
   expires_at: number;
   token_preview: string;
+  /** P644: Google Chat OAuth account posture (never token values). */
+  google_chat?: {
+    client_secret_configured: boolean;
+    authorized_emails: string[];
+  };
 }
 
 /** One OAuth-capable provider row from GET /api/providers/oauth (P350). */

@@ -99,6 +99,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="systemPanel.title">System</h3>
         <div id="system-rows"></div>
       </section>
+      <section id="doctor-oauth" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="oauthPanel.title">Authorization</h3>
+        <div id="oauth-rows"></div>
+      </section>
       <section id="doctor-sync" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="syncPanel.title">Skills sync</h3>
         <div id="sync-rows"></div>
@@ -246,6 +250,7 @@ export class DoctorWidget {
     this.loadComputerUse().catch(() => undefined);
     this.loadSecrets().catch(() => undefined);
     this.loadSync().catch(() => undefined);
+    this.loadOAuth().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
     this.loadBackups().catch(() => undefined);
     this.loadCheckpoints().catch(() => undefined);
@@ -787,6 +792,59 @@ export class DoctorWidget {
         [v.home, info.home],
         [v.config, info.config_path],
       ];
+      rows.innerHTML = "";
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        valueEl.title = value;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** Authorization (P644): sync device-flow posture + Google Chat
+   * OAuth accounts. Tokens are only ever shown redacted server-side. */
+  private async loadOAuth(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-oauth") as HTMLElement;
+    const rows = this.root.querySelector("#oauth-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const info = await client.oauthStatus();
+      const v = t.oauthPanel;
+      const entries: [string, string][] = [];
+      let account = info.logged_in ? v.loggedIn : v.loggedOut;
+      if (info.logged_in && info.expired) account += ` \u00B7 ${v.expiredTag}`;
+      entries.push([v.syncAccount, account]);
+      if (info.logged_in && info.scopes) entries.push([v.scopes, info.scopes]);
+      if (info.expires_at > 0) {
+        entries.push([v.expires, new Date(info.expires_at * 1000).toLocaleString()]);
+      }
+      if (info.token_preview) entries.push([v.tokenPreview, info.token_preview]);
+      const gc = info.google_chat;
+      if (gc) {
+        entries.push([
+          v.googleSecret,
+          gc.client_secret_configured ? v.configured : v.notConfigured,
+        ]);
+        entries.push([
+          v.accounts,
+          gc.authorized_emails.length > 0 ? gc.authorized_emails.join(", ") : v.noneAccounts,
+        ]);
+      }
       rows.innerHTML = "";
       for (const [label, value] of entries) {
         const row = document.createElement("div");

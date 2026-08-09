@@ -34,6 +34,8 @@
 //!     never secret values) for the desktop Doctor panel
 //!   - `GET  /api/sync` — skills-sync posture (remote manifest with
 //!     `?remote=true`) for the desktop Doctor panel
+//!   - `GET  /api/oauth/status` also carries Google Chat OAuth
+//!     account posture (client secret + authorized emails; P644)
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
 //!   - `GET/PUT /api/fast` — Priority Processing (service_tier) toggle
@@ -2122,6 +2124,11 @@ async fn oauth_status(State(state): State<Arc<GatewayState>>) -> Json<Value> {
             crate::status::redact_key(&tokens.access_token)
         } else {
             String::new()
+        },
+        // P644: Google Chat OAuth account posture (never token values).
+        "google_chat": {
+            "client_secret_configured": crate::google_chat_oauth::load_client_secret(&home).is_some(),
+            "authorized_emails": crate::google_chat_oauth::list_authorized_emails(&home),
         },
     }))
 }
@@ -20311,6 +20318,14 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["scopes"], "read");
         let preview = body["token_preview"].as_str().unwrap();
         assert!(!preview.contains("tok-long-enough-value"), "raw token leaked");
+
+        // P644: Google Chat OAuth posture — no client secret, no
+        // authorized accounts on a fresh home.
+        assert_eq!(body["google_chat"]["client_secret_configured"], false, "{body}");
+        assert!(body["google_chat"]["authorized_emails"]
+            .as_array()
+            .unwrap()
+            .is_empty(), "{body}");
 
         match prev {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),
