@@ -1287,6 +1287,14 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
   background: rgba(200, 120, 160, 0.22);
   cursor: pointer;
 }
+/* P629: context-window usage chip on sessions-view rows (P628 parity). */
+.sessions-view-chip.sessions-view-ctx {
+  background: rgba(90, 170, 220, 0.22);
+}
+.sessions-view-chip.sessions-view-ctx.hot {
+  background: rgba(221, 51, 51, 0.24);
+  color: #ff8080;
+}
 /* P447: message-count meta on sessions-view rows. */
 .sessions-view-msgcount { opacity: 0.75; font-size: 0.9em; }
 /* P450: sortable count header. */

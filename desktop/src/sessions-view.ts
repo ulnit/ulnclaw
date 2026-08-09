@@ -568,7 +568,8 @@ export class SessionsViewWidget {
     }
     try {
       // P510: request last-message previews for the list rows.
-      this.all = await client.listSessions(true);
+      // P629: context=true adds per-row context_percent for the chips.
+      this.all = await client.listSessions(true, true);
       this.sortSessions();
       // P446: restore the persisted selection on the first load.
       if (!this.restored) {
@@ -1036,6 +1037,7 @@ export class SessionsViewWidget {
               ${session.model ? `<span class="sessions-view-chip sessions-view-model" data-model="${escapeHtml(session.model)}" title="${escapeHtml(session.model)}">${escapeHtml(session.model)}</span>` : ""}
               ${session.project ? `<span class="sessions-view-chip sessions-view-project" data-project="${escapeHtml(session.project)}" title="${escapeHtml(session.project)}">${escapeHtml(session.project)}</span>` : ""}
               ${session.message_count ? `<span class="sessions-view-msgcount">${escapeHtml(fmt(t.sessionsView.msgCount, { count: String(session.message_count) }))}</span>` : ""}
+              ${typeof session.context_percent === "number" && session.context_percent > 0 ? `<span class="sessions-view-chip sessions-view-ctx${session.context_percent >= 80 ? " hot" : ""}" title="${escapeHtml(fmt(t.session.ctxTitle, { pct: String(session.context_percent) }))}">${session.context_percent}% ctx</span>` : ""}
               <span title="${escapeHtml(fmtWhen(session.started_at))}">${fmtWhen(session.last_activity_at || session.started_at)}</span>
             </div>
           </div>`;

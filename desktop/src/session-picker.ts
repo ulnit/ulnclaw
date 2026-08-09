@@ -205,6 +205,10 @@ export class SessionPickerDialog {
       if (session.model) bits.push(session.model);
       if (session.project) bits.push(session.project);
       if (session.end_reason) bits.push(session.end_reason);
+      // P629: context-window usage meta (sidebar badge parity, P628).
+      if (typeof session.context_percent === "number" && session.context_percent > 0) {
+        bits.push(`${session.context_percent}% ctx`);
+      }
       const meta = document.createElement("span");
       meta.className = "session-picker-meta";
       meta.textContent = bits.join(" \u00b7 ");
