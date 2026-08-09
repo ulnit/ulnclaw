@@ -3718,6 +3718,42 @@ export class GatewayClient {
     return (value?.task || null) as KanbanTask | null;
   }
 
+  /** P646: park a task in the scheduled column. */
+  async kanbanSchedule(id: string, reason: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/schedule`), {
+        headers: this.headers(),
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P646: reassign a task ("none" or empty unassigns). */
+  async kanbanReassign(id: string, assignee: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/reassign`), {
+        headers: this.headers(),
+        method: "POST",
+        body: JSON.stringify({ assignee }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
   /** P645: attach a file/link to a task. */
   async kanbanAttach(id: string, kind: string, value: string): Promise<{ ok: boolean; error?: string }> {
     try {

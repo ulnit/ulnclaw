@@ -27,7 +27,8 @@
 //!     `POST /api/kanban/tasks/:id/set-model`,
 //!     `POST /api/kanban/tasks/:id/edit`,
 //!     `POST /api/kanban/tasks/:id/archive`, `DELETE /api/kanban/tasks/:id`,
-//!     `POST /api/kanban/tasks/:id/attach`, `DELETE /api/kanban/attachments/:aid`
+//!     `POST /api/kanban/tasks/:id/attach`, `DELETE /api/kanban/attachments/:aid`,
+//!     `POST /api/kanban/tasks/:id/schedule|reassign`
 //!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/computer-use` — cua-driver status + config (deep
 //!     health report with `?deep=true`) for the desktop Doctor panel
@@ -6723,6 +6724,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/tasks/:id/edit", post(kanban::edit_task))
         .route("/api/kanban/tasks/:id/archive", post(kanban::archive_task))
         .route("/api/kanban/tasks/:id/attach", post(kanban::attach_task))
+        .route("/api/kanban/tasks/:id/schedule", post(kanban::schedule_task))
+        .route("/api/kanban/tasks/:id/reassign", post(kanban::reassign_task))
         .route("/api/kanban/attachments/:aid", delete(kanban::remove_attachment))
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
@@ -15353,6 +15356,101 @@ mod tests {
         assert!(body["config"]["capture_after_mode"].is_string(), "{body}");
         // Shallow call never carries a health payload.
         assert!(body.get("health").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn test_kanban_schedule_reassign_endpoints() {
+        // P646: POST .../schedule parks a task; POST .../reassign moves
+        // or clears the assignee (hermes schedule / reassign).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "lifecycle test"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let id = body["task"]["id"].as_str().unwrap().to_string();
+
+        // Schedule it.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/schedule"), None,
+            json!({"reason": "waiting on upstream"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["status"], "scheduled", "{body}");
+
+        // Scheduling again fails the transition.
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/schedule"), None,
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Reassign to a worker, then unassign with "none".
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/reassign"), None,
+            json!({"assignee": "worker-a"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["assignee"], "worker-a", "{body}");
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/reassign"), None,
+            json!({"assignee": "none"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["task"]["assignee"].is_null(), "{body}");
+
+        // Terminal task -> 400 on reassign.
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/unblock"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/complete"), None,
+            json!({"result": "done"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/reassign"), None,
+            json!({"assignee": "worker-b"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already terminal"), "{body}");
+
+        // Unknown ids 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks/nope123/schedule", None, json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks/nope123/reassign", None,
+            json!({"assignee": "x"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

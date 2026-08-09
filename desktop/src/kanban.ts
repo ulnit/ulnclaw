@@ -79,6 +79,8 @@ export class KanbanWidget {
           <menu>
             <button id="kanban-detail-attach" type="button" data-i18n="kanban.attachAction">Attach</button>
             <button id="kanban-detail-edit" type="button" data-i18n="kanban.editAction">Edit</button>
+            <button id="kanban-detail-schedule" type="button" data-i18n="kanban.scheduleAction">Schedule</button>
+            <button id="kanban-detail-reassign" type="button" data-i18n="kanban.reassignAction">Reassign</button>
             <button id="kanban-detail-archive" type="button" data-i18n="kanban.archiveAction">Archive</button>
             <button id="kanban-detail-delete" type="button" data-i18n="kanban.deleteAction">Delete</button>
             <button id="kanban-detail-claim" value="claim" data-i18n="kanban.claim">Claim</button>
@@ -139,6 +141,39 @@ export class KanbanWidget {
           return;
         }
         void this.openDetail(taskId);
+      });
+    };
+
+    // P646: schedule + reassign from the detail dialog.
+    (this.root.querySelector("#kanban-detail-schedule") as HTMLButtonElement).onclick = () => {
+      const dialogEl = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
+      const taskId = dialogEl.dataset.taskId || "";
+      const client = this.client();
+      if (!taskId || !client) return;
+      const reason = window.prompt(t.kanban.schedulePrompt) || "";
+      void client.kanbanSchedule(taskId, reason.trim()).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "schedule failed");
+          return;
+        }
+        dialogEl.close();
+        void this.refresh();
+      });
+    };
+    (this.root.querySelector("#kanban-detail-reassign") as HTMLButtonElement).onclick = () => {
+      const dialogEl = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
+      const taskId = dialogEl.dataset.taskId || "";
+      const client = this.client();
+      if (!taskId || !client) return;
+      const assignee = window.prompt(t.kanban.reassignPrompt);
+      if (assignee === null) return;
+      void client.kanbanReassign(taskId, assignee.trim() || "none").then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "reassign failed");
+          return;
+        }
+        dialogEl.close();
+        void this.refresh();
       });
     };
 
@@ -662,6 +697,10 @@ export class KanbanWidget {
     completeBtn.style.display = detail.task.status === "done" ? "none" : "";
     const claimBtn = this.root.querySelector("#kanban-detail-claim") as HTMLButtonElement;
     claimBtn.style.display = detail.task.status === "done" ? "none" : "";
+    const scheduleBtn = this.root.querySelector("#kanban-detail-schedule") as HTMLButtonElement;
+    scheduleBtn.style.display = ["todo", "ready", "blocked"].includes(detail.task.status) ? "" : "none";
+    const reassignBtn = this.root.querySelector("#kanban-detail-reassign") as HTMLButtonElement;
+    reassignBtn.style.display = ["done", "archived"].includes(detail.task.status) ? "none" : "";
     const archiveBtn = this.root.querySelector("#kanban-detail-archive") as HTMLButtonElement;
     archiveBtn.style.display = detail.task.status === "archived" ? "none" : "";
     const deleteBtn = this.root.querySelector("#kanban-detail-delete") as HTMLButtonElement;

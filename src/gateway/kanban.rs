@@ -538,6 +538,74 @@ pub async fn unblock_task(Path(id): Path<String>) -> Response {
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct ScheduleBody {
+    /// Why the task is parked in the scheduled column; doubles as a
+    /// comment (hermes kanban schedule).
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `POST /api/kanban/tasks/:id/schedule` — park a task in the
+/// scheduled column: waiting on time, not human input (hermes
+/// `kanban schedule`).
+pub async fn schedule_task(Path(id): Path<String>, Json(body): Json<ScheduleBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.schedule_task(&id, body.reason.as_deref().unwrap_or("")) {
+        Ok(task) => Json(json!({
+            "object": "ulnclaw.kanban.task",
+            "task": task_json(&store, &task),
+        }))
+        .into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ReassignBody {
+    /// New assignee; "none" or empty clears the assignment.
+    pub assignee: String,
+    /// Reclaim a running task before reassigning (hermes
+    /// kanban reassign --reclaim).
+    #[serde(default)]
+    pub reclaim_first: Option<bool>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `POST /api/kanban/tasks/:id/reassign` — move a task to a different
+/// assignee (hermes `kanban reassign`); "none" unassigns.
+pub async fn reassign_task(Path(id): Path<String>, Json(body): Json<ReassignBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.reassign_task(
+        &id,
+        &body.assignee,
+        body.reclaim_first.unwrap_or(false),
+        body.reason.as_deref().unwrap_or(""),
+    ) {
+        Ok(task) => Json(json!({
+            "object": "ulnclaw.kanban.task",
+            "task": task_json(&store, &task),
+        }))
+        .into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct AttachBody {
     /// Attachment kind; defaults to "file" (hermes kanban attach).
