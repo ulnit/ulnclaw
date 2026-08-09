@@ -2069,6 +2069,10 @@ function gatewaySlashCommands(): [string, string][] {
     ["/goal", t.slash.goal],
     ["/subgoal", t.slash.subgoal],
     ["/reload-mcp", t.slash.reloadMcp],
+    ["/fast", t.slash.fast],
+    ["/branch", t.slash.branch],
+    ["/diff", t.slash.diff],
+    ["/rollback", t.slash.rollback],
   ];
 }
 
