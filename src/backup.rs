@@ -956,6 +956,61 @@ pub fn create_pre_update_backup(home: &Path) -> Option<String> {
     .flatten()
 }
 
+/// Shared `/snapshot` dispatch for REPL and gateway (P668 — hermes
+/// `/snapshot` parity over the quick-snapshot system): create (default),
+/// list, restore, prune. One formatted string back, no process spawn.
+pub fn snapshot_slash(home: &Path, rest: &str) -> String {
+    let mut parts = rest.split_whitespace();
+    let sub = parts.next().unwrap_or("create");
+    match sub {
+        "create" | "new" | "save" => {
+            let label = parts.collect::<Vec<_>>().join(" ");
+            let label = if label.is_empty() { None } else { Some(label.as_str()) };
+            match create_quick_snapshot(home, label, None, None) {
+                Ok(Some(id)) => format!("📸 snapshot created: {id}\n"),
+                Ok(None) => "(o_o) nothing to snapshot yet (no state files).\n".to_string(),
+                Err(e) => format!("(._.) snapshot failed: {e}\n"),
+            }
+        }
+        "list" | "ls" => {
+            let snapshots = list_quick_snapshots(home);
+            if snapshots.is_empty() {
+                return "(o_o) no snapshots yet. Run /snapshot to create one.\n".to_string();
+            }
+            let mut out = String::new();
+            out.push_str(&format!("{} snapshot(s):\n", snapshots.len()));
+            for snapshot in &snapshots {
+                out.push_str(&format!(
+                    "  {:<32} {:>4} file(s)  {:>10}\n",
+                    snapshot.id,
+                    snapshot.files,
+                    format_size(snapshot.bytes as f64)
+                ));
+            }
+            out
+        }
+        "restore" => {
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /snapshot restore <snapshot-id>\n".to_string();
+            };
+            match restore_quick_snapshot(home, id) {
+                Ok(true) => format!("✓ restored state from snapshot {id}\n"),
+                Ok(false) => format!("(o_o) snapshot '{id}' not found or empty\n"),
+                Err(e) => format!("(._.) restore failed: {e}\n"),
+            }
+        }
+        "prune" => {
+            let keep = parts
+                .next()
+                .and_then(|raw| raw.parse::<usize>().ok())
+                .unwrap_or(QUICK_DEFAULT_KEEP);
+            let removed = prune_quick_snapshots(home, keep);
+            format!("pruned {removed} snapshot(s) (keeping {keep})\n")
+        }
+        _ => "(o_o) usage: /snapshot [create [label]|list|restore <id>|prune [keep]]\n".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1226,5 +1281,43 @@ mod tests {
         assert!(message.is_some(), "safety net should fire");
         assert!(message.unwrap().contains(&snap_id));
         assert_eq!(count_cron_jobs(&home.join("state.db")), Some(3));
+    }
+
+    #[test]
+    fn snapshot_slash_create_list_restore_prune() {
+        // P668: /snapshot slash over the quick-snapshot system.
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        populate_home(&home);
+
+        // Create (with a label).
+        let out = snapshot_slash(&home, "create before-upgrade");
+        assert!(out.contains("snapshot created:"), "{out}");
+        let id = out
+            .trim()
+            .trim_start_matches("\u{1f4f8} snapshot created:")
+            .trim()
+            .to_string();
+        assert!(id.ends_with("before-upgrade"), "{id}");
+
+        // List shows it with file counts.
+        let out = snapshot_slash(&home, "list");
+        assert!(out.contains(&id), "{out}");
+        assert!(out.contains("file(s)"), "{out}");
+
+        // Restore round-trip + unknown id.
+        let out = snapshot_slash(&home, &format!("restore {id}"));
+        assert!(out.contains("restored state from snapshot"), "{out}");
+        let out = snapshot_slash(&home, "restore nope");
+        assert!(out.contains("not found"), "{out}");
+
+        // Prune with a generous keep removes nothing.
+        let out = snapshot_slash(&home, "prune 5");
+        assert!(out.contains("pruned 0 snapshot(s)"), "{out}");
+
+        // Usage fallback.
+        let out = snapshot_slash(&home, "bogus");
+        assert!(out.contains("usage:"), "{out}");
     }
 }
