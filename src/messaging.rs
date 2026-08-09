@@ -1813,10 +1813,27 @@ impl Dispatcher {
                 // directory (hermes `_pending_messages` visibility) so the
                 // session stall watcher can see it.
                 register_pending_inbound(&key, &event.platform, &event.chat_id);
-                return Ok(DispatchOutcome {
-                    reply: format!(
+                // P721: queue-depth detail is gated on the per-platform
+                // `busy_ack_detail` display setting (hermes busy-ack
+                // iteration-counter parity); quiet platforms get a plain ack.
+                let busy_ack_detail = crate::config::UlncLawConfig::load(None)
+                    .map(|config| {
+                        crate::display_config::resolve_flag(
+                            &config.display,
+                            Some(&event.platform),
+                            crate::display_config::DisplaySetting::BusyAckDetail,
+                        )
+                    })
+                    .unwrap_or(true);
+                let reply = if busy_ack_detail {
+                    format!(
                         "(queued \u{2014} message {depth} in queue; runs after the current turn)"
-                    ),
+                    )
+                } else {
+                    "(queued \u{2014} runs after the current turn)".to_string()
+                };
+                return Ok(DispatchOutcome {
+                    reply,
                     transcript_echoes: Vec::new(),
                 });
             }
@@ -7974,6 +7991,10 @@ mod tests {
         // serialize against the restart-announcement test (which
         // broadcasts through every registered sender).
         let _env_guard = crate::models_dev::test_env_lock();
+        // P721: the busy ack now resolves `busy_ack_detail` from
+        // config.toml — isolate ULNCLAW_HOME so a real user config
+        // can't flip the assertions.
+        let _home_guard = IsolatedHome::new();
         let dispatcher = test_dispatcher();
         let key = "platform-testplat-chat-1".to_string();
         let sends = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -8004,11 +8025,80 @@ mod tests {
         unregister_platform_sender_for_tests("testplat");
     }
 
+    /// RAII guard: points `ULNCLAW_HOME` at a fresh tempdir (optionally
+    // seeded with a config.toml) and restores the previous value on
+    /// drop. Callers must hold `test_env_lock()`.
+    struct IsolatedHome {
+        _temp: tempfile::TempDir,
+        prev: Option<String>,
+    }
+
+    impl IsolatedHome {
+        fn new() -> Self {
+            Self::with_config(None)
+        }
+
+        fn with_config(config_toml: Option<&str>) -> Self {
+            let temp = tempfile::tempdir().expect("tempdir");
+            if let Some(content) = config_toml {
+                std::fs::write(temp.path().join("config.toml"), content)
+                    .expect("config.toml written");
+            }
+            let prev = std::env::var("ULNCLAW_HOME").ok();
+            std::env::set_var("ULNCLAW_HOME", temp.path());
+            Self { _temp: temp, prev }
+        }
+    }
+
+    impl Drop for IsolatedHome {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(home) => std::env::set_var("ULNCLAW_HOME", home),
+                None => std::env::remove_var("ULNCLAW_HOME"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn busy_ack_detail_off_gives_plain_queue_ack() {
+        // P721: hermes busy_ack_detail parity — with the per-platform
+        // display setting off, the parked-message ack drops the
+        // queue-depth counter (quiet platforms stay quiet).
+        let _env_guard = crate::models_dev::test_env_lock();
+        let _home_guard = IsolatedHome::with_config(Some(
+            "[display.platforms.testplat]\nbusy_ack_detail = false\n",
+        ));
+        let dispatcher = test_dispatcher();
+        let key = "platform-testplat-chat-1".to_string();
+
+        dispatcher.busy.lock().await.insert(key.clone(), true);
+        let outcome = dispatcher
+            .handle_event(test_event("quiet queue", "m1"))
+            .await
+            .unwrap();
+        assert_eq!(outcome.reply, "(queued \u{2014} runs after the current turn)");
+        assert!(!outcome.reply.contains("in queue"), "{}", outcome.reply);
+
+        // Global display.busy_ack_detail=false applies to every platform.
+        let _home_guard2 = IsolatedHome::with_config(Some("[display]\nbusy_ack_detail = false\n"));
+        let outcome = dispatcher
+            .handle_event(test_event("quiet queue two", "m2"))
+            .await
+            .unwrap();
+        assert_eq!(outcome.reply, "(queued \u{2014} runs after the current turn)");
+
+        dispatcher.busy.lock().await.insert(key.clone(), false);
+        dispatcher.drain_queued(&key).await;
+    }
+
     #[tokio::test]
     async fn parked_messages_publish_pending_inbound_directory() {
         // P714: stall-watcher visibility — parking registers the chat
         // in the pending-inbound directory; draining unregisters it.
         let _env_guard = crate::models_dev::test_env_lock();
+        // P721: parking now loads config.toml for `busy_ack_detail` —
+        // keep the real user config out of the test.
+        let _home_guard = IsolatedHome::new();
         clear_pending_inbound_for_tests();
         let dispatcher = test_dispatcher();
         let key = "platform-testplat-chat-1".to_string();

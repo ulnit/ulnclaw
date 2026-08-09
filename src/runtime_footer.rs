@@ -405,6 +405,7 @@ mod tests {
             .platforms
             .insert("whatsapp".into(), crate::config::PlatformDisplayOverride {
                 runtime_footer: override_cfg,
+                ..Default::default()
             });
 
         // Global only: disabled, default fields replaced by the global list.

@@ -1310,6 +1310,61 @@ pub struct DisplayConfig {
     /// replies minimal; toggle live with `/footer on|off`.
     #[serde(default)]
     pub runtime_footer: crate::runtime_footer::RuntimeFooterConfig,
+    /// Tool-progress bubble mode: `off`|`new`|`all`|`verbose`|`log`
+    /// (hermes `display.tool_progress`). Unset = per-platform built-in
+    /// default via `display_config`.
+    #[serde(default)]
+    pub tool_progress: Option<String>,
+    /// Progress grouping: `accumulate`|`separate` (hermes
+    /// `display.tool_progress_grouping`).
+    #[serde(default)]
+    pub tool_progress_grouping: Option<String>,
+    /// Render reasoning/thinking summaries (hermes
+    /// `display.show_reasoning`).
+    #[serde(default)]
+    pub show_reasoning: Option<bool>,
+    /// Reasoning render style: `code`|`blockquote`|`subtext` (hermes
+    /// `display.reasoning_style`).
+    #[serde(default)]
+    pub reasoning_style: Option<String>,
+    /// Tool argument preview length, 0 = no limit (hermes
+    /// `display.tool_preview_length`).
+    #[serde(default)]
+    pub tool_preview_length: Option<i64>,
+    /// CLI terminal streaming toggle (hermes `display.streaming` —
+    /// CLI-only; gateway streaming follows the top-level streaming
+    /// config unless a per-platform override is set).
+    #[serde(default)]
+    pub streaming: Option<bool>,
+    /// Surface real mid-turn assistant commentary (hermes
+    /// `display.interim_assistant_messages`).
+    #[serde(default)]
+    pub interim_assistant_messages: Option<bool>,
+    /// Periodic "still working" heartbeats on long turns (hermes
+    /// `display.long_running_notifications`).
+    #[serde(default)]
+    pub long_running_notifications: Option<bool>,
+    /// Queue-depth/iteration detail in busy acknowledgments (hermes
+    /// `display.busy_ack_detail`).
+    #[serde(default)]
+    pub busy_ack_detail: Option<bool>,
+    /// Visible ack after a successful mid-turn steer (hermes
+    /// `display.busy_steer_ack_enabled`).
+    #[serde(default)]
+    pub busy_steer_ack_enabled: Option<bool>,
+    /// Delete progress bubbles after the final response lands (hermes
+    /// `display.cleanup_progress`).
+    #[serde(default)]
+    pub cleanup_progress: Option<bool>,
+    /// Live working-state status text: `full`|`verb`|`off` (hermes
+    /// `display.live_status`).
+    #[serde(default)]
+    pub live_status: Option<String>,
+    /// Legacy per-platform tool-progress overrides (hermes
+    /// `display.tool_progress_overrides`) — fallback when no
+    /// `[display.platforms.<platform>]` entry exists.
+    #[serde(default)]
+    pub tool_progress_overrides: std::collections::HashMap<String, String>,
     /// Per-platform display overrides (hermes
     /// `display.platforms.<platform>`).
     #[serde(default)]
@@ -1326,6 +1381,54 @@ pub struct PlatformDisplayOverride {
     /// `display.platforms.<key>.runtime_footer`).
     #[serde(default)]
     pub runtime_footer: crate::runtime_footer::RuntimeFooterOverride,
+    /// Per-platform tool-progress mode (hermes
+    /// `display.platforms.<key>.tool_progress`).
+    #[serde(default)]
+    pub tool_progress: Option<String>,
+    /// Per-platform progress grouping (hermes
+    /// `display.platforms.<key>.tool_progress_grouping`).
+    #[serde(default)]
+    pub tool_progress_grouping: Option<String>,
+    /// Per-platform reasoning visibility (hermes
+    /// `display.platforms.<key>.show_reasoning`).
+    #[serde(default)]
+    pub show_reasoning: Option<bool>,
+    /// Per-platform reasoning style (hermes
+    /// `display.platforms.<key>.reasoning_style`).
+    #[serde(default)]
+    pub reasoning_style: Option<String>,
+    /// Per-platform tool preview length (hermes
+    /// `display.platforms.<key>.tool_preview_length`).
+    #[serde(default)]
+    pub tool_preview_length: Option<i64>,
+    /// Per-platform gateway streaming override (hermes
+    /// `display.platforms.<key>.streaming`).
+    #[serde(default)]
+    pub streaming: Option<bool>,
+    /// Per-platform interim commentary (hermes
+    /// `display.platforms.<key>.interim_assistant_messages`).
+    #[serde(default)]
+    pub interim_assistant_messages: Option<bool>,
+    /// Per-platform long-turn heartbeats (hermes
+    /// `display.platforms.<key>.long_running_notifications`).
+    #[serde(default)]
+    pub long_running_notifications: Option<bool>,
+    /// Per-platform busy-ack detail (hermes
+    /// `display.platforms.<key>.busy_ack_detail`).
+    #[serde(default)]
+    pub busy_ack_detail: Option<bool>,
+    /// Per-platform steer-ack toggle (hermes
+    /// `display.platforms.<key>.busy_steer_ack_enabled`).
+    #[serde(default)]
+    pub busy_steer_ack_enabled: Option<bool>,
+    /// Per-platform progress cleanup (hermes
+    /// `display.platforms.<key>.cleanup_progress`).
+    #[serde(default)]
+    pub cleanup_progress: Option<bool>,
+    /// Per-platform live status text mode (hermes
+    /// `display.platforms.<key>.live_status`).
+    #[serde(default)]
+    pub live_status: Option<String>,
 }
 
 /// `[dashboard]` — web/desktop dashboard appearance persistence (hermes
