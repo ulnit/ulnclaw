@@ -628,6 +628,25 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/terminal` — P732 resolved terminal backend config. */
+export interface TerminalInfoPayload {
+  backend: string;
+  backend_env_override: boolean;
+  configured_cwd: string | null;
+  configured_is_placeholder: boolean;
+  resolved_messaging_cwd: string | null;
+  docker_mount_cwd_to_workspace: boolean;
+  container: string | null;
+  image: string | null;
+  ssh_host: string | null;
+  ssh_user: string | null;
+  ssh_port: number | null;
+  timeout_secs: number;
+  foreground_max_timeout_secs: number;
+  env_passthrough_count: number;
+  session_cwd: string;
+}
+
 /** `GET /api/display` — P730 resolved per-platform display settings. */
 export interface DisplayPlatformRow {
   platform: string;
@@ -2525,6 +2544,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`status-phrases HTTP ${response.status}`);
     return (await response.json()) as StatusPhrasesPayload;
+  }
+
+  /** GET /api/terminal — P732 resolved terminal backend config. */
+  async terminalInfo(): Promise<TerminalInfoPayload> {
+    const response = await fetch(this.endpoint("/api/terminal"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`terminal HTTP ${response.status}`);
+    return (await response.json()) as TerminalInfoPayload;
   }
 
   /** GET /api/display — P730 resolved per-platform display settings. */

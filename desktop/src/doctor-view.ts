@@ -81,6 +81,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
       </section>
+      <section id="doctor-terminal" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="terminalPanel.title">Terminal</h3>
+        <div id="terminal-rows"></div>
+      </section>
       <section id="doctor-display" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="displayPanel.title">Display settings</h3>
         <div id="display-rows"></div>
@@ -286,6 +290,7 @@ export class DoctorWidget {
     this.loadLifecycle().catch(() => undefined);
     this.loadDisplay().catch(() => undefined);
     this.loadPhrases().catch(() => undefined);
+    this.loadTerminal().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2409,6 +2414,76 @@ export class DoctorWidget {
           `${catalog.status_count} ${t.phrasesPanel.statusWord} \u00b7 ${catalog.generic_count} ${t.phrasesPanel.genericWord}`,
         );
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadTerminal(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-terminal") as HTMLElement;
+    const rows = this.root.querySelector("#terminal-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.terminalInfo();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      const backend = payload.backend_env_override
+        ? `${escapeHtmlDoctor(payload.backend)} <span class="models-view-badge warn">${escapeHtmlDoctor(t.terminalPanel.envOverride)}</span>`
+        : escapeHtmlDoctor(payload.backend);
+      addRow(t.terminalPanel.backend, backend);
+      const cwdBadge = payload.configured_is_placeholder
+        ? ` <span class="models-view-badge warn">${escapeHtmlDoctor(t.terminalPanel.placeholder)}</span>`
+        : "";
+      addRow(
+        t.terminalPanel.configuredCwd,
+        escapeHtmlDoctor(payload.configured_cwd ?? t.terminalPanel.notSet) + cwdBadge,
+      );
+      addRow(
+        t.terminalPanel.resolvedCwd,
+        escapeHtmlDoctor(payload.resolved_messaging_cwd ?? off),
+      );
+      if (payload.backend === "docker") {
+        addRow(
+          t.terminalPanel.mountWorkspace,
+          payload.docker_mount_cwd_to_workspace ? on : off,
+        );
+        if (payload.container) addRow(t.terminalPanel.container, escapeHtmlDoctor(payload.container));
+        if (payload.image) addRow(t.terminalPanel.image, escapeHtmlDoctor(payload.image));
+      }
+      if (payload.backend === "ssh" && payload.ssh_host) {
+        const port = payload.ssh_port ? `:${payload.ssh_port}` : "";
+        addRow(
+          t.terminalPanel.sshHost,
+          escapeHtmlDoctor(`${payload.ssh_user ?? ""}@${payload.ssh_host}${port}`),
+        );
+      }
+      addRow(
+        t.terminalPanel.timeouts,
+        `${payload.timeout_secs}s \u00b7 ${t.terminalPanel.foregroundMax} ${payload.foreground_max_timeout_secs}s`,
+      );
+      addRow(
+        t.terminalPanel.envPassthrough,
+        payload.env_passthrough_count > 0 ? String(payload.env_passthrough_count) : off,
+      );
+      addRow(t.terminalPanel.sessionCwd, escapeHtmlDoctor(payload.session_cwd));
       section.hidden = false;
     } catch {
       section.hidden = true;

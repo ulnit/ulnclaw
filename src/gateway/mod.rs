@@ -5552,6 +5552,44 @@ async fn dead_targets_api() -> Json<Value> {
     Json(json!({ "targets": targets, "count": count }))
 }
 
+/// `GET /api/terminal` — P732 ops surface over the terminal config:
+/// backend, configured vs placeholder cwd, the P723-resolved messaging
+/// cwd, docker/ssh details, timeouts and env-passthrough posture.
+async fn terminal_info_api(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    // Fresh disk load (like the other ops surfaces) so config edits are
+    // visible without a gateway restart.
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let terminal = config.terminal.clone();
+    let resolved = crate::cwd_placeholder::resolve_messaging_cwd(&config);
+    let env_backend = std::env::var("TERMINAL_ENV")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    Json(json!({
+        "backend": env_backend
+            .clone()
+            .or_else(|| terminal.backend.clone())
+            .unwrap_or_else(|| "local".to_string()),
+        "backend_env_override": env_backend.is_some(),
+        "configured_cwd": terminal.cwd,
+        "configured_is_placeholder": terminal
+            .cwd
+            .as_deref()
+            .map(crate::cwd_placeholder::is_placeholder)
+            .unwrap_or(true),
+        "resolved_messaging_cwd": resolved.map(|p| p.to_string_lossy().to_string()),
+        "docker_mount_cwd_to_workspace": terminal.docker_mount_cwd_to_workspace,
+        "container": terminal.container,
+        "image": terminal.image,
+        "ssh_host": terminal.ssh_host,
+        "ssh_user": terminal.ssh_user,
+        "ssh_port": terminal.ssh_port,
+        "timeout_secs": terminal.timeout,
+        "foreground_max_timeout_secs": terminal.foreground_max_timeout,
+        "env_passthrough_count": terminal.env_passthrough.len(),
+        "session_cwd": state.agent.context().cwd().to_string_lossy().to_string(),
+    }))
+}
+
 /// `GET /api/status-phrases` — P731 ops surface over the P722
 /// status-phrase catalogs: the resolved global catalog (built-ins +
 /// conventional profile files + `[display.status_phrases]`), which
@@ -7240,6 +7278,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/lifecycle", get(lifecycle_api))
         .route("/api/display", get(display_settings_api))
         .route("/api/status-phrases", get(status_phrases_api))
+        .route("/api/terminal", get(terminal_info_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -25755,6 +25794,60 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(body["obligations"].is_array(), "{body}");
         assert!(body["counts"].is_object(), "{body}");
         assert_eq!(body["outstanding"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_terminal_endpoint_resolves_placeholder_cwd() {
+        // P732: terminal surface — placeholder cwd resolves through
+        // the P723 contract (local backend → MESSAGING_CWD → home).
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("config.toml"),
+            "[terminal]\ncwd = \"auto\"\nbackend = \"local\"\n",
+        )
+        .unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        let prev_msg = std::env::var("ULNCLAW_MESSAGING_CWD").ok();
+        let prev_env_backend = std::env::var("TERMINAL_ENV").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+        std::env::set_var("ULNCLAW_MESSAGING_CWD", "/chat/work");
+        std::env::remove_var("TERMINAL_ENV");
+
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/terminal", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["backend"], "local", "{body}");
+        assert_eq!(body["configured_cwd"], "auto", "{body}");
+        assert_eq!(body["configured_is_placeholder"], true, "{body}");
+        assert_eq!(body["resolved_messaging_cwd"], "/chat/work", "{body}");
+        assert!(body["session_cwd"].as_str().unwrap().len() > 0, "{body}");
+
+        // Explicit cwd passes through untouched.
+        std::fs::write(
+            temp.path().join("config.toml"),
+            "[terminal]\ncwd = \"/srv/project\"\nbackend = \"docker\"\ndocker_mount_cwd_to_workspace = true\n",
+        )
+        .unwrap();
+        let app = router(test_state());
+        let (_, body) = get_json(app, "/api/terminal", Some("sekret")).await;
+        assert_eq!(body["backend"], "docker", "{body}");
+        assert_eq!(body["configured_is_placeholder"], false, "{body}");
+        assert_eq!(body["resolved_messaging_cwd"], "/srv/project", "{body}");
+        assert_eq!(body["docker_mount_cwd_to_workspace"], true, "{body}");
+
+        match prev_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+        match prev_msg {
+            Some(v) => std::env::set_var("ULNCLAW_MESSAGING_CWD", v),
+            None => std::env::remove_var("ULNCLAW_MESSAGING_CWD"),
+        }
+        match prev_env_backend {
+            Some(v) => std::env::set_var("TERMINAL_ENV", v),
+            None => std::env::remove_var("TERMINAL_ENV"),
+        }
     }
 
     #[tokio::test]
