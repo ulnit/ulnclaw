@@ -341,6 +341,10 @@ pub struct Dispatcher {
     busy: Arc<Mutex<HashMap<String, bool>>>,
     /// Per-chat rolling history (mirrors the REPL continuity model).
     histories: Arc<Mutex<HashMap<String, Vec<crate::provider::Message>>>>,
+    /// Per-chat session remap (hermes `/resume` switch): chat session
+    /// key → resumed session id. Absent while a chat runs under its
+    /// own deterministic key.
+    session_remap: Arc<Mutex<HashMap<String, String>>>,
 }
 
 /// Result of one dispatched platform message (hermes run-turn output):
@@ -1070,6 +1074,7 @@ impl Dispatcher {
             store,
             busy: Arc::new(Mutex::new(HashMap::new())),
             histories: Arc::new(Mutex::new(HashMap::new())),
+            session_remap: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1129,6 +1134,11 @@ impl Dispatcher {
         // Gateway slash commands (hermes gateway/slash_commands.py).
         if event.text.trim() == "/reload-mcp" {
             return self.handle_reload_mcp_command(&key, &event).await;
+        }
+        // /resume [name|N|id] — list or switch this chat's session
+        // (hermes gateway /resume; needs the dispatcher remap state).
+        if event.text.trim().split_whitespace().next() == Some("/resume") {
+            return self.handle_resume_command(&key, &event).await;
         }
         // Direct slash commands (hermes gateway/slash_commands.py direct
         // set): answer without an LLM turn; skill/bundle slashes expand
@@ -1299,13 +1309,160 @@ impl Dispatcher {
         formatted
     }
 
+    /// hermes `/resume [name|N|session-id]` parity: without args list
+    /// recent titled sessions; otherwise switch this chat's session key
+    /// to the resolved session (numbered pick, id/prefix, or title).
+    async fn handle_resume_command(
+        &self,
+        key: &str,
+        event: &MessageEvent,
+    ) -> Result<DispatchOutcome> {
+        let args = event
+            .text
+            .trim()
+            .strip_prefix("/resume")
+            .unwrap_or("")
+            .trim();
+        let name = strip_resume_brackets(args);
+        let titled: Vec<crate::session::sqlite::SessionRow> = self
+            .store
+            .list_session_rows(50)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|row| {
+                row.title
+                    .as_deref()
+                    .map(|t| !t.is_empty())
+                    .unwrap_or(false)
+            })
+            .take(10)
+            .collect();
+        if name.is_empty() {
+            if titled.is_empty() {
+                return Ok(DispatchOutcome {
+                    reply: "No named sessions found.
+Use `/title My Session` to name your                             current session, then `/resume My Session` to return to it later."
+                        .to_string(),
+                    transcript_echoes: Vec::new(),
+                });
+            }
+            let mut lines = vec!["\u{1F4CB} **Named Sessions**".to_string()];
+            for (idx, row) in titled.iter().enumerate() {
+                lines.push(format!(
+                    "  {}. {} ({} msgs)",
+                    idx + 1,
+                    row.title.as_deref().unwrap_or("(untitled)"),
+                    row.message_count
+                ));
+            }
+            lines.push(
+                "
+Usage: `/resume <session name>` or `/resume <number>` (e.g. `/resume 1`                  for the most recent)"
+                    .to_string(),
+            );
+            return Ok(DispatchOutcome {
+                reply: lines.join("
+"),
+                transcript_echoes: Vec::new(),
+            });
+        }
+        // Resolve a numbered choice, session id/prefix, or title.
+        let mut target_id: Option<String> = None;
+        if let Ok(index) = name.parse::<usize>() {
+            if index < 1 || index > titled.len() {
+                return Ok(DispatchOutcome {
+                    reply: format!(
+                        "Resume index {index} is out of range.
+Use `/resume` with no                          arguments to see available sessions."
+                    ),
+                    transcript_echoes: Vec::new(),
+                });
+            }
+            target_id = Some(titled[index - 1].id.clone());
+        } else if let Some(id) = self.store.resolve_session_id(name).ok().flatten() {
+            target_id = Some(id);
+        } else if let Some(id) = self.store.resolve_session_by_title(name).ok().flatten() {
+            target_id = Some(id);
+        }
+        let Some(target_id) = target_id else {
+            return Ok(DispatchOutcome {
+                reply: format!(
+                    "No session found matching '**{name}**'.
+Use `/resume` with no                      arguments to see available sessions."
+                ),
+                transcript_echoes: Vec::new(),
+            });
+        };
+        if self.effective_session_id(key).await == target_id {
+            let title = self
+                .store
+                .get_session_row(&target_id)
+                .ok()
+                .flatten()
+                .and_then(|row| row.title)
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| name.to_string());
+            return Ok(DispatchOutcome {
+                reply: format!("\u{1F4CC} Already on session **{title}**."),
+                transcript_echoes: Vec::new(),
+            });
+        }
+        // Switch: remap the chat key and drop the cached history so the
+        // next turn rebuilds from the resumed session's transcript
+        // (hermes switch_session + agent-cache eviction).
+        self.session_remap
+            .lock()
+            .await
+            .insert(key.to_string(), target_id.clone());
+        self.histories.lock().await.remove(key);
+        let row = self.store.get_session_row(&target_id).ok().flatten();
+        let title = row
+            .as_ref()
+            .and_then(|r| r.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| name.to_string());
+        let msg_count = row.as_ref().map(|r| r.message_count).unwrap_or(0);
+        let reply = if msg_count == 0 {
+            format!("\u{21BB} Resumed session **{title}**. Conversation restored.")
+        } else {
+            format!(
+                "\u{21BB} Resumed session **{title}** ({msg_count} messages).                  Conversation restored."
+            )
+        };
+        Ok(DispatchOutcome {
+            reply,
+            transcript_echoes: Vec::new(),
+        })
+    }
+
+    /// Session id this chat currently runs under — the remapped
+    /// (resumed) session when `/resume` switched it, else the
+    /// deterministic chat key (hermes switch_session semantics).
+    async fn effective_session_id(&self, key: &str) -> String {
+        self.session_remap
+            .lock()
+            .await
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| key.to_string())
+    }
+
     async fn run_turn(&self, key: &str, event: &MessageEvent) -> Result<DispatchOutcome> {
         use crate::provider::Role;
+        // Resume remap (hermes /resume): a chat may run under a
+        // previous session id; default stays the deterministic key.
+        let session_id = self.effective_session_id(key).await;
         // Ensure the session row exists under a deterministic id.
-        if self.store.resolve_session_id(key).ok().flatten().is_none() {
+        if self
+            .store
+            .resolve_session_id(&session_id)
+            .ok()
+            .flatten()
+            .is_none()
+        {
             self.store
                 .create_named_session(
-                    key,
+                    &session_id,
                     &format!("platform:{}", event.platform),
                     Some(&self.agent.context().config.model.model),
                     None,
@@ -1315,7 +1472,7 @@ impl Dispatcher {
         let mut histories = self.histories.lock().await;
         let history = histories.entry(key.to_string()).or_default();
         if history.is_empty() {
-            if let Ok(messages) = self.store.load_messages(key) {
+            if let Ok(messages) = self.store.load_messages(&session_id) {
                 *history = messages
                     .into_iter()
                     .filter(|m| m.role != Role::System)
@@ -1388,7 +1545,7 @@ impl Dispatcher {
         prompt.push_str(&attachment_note_refs(&referenced));
         let result = self
             .agent
-            .run_with_session_images(&prompt, images, Some(history.clone()), Some(key))
+            .run_with_session_images(&prompt, images, Some(history.clone()), Some(&session_id))
             .await?;
         *history = result
             .conversation
@@ -1402,6 +1559,23 @@ impl Dispatcher {
             transcript_echoes,
         })
     }
+}
+
+/// Strip one pair of outer brackets/quotes users type literally from
+/// the usage hint (`/resume <abc123>`), mirroring hermes.
+fn strip_resume_brackets(name: &str) -> &str {
+    let bytes = name.as_bytes();
+    if name.len() >= 2 {
+        let (first, last) = (bytes[0], bytes[bytes.len() - 1]);
+        if (first == b'<' && last == b'>')
+            || (first == b'[' && last == b']')
+            || (first == b'"' && last == b'"')
+            || (first == b'\'' && last == b'\'')
+        {
+            return name[1..name.len() - 1].trim();
+        }
+    }
+    name
 }
 
 /// Access gate (hermes pairing): allowlisted ids pass; everything else
@@ -6522,6 +6696,79 @@ mod tests {
                 .unwrap()
                 .push((chat_id.to_string(), text.to_string()));
         }
+    }
+
+    #[test]
+    fn resume_bracket_stripping() {
+        assert_eq!(strip_resume_brackets("<abc123>"), "abc123");
+        assert_eq!(strip_resume_brackets("[abc]"), "abc");
+        assert_eq!(strip_resume_brackets("\"abc\""), "abc");
+        assert_eq!(strip_resume_brackets("'abc'"), "abc");
+        assert_eq!(strip_resume_brackets("abc"), "abc");
+        assert_eq!(strip_resume_brackets("<"), "<");
+    }
+
+    #[tokio::test]
+    async fn resume_lists_switches_and_guards() {
+        // P686: hermes /resume parity on the platform dispatch path.
+        let dispatcher = test_dispatcher();
+        let event = test_event("/resume", "m1");
+
+        // No titled sessions yet.
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        assert!(outcome.reply.contains("No named sessions found"), "{}", outcome.reply);
+
+        // Seed titled sessions (newest first).
+        let store = dispatcher.store.clone();
+        store.create_named_session("sess-a", "platform:testplat", None, None).unwrap();
+        store.set_session_title("sess-a", "Alpha work").unwrap();
+        store.create_named_session("sess-b", "platform:testplat", None, None).unwrap();
+        store.set_session_title("sess-b", "Beta work").unwrap();
+
+        // Listing is numbered, newest first.
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        assert!(outcome.reply.contains("Named Sessions"), "{}", outcome.reply);
+        let alpha_pos = outcome.reply.find("Alpha work").unwrap();
+        let beta_pos = outcome.reply.find("Beta work").unwrap();
+        assert!(beta_pos < alpha_pos, "{}", outcome.reply);
+        assert!(outcome.reply.contains("/resume 1"), "{}", outcome.reply);
+
+        // Switch by number.
+        let event = test_event("/resume 2", "m2");
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        assert!(outcome.reply.contains("Resumed session **Alpha work**"), "{}", outcome.reply);
+        assert_eq!(
+            dispatcher.effective_session_id("platform-testplat-chat-1").await,
+            "sess-a"
+        );
+
+        // Already on it.
+        let event = test_event("/resume Alpha work", "m3");
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        assert!(outcome.reply.contains("Already on session"), "{}", outcome.reply);
+
+        // Switch by title with bracket stripping, then by id prefix.
+        let event = test_event("/resume <Beta work>", "m4");
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        assert!(outcome.reply.contains("Resumed session **Beta work**"), "{}", outcome.reply);
+        let event = test_event("/resume sess-a", "m5");
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        assert!(outcome.reply.contains("Resumed session **Alpha work**"), "{}", outcome.reply);
+
+        // Unknown target + out-of-range index.
+        let event = test_event("/resume ghost", "m6");
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        assert!(outcome.reply.contains("No session found matching"), "{}", outcome.reply);
+        let event = test_event("/resume 99", "m7");
+        let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
+        assert!(outcome.reply.contains("out of range"), "{}", outcome.reply);
+    }
+
+    #[tokio::test]
+    async fn resume_dispatches_through_handle_event() {
+        let dispatcher = test_dispatcher();
+        let outcome = dispatcher.handle_event(test_event("/resume", "m1")).await.unwrap();
+        assert!(outcome.reply.contains("No named sessions found"), "{}", outcome.reply);
     }
 
     #[tokio::test]

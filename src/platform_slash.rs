@@ -27,6 +27,7 @@ const PLATFORM_SLASH_HELP: &str = "Commands you can send as chat messages:
   /tools           list enabled tools
   /recap           recap this chat's session
   /title [text]    show or set the session title
+  /resume [name]   list or switch to a previous session
   /sethome         set this chat as the platform home channel
   /usage           this session's token usage
   /insights [N] [--days N] [--source S]   usage analytics across sessions
