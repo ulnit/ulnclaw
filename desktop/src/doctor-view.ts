@@ -88,6 +88,17 @@ export class DoctorWidget {
           <span id="gateway-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-agent-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="agentSettingsPanel.title">Agent settings</h3>
+        <div id="agent-settings-rows"></div>
+        <div id="agent-settings-editor" class="monitoring-row" hidden>
+          <select id="agent-settings-key" class="ghost"></select>
+          <input id="agent-settings-value" class="ghost" />
+          <button id="agent-settings-apply" class="ghost mcp-add-btn" data-i18n="agentSettingsPanel.apply">Apply</button>
+          <button id="agent-settings-clear" class="ghost mcp-add-btn" data-i18n="agentSettingsPanel.clear">Clear</button>
+          <span id="agent-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -338,6 +349,7 @@ export class DoctorWidget {
     this.loadMonitoring().catch(() => undefined);
     this.loadGatewayHealth().catch(() => undefined);
     this.loadGatewaySettings().catch(() => undefined);
+    this.loadAgentSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2421,6 +2433,106 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadAgentSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-agent-settings") as HTMLElement;
+    const rows = this.root.querySelector("#agent-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.agentSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      const dflt = t.agentSettingsPanel.defaultWord;
+      addRow(t.agentSettingsPanel.iterations, String(payload.max_iterations));
+      addRow(t.agentSettingsPanel.approvalGate, payload.approval ? on : off);
+      addRow(
+        t.agentSettingsPanel.concurrentTools,
+        payload.concurrent_tool_execution
+          ? `${on} \u00b7 ${payload.max_concurrent_tools}`
+          : off,
+      );
+      addRow(t.agentSettingsPanel.contextBudget, `${payload.context_budget_tokens}`);
+      addRow(t.agentSettingsPanel.verbose, payload.verbose ? on : off);
+      addRow(t.agentSettingsPanel.envProbe, payload.environment_probe ? on : off);
+      addRow(
+        t.agentSettingsPanel.reasoning,
+        payload.reasoning_effort.trim() !== "" ? escapeHtmlDoctor(payload.reasoning_effort) : escapeHtmlDoctor(dflt),
+      );
+      addRow(
+        t.agentSettingsPanel.serviceTier,
+        payload.service_tier.trim() !== "" ? escapeHtmlDoctor(payload.service_tier) : escapeHtmlDoctor(dflt),
+      );
+      addRow(
+        t.agentSettingsPanel.personality,
+        payload.personality.trim() !== "" ? escapeHtmlDoctor(payload.personality) : escapeHtmlDoctor(dflt),
+      );
+      // P746: agent behavior editor — pick a key, type the value, Apply
+      // persists through PUT /api/agent-settings, Clear removes the
+      // override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#agent-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#agent-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#agent-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#agent-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#agent-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#agent-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = [
+          "max_iterations",
+          "approval",
+          "concurrent_tool_execution",
+          "max_concurrent_tools",
+          "context_budget_tokens",
+          "verbose",
+          "environment_probe",
+        ];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | number | boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateAgentSetting(keySel.value, value);
+            await this.loadAgentSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number | boolean =
+            raw === "true" ? true : raw === "false" ? false : /^-?\d+$/.test(raw) ? Number(raw) : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

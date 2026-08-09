@@ -5956,6 +5956,121 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/agent-settings` — P746: agent behavior snapshot for the
+/// shell: iteration budget, concurrency knobs, context budget, logging
+/// and environment probe — plus pointers to the surfaces that own the
+/// adjacent keys (reasoning effort → `/api/reasoning`, service tier →
+/// `/api/fast`, personality/system prompt → `/personality`).
+async fn agent_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let agent = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .map(|c| c.agent)
+        .unwrap_or_default();
+    Json(json!({
+        "max_iterations": agent.max_iterations,
+        "approval": agent.approval,
+        "concurrent_tool_execution": agent.concurrent_tool_execution,
+        "max_concurrent_tools": agent.max_concurrent_tools,
+        "context_budget_tokens": agent.context_budget_tokens,
+        "verbose": agent.verbose,
+        "environment_probe": agent.environment_probe,
+        "reasoning_effort": agent.reasoning_effort,
+        "service_tier": agent.service_tier,
+        "personality": agent.personality,
+        "system_prompt_configured": !agent.system_prompt.trim().is_empty(),
+    }))
+}
+
+/// `PUT /api/agent-settings` — P746: persist agent behavior knobs from
+/// the shell. Body: `{"key": "max_iterations"|"approval"|
+/// "concurrent_tool_execution"|"max_concurrent_tools"|
+/// "context_budget_tokens"|"verbose"|"environment_probe",
+/// "value": ...|null}` — null removes the key (falls back to the
+/// default). Reasoning effort, service tier and the system prompt are
+/// owned by their own surfaces and are rejected here. Applies to new
+/// runs.
+async fn update_agent_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "max_iterations",
+        "approval",
+        "concurrent_tool_execution",
+        "max_concurrent_tools",
+        "context_budget_tokens",
+        "verbose",
+        "environment_probe",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown agent key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "max_iterations" | "max_concurrent_tools" | "context_budget_tokens" => {
+                    let ok = v.as_u64().map(|n| n >= 1).unwrap_or(false);
+                    if !ok {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("agent key '{key}' must be a positive integer") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "approval" | "concurrent_tool_execution" | "verbose" | "environment_probe" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("agent key '{key}' must be a boolean") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    let dotted = format!("agent.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(_) => crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true)
+            .map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/gateway-settings` — P745: resolved gateway listener +
 /// behavior settings for the shell. Host/port/key report the effective
 /// values after env overrides (`ULNCLAW_GATEWAY_HOST/PORT/KEY`) with
@@ -7756,6 +7871,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/approvals", get(approvals_get).put(approvals_set))
         .route("/api/approvals/settings", put(update_approvals_settings_api))
         .route("/api/gateway-settings", get(gateway_settings_api).put(update_gateway_settings_api))
+        .route("/api/agent-settings", get(agent_settings_api).put(update_agent_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -18098,6 +18214,91 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/gateway-settings", Some("sekret")).await;
         assert_eq!(body["message_timestamps"], false, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_settings_editor() {
+        // P746: GET /api/agent-settings surfaces agent behavior knobs;
+        // PUT persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults surface.
+        let (status, body) = get_json(app.clone(), "/api/agent-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["max_iterations"], 90, "{body}");
+        assert_eq!(body["approval"], true, "{body}");
+        assert_eq!(body["concurrent_tool_execution"], false, "{body}");
+        assert_eq!(body["max_concurrent_tools"], 5, "{body}");
+        assert_eq!(body["context_budget_tokens"], 120_000, "{body}");
+        assert_eq!(body["verbose"], false, "{body}");
+        assert_eq!(body["environment_probe"], true, "{body}");
+        assert_eq!(body["system_prompt_configured"], false, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("max_iterations", json!(150)),
+            ("approval", json!(false)),
+            ("concurrent_tool_execution", json!(true)),
+            ("max_concurrent_tools", json!(8)),
+            ("context_budget_tokens", json!(200_000)),
+            ("verbose", json!(true)),
+            ("environment_probe", json!(false)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/agent-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/agent-settings", Some("sekret")).await;
+        assert_eq!(body["max_iterations"], 150, "{body}");
+        assert_eq!(body["approval"], false, "{body}");
+        assert_eq!(body["concurrent_tool_execution"], true, "{body}");
+        assert_eq!(body["max_concurrent_tools"], 8, "{body}");
+        assert_eq!(body["context_budget_tokens"], 200_000, "{body}");
+        assert_eq!(body["verbose"], true, "{body}");
+        assert_eq!(body["environment_probe"], false, "{body}");
+
+        // Validation: foreign surfaces, zero budgets, wrong types.
+        for payload in [
+            json!({ "key": "reasoning_effort", "value": "high" }),
+            json!({ "key": "service_tier", "value": "fast" }),
+            json!({ "key": "max_iterations", "value": 0 }),
+            json!({ "key": "context_budget_tokens", "value": "lots" }),
+            json!({ "key": "verbose", "value": "yes" }),
+        ] {
+            let (status, _) = send_json(
+                app.clone(), "PUT", "/api/agent-settings", Some("sekret"), payload,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/agent-settings", Some("sekret"),
+            json!({ "key": "max_iterations", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/agent-settings", Some("sekret")).await;
+        assert_eq!(body["max_iterations"], 90, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

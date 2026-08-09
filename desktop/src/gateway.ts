@@ -628,6 +628,21 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/agent-settings` — P746 agent behavior snapshot. */
+export interface AgentSettingsPayload {
+  max_iterations: number;
+  approval: boolean;
+  concurrent_tool_execution: boolean;
+  max_concurrent_tools: number;
+  context_budget_tokens: number;
+  verbose: boolean;
+  environment_probe: boolean;
+  reasoning_effort: string;
+  service_tier: string;
+  personality: string;
+  system_prompt_configured: boolean;
+}
+
 /** `GET /api/gateway-settings` — P745 resolved gateway settings. */
 export interface GatewaySettingsPayload {
   host: string;
@@ -3986,6 +4001,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/agent-settings — P746 agent behavior snapshot. */
+  async agentSettings(): Promise<AgentSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/agent-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`agent-settings HTTP ${response.status}`);
+    return (await response.json()) as AgentSettingsPayload;
+  }
+
+  /** P746: PUT /api/agent-settings — persist an agent behavior knob;
+   * null removes the override. */
+  async updateAgentSetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/agent-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `agent-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/gateway-settings — P745 resolved gateway settings. */
