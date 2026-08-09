@@ -8094,11 +8094,47 @@ async fn health(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     }))
 }
 
+/// Hermes `/health/detailed` parity: the bounded readiness report
+/// (state.db / config / model / disk / gateway / background queues)
+/// plus gateway liveness fields (state, busy, drainable, platforms,
+/// pid, updated_at). Probes expose status and counts only — never
+/// config values or credentials.
 async fn health_detailed(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     let sessions = state.store.list_session_rows(1).map(|rows| rows.len()).unwrap_or(0);
     let runs = state.runs.lock().await.len();
+    let queued_depth: usize = state
+        .queued_prompts
+        .lock()
+        .unwrap()
+        .values()
+        .map(std::collections::VecDeque::len)
+        .sum();
+    let draining = state.restart.load(std::sync::atomic::Ordering::Acquire);
+    let gateway_state = if draining { "draining" } else { "running" };
+    let rows = crate::messaging::platform_state_rows();
+    let platforms = rows
+        .iter()
+        .map(|(id, _, platform_state)| ((*id).to_string(), json!({ "state": platform_state })))
+        .collect::<serde_json::Map<String, Value>>();
+    let model = state.model_name.clone();
+    let readiness = tokio::task::spawn_blocking(move || {
+        let home = crate::config::ulnclaw_home();
+        crate::readiness::collect_runtime_readiness(
+            &home,
+            &model,
+            gateway_state,
+            &rows,
+            runs,
+            queued_depth,
+        )
+    })
+    .await
+    .unwrap_or_else(|_| json!({ "status": "degraded", "checks": {} }));
+    let active_agents = runs;
     Json(json!({
-        "status": "ok",
+        "status": readiness.get("status").cloned().unwrap_or_else(|| json!("degraded")),
+        "readiness": readiness,
+        "platform": "ulnclaw-gateway",
         "service": "ulnclaw-gateway",
         "version": crate::VERSION,
         "model": state.model_name,
@@ -8106,6 +8142,14 @@ async fn health_detailed(State(state): State<Arc<GatewayState>>) -> Json<Value> 
         "auth_required": state.key.is_some(),
         "sessions_total_at_least": sessions,
         "runs_tracked": runs,
+        "gateway_state": gateway_state,
+        "platforms": platforms,
+        "active_agents": active_agents,
+        "gateway_busy": gateway_state == "running" && active_agents > 0,
+        "gateway_drainable": gateway_state == "running",
+        "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "uptime_seconds": state.started_at.elapsed().as_secs(),
+        "pid": std::process::id(),
     }))
 }
 
@@ -15354,6 +15398,57 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "ok");
         assert_eq!(body["service"], "ulnclaw-gateway");
+    }
+
+    #[tokio::test]
+    async fn test_health_detailed_reports_readiness() {
+        // P697: hermes /health/detailed parity — the bounded readiness
+        // report plus gateway liveness fields, all open like /health.
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/health/detailed", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            matches!(body["status"].as_str(), Some("ok") | Some("degraded")),
+            "{body}"
+        );
+        let checks = &body["readiness"]["checks"];
+        for name in [
+            "state_db",
+            "config",
+            "model",
+            "disk",
+            "gateway",
+            "background_queues",
+        ] {
+            assert!(checks[name].is_object(), "missing check {name}: {body}");
+        }
+        assert_eq!(body["gateway_state"], "running");
+        assert_eq!(body["gateway_drainable"], true);
+        assert_eq!(body["gateway_busy"], false);
+        assert!(body["platforms"].is_object(), "{body}");
+        assert!(body["pid"].as_u64().unwrap_or(0) > 0, "{body}");
+        assert!(body["updated_at"].is_string(), "{body}");
+        // Compat fields the desktop already reads survive.
+        assert_eq!(body["service"], "ulnclaw-gateway");
+        assert_eq!(body["model"], "test-model");
+    }
+
+    #[tokio::test]
+    async fn test_health_detailed_reflects_restart_drain() {
+        // While the restart/drain flag is set the gateway reports the
+        // draining state and is no longer drainable (hermes
+        // derive_gateway_drainable semantics).
+        let state = test_state();
+        state
+            .restart
+            .store(true, std::sync::atomic::Ordering::Release);
+        let app = router(state);
+        let (status, body) = get_json(app, "/health/detailed", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["gateway_state"], "draining");
+        assert_eq!(body["gateway_drainable"], false);
+        assert_eq!(body["readiness"]["checks"]["gateway"]["state"], "draining");
+        assert_eq!(body["readiness"]["checks"]["gateway"]["status"], "ok");
     }
 
     fn learning_state(home: &std::path::Path) -> Arc<GatewayState> {

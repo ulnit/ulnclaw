@@ -179,6 +179,7 @@ pub mod prompt_stash;
 pub mod provider;
 pub mod proxy_cmd;
 pub mod raft;
+pub mod readiness;
 pub mod redact;
 pub mod secret_scope;
 pub mod secrets;
