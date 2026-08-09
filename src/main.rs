@@ -9258,6 +9258,20 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     }
                     Ok(exchange)
                 };
+                // P741: raw trace rendering for the viewer's `r`
+                // toggle — timestamped messages including tool calls,
+                // loaded through a fresh store connection (capped so a
+                // giant session cannot blow up the redraw buffer).
+                let raw_home = home.clone();
+                let raw_transcript = move |id: &str| {
+                    let raw_store =
+                        SqliteSessionStore::open(raw_home.join("state.db"))
+                            .map_err(|e| e.to_string())?;
+                    let messages = raw_store
+                        .load_messages_with_timestamps(id)
+                        .map_err(|e| e.to_string())?;
+                    Ok(messages.into_iter().take(2000).collect::<Vec<_>>())
+                };
                 match run_session_browse_tui(
                     rows.clone(),
                     project_by_session.clone(),
@@ -9271,6 +9285,7 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     Some(&export),
                     Some(&context),
                     Some(&transcript),
+                    Some(&raw_transcript),
                 ) {
                     Ok(selected) => selected,
                     Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
@@ -9749,6 +9764,7 @@ fn run_session_browse_tui(
     export: Option<&dyn Fn(&str) -> Result<std::path::PathBuf, String>>,
     context: Option<&dyn Fn(&str) -> Option<(usize, usize)>>,
     transcript: Option<&dyn Fn(&str) -> Result<Vec<(String, Option<String>)>, String>>,
+    raw_transcript: Option<&dyn Fn(&str) -> Result<Vec<(f64, ulnclaw::provider::Message)>, String>>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -9807,6 +9823,11 @@ fn run_session_browse_tui(
     let mut transcript_title = String::new();
     let mut transcript_lines: Vec<String> = Vec::new();
     let mut transcript_scroll: usize = 0;
+    // P741: raw-mode rendering inside the transcript viewer — `r`
+    // swaps between the pretty rendering and the raw trace rendering
+    // (timestamps, tool names/ids, tool_calls JSON).
+    let mut transcript_raw_mode = false;
+    let mut transcript_alt_lines: Vec<String> = Vec::new();
     // P630: live context-in-use per highlighted session (used, budget),
     // cached by id so redraws don't re-read the store.
     let mut context_cache: std::collections::HashMap<String, Option<(usize, usize)>> =
@@ -9934,8 +9955,10 @@ fn run_session_browse_tui(
             }
             if trows >= 3 && tcols >= 20 {
                 let header = format!(
-                    "  {} \u{2014} transcript  (\u{2191}\u{2193}/PgUp/PgDn scroll, Home/End, Esc back)",
-                    transcript_title
+                    "  {} \u{2014} transcript{}  (\u{2191}\u{2193}/PgUp/PgDn scroll, Home/End, r {}, Esc back)",
+                    transcript_title,
+                    if transcript_raw_mode { " [RAW]" } else { "" },
+                    if transcript_raw_mode { "pretty" } else { "raw" },
                 );
                 queue!(
                     out,
@@ -10005,6 +10028,14 @@ fn run_session_browse_tui(
                     }
                     KeyCode::Home => transcript_scroll = 0,
                     KeyCode::End => transcript_scroll = max_scroll,
+                    KeyCode::Char('r') => {
+                        // P741: swap pretty \u{2194} raw renderings.
+                        if !transcript_alt_lines.is_empty() {
+                            std::mem::swap(&mut transcript_lines, &mut transcript_alt_lines);
+                            transcript_raw_mode = !transcript_raw_mode;
+                            transcript_scroll = 0;
+                        }
+                    }
                     _ => {}
                 },
                 Event::Resize(_, _) => {}
@@ -10039,7 +10070,7 @@ fn run_session_browse_tui(
             queue!(
                 out,
                 SetForegroundColor(Color::Yellow),
-                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  v transcript  Type to filter  Tab source  F10 model  F2 sort  F3 preview  Ctrl+U/D pane  F1 help  F5 reload  F8 archive  Esc quit"),
+                Print("  Browse sessions — \u{2191}\u{2193} navigate  Enter select  v transcript  r raw  Type to filter  Tab source  F10 model  F2 sort  F3 preview  Ctrl+U/D pane  F1 help  F5 reload  F8 archive  Esc quit"),
                 ResetColor
             )
             .map_err(|e| e.to_string())?;
@@ -10844,7 +10875,22 @@ fn run_session_browse_tui(
                                         }
                                         lines.push(String::new());
                                     }
+                                    // P741: pre-render the raw trace view too
+                                    // so `r` inside the viewer can swap
+                                    // pretty \u{2194} raw without a reload.
+                                    let mut alt: Vec<String> = Vec::new();
+                                    if let Some(raw_fn) = raw_transcript {
+                                        match raw_fn(&row.id) {
+                                            Ok(messages) => {
+                                                let raw = ulnclaw::session::export::render_session_raw(&messages, false);
+                                                alt.extend(raw.lines().map(str::to_string));
+                                            }
+                                            Err(_) => {}
+                                        }
+                                    }
                                     transcript_lines = lines;
+                                    transcript_alt_lines = alt;
+                                    transcript_raw_mode = false;
                                     transcript_scroll = 0;
                                     transcript_title = row
                                         .title

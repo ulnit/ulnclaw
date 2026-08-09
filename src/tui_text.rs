@@ -168,6 +168,7 @@ pub fn browse_help_entries() -> &'static [(&'static str, &'static str)] {
         ("Home/End", "jump to the first / last session"),
         ("Enter", "select and resume the highlighted session"),
         ("v", "view the highlighted session's full transcript (Esc returns)"),
+        ("r", "in the transcript viewer: toggle raw \u{2194} pretty (timestamps + tool calls)"),
         ("Type", "live filter over title, preview, id, source, project"),
         ("Backspace", "delete one filter character"),
         ("Esc", "clear the filter; a second press quits"),
