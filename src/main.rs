@@ -2672,6 +2672,22 @@ async fn gateway_cmd(
         });
     }
 
+    // P700: delivery-ledger recovery — redeliver orphaned final replies
+    // once platform senders have registered (hermes delivery_ledger
+    // sweep_recoverable; delayed so the connect loops beat us to it).
+    {
+        let ledger_store = state.store.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let redelivered = ulnclaw::delivery_ledger::sweep_and_redeliver(&ledger_store).await;
+            if redelivered > 0 {
+                tracing::info!(
+                    "[delivery_ledger] redelivered {redelivered} orphaned reply(ies) after restart"
+                );
+            }
+        });
+    }
+
     // Register this instance in the pidfile; a startup failure or a
     // clean shutdown removes it (best-effort — a stale file only
     // weakens the guard, and the liveness check self-heals it).

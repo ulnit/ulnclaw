@@ -77,6 +77,22 @@ CREATE TABLE IF NOT EXISTS async_delegations (
     task_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS delivery_obligations (
+    obligation_id TEXT PRIMARY KEY,
+    session_key TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    thread_id TEXT,
+    content TEXT NOT NULL,
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    owner_pid INTEGER,
+    owner_started_at INTEGER,
+    last_error TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
@@ -880,6 +896,193 @@ impl SqliteSessionStore {
             |row| row.get::<_, i64>(0),
         )
         .unwrap_or(0)
+    }
+
+    // ------------------------------------------------------------------
+    // Delivery obligations (P700; hermes gateway/delivery_ledger.py)
+    // ------------------------------------------------------------------
+
+    /// Record a pending outbound final response (hermes
+    /// `record_obligation`); returns the obligation id.
+    pub fn record_obligation(
+        &self,
+        obligation_id: &str,
+        session_key: &str,
+        platform: &str,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        content: &str,
+        owner_pid: u32,
+        owner_started_at: Option<u64>,
+        now: f64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO delivery_obligations
+             (obligation_id, session_key, platform, chat_id, thread_id, content,
+              state, attempts, created_at, updated_at, owner_pid, owner_started_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, ?7, ?7, ?8, ?9)",
+            params![
+                obligation_id,
+                session_key,
+                platform,
+                chat_id,
+                thread_id,
+                content,
+                now,
+                owner_pid,
+                owner_started_at.map(|v| v as i64),
+            ],
+        )
+        .map_err(|e| AgentError::session(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Transition one obligation's state (hermes `mark_attempting` /
+    /// `mark_delivered` / `mark_failed` / abandon).
+    pub fn set_obligation_state(&self, obligation_id: &str, state: &str, last_error: Option<&str>, now: f64) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        conn.execute(
+            "UPDATE delivery_obligations SET state = ?2, updated_at = ?3, last_error = ?4
+             WHERE obligation_id = ?1",
+            params![obligation_id, state, now, last_error],
+        )
+        .map_err(|e| AgentError::session(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Claim undelivered obligations owned by dead processes for
+    /// redelivery (hermes `sweep_recoverable`): re-stamps the owner to
+    /// this process and bumps attempts atomically; rows past the
+    /// attempts cap or stale cutoff flip to 'abandoned'. Returns
+    /// (obligation_id, platform, chat_id, thread_id, content,
+    /// needs_marker, attempts).
+    pub fn sweep_obligations(
+        &self,
+        deliverable_platforms: &[String],
+        owner_pid: u32,
+        owner_started_at: Option<u64>,
+        liveness: &dyn Fn(Option<i64>, Option<i64>) -> bool,
+        max_attempts: i64,
+        stale_after_seconds: f64,
+        now: f64,
+    ) -> Vec<(String, String, String, Option<String>, String, bool, i64)> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let mut claimed = Vec::new();
+        let rows: Vec<(String, String, String, Option<String>, String, String, i64, f64, Option<i64>, Option<i64>)> = {
+            let mut stmt = match conn.prepare(
+                "SELECT obligation_id, platform, chat_id, thread_id, content, state,
+                        attempts, created_at, owner_pid, owner_started_at
+                 FROM delivery_obligations
+                 WHERE state IN ('pending', 'attempting', 'failed')",
+            ) {
+                Ok(s) => s,
+                Err(_) => return Vec::new(),
+            };
+            let mapped = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, f64>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, Option<i64>>(9)?,
+                ))
+            });
+            let Ok(mapped) = mapped else { return Vec::new() };
+            mapped.filter_map(|r| r.ok()).collect()
+        };
+        for (oid, platform, chat_id, thread_id, content, state, attempts, created_at, opid, ostarted) in rows {
+            if liveness(opid, ostarted) {
+                continue; // a live gateway still owns this row
+            }
+            if attempts >= max_attempts || (now - created_at) > stale_after_seconds {
+                let _ = conn.execute(
+                    "UPDATE delivery_obligations SET state = 'abandoned', updated_at = ?2 WHERE obligation_id = ?1",
+                    params![oid, now],
+                );
+                continue;
+            }
+            if !deliverable_platforms.is_empty() && !deliverable_platforms.contains(&platform) {
+                // No adapter for this platform this boot — claiming would
+                // spend an attempt on a no-op (hermes semantics).
+                continue;
+            }
+            let updated = conn.execute(
+                "UPDATE delivery_obligations
+                 SET owner_pid = ?2, owner_started_at = ?3, attempts = attempts + 1, updated_at = ?4
+                 WHERE obligation_id = ?1 AND (owner_pid IS ?5 OR owner_pid = ?5)",
+                params![
+                    oid,
+                    owner_pid,
+                    owner_started_at.map(|v| v as i64),
+                    now,
+                    opid,
+                ],
+            ).unwrap_or(0);
+            if updated > 0 {
+                claimed.push((oid, platform, chat_id, thread_id, content, state != "pending", attempts + 1));
+            }
+        }
+        claimed
+    }
+
+    /// Retention prune: drop delivered/abandoned rows older than the
+    /// retention window and cap the total row count (hermes `_prune`).
+    pub fn prune_obligations(&self, retention_seconds: f64, max_rows: usize, now: f64) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
+        let cutoff = now - retention_seconds;
+        conn.execute(
+            "DELETE FROM delivery_obligations WHERE state IN ('delivered', 'abandoned') AND updated_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| AgentError::session(e.to_string()))?;
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM delivery_obligations", [], |r| r.get(0))
+            .unwrap_or(0);
+        let excess = total.saturating_sub(max_rows as i64);
+        if excess > 0 {
+            conn.execute(
+                "DELETE FROM delivery_obligations WHERE obligation_id IN (
+                   SELECT obligation_id FROM delivery_obligations
+                   ORDER BY CASE state WHEN 'delivered' THEN 0 WHEN 'abandoned' THEN 1 ELSE 2 END,
+                            updated_at ASC
+                   LIMIT ?1)",
+                params![excess],
+            )
+            .map_err(|e| AgentError::session(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Test/inspection hook: all obligation rows ordered oldest first.
+    #[cfg(test)]
+    pub fn obligation_rows(&self) -> Vec<(String, String, String, i64)> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT obligation_id, platform, state, attempts FROM delivery_obligations ORDER BY created_at",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
     }
 
     /// Undelivered finished delegations: (id, origin_session, result_json).

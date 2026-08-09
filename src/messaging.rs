@@ -1536,7 +1536,25 @@ impl Dispatcher {
                             sender.send_text(&event.chat_id, echo).await;
                         }
                         if !result.reply.is_empty() {
+                            // P700: durable delivery obligation around the
+                            // send (hermes delivery_ledger) — a crash
+                            // between finalize and send is redelivered on
+                            // the next boot.
+                            let obligation = crate::delivery_ledger::record_obligation(
+                                &self.store,
+                                key,
+                                &event.platform,
+                                &event.chat_id,
+                                None,
+                                &result.reply,
+                            );
+                            if let Some(id) = &obligation {
+                                crate::delivery_ledger::mark_attempting(&self.store, id);
+                            }
                             sender.send_text(&event.chat_id, &result.reply).await;
+                            if let Some(id) = &obligation {
+                                crate::delivery_ledger::mark_delivered(&self.store, id);
+                            }
                         }
                     }
                 }

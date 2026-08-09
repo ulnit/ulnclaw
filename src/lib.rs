@@ -118,6 +118,7 @@ pub mod desktop;
 pub mod desktop_bridge;
 pub mod dingtalk;
 pub mod debug_cmd;
+pub mod delivery_ledger;
 pub mod doctor;
 pub mod dump;
 pub mod env_guard;

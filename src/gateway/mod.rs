@@ -13894,7 +13894,7 @@ fn release_fire_claim(job_id: &str) {
 /// configured, strips `MEDIA:` tags (senders are text-only), and sends
 /// via each platform's registered sender. Returns None on success /
 /// nothing-to-deliver, or an error string.
-async fn deliver_job_result(job: &CronJob, content: &str, wrap_response: bool) -> Option<String> {
+async fn deliver_job_result(store: &crate::session::SqliteSessionStore, job: &CronJob, content: &str, wrap_response: bool) -> Option<String> {
     let targets = crate::cron::delivery::resolve_delivery_targets(job);
     if targets.is_empty() {
         let deliver = crate::cron::delivery::normalize_deliver_value(
@@ -13924,11 +13924,29 @@ async fn deliver_job_result(job: &CronJob, content: &str, wrap_response: bool) -
     };
     let (cleaned, _media) = crate::messaging::extract_media_tags(&body);
     let mut errors: Vec<String> = Vec::new();
+    let session_key = format!("cron-job:{}", job.id);
     for target in targets {
         let key = crate::cron::delivery::sender_key_for(&target.platform);
         match crate::messaging::platform_sender(&key) {
             Some(sender) => {
+                // P700: durable delivery obligation around the send
+                // (hermes delivery_ledger) — cron output is exactly the
+                // kind of final response a restart must not lose.
+                let obligation = crate::delivery_ledger::record_obligation(
+                    store,
+                    &session_key,
+                    &key,
+                    &target.chat_id,
+                    target.thread_id.as_deref(),
+                    &cleaned,
+                );
+                if let Some(id) = &obligation {
+                    crate::delivery_ledger::mark_attempting(store, id);
+                }
                 sender.send_text(&target.chat_id, &cleaned).await;
+                if let Some(id) = &obligation {
+                    crate::delivery_ledger::mark_delivered(store, id);
+                }
             }
             None => errors.push(format!(
                 "platform '{}' has no registered sender",
@@ -13991,6 +14009,7 @@ async fn spawn_job_run(
     let job_id = job.id.clone();
     let runs = state.runs.clone();
     let outcome_run_id = run_id.clone();
+    let session_store = state.store.clone();
     tokio::spawn(async move {
         let outcome = loop {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -14033,7 +14052,7 @@ async fn spawn_job_run(
         if success {
             if !crate::cron::delivery::is_cron_silence_response(&result_text) {
                 delivery_error =
-                    deliver_job_result(&job_snapshot, &result_text, wrap_response).await;
+                    deliver_job_result(&session_store, &job_snapshot, &result_text, wrap_response).await;
             }
         } else {
             let summary = crate::cron::delivery::summarize_cron_failure_for_delivery(
@@ -14042,7 +14061,7 @@ async fn spawn_job_run(
             );
             if !summary.trim().is_empty() {
                 delivery_error =
-                    deliver_job_result(&job_snapshot, &summary, wrap_response).await;
+                    deliver_job_result(&session_store, &job_snapshot, &summary, wrap_response).await;
             }
         }
         let delivery_failed = delivery_error.is_some();
