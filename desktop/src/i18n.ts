@@ -355,6 +355,7 @@ export interface Translations {
   webSettingsPanel: { title: string; searchBackend: string; extractBackend: string; tavilyKey: string; braveKey: string; searxngUrl: string; autoWord: string; apply: string; clear: string; };
   delegationPanel: { title: string; children: string; childIterations: string; maxDepth: string; invalidNumber: string; apply: string; clear: string; };
   memoryPanel: { title: string; memoryLimit: string; userLimit: string; invalidNumber: string; apply: string; clear: string; };
+  modelCatalogPanel: { title: string; excluded: string; canonical: string; custom: string; apply: string; clear: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -870,6 +871,7 @@ const en: Translations = {
   webSettingsPanel: { title: "Web search", searchBackend: "Search backend", extractBackend: "Extract backend", tavilyKey: "Tavily key", braveKey: "Brave key", searxngUrl: "SearXNG URL", autoWord: "auto", apply: "Apply", clear: "Clear" },
   delegationPanel: { title: "Delegation", children: "Concurrent children", childIterations: "Child iteration budget", maxDepth: "Max nesting depth", invalidNumber: "enter a positive integer", apply: "Apply", clear: "Clear" },
   memoryPanel: { title: "Memory limits", memoryLimit: "MEMORY.md char limit", userLimit: "USER.md char limit", invalidNumber: "enter a positive integer", apply: "Apply", clear: "Clear" },
+  modelCatalogPanel: { title: "Model catalog", excluded: "Excluded providers", canonical: "Canonical providers", custom: "Custom providers", apply: "Apply", clear: "Clear" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1462,6 +1464,7 @@ const zh: Translations = {
   webSettingsPanel: { title: "网络搜索", searchBackend: "搜索后端", extractBackend: "提取后端", tavilyKey: "Tavily 密钥", braveKey: "Brave 密钥", searxngUrl: "SearXNG 地址", autoWord: "自动", apply: "应用", clear: "清除" },
   delegationPanel: { title: "委托", children: "并发子代理数", childIterations: "子代理迭代预算", maxDepth: "最大嵌套深度", invalidNumber: "请输入正整数", apply: "应用", clear: "清除" },
   memoryPanel: { title: "记忆限额", memoryLimit: "MEMORY.md 字符上限", userLimit: "USER.md 字符上限", invalidNumber: "请输入正整数", apply: "应用", clear: "清除" },
+  modelCatalogPanel: { title: "模型目录", excluded: "排除的提供商", canonical: "内置提供商数", custom: "自定义提供商", apply: "应用", clear: "清除" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2054,6 +2057,7 @@ const zhHant: Translations = {
   webSettingsPanel: { title: "網路搜尋", searchBackend: "搜尋後端", extractBackend: "擷取後端", tavilyKey: "Tavily 金鑰", braveKey: "Brave 金鑰", searxngUrl: "SearXNG 位址", autoWord: "自動", apply: "套用", clear: "清除" },
   delegationPanel: { title: "委託", children: "並行子代理數", childIterations: "子代理迭代預算", maxDepth: "最大巢狀深度", invalidNumber: "請輸入正整數", apply: "套用", clear: "清除" },
   memoryPanel: { title: "記憶限額", memoryLimit: "MEMORY.md 字元上限", userLimit: "USER.md 字元上限", invalidNumber: "請輸入正整數", apply: "套用", clear: "清除" },
+  modelCatalogPanel: { title: "模型目錄", excluded: "排除的供應商", canonical: "內建供應商數", custom: "自訂供應商", apply: "套用", clear: "清除" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2646,6 +2650,7 @@ const ja: Translations = {
   webSettingsPanel: { title: "ウェブ検索", searchBackend: "検索バックエンド", extractBackend: "抽出バックエンド", tavilyKey: "Tavily キー", braveKey: "Brave キー", searxngUrl: "SearXNG URL", autoWord: "自動", apply: "適用", clear: "クリア" },
   delegationPanel: { title: "委譲", children: "並行子エージェント数", childIterations: "子イテレーション予算", maxDepth: "最大ネスト深度", invalidNumber: "正の整数を入力してください", apply: "適用", clear: "クリア" },
   memoryPanel: { title: "メモリ上限", memoryLimit: "MEMORY.md 文字上限", userLimit: "USER.md 文字上限", invalidNumber: "正の整数を入力してください", apply: "適用", clear: "クリア" },
+  modelCatalogPanel: { title: "モデルカタログ", excluded: "除外プロバイダー", canonical: "正規プロバイダー数", custom: "カスタムプロバイダー", apply: "適用", clear: "クリア" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3238,6 +3243,7 @@ const ar: Translations = {
   webSettingsPanel: { title: "بحث الويب", searchBackend: "واجهة البحث", extractBackend: "واجهة الاستخراج", tavilyKey: "مفتاح Tavily", braveKey: "مفتاح Brave", searxngUrl: "عنوان SearXNG", autoWord: "تلقائي", apply: "تطبيق", clear: "مسح" },
   delegationPanel: { title: "التفويض", children: "الأبناء المتزامنون", childIterations: "ميزانية تكرار الأبناء", maxDepth: "أقصى عمق تداخل", invalidNumber: "أدخل عددًا صحيحًا موجبًا", apply: "تطبيق", clear: "مسح" },
   memoryPanel: { title: "حدود الذاكرة", memoryLimit: "حد أحرف MEMORY.md", userLimit: "حد أحرف USER.md", invalidNumber: "أدخل عددًا صحيحًا موجبًا", apply: "تطبيق", clear: "مسح" },
+  modelCatalogPanel: { title: "فهرس النماذج", excluded: "الموفرون المستبعدون", canonical: "عدد الموفرين القياسيين", custom: "الموفرون المخصصون", apply: "تطبيق", clear: "مسح" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

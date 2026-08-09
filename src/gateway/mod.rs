@@ -6022,6 +6022,116 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/model-catalog` — P750: picker catalog knobs for the
+/// shell: the excluded provider slugs plus the canonical and custom
+/// (`[providers.*]`) provider inventories so operators can see what
+/// they are excluding.
+async fn model_catalog_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let excluded: Vec<String> = config
+        .model_catalog
+        .excluded_providers
+        .iter()
+        .map(|slug| slug.trim().to_lowercase())
+        .filter(|slug| !slug.is_empty())
+        .collect();
+    let mut custom: Vec<String> = config
+        .providers
+        .keys()
+        .map(|slug| slug.trim().to_lowercase())
+        .filter(|slug| !slug.is_empty())
+        .collect();
+    custom.sort();
+    Json(json!({
+        "excluded_providers": excluded,
+        "canonical_providers": crate::model_inventory::CANONICAL_PROVIDERS
+            .iter()
+            .map(|provider| provider.slug)
+            .collect::<Vec<_>>(),
+        "custom_providers": custom,
+    }))
+}
+
+/// `PUT /api/model-catalog` — P750: persist picker catalog knobs from
+/// the shell. Body: `{"key": "excluded_providers",
+/// "value": ["slug", ...]|null}` — null removes the key (nothing is
+/// excluded). Slugs are trimmed/lowercased and blanks are rejected.
+/// Applies the next time the picker inventory is built.
+async fn update_model_catalog_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["excluded_providers"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown model_catalog key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let items = match v.as_array() {
+                Some(items) => items,
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "model_catalog.excluded_providers must be an array of provider slugs" })),
+                    )
+                }
+            };
+            let mut list: Vec<toml::Value> = Vec::new();
+            for item in items {
+                let slug = item.as_str().map(str::trim).map(str::to_lowercase).unwrap_or_default();
+                if slug.is_empty() {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "model_catalog.excluded_providers entries must be non-empty slugs" })),
+                    );
+                }
+                list.push(toml::Value::String(slug));
+            }
+            raw = Some(toml::Value::Array(list).to_string());
+        }
+    }
+    let dotted = format!("model_catalog.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(_) => crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true)
+            .map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/delegation-settings` — P748: sub-agent delegation limits
 /// for the shell: concurrent children, child iteration budget and the
 /// maximum nesting depth.
@@ -8117,6 +8227,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/agent-settings", get(agent_settings_api).put(update_agent_settings_api))
         .route("/api/web-settings", get(web_settings_api).put(update_web_settings_api))
         .route("/api/delegation-settings", get(delegation_settings_api).put(update_delegation_settings_api))
+        .route("/api/model-catalog", get(model_catalog_api).put(update_model_catalog_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -18759,6 +18870,76 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/memory", Some("sekret")).await;
         assert_eq!(body["char_limits"]["memory"], 2200, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_model_catalog_editor() {
+        // P750: GET /api/model-catalog surfaces exclusions + provider
+        // inventories; PUT persists the excluded slugs.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[providers.localbox]\nbase_url = \"http://127.0.0.1:9/v1\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: nothing excluded; inventories surface.
+        let (status, body) = get_json(app.clone(), "/api/model-catalog", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["excluded_providers"], json!([]), "{body}");
+        assert!(body["canonical_providers"].as_array().unwrap().contains(&json!("openai")), "{body}");
+        assert_eq!(body["custom_providers"], json!(["localbox"]), "{body}");
+
+        // Exclude two providers.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/model-catalog", Some("sekret"),
+            json!({ "key": "excluded_providers", "value": ["Ollama ", "llamacpp"] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/model-catalog", Some("sekret")).await;
+        assert_eq!(body["excluded_providers"], json!(["ollama", "llamacpp"]), "{body}");
+
+        // Validation: not an array, blank slug, unknown key.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/model-catalog", Some("sekret"),
+            json!({ "key": "excluded_providers", "value": "ollama" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/model-catalog", Some("sekret"),
+            json!({ "key": "excluded_providers", "value": ["ollama", "  "] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/model-catalog", Some("sekret"),
+            json!({ "key": "yolo", "value": [] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/model-catalog", Some("sekret"),
+            json!({ "key": "excluded_providers", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/model-catalog", Some("sekret")).await;
+        assert_eq!(body["excluded_providers"], json!([]), "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

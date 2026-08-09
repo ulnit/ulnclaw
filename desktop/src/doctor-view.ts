@@ -132,6 +132,17 @@ export class DoctorWidget {
           <span id="memory-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-model-catalog" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="modelCatalogPanel.title">Model catalog</h3>
+        <div id="model-catalog-rows"></div>
+        <div id="model-catalog-editor" class="monitoring-row" hidden>
+          <span class="monitoring-label" data-i18n="modelCatalogPanel.excluded">Excluded providers</span>
+          <input id="model-catalog-value" class="ghost" />
+          <button id="model-catalog-apply" class="ghost mcp-add-btn" data-i18n="modelCatalogPanel.apply">Apply</button>
+          <button id="model-catalog-clear" class="ghost mcp-add-btn" data-i18n="modelCatalogPanel.clear">Clear</button>
+          <span id="model-catalog-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -386,6 +397,7 @@ export class DoctorWidget {
     this.loadWebSettings().catch(() => undefined);
     this.loadDelegationSettings().catch(() => undefined);
     this.loadMemorySettings().catch(() => undefined);
+    this.loadModelCatalog().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2469,6 +2481,78 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadModelCatalog(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-model-catalog") as HTMLElement;
+    const rows = this.root.querySelector("#model-catalog-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.modelCatalog();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const off = t.monitoring.off;
+      addRow(
+        t.modelCatalogPanel.excluded,
+        payload.excluded_providers.length > 0
+          ? escapeHtmlDoctor(payload.excluded_providers.join(", "))
+          : escapeHtmlDoctor(off),
+      );
+      addRow(t.modelCatalogPanel.canonical, String(payload.canonical_providers.length));
+      addRow(
+        t.modelCatalogPanel.custom,
+        payload.custom_providers.length > 0
+          ? escapeHtmlDoctor(payload.custom_providers.join(", "))
+          : escapeHtmlDoctor(off),
+      );
+      // P750: excluded-providers editor — comma-separated slugs, Apply
+      // persists through PUT /api/model-catalog, Clear removes the
+      // override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#model-catalog-editor") as HTMLElement;
+      const valueInput = this.root.querySelector("#model-catalog-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#model-catalog-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#model-catalog-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#model-catalog-status") as HTMLElement;
+      if (!applyBtn.dataset.wired) {
+        const applyEdit = async (value: string[] | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateModelCatalog("excluded_providers", value);
+            await this.loadModelCatalog();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const slugs = valueInput.value
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+          void applyEdit(slugs);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        applyBtn.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

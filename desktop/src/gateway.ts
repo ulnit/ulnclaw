@@ -628,6 +628,13 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/model-catalog` — P750 picker catalog knobs. */
+export interface ModelCatalogPayload {
+  excluded_providers: string[];
+  canonical_providers: string[];
+  custom_providers: string[];
+}
+
 /** `GET /api/delegation-settings` — P748 sub-agent delegation limits. */
 export interface DelegationSettingsPayload {
   max_concurrent_children: number;
@@ -4036,6 +4043,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/model-catalog — P750 picker catalog knobs. */
+  async modelCatalog(): Promise<ModelCatalogPayload> {
+    const response = await fetch(this.endpoint("/api/model-catalog"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`model-catalog HTTP ${response.status}`);
+    return (await response.json()) as ModelCatalogPayload;
+  }
+
+  /** P750: PUT /api/model-catalog — persist excluded provider slugs;
+   * null removes the override. */
+  async updateModelCatalog(
+    key: string,
+    value: string[] | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/model-catalog"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `model-catalog PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/delegation-settings — P748 delegation limits. */
