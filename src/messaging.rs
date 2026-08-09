@@ -332,6 +332,57 @@ pub struct MessageEvent {
     pub attachments: Vec<MediaAttachment>,
 }
 
+/// Process-wide chat-session remap (hermes switch_session semantics):
+/// platform chat session key → session id to run under. Shared between
+/// the messaging Dispatcher (`/resume`) and the gateway (`/handoff`) —
+/// both surfaces can bind a chat to another session.
+fn session_remappings() -> &'static std::sync::Mutex<HashMap<String, String>> {
+    static REMAP: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    REMAP.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Bind a platform chat session key to a session id (hermes
+/// switch_session; used by `/resume` and `/handoff`).
+pub fn set_session_remap(session_key: &str, session_id: &str) {
+    session_remappings()
+        .lock()
+        .unwrap()
+        .insert(session_key.to_string(), session_id.to_string());
+}
+
+/// Session id the chat key currently runs under — the remapped session
+/// when one is bound, else the deterministic chat key itself.
+pub fn effective_session_id_for(session_key: &str) -> String {
+    session_remappings()
+        .lock()
+        .unwrap()
+        .get(session_key)
+        .cloned()
+        .unwrap_or_else(|| session_key.to_string())
+}
+
+/// Per-chat rolling history (mirrors the REPL continuity model) —
+/// process-global so gateway `/handoff` can evict a chat's cache when
+/// rebinding it to another session.
+fn chat_histories() -> &'static Mutex<HashMap<String, Vec<crate::provider::Message>>> {
+    static HISTORIES: std::sync::OnceLock<Mutex<HashMap<String, Vec<crate::provider::Message>>>> =
+        std::sync::OnceLock::new();
+    HISTORIES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Evict a chat's cached history so the next turn rebuilds from the
+/// (possibly remapped) session transcript (hermes agent-cache eviction).
+pub async fn drop_history_cache(session_key: &str) {
+    chat_histories().lock().await.remove(session_key);
+}
+
+/// Test hook: clear the process-wide remap table.
+#[cfg(test)]
+fn clear_session_remappings_for_tests() {
+    session_remappings().lock().unwrap().clear();
+}
+
 /// Per-chat conversation runner: one session per platform+chat
 /// (hermes gateway session routing).
 pub struct Dispatcher {
@@ -339,12 +390,6 @@ pub struct Dispatcher {
     store: Arc<SqliteSessionStore>,
     /// Per-chat in-flight guard: one turn at a time per chat.
     busy: Arc<Mutex<HashMap<String, bool>>>,
-    /// Per-chat rolling history (mirrors the REPL continuity model).
-    histories: Arc<Mutex<HashMap<String, Vec<crate::provider::Message>>>>,
-    /// Per-chat session remap (hermes `/resume` switch): chat session
-    /// key → resumed session id. Absent while a chat runs under its
-    /// own deterministic key.
-    session_remap: Arc<Mutex<HashMap<String, String>>>,
 }
 
 /// Result of one dispatched platform message (hermes run-turn output):
@@ -1073,8 +1118,6 @@ impl Dispatcher {
             agent,
             store,
             busy: Arc::new(Mutex::new(HashMap::new())),
-            histories: Arc::new(Mutex::new(HashMap::new())),
-            session_remap: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1300,7 +1343,7 @@ impl Dispatcher {
             tool_call_id: None,
             name: None,
         };
-        self.histories
+        chat_histories()
             .lock()
             .await
             .entry(key.to_string())
@@ -1393,7 +1436,7 @@ Use `/resume` with no                      arguments to see available sessions."
                 transcript_echoes: Vec::new(),
             });
         };
-        if self.effective_session_id(key).await == target_id {
+        if effective_session_id_for(key) == target_id {
             let title = self
                 .store
                 .get_session_row(&target_id)
@@ -1410,11 +1453,8 @@ Use `/resume` with no                      arguments to see available sessions."
         // Switch: remap the chat key and drop the cached history so the
         // next turn rebuilds from the resumed session's transcript
         // (hermes switch_session + agent-cache eviction).
-        self.session_remap
-            .lock()
-            .await
-            .insert(key.to_string(), target_id.clone());
-        self.histories.lock().await.remove(key);
+        set_session_remap(key, &target_id);
+        drop_history_cache(key).await;
         let row = self.store.get_session_row(&target_id).ok().flatten();
         let title = row
             .as_ref()
@@ -1435,23 +1475,11 @@ Use `/resume` with no                      arguments to see available sessions."
         })
     }
 
-    /// Session id this chat currently runs under — the remapped
-    /// (resumed) session when `/resume` switched it, else the
-    /// deterministic chat key (hermes switch_session semantics).
-    async fn effective_session_id(&self, key: &str) -> String {
-        self.session_remap
-            .lock()
-            .await
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| key.to_string())
-    }
-
     async fn run_turn(&self, key: &str, event: &MessageEvent) -> Result<DispatchOutcome> {
         use crate::provider::Role;
-        // Resume remap (hermes /resume): a chat may run under a
-        // previous session id; default stays the deterministic key.
-        let session_id = self.effective_session_id(key).await;
+        // Resume remap (hermes /resume + /handoff): a chat may run
+        // under another session id; default stays the deterministic key.
+        let session_id = effective_session_id_for(key);
         // Ensure the session row exists under a deterministic id.
         if self
             .store
@@ -1469,7 +1497,7 @@ Use `/resume` with no                      arguments to see available sessions."
                 )
                 .ok();
         }
-        let mut histories = self.histories.lock().await;
+        let mut histories = chat_histories().lock().await;
         let history = histories.entry(key.to_string()).or_default();
         if history.is_empty() {
             if let Ok(messages) = self.store.load_messages(&session_id) {
@@ -6582,7 +6610,7 @@ mod tests {
         assert!(crate::slash_confirm::get_pending(&key).is_none());
 
         // The change note lands at the END of the session history.
-        let histories = dispatcher.histories.lock().await;
+        let histories = chat_histories().lock().await;
         let history = histories.get(&key).expect("history created");
         let last = history.last().expect("note appended");
         assert!(last
@@ -6603,7 +6631,7 @@ mod tests {
         let outcome = dispatcher.handle_event(test_event("cancel", "m2")).await.unwrap();
         assert!(outcome.reply.contains("cancelled"), "{}", outcome.reply);
         assert!(crate::slash_confirm::get_pending(&key).is_none());
-        let histories = dispatcher.histories.lock().await;
+        let histories = chat_histories().lock().await;
         let history = histories.get(&key);
         assert!(
             history.map(|h| h.is_empty()).unwrap_or(true),
@@ -6711,6 +6739,7 @@ mod tests {
     #[tokio::test]
     async fn resume_lists_switches_and_guards() {
         // P686: hermes /resume parity on the platform dispatch path.
+        clear_session_remappings_for_tests();
         let dispatcher = test_dispatcher();
         let event = test_event("/resume", "m1");
 
@@ -6737,10 +6766,7 @@ mod tests {
         let event = test_event("/resume 2", "m2");
         let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
         assert!(outcome.reply.contains("Resumed session **Alpha work**"), "{}", outcome.reply);
-        assert_eq!(
-            dispatcher.effective_session_id("platform-testplat-chat-1").await,
-            "sess-a"
-        );
+        assert_eq!(effective_session_id_for("platform-testplat-chat-1"), "sess-a");
 
         // Already on it.
         let event = test_event("/resume Alpha work", "m3");
@@ -6762,6 +6788,7 @@ mod tests {
         let event = test_event("/resume 99", "m7");
         let outcome = dispatcher.handle_resume_command("platform-testplat-chat-1", &event).await.unwrap();
         assert!(outcome.reply.contains("out of range"), "{}", outcome.reply);
+        clear_session_remappings_for_tests();
     }
 
     #[tokio::test]

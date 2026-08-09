@@ -10790,6 +10790,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /moa <prompt>      one-shot Mixture-of-Agents synthesis (default preset)
   /reload            reload <home>/.env vars into the running gateway
   /history [N]       recent transcript of this session (tool chatter collapsed)
+  /handoff [platform]  hand this session off to a platform home channel
   /subgoal [text|remove N|clear]  extra criteria on the active goal
   /reload-mcp [confirm]  rebuild the MCP tool surface (confirm when gated)
   /skills          list skills (invoke one: /<skill-name> [instruction])
@@ -11473,6 +11474,83 @@ async fn resolve_gateway_slash(
             Some(GatewaySlash::AgentTurn(
                 crate::learn_prompt::build_learn_prompt(rest),
             ))
+        }
+        "/handoff" => {
+            // hermes /handoff parity (lean): bind this session to a
+            // platform's home channel and ping it — the conversation
+            // continues there (session remap + history eviction).
+            let live = crate::messaging::platform_sender_names();
+            let platform = if rest.is_empty() {
+                if live.len() == 1 {
+                    live[0].clone()
+                } else if live.is_empty() {
+                    return Some(GatewaySlash::Direct(
+                        "no messaging platforms are connected — handoff needs a live platform."
+                            .to_string(),
+                    ));
+                } else {
+                    return Some(GatewaySlash::Direct(format!(
+                        "usage: /handoff <platform> — connected: {}",
+                        live.join(", ")
+                    )));
+                }
+            } else {
+                let wanted = rest
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                if live.iter().any(|p| p == &wanted) {
+                    wanted
+                } else {
+                    return Some(GatewaySlash::Direct(format!(
+                        "platform '{wanted}' is not connected — live platforms: {}.",
+                        if live.is_empty() {
+                            "none".to_string()
+                        } else {
+                            live.join(", ")
+                        }
+                    )));
+                }
+            };
+            let chat_id = crate::config::get_env_value(
+                &crate::send_message_tool::home_channel_env(&platform),
+            )
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+            let Some(chat_id) = chat_id else {
+                return Some(GatewaySlash::Direct(format!(
+                    "no home channel configured for {platform} — send /sethome in the target chat first."
+                )));
+            };
+            let session_key = format!("platform-{platform}-{chat_id}");
+            crate::messaging::set_session_remap(&session_key, session_id);
+            crate::messaging::drop_history_cache(&session_key).await;
+            let title = state
+                .store
+                .get_session_row(session_id)
+                .ok()
+                .flatten()
+                .and_then(|row| row.title)
+                .filter(|t| !t.is_empty());
+            if let Some(sender) = crate::messaging::platform_sender(&platform) {
+                let notice = match &title {
+                    Some(title) => format!(
+                        "\u{21AA} Session **{title}** handed off here — send a message to continue."
+                    ),
+                    None => "\u{21AA} Session handed off here — send a message to continue."
+                        .to_string(),
+                };
+                sender.send_text(&chat_id, &notice).await;
+            }
+            Some(GatewaySlash::Direct(match &title {
+                Some(title) => format!(
+                    "\u{2713} Handed session **{title}** off to {platform} ({chat_id}) — continue there."
+                ),
+                None => format!(
+                    "\u{2713} Handed this session off to {platform} ({chat_id}) — continue there."
+                ),
+            }))
         }
         "/history" => {
             // hermes /history parity (lean): recent transcript of this
@@ -16405,6 +16483,72 @@ mod tests {
         assert!(digest.contains("1 reference(s)"), "{digest}");
         assert!(digest.contains("aggregator openai:gpt-x"), "{digest}");
         assert!(digest.contains("/moa <prompt>"), "{digest}");
+    }
+
+    struct HandoffCapture {
+        sends: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::messaging::PlatformSender for HandoffCapture {
+        async fn send_text(&self, chat_id: &str, text: &str) {
+            self.sends
+                .lock()
+                .unwrap()
+                .push((chat_id.to_string(), text.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_handoff_binds_home_channel() {
+        // P691: /handoff binds the session to the platform home
+        // channel and pings it.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        std::fs::write(dir.path().join(".env"), "HANDOFFTEST_HOME_CHANNEL=home-chat\n").unwrap();
+
+        let sends = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        crate::messaging::register_platform_sender(
+            "handofftest",
+            std::sync::Arc::new(HandoffCapture { sends: sends.clone() }),
+        );
+
+        let state = test_state();
+        let sid = "sess-handoff";
+        state.store.create_named_session(sid, "test", None, None).unwrap();
+        state.store.set_session_title(sid, "Handoff me").unwrap();
+
+        // Unknown platform → lists live platforms.
+        match resolve_gateway_slash(&state, sid, "/handoff ghost").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("not connected"), "{text}");
+            }
+            _ => panic!("expected direct reply"),
+        }
+
+        // Valid handoff: remap + ping + confirmation.
+        match resolve_gateway_slash(&state, sid, "/handoff handofftest").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("Handed session **Handoff me** off"), "{text}");
+                assert!(text.contains("home-chat"), "{text}");
+            }
+            _ => panic!("expected direct reply"),
+        }
+        assert_eq!(
+            crate::messaging::effective_session_id_for("platform-handofftest-home-chat"),
+            sid
+        );
+        let captured = sends.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1, "{captured:?}");
+        assert_eq!(captured[0].0, "home-chat");
+        assert!(captured[0].1.contains("handed off here"), "{captured:?}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]
