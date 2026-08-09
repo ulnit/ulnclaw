@@ -418,6 +418,28 @@ export interface HealthDetailed {
   runs_tracked: number;
 }
 
+export interface SecretsStatus {
+  order: string[];
+  preserve_existing: string[];
+  command: { enabled: boolean; command_set: boolean; timeout_seconds: number };
+  bitwarden: {
+    enabled: boolean;
+    bws: string | null;
+    token_env: string;
+    token_present: boolean;
+    project_id: string | null;
+    override_existing: boolean;
+  };
+  onepassword: {
+    enabled: boolean;
+    op: string | null;
+    token_env: string;
+    token_present: boolean;
+    bindings: number;
+    override_existing: boolean;
+  };
+}
+
 export interface ComputerUseStatus {
   installed: boolean;
   driver: string | null;
@@ -1759,6 +1781,15 @@ export class GatewayClient {
     } catch {
       return null;
     }
+  }
+
+  /** GET /api/secrets — secret-source posture, never values (P642). */
+  async secretsStatus(): Promise<SecretsStatus> {
+    const response = await fetch(this.endpoint("/api/secrets"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as SecretsStatus;
   }
 
   /** GET /api/computer-use — cua-driver status + config (P641). */

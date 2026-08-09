@@ -30,6 +30,8 @@
 //!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/computer-use` — cua-driver status + config (deep
 //!     health report with `?deep=true`) for the desktop Doctor panel
+//!   - `GET  /api/secrets` — external secret-source posture (read-only,
+//!     never secret values) for the desktop Doctor panel
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
 //!   - `GET/PUT /api/fast` — Priority Processing (service_tier) toggle
@@ -5462,6 +5464,46 @@ async fn egress_status(State(_state): State<Arc<GatewayState>>) -> Response {
     }
 }
 
+/// `GET /api/secrets` — external secret-source status for the
+/// desktop Doctor panel (hermes `ulnclaw secrets status` parity):
+/// source order + per-source posture. Strictly read-only — secret
+/// VALUES are never exposed over the API.
+async fn secrets_status() -> Response {
+    use crate::secrets as sec;
+    let config = match crate::config::UlncLawConfig::load(None) {
+        Ok(c) => c,
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let cfg = &config.secrets;
+    let home = crate::config::ulnclaw_home();
+    Json(json!({
+        "order": sec::ordered_sources(cfg),
+        "preserve_existing": cfg.preserve_existing,
+        "command": {
+            "enabled": cfg.command.enabled,
+            "command_set": !cfg.command.command.is_empty(),
+            "timeout_seconds": cfg.command.timeout_seconds,
+        },
+        "bitwarden": {
+            "enabled": cfg.bitwarden.enabled,
+            "bws": sec::find_bws(&home).map(|p| p.display().to_string()),
+            "token_env": cfg.bitwarden.access_token_env,
+            "token_present": std::env::var(&cfg.bitwarden.access_token_env).is_ok(),
+            "project_id": (!cfg.bitwarden.project_id.is_empty()).then(|| cfg.bitwarden.project_id.clone()),
+            "override_existing": cfg.bitwarden.override_existing,
+        },
+        "onepassword": {
+            "enabled": cfg.onepassword.enabled,
+            "op": sec::find_op(&cfg.onepassword.binary_path).map(|p| p.display().to_string()),
+            "token_env": cfg.onepassword.service_account_token_env,
+            "token_present": std::env::var(&cfg.onepassword.service_account_token_env).is_ok(),
+            "bindings": cfg.onepassword.env.len(),
+            "override_existing": cfg.onepassword.override_existing,
+        },
+    }))
+    .into_response()
+}
+
 #[derive(Deserialize, Default)]
 struct ComputerUseQuery {
     /// Run the hermes-style deep health report (spawns the driver MCP
@@ -6494,6 +6536,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/egress/status", get(egress_status))
         .route("/api/system", get(system_info))
         .route("/api/computer-use", get(computer_use_status))
+        .route("/api/secrets", get(secrets_status))
         .route("/api/pairing", get(pairing_status))
         .route("/api/pairing/approve", post(pairing_approve))
         .route("/api/pairing/revoke", post(pairing_revoke))
@@ -15161,6 +15204,33 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_secrets_status_endpoint() {
+        // P642: GET /api/secrets reports source posture, never values.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = get_json(app.clone(), "/api/secrets", None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["order"].is_array(), "{body}");
+        assert!(body["command"]["enabled"].is_boolean(), "{body}");
+        assert!(body["bitwarden"]["enabled"].is_boolean(), "{body}");
+        assert!(body["bitwarden"]["token_env"].is_string(), "{body}");
+        assert!(body["onepassword"]["enabled"].is_boolean(), "{body}");
+        assert!(body["onepassword"]["bindings"].is_number(), "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

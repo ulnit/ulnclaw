@@ -99,6 +99,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="systemPanel.title">System</h3>
         <div id="system-rows"></div>
       </section>
+      <section id="doctor-secrets" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="secretsPanel.title">Secret sources</h3>
+        <div id="secrets-rows"></div>
+      </section>
       <section id="doctor-computer-use" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="computerUsePanel.title">Computer Use</h3>
         <div id="computer-use-rows"></div>
@@ -232,6 +236,7 @@ export class DoctorWidget {
     this.wireMcpAdd();
     this.loadSystem().catch(() => undefined);
     this.loadComputerUse().catch(() => undefined);
+    this.loadSecrets().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
     this.loadBackups().catch(() => undefined);
     this.loadCheckpoints().catch(() => undefined);
@@ -773,6 +778,69 @@ export class DoctorWidget {
         [v.home, info.home],
         [v.config, info.config_path],
       ];
+      rows.innerHTML = "";
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        valueEl.title = value;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** Secret sources (P642): per-source posture (hermes secrets
+   * status parity). Values are never shown — only presence. */
+  private async loadSecrets(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-secrets") as HTMLElement;
+    const rows = this.root.querySelector("#secrets-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const info = await client.secretsStatus();
+      const v = t.secretsPanel;
+      const entries: [string, string][] = [];
+      entries.push([
+        v.order,
+        info.order.length > 0 ? info.order.join(" \u2192 ") : v.noneEnabled,
+      ]);
+      if (info.command.enabled) {
+        entries.push([
+          "command",
+          `${info.command.command_set ? v.configured : v.noCommand} \u00B7 timeout ${info.command.timeout_seconds}s`,
+        ]);
+      }
+      if (info.bitwarden.enabled) {
+        entries.push([
+          "bitwarden",
+          `${info.bitwarden.bws || v.bwsMissing} \u00B7 ${info.bitwarden.token_env}: ${
+            info.bitwarden.token_present ? v.tokenPresent : v.tokenMissing
+          }${info.bitwarden.project_id ? ` \u00B7 ${info.bitwarden.project_id}` : ""}`,
+        ]);
+      }
+      if (info.onepassword.enabled) {
+        entries.push([
+          "onepassword",
+          `${info.onepassword.op || v.opMissing} \u00B7 ${info.onepassword.bindings} ${v.bindingsWord} \u00B7 ${
+            info.onepassword.token_present ? v.tokenPresent : v.tokenOptional
+          }`,
+        ]);
+      }
+      if (info.preserve_existing.length > 0) {
+        entries.push([v.preserve, info.preserve_existing.join(", ")]);
+      }
       rows.innerHTML = "";
       for (const [label, value] of entries) {
         const row = document.createElement("div");
