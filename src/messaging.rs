@@ -507,10 +507,61 @@ pub fn register_platform_sender(platform: &str, sender: Arc<dyn PlatformSender>)
         .lock()
         .unwrap()
         .insert(platform.to_string(), sender);
+    // Sender registration is the loop's "I'm live" signal.
+    set_platform_lifecycle(platform, "running");
+}
+
+/// Process-wide platform-loop lifecycle states (`starting` → `running`
+/// → `exited`) — crash visibility for the `/platforms` digest (lean
+/// groundwork for hermes `/platform` retry-queue controls).
+fn platform_lifecycles() -> &'static std::sync::Mutex<HashMap<String, String>> {
+    static LIFECYCLES: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    LIFECYCLES.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Record a platform loop state (`starting` / `running` / `exited`).
+pub fn set_platform_lifecycle(platform: &str, state: &str) {
+    platform_lifecycles()
+        .lock()
+        .unwrap()
+        .insert(platform.to_string(), state.to_string());
+}
+
+/// Last recorded loop state for a platform, if any.
+pub fn platform_lifecycle(platform: &str) -> Option<String> {
+    platform_lifecycles().lock().unwrap().get(platform).cloned()
+}
+
+/// Test hook: clear the lifecycle table.
+#[cfg(test)]
+fn clear_platform_lifecycles_for_tests() {
+    platform_lifecycles().lock().unwrap().clear();
+}
+
+/// Spawn one platform loop with lifecycle bookkeeping: `starting` now,
+/// `exited` when the loop future completes (senders flip it to
+/// `running` on registration).
+fn spawn_platform_task<F>(tasks: &mut Vec<tokio::task::JoinHandle<()>>, platform: &'static str, fut: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    set_platform_lifecycle(platform, "starting");
+    tasks.push(tokio::spawn(async move {
+        fut.await;
+        set_platform_lifecycle(platform, "exited");
+    }));
 }
 
 pub fn platform_sender(platform: &str) -> Option<Arc<dyn PlatformSender>> {
     platform_senders().lock().unwrap().get(platform).cloned()
+}
+
+/// Test hook: remove a registered sender (the registry is process-wide
+/// and tests share it).
+#[cfg(test)]
+pub fn unregister_platform_sender_for_tests(platform: &str) {
+    platform_senders().lock().unwrap().remove(platform);
 }
 
 /// Whether any platform adapter has registered a live sender (hermes
@@ -773,8 +824,18 @@ pub fn platform_state_rows() -> Vec<(&'static str, &'static str, String)> {
                 "disabled"
             } else if !configured {
                 "not_configured"
-            } else {
+            } else if platform_sender(entry.id).is_some() {
                 "connected"
+            } else {
+                // Enabled + configured but no live sender: surface the
+                // loop lifecycle when this process tracks one (a crashed
+                // loop reads "exited"); otherwise assume connected
+                // (REPL /platforms runs without the gateway loops).
+                match platform_lifecycle(entry.id).as_deref() {
+                    Some("exited") => "exited",
+                    Some("starting") => "starting",
+                    _ => "connected",
+                }
             };
             (entry.id, entry.name, state.to_string())
         })
@@ -799,6 +860,7 @@ pub fn format_platforms_digest(rows: &[(&str, &str, String)]) -> String {
         let glyph = match state.as_str() {
             "connected" => "\u{2713}",
             "not_configured" => "\u{26a0}",
+            "exited" => "\u{2717}",
             _ => "\u{25cb}",
         };
         out.push_str(&format!("  {glyph} {:<14} {:<14} {id}\n", name, state));
@@ -1905,97 +1967,97 @@ pub async fn run_messaging(
         let cfg = msg.telegram.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "telegram", async move {
             telegram::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.discord.enabled {
         let cfg = msg.discord.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "discord", async move {
             discord::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.slack.enabled {
         let cfg = msg.slack.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "slack", async move {
             slack::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.signal.enabled {
         let cfg = msg.signal.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "signal", async move {
             crate::signal::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.weixin.enabled {
         let cfg = msg.weixin.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "weixin", async move {
             crate::weixin::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.qq.enabled {
         let cfg = msg.qq.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "qq", async move {
             crate::qqbot::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.yuanbao.enabled {
         let cfg = msg.yuanbao.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "yuanbao", async move {
             crate::yuanbao::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.email.enabled {
         let cfg = msg.email.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "email", async move {
             crate::email_platform::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.mattermost.enabled {
         let cfg = msg.mattermost.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "mattermost", async move {
             crate::mattermost::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.matrix.enabled {
         let cfg = msg.matrix.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "matrix", async move {
             crate::matrix::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.dingtalk.enabled {
         let cfg = msg.dingtalk.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "dingtalk", async move {
             crate::dingtalk::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.wecom.enabled {
         let cfg = msg.wecom.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "wecom", async move {
             crate::wecom::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     // Standalone `notify/notify` sender (hermes `_standalone_send`):
     // delivery works without the live WS adapter whenever credentials
@@ -2005,41 +2067,41 @@ pub async fn run_messaging(
         let cfg = msg.homeassistant.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "homeassistant", async move {
             crate::homeassistant::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.whatsapp.enabled {
         let cfg = msg.whatsapp.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "whatsapp", async move {
             crate::whatsapp::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.irc.enabled {
         let cfg = msg.irc.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "irc", async move {
             crate::irc::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.ntfy.enabled {
         let cfg = msg.ntfy.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "ntfy", async move {
             crate::ntfy::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.simplex.enabled {
         let cfg = msg.simplex.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "simplex", async move {
             crate::simplex::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.teams.enabled {
         // Gateway-mounted webhook platform: register sender + runtime.
@@ -2059,26 +2121,26 @@ pub async fn run_messaging(
         {
             let dispatcher = dispatcher.clone();
             let pairing = pairing.clone();
-            tasks.push(tokio::spawn(async move {
+            spawn_platform_task(&mut tasks, "google_chat", async move {
                 crate::google_chat::run_pubsub(dispatcher, pairing).await;
-            }));
+            });
         }
     }
     if msg.buzz.enabled {
         let cfg = msg.buzz.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "buzz", async move {
             crate::buzz::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.photon.enabled {
         let cfg = msg.photon.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "photon", async move {
             crate::photon::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.feishu.enabled
         && crate::feishu::is_websocket_mode(&msg.feishu.resolve().connection_mode)
@@ -2088,9 +2150,9 @@ pub async fn run_messaging(
         let cfg = msg.feishu.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        tasks.push(tokio::spawn(async move {
+        spawn_platform_task(&mut tasks, "feishu", async move {
             crate::feishu_ws::run(cfg, dispatcher, pairing).await;
-        }));
+        });
     }
     if msg.a2a.enabled {
         crate::a2a::register(&msg.a2a);
@@ -6710,6 +6772,54 @@ mod tests {
         let empty: Vec<(&str, &str, String)> = vec![];
         let out = format_platforms_digest(&empty);
         assert!(out.contains("no messaging platforms"), "{out}");
+    }
+
+    #[test]
+    fn platform_lifecycle_flows_into_state_rows() {
+        // P693: crashed platform loops surface as "exited" in the
+        // /platforms posture rows; sender registration means connected.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        clear_platform_lifecycles_for_tests();
+
+        // Config with telegram enabled + configured.
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[messaging.telegram]\nenabled = true\nbot_token = \"t\"\n",
+        )
+        .unwrap();
+
+        // No lifecycle record → assumed connected (REL semantics).
+        let rows = platform_state_rows();
+        let telegram = rows.iter().find(|r| r.0 == "telegram").unwrap();
+        assert_eq!(telegram.2, "connected", "{rows:?}");
+
+        // Loop exited without a sender → "exited".
+        set_platform_lifecycle("telegram", "exited");
+        let rows = platform_state_rows();
+        let telegram = rows.iter().find(|r| r.0 == "telegram").unwrap();
+        assert_eq!(telegram.2, "exited", "{rows:?}");
+        let digest = format_platforms_digest(&rows);
+        assert!(digest.contains("\u{2717}"), "{digest}");
+
+        // Sender registration flips back to connected.
+        let sends = Arc::new(std::sync::Mutex::new(Vec::new()));
+        register_platform_sender(
+            "telegram",
+            Arc::new(RestartCapture { sends: sends.clone() }),
+        );
+        assert_eq!(platform_lifecycle("telegram").as_deref(), Some("running"));
+        let rows = platform_state_rows();
+        let telegram = rows.iter().find(|r| r.0 == "telegram").unwrap();
+        assert_eq!(telegram.2, "connected", "{rows:?}");
+
+        clear_platform_lifecycles_for_tests();
+        unregister_platform_sender_for_tests("telegram");
+        if let Some(home) = prev_home {
+            std::env::set_var("ULNCLAW_HOME", home);
+        }
     }
 
     struct RestartCapture {
