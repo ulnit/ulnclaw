@@ -499,6 +499,10 @@ pub struct TerminalConfig {
     /// SSH identity file (backend="ssh").
     #[serde(default)]
     pub ssh_identity: Option<String>,
+    /// Docker: mount the host messaging cwd into `/workspace` (hermes
+    /// `terminal.docker_mount_cwd_to_workspace`).
+    #[serde(default)]
+    pub docker_mount_cwd_to_workspace: bool,
 }
 
 fn default_terminal_timeout() -> u64 {
@@ -521,6 +525,7 @@ impl Default for TerminalConfig {
             ssh_user: None,
             ssh_port: None,
             ssh_identity: None,
+            docker_mount_cwd_to_workspace: false,
             env_passthrough: Vec::new(),
         }
     }

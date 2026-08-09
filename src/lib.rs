@@ -99,6 +99,7 @@ pub mod checkpoint;
 pub mod clipboard;
 pub mod clarify_gateway;
 pub mod code_skew;
+pub mod cwd_placeholder;
 pub mod computer_use;
 pub mod credential_pool;
 pub mod discord_tool;

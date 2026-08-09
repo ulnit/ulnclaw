@@ -2336,6 +2336,11 @@ async fn build_gateway_stack(
     let approve = ulnclaw::messaging::messaging_aware_approve_fn(approve);
     let agent = make_agent_in(config, false, Some(approve), home, None).await?;
     agent.context().set_async_delivery(true);
+    // P723: placeholder-aware terminal cwd (hermes cwd_placeholder) —
+    // messaging turns start in the resolved cwd when one applies.
+    if let Some(cwd) = ulnclaw::cwd_placeholder::resolve_messaging_cwd(config) {
+        agent.context().set_cwd(cwd);
+    }
     let state = ulnclaw::gateway::GatewayState::new(
         agent,
         config.model.model.clone(),
@@ -2434,6 +2439,10 @@ async fn build_profile_messaging_stack(
     let approve = ulnclaw::messaging::messaging_aware_approve_fn(approve);
     let agent = make_agent_in(&profile_config, false, Some(approve), &profile_home, None).await?;
     agent.context().set_async_delivery(true);
+    // P723: placeholder-aware terminal cwd for profile gateways too.
+    if let Some(cwd) = ulnclaw::cwd_placeholder::resolve_messaging_cwd(&profile_config) {
+        agent.context().set_cwd(cwd);
+    }
     let state = ulnclaw::gateway::GatewayState::new(
         agent.clone(),
         profile_config.model.model.clone(),
