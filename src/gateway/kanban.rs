@@ -539,6 +539,39 @@ pub async fn unblock_task(Path(id): Path<String>) -> Response {
 }
 
 #[derive(Deserialize, Default)]
+pub struct EditTaskBody {
+    /// New title; blank is rejected, omitted keeps the current one.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// New body; omitted keeps the current one (empty string clears).
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+/// `POST /api/kanban/tasks/:id/edit` — rewrite a task's title/body
+/// (hermes `kanban edit`). Archived tasks refuse the edit.
+pub async fn edit_task(Path(id): Path<String>, Json(body): Json<EditTaskBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    // Pass the title through raw: the store rejects blank titles with
+    // a precise error and trims on write; omitted keeps the current.
+    match store.edit_task(&id, body.title.as_deref(), body.body.as_deref()) {
+        Ok(task) => Json(json!({
+            "object": "ulnclaw.kanban.task",
+            "task": task_json(&store, &task),
+        }))
+        .into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+#[derive(Deserialize, Default)]
 pub struct SetModelBody {
     /// Model to pin; null / empty clears the override (and the
     /// provider with it). Takes effect on the next dispatch.

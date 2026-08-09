@@ -30,6 +30,8 @@ export class KanbanWidget {
   private timer: number | null = null;
   /** P526: live task-filter text (title / assignee / id). */
   private filterText = "";
+  /** P639: whether the detail dialog is in title/body edit mode. */
+  private editMode = false;
 
   constructor(
     private root: HTMLElement,
@@ -53,6 +55,7 @@ export class KanbanWidget {
       <dialog id="kanban-detail">
         <form method="dialog">
           <h2 id="kanban-detail-title"></h2>
+          <input id="kanban-detail-title-edit" type="text" style="display: none" />
           <div id="kanban-detail-meta" class="kanban-detail-meta"></div>
           <div class="kanban-detail-reasoning">
             <label for="kanban-detail-reasoning" data-i18n="kanban.reasoningLabel">Reasoning effort</label>
@@ -65,6 +68,7 @@ export class KanbanWidget {
             <button id="kanban-detail-model-apply" type="button" data-i18n="kanban.applyAction">Apply</button>
           </div>
           <pre id="kanban-detail-body" class="kanban-detail-body"></pre>
+          <textarea id="kanban-detail-body-edit" class="kanban-detail-body" style="display: none"></textarea>
           <div id="kanban-detail-attachments" class="kanban-detail-attachments"></div>
           <div id="kanban-detail-events" class="kanban-events"></div>
           <div id="kanban-detail-comments" class="kanban-comments"></div>
@@ -73,6 +77,7 @@ export class KanbanWidget {
             <button id="kanban-comment-send" value="comment" data-i18n="kanban.comment">Comment</button>
           </div>
           <menu>
+            <button id="kanban-detail-edit" type="button" data-i18n="kanban.editAction">Edit</button>
             <button id="kanban-detail-claim" value="claim" data-i18n="kanban.claim">Claim</button>
             <button id="kanban-detail-unblock" value="unblock" data-i18n="kanban.unblock">Unblock</button>
             <button id="kanban-detail-block" value="block" data-i18n="kanban.blockEllipsis">Block…</button>
@@ -112,6 +117,36 @@ export class KanbanWidget {
       if (!title || !title.trim()) return;
       void client.kanbanCreateTask(title.trim()).then((task) => {
         if (task) void this.refresh();
+      });
+    };
+
+    // P639: title/body edit toggle in the detail dialog.
+    (this.root.querySelector("#kanban-detail-edit") as HTMLButtonElement).onclick = () => {
+      const dialogEl = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
+      const taskId = dialogEl.dataset.taskId || "";
+      if (!taskId) return;
+      if (!this.editMode) {
+        this.setEditMode(true);
+        return;
+      }
+      const client = this.client();
+      if (!client) return;
+      const titleInput = this.root.querySelector("#kanban-detail-title-edit") as HTMLInputElement;
+      const bodyArea = this.root.querySelector("#kanban-detail-body-edit") as HTMLTextAreaElement;
+      const title = titleInput.value.trim();
+      const bodyValue = bodyArea.value;
+      void client.kanbanEdit(taskId, title, bodyValue).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "edit failed");
+          return;
+        }
+        const titleEl = this.root.querySelector("#kanban-detail-title") as HTMLElement;
+        const bodyEl = this.root.querySelector("#kanban-detail-body") as HTMLElement;
+        const status = this.tasks.find((task) => task.id === taskId)?.status || "";
+        titleEl.textContent = `${title || titleEl.textContent} (${status})`;
+        bodyEl.textContent = bodyValue || t.kanban.noDescription;
+        this.setEditMode(false);
+        void this.refresh();
       });
     };
 
@@ -342,6 +377,22 @@ export class KanbanWidget {
     return card;
   }
 
+  /** P639: flip the detail dialog between display and edit mode. */
+  private setEditMode(editing: boolean): void {
+    this.editMode = editing;
+    const titleEl = this.root.querySelector("#kanban-detail-title") as HTMLElement;
+    const titleInput = this.root.querySelector("#kanban-detail-title-edit") as HTMLInputElement;
+    const bodyEl = this.root.querySelector("#kanban-detail-body") as HTMLElement;
+    const bodyArea = this.root.querySelector("#kanban-detail-body-edit") as HTMLTextAreaElement;
+    const editBtn = this.root.querySelector("#kanban-detail-edit") as HTMLButtonElement;
+    titleEl.style.display = editing ? "none" : "";
+    titleInput.style.display = editing ? "" : "none";
+    bodyEl.style.display = editing ? "none" : "";
+    bodyArea.style.display = editing ? "" : "none";
+    editBtn.textContent = editing ? t.kanban.saveAction : t.kanban.editAction;
+    if (editing) titleInput.focus();
+  }
+
   private renderQuickAdd(): HTMLElement {
     const box = document.createElement("div");
     box.className = "kanban-quickadd";
@@ -503,6 +554,12 @@ export class KanbanWidget {
       empty.textContent = t.kanban.noComments;
       comments.appendChild(empty);
     }
+    // P639: always reopen in display mode with prefilled edit fields.
+    this.setEditMode(false);
+    (this.root.querySelector("#kanban-detail-title-edit") as HTMLInputElement).value =
+      detail.task.title;
+    (this.root.querySelector("#kanban-detail-body-edit") as HTMLTextAreaElement).value =
+      detail.task.body || "";
     (this.root.querySelector("#kanban-comment-input") as HTMLInputElement).value = "";
     const unblockBtn = this.root.querySelector("#kanban-detail-unblock") as HTMLButtonElement;
     unblockBtn.style.display = detail.task.status === "blocked" ? "" : "none";

@@ -1535,6 +1535,8 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .kanban-event { display: flex; justify-content: space-between; gap: 12px; font-size: 0.8em; padding: 2px 0; border-bottom: 1px solid rgba(128, 128, 128, 0.15); }
 .kanban-event-head { overflow-wrap: anywhere; }
 .kanban-event-when { opacity: 0.6; white-space: nowrap; }
+#kanban-detail-title-edit { width: 100%; font-size: 1.1em; margin-bottom: 6px; }
+#kanban-detail-body-edit { width: 100%; min-height: 6em; resize: vertical; font: inherit; white-space: pre-wrap; }
 .kanban-detail-attachments { margin-top: 8px; }
 .kanban-attachment { display: flex; align-items: center; gap: 8px; font-size: 0.85em; margin: 3px 0; }
 .kanban-attachment code { font-family: var(--mono, monospace); font-size: 0.95em; word-break: break-all; }

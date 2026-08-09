@@ -3633,6 +3633,28 @@ export class GatewayClient {
     return (value?.task || null) as KanbanTask | null;
   }
 
+  /** P639: rewrite a task's title/body (either may be omitted). */
+  async kanbanEdit(
+    id: string,
+    title: string | null,
+    body: string | null,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/edit`), {
+        headers: this.headers(),
+        method: "POST",
+        body: JSON.stringify({ title, body }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
   /**
    * P637: pin (or clear, model=null) the per-task model/provider
    * override. Returns the server error message, if any, so the UI can

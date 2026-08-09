@@ -24,7 +24,8 @@
 //!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`,
 //!     `POST /api/kanban/tasks/:id/set-reasoning`,
-//!     `POST /api/kanban/tasks/:id/set-model`
+//!     `POST /api/kanban/tasks/:id/set-model`,
+//!     `POST /api/kanban/tasks/:id/edit`
 //!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
@@ -6561,6 +6562,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/tasks/:id/claim", post(kanban::claim_task))
         .route("/api/kanban/tasks/:id/set-reasoning", post(kanban::set_reasoning))
         .route("/api/kanban/tasks/:id/set-model", post(kanban::set_model))
+        .route("/api/kanban/tasks/:id/edit", post(kanban::edit_task))
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
         .route("/api/jobs/:id/run", post(run_job_now))
@@ -15109,6 +15111,96 @@ mod tests {
         let (status, _) = send_json(
             app.clone(), "POST", "/api/kanban/tasks/nope123/set-reasoning", None,
             json!({"reasoning_effort": "high"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kanban_edit_task_endpoint() {
+        // P639: POST /api/kanban/tasks/:id/edit rewrites title/body.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "draft title", "body": "draft body"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let id = body["task"]["id"].as_str().unwrap().to_string();
+
+        // Rewrite the title only.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/edit"), None,
+            json!({"title": "final title"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["title"], "final title", "{body}");
+        assert_eq!(body["task"]["body"], "draft body", "{body}");
+
+        // Rewrite the body only (empty string clears).
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/edit"), None,
+            json!({"body": ""}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["body"], "", "{body}");
+
+        // Blank title -> 400.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/edit"), None,
+            json!({"title": "   "}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("title cannot be blank"), "{body}");
+
+        // Nothing to edit -> 400.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/edit"), None,
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("nothing to edit"), "{body}");
+
+        // Archived task -> 400.
+        let store = crate::kanban::KanbanStore::open_default().unwrap();
+        store.archive_task(&id).unwrap();
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/edit"), None,
+            json!({"title": "nope"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not found or archived"), "{body}");
+
+        // Unknown task -> 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks/nope123/edit", None,
+            json!({"title": "x"}),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
