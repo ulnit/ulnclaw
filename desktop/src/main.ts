@@ -1972,6 +1972,8 @@ function gatewaySlashCommands(): [string, string][] {
     ["/verbose", t.slash.verbose],
     ["/yolo", t.slash.yolo],
     ["/personality", t.slash.personality],
+    ["/goal", t.slash.goal],
+    ["/subgoal", t.slash.subgoal],
   ];
 }
 

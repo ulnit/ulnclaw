@@ -10064,6 +10064,8 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /yolo [on|off]   show or persist approvals.mode=off (auto-approve; deny rules still bind)
   /personality [name|none]  list or activate a personality (agent.personalities)
   /runs            list the tracked runs (newest first)
+  /goal [text|status|show|pause|resume|clear]  standing goal (Ralph loop) control
+  /subgoal [text|remove N|clear]  extra criteria on the active goal
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -10848,6 +10850,104 @@ async fn resolve_gateway_slash(
                 lines.push(line);
             }
             Some(GatewaySlash::Direct(lines.join("\n")))
+        }
+        "/goal" => {
+            // Gateway twin of the CLI standing-goal control plane
+            // (hermes /goal): manages the session's persisted Ralph-loop
+            // state. Setting a goal kicks it off as this turn's work —
+            // hermes queues the goal text as the next turn. The
+            // judge-driven continuation loop itself runs on REPL/kanban
+            // turns; gateway turns stay client-driven.
+            let mut manager = crate::goals::GoalManager::new(
+                session_id.to_string(),
+                Some(state.store.clone()),
+                crate::goals::DEFAULT_MAX_TURNS,
+            );
+            let lower = rest.to_ascii_lowercase();
+            if rest.is_empty() || lower == "status" {
+                return Some(GatewaySlash::Direct(manager.status_line()));
+            }
+            if lower == "show" {
+                let mut text = manager.status_line();
+                if manager.has_goal() {
+                    text.push('\n');
+                    text.push_str(&manager.render_contract());
+                }
+                return Some(GatewaySlash::Direct(text));
+            }
+            if lower == "pause" {
+                return Some(GatewaySlash::Direct(match manager.pause("user-paused") {
+                    Some(goal_state) => format!("\u{23F8} goal paused: {}", goal_state.goal),
+                    None => "no goal set.".to_string(),
+                }));
+            }
+            if lower == "resume" {
+                return Some(GatewaySlash::Direct(match manager.resume(true) {
+                    Some(goal_state) => format!("\u{25B6} goal resumed: {}", goal_state.goal),
+                    None => "no goal set.".to_string(),
+                }));
+            }
+            if lower == "clear" {
+                let had_goal = manager.has_goal();
+                manager.clear();
+                return Some(GatewaySlash::Direct(if had_goal {
+                    "goal cleared.".to_string()
+                } else {
+                    "no goal set.".to_string()
+                }));
+            }
+            // Anything else is the new goal text; inline `field: value`
+            // lines form the completion contract (hermes parse_contract).
+            let (objective, contract) = crate::goals::parse_contract(rest);
+            match manager.set(&objective, None, Some(contract)) {
+                Ok(goal_state) => Some(GatewaySlash::AgentTurn(goal_state.goal)),
+                Err(e) => Some(GatewaySlash::Direct(format!("invalid goal: {e}"))),
+            }
+        }
+        "/subgoal" => {
+            // Extra criteria on the active goal (hermes /subgoal).
+            let mut manager = crate::goals::GoalManager::new(
+                session_id.to_string(),
+                Some(state.store.clone()),
+                crate::goals::DEFAULT_MAX_TURNS,
+            );
+            if rest.is_empty() {
+                return Some(GatewaySlash::Direct(manager.render_subgoals()));
+            }
+            let mut parts = rest.splitn(2, ' ');
+            match parts.next().unwrap_or("") {
+                "remove" => {
+                    let index_raw = parts.next().unwrap_or("").trim();
+                    if index_raw.is_empty() {
+                        return Some(GatewaySlash::Direct(
+                            "usage: /subgoal remove <n>".to_string(),
+                        ));
+                    }
+                    match index_raw.parse::<usize>() {
+                        Ok(n) => match manager.remove_subgoal(n) {
+                            Ok(removed) => Some(GatewaySlash::Direct(format!(
+                                "removed subgoal {n}: {removed}"
+                            ))),
+                            Err(e) => Some(GatewaySlash::Direct(format!(
+                                "/subgoal remove: {e}"
+                            ))),
+                        },
+                        Err(_) => Some(GatewaySlash::Direct(
+                            "/subgoal remove: <n> must be a 1-based integer".to_string(),
+                        )),
+                    }
+                }
+                "clear" => match manager.clear_subgoals() {
+                    Ok(count) => Some(GatewaySlash::Direct(format!(
+                        "cleared {count} subgoal(s)"
+                    ))),
+                    Err(e) => Some(GatewaySlash::Direct(format!("/subgoal clear: {e}"))),
+                },
+                _ => match manager.add_subgoal(rest) {
+                    Ok(text) => Some(GatewaySlash::Direct(format!("added subgoal: {text}"))),
+                    Err(e) => Some(GatewaySlash::Direct(format!("/subgoal: {e}"))),
+                },
+            }
         }
         _ => {
             let cmd_name = cmd.trim_start_matches('/');
@@ -14355,6 +14455,64 @@ mod tests {
         assert!(new_pos < old_pos, "{text}");
         assert!(text.contains("provider exploded"), "{text}");
         assert!(text.contains(&sid), "{text}");
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_goal_lifecycle() {
+        // P622: /goal + /subgoal manage the persisted standing-goal
+        // state; setting a goal kicks it as this turn's work.
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-goal", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/goal").await;
+        assert_eq!(
+            reply["response"],
+            "No active goal. Set one with /goal <text>."
+        );
+
+        // Setting kicks the goal text as the turn (fake provider answers
+        // "Hello"), and the goal persists.
+        let reply = post_chat(app.clone(), &sid, "/goal ship the widget").await;
+        assert_eq!(reply["response"], "Hello");
+        let messages = state.store.load_messages(&sid).expect("messages load");
+        assert!(messages
+            .iter()
+            .any(|m| m.content.as_deref() == Some("ship the widget")));
+
+        let reply = post_chat(app.clone(), &sid, "/goal").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("ship the widget"), "{text}");
+
+        // Subgoals add/list/remove.
+        let reply = post_chat(app.clone(), &sid, "/subgoal add tests").await;
+        assert_eq!(reply["response"], "added subgoal: add tests");
+        let reply = post_chat(app.clone(), &sid, "/subgoal").await;
+        assert!(reply["response"].as_str().unwrap().contains("add tests"));
+        let reply = post_chat(app.clone(), &sid, "/subgoal remove 1").await;
+        assert_eq!(reply["response"], "removed subgoal 1: add tests");
+
+        // Pause / resume / clear.
+        let reply = post_chat(app.clone(), &sid, "/goal pause").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("goal paused: ship the widget"));
+        let reply = post_chat(app.clone(), &sid, "/goal resume").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("goal resumed: ship the widget"));
+        let reply = post_chat(app.clone(), &sid, "/goal clear").await;
+        assert_eq!(reply["response"], "goal cleared.");
+        let reply = post_chat(app.clone(), &sid, "/goal").await;
+        assert_eq!(
+            reply["response"],
+            "No active goal. Set one with /goal <text>."
+        );
     }
 
     #[tokio::test]
