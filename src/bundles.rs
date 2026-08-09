@@ -326,6 +326,56 @@ pub fn build_bundle_invocation_message(
     Some((parts.join("\n\n"), loaded, missing))
 }
 
+/// Shared `/bundles` dispatch for REPL and gateway (P671 — hermes
+/// `/bundles` parity): list installed skill bundles, or show one in
+/// full. Invoking a bundle stays `/<slug> [instruction]`.
+pub fn run_slash(rest: &str) -> String {
+    let mut parts = rest.split_whitespace();
+    match parts.next() {
+        None | Some("list") => {
+            let list = list_bundles();
+            if list.is_empty() {
+                return format!(
+                    "(o_o) no bundles installed. Create one with `ulnclaw bundles create <name> --skill a --skill b`.\nBundles directory: {}\n",
+                    bundles_dir().display()
+                );
+            }
+            let mut out = format!("skill bundles ({}):\n", list.len());
+            for info in &list {
+                out.push_str(&format!(
+                    "  /{:<20} {:<24} {:>2} skills  {}\n",
+                    info.slug,
+                    info.name,
+                    info.skills.len(),
+                    info.description
+                ));
+            }
+            out
+        }
+        Some("show") => {
+            let Some(name) = parts.next() else {
+                return "(o_o) usage: /bundles show <name>\n".to_string();
+            };
+            let Some(info) = get_bundle(name) else {
+                return format!("(._.) bundle '{name}' not found\n");
+            };
+            let mut out = format!("/{}  {}\n", info.slug, info.name);
+            if !info.description.is_empty() {
+                out.push_str(&format!("  {}\n", info.description));
+            }
+            out.push_str(&format!("  skills ({}):\n", info.skills.len()));
+            for skill in &info.skills {
+                out.push_str(&format!("    - {skill}\n"));
+            }
+            if !info.instruction.is_empty() {
+                out.push_str(&format!("  instruction: {}\n", info.instruction));
+            }
+            out
+        }
+        Some(_) => "(o_o) usage: /bundles [list|show <name>]\n".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,6 +552,39 @@ mod tests {
             let skills_dir = dir.path().join("skills");
             std::fs::create_dir_all(&skills_dir).unwrap();
             assert!(build_bundle_invocation_message("/ghosts", "", &skills_dir).is_none());
+        });
+    }
+
+    #[test]
+    fn bundles_slash_list_show_usage() {
+        // P671: /bundles slash over a temp bundles dir.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("backend.yaml"),
+            "name: Backend Dev\ndescription: feature work\nskills:\n  - review\n  - tdd\ninstruction: go\n",
+        )
+        .unwrap();
+        with_bundles_dir(dir.path(), || {
+            let out = run_slash("");
+            assert!(out.contains("skill bundles (1)"), "{out}");
+            assert!(out.contains("/backend-dev"), "{out}");
+
+            let out = run_slash("show backend-dev");
+            assert!(out.contains("Backend Dev"), "{out}");
+            assert!(out.contains("- review"), "{out}");
+            assert!(out.contains("instruction: go"), "{out}");
+
+            let out = run_slash("show nope");
+            assert!(out.contains("not found"), "{out}");
+
+            let out = run_slash("bogus");
+            assert!(out.contains("usage:"), "{out}");
+        });
+
+        let empty = tempfile::tempdir().unwrap();
+        with_bundles_dir(empty.path(), || {
+            let out = run_slash("");
+            assert!(out.contains("no bundles installed"), "{out}");
         });
     }
 }

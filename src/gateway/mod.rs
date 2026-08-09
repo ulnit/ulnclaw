@@ -10536,6 +10536,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /snapshot [create [label]|list|restore <id>|prune [keep]]  state snapshots
   /platforms         messaging-platform connection posture
   /curator [status|run [--dry-run]|pause|resume|pin|unpin|archive|restore|list-archived]  skill maintenance
+  /bundles [list|show <name>]  skill bundles (/<slug> invokes one)
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /branch [name]   fork this session into a child branch
@@ -11594,6 +11595,12 @@ async fn resolve_gateway_slash(
                     "failed to create the job: {e}"
                 ))),
             }
+        }
+        "/bundles" => {
+            // Hermes /bundles parity (P671): list skill bundles (or
+            // show one); invoking stays /<slug> [instruction].
+            let reply = crate::bundles::run_slash(rest);
+            Some(GatewaySlash::Direct(reply.trim_end().to_string()))
         }
         "/curator" => {
             // Hermes /curator parity (P670): background skill

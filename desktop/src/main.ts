@@ -2213,6 +2213,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/snapshot", t.slash.snapshot],
     ["/platforms", t.slash.platforms],
     ["/curator", t.slash.curator],
+    ["/bundles", t.slash.bundles],
   ];
 }
 
