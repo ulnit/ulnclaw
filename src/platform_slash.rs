@@ -28,6 +28,7 @@ const PLATFORM_SLASH_HELP: &str = "Commands you can send as chat messages:
   /recap           recap this chat's session
   /title [text]    show or set the session title
   /resume [name]   list or switch to a previous session
+  /new             start a fresh session (old one stays saved)
   /learn <what>    learn a reusable skill from anything you describe
   /sethome         set this chat as the platform home channel
   /usage           this session's token usage
@@ -147,6 +148,36 @@ pub async fn resolve(
                 Err(e) => format!("insights failed: {e}"),
             };
             Some(PlatformSlashOutcome::Direct(result))
+        }
+        "/new" | "/reset" => {
+            // hermes /new + /reset parity: rotate this chat to a fresh
+            // session; the old transcript stays saved (/resume returns).
+            let Some((platform, chat_id)) = parse_platform_session_key(session_id) else {
+                return Some(PlatformSlashOutcome::Direct(
+                    "not a platform chat session.".to_string(),
+                ));
+            };
+            let new_id = format!(
+                "platform-{platform}-{chat_id}-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            );
+            if store
+                .create_named_session(&new_id, &format!("platform:{platform}"), None, None)
+                .is_err()
+            {
+                return Some(PlatformSlashOutcome::Direct(
+                    "reset failed: could not create the new session.".to_string(),
+                ));
+            }
+            crate::messaging::set_session_remap(session_id, &new_id);
+            crate::messaging::drop_history_cache(session_id).await;
+            Some(PlatformSlashOutcome::Direct(
+                "\u{2713} Started a fresh session. The previous conversation is saved —                  return with /resume."
+                    .to_string(),
+            ))
         }
         "/learn" => Some(PlatformSlashOutcome::AgentTurn(
             crate::learn_prompt::build_learn_prompt(rest),
@@ -333,6 +364,29 @@ mod tests {
             message.contains("greet"),
             "expansion should reference the skill: {message}"
         );
+    }
+
+    #[tokio::test]
+    async fn new_rotates_platform_chat_to_fresh_session() {
+        // P692: hermes /new parity — rotate the chat to a fresh
+        // session id; the old transcript stays saved.
+        crate::messaging::clear_session_remappings_for_tests();
+        let (_dir, home, agent, store) = setup();
+        let outcome = resolve(&agent, &store, &home, "platform-telegram-chat-9", "/new").await;
+        let Some(PlatformSlashOutcome::Direct(reply)) = outcome else {
+            panic!("expected direct reply");
+        };
+        assert!(reply.contains("fresh session"), "{reply}");
+        let remapped = crate::messaging::effective_session_id_for("platform-telegram-chat-9");
+        assert!(remapped.starts_with("platform-telegram-chat-9-"), "{remapped}");
+        assert!(store.get_session_row(&remapped).unwrap().is_some());
+        // Alias behaves identically.
+        let outcome = resolve(&agent, &store, &home, "platform-telegram-chat-9", "/reset").await;
+        assert!(matches!(outcome, Some(PlatformSlashOutcome::Direct(ref t)) if t.contains("fresh session")));
+        // Non-platform session keys are rejected.
+        let outcome = resolve(&agent, &store, &home, "s1", "/new").await;
+        assert!(matches!(outcome, Some(PlatformSlashOutcome::Direct(ref t)) if t.contains("not a platform chat")));
+        crate::messaging::clear_session_remappings_for_tests();
     }
 
     #[tokio::test]

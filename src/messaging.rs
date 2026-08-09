@@ -379,7 +379,7 @@ pub async fn drop_history_cache(session_key: &str) {
 
 /// Test hook: clear the process-wide remap table.
 #[cfg(test)]
-fn clear_session_remappings_for_tests() {
+pub(crate) fn clear_session_remappings_for_tests() {
     session_remappings().lock().unwrap().clear();
 }
 
