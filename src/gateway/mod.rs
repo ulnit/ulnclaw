@@ -10522,6 +10522,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /retitle         regenerate this session's title via the LLM
   /usage           this session's token usage
   /kanban <title>  add a task to the current kanban board
+  /blueprint [name] [slot=val…]  automation blueprints: catalog, guided setup, or direct create
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /branch [name]   fork this session into a child branch
@@ -11487,6 +11488,98 @@ async fn resolve_gateway_slash(
                     result["reason"].as_str().unwrap_or("unknown").trim()
                 ))),
                 Err(e) => Some(GatewaySlash::Direct(format!("rollback failed: {e}"))),
+            }
+        }
+        "/blueprint" => {
+            // Hermes /blueprint parity: browse the automation-blueprint
+            // catalog, seed the agent to gather slot values
+            // conversationally, or create the job directly with inline
+            // slot=val arguments (deterministic power-user shortcut).
+            let tokens = crate::cron::blueprints::tokenize_blueprint_args(rest);
+            let Some(query) = tokens.first() else {
+                return Some(GatewaySlash::Direct(
+                    crate::cron::blueprints::format_catalog(),
+                ));
+            };
+            let (blueprint, candidates) = crate::cron::blueprints::match_blueprint(query);
+            let Some(blueprint) = blueprint else {
+                return Some(GatewaySlash::Direct(if candidates.is_empty() {
+                    crate::cron::blueprints::format_no_match(query)
+                } else {
+                    crate::cron::blueprints::format_candidates(query, &candidates)
+                }));
+            };
+            let values: std::collections::HashMap<String, String> = tokens[1..]
+                .iter()
+                .filter_map(|tok| {
+                    let tok = tok.as_str();
+                    let eq = tok.find('=')?;
+                    let key = tok[..eq].trim();
+                    let value = tok[eq + 1..].trim();
+                    if key.is_empty() {
+                        return None;
+                    }
+                    Some((key.to_string(), value.to_string()))
+                })
+                .collect();
+            if values.is_empty() {
+                // Name only -> seed the agent to ask for each slot one
+                // at a time (the messaging-assistant model).
+                return Some(GatewaySlash::AgentTurn(
+                    crate::cron::blueprints::build_blueprint_seed(&blueprint),
+                ));
+            }
+            let store = match state.cron.get() {
+                Some(store) => store,
+                None => {
+                    return Some(GatewaySlash::Direct(
+                        "cron jobs are not enabled on this gateway".to_string(),
+                    ))
+                }
+            };
+            let filled = match crate::cron::blueprints::fill_blueprint(&blueprint, &values) {
+                Ok(filled) => filled,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!(
+                        "Can't set up '{}': {e}\nOr just run /blueprint {} and I'll ask you for the values.",
+                        blueprint.title, blueprint.key
+                    )))
+                }
+            };
+            let deliver_value = Value::String(filled.deliver.clone());
+            let deliver = crate::cron::delivery::normalize_deliver_value(Some(&deliver_value));
+            let parsed = match crate::cron::parse_schedule(&filled.schedule) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!(
+                        "failed to create the job: invalid schedule: {e}"
+                    )))
+                }
+            };
+            let job = CronJob {
+                id: uuid::Uuid::new_v4().simple().to_string()[..12].to_string(),
+                name: filled.name,
+                schedule: filled.schedule.clone(),
+                prompt: filled.prompt,
+                skills: filled.skills,
+                enabled: true,
+                repeat: None,
+                next_run: crate::cron::next_run(&parsed),
+                created_at: now_secs(),
+                last_run: None,
+                last_status: None,
+                deliver: Some(deliver),
+                origin: None,
+                last_delivery_error: None,
+            };
+            match store.add(&job) {
+                Ok(()) => Some(GatewaySlash::Direct(format!(
+                    "Scheduled '{}' ({}), delivering to {}. Ask me to list, pause, or remove it any time.",
+                    blueprint.title, filled.schedule, filled.deliver
+                ))),
+                Err(e) => Some(GatewaySlash::Direct(format!(
+                    "failed to create the job: {e}"
+                ))),
             }
         }
         "/verbose" => {
@@ -15044,6 +15137,64 @@ mod tests {
         assert!(text.contains("Toolsets by schema cost"), "{text}");
         // No hint line in the expanded view.
         assert!(!text.contains("Use /context all"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_blueprint() {
+        // P656: /blueprint — catalog listing, forgiving name match,
+        // agent seeding, and inline slot=val direct creation.
+        let state = streaming_state();
+        let cron_temp = tempfile::tempdir().expect("tempdir");
+        let cron = crate::cron::CronStore::open(&cron_temp.path().join("cron.db"))
+            .expect("cron store opens");
+        state.cron.set(Arc::new(cron)).ok();
+        let sid = state
+            .store
+            .create_session("blueprint-slash", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        // Bare -> catalog.
+        let reply = post_chat(app.clone(), &sid, "/blueprint").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("Automation Blueprints"), "{text}");
+        assert!(text.contains("morning-brief"), "{text}");
+
+        // Ambiguous prefix -> candidate list.
+        let reply = post_chat(app.clone(), &sid, "/blueprint week").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("matches several blueprints"), "{text}");
+
+        // No match -> suggestion.
+        let reply = post_chat(app.clone(), &sid, "/blueprint zzzzz").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("No automation blueprint matches"), "{text}");
+
+        // Direct create with inline values.
+        let reply = post_chat(
+            app.clone(),
+            &sid,
+            "/blueprint morning-brief time=07:45 deliver=local",
+        )
+        .await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("Scheduled 'Morning briefing'"), "{text}");
+        assert!(text.contains("45 7 * * *"), "{text}");
+        let jobs = state.cron.get().unwrap().list().expect("jobs list");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].schedule, "45 7 * * *");
+        assert_eq!(jobs[0].deliver.as_deref(), Some("local"));
+
+        // Inline validation error stays a direct reply.
+        let reply = post_chat(
+            app.clone(),
+            &sid,
+            "/blueprint morning-brief time=25:99",
+        )
+        .await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("Can't set up"), "{text}");
+        assert!(text.contains("invalid time"), "{text}");
     }
 
     /// P625: gateway state wired to a real OpenAI provider (no network

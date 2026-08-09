@@ -875,6 +875,234 @@ pub fn fill_blueprint(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Chat-side `/blueprint` command support (hermes blueprint_cmd.py port)
+// ---------------------------------------------------------------------------
+
+/// Levenshtein distance for typo-tolerant blueprint matching (the
+/// difflib pass in hermes `match_blueprint`).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for i in 1..=a.len() {
+        curr[0] = i;
+        for j in 1..=b.len() {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Similarity ratio in [0, 1] — 1.0 = identical (difflib ratio parity).
+fn similarity(a: &str, b: &str) -> f64 {
+    let max_len = a.chars().count().max(b.chars().count());
+    if max_len == 0 {
+        return 1.0;
+    }
+    1.0 - (levenshtein(a, b) as f64 / max_len as f64)
+}
+
+/// Resolve a free-typed blueprint name to a blueprint (hermes
+/// `match_blueprint`): exact key, unique prefix on key/title words,
+/// substring, then fuzzy. Returns `(blueprint, candidates)` —
+/// candidates are set when the query is ambiguous.
+pub fn match_blueprint(query: &str) -> (Option<AutomationBlueprint>, Vec<AutomationBlueprint>) {
+    let q = query.trim().to_lowercase();
+    let entries = catalog();
+    if q.is_empty() {
+        return (None, Vec::new());
+    }
+    if let Some(exact) = entries.iter().find(|b| b.key == q) {
+        return (Some(exact.clone()), Vec::new());
+    }
+    // Prefix match on key or title word-start.
+    let prefix: Vec<&AutomationBlueprint> = entries
+        .iter()
+        .filter(|b| {
+            b.key.to_lowercase().starts_with(&q)
+                || b.title
+                    .split_whitespace()
+                    .any(|w| w.to_lowercase().starts_with(&q))
+        })
+        .collect();
+    if prefix.len() == 1 {
+        return (Some(prefix[0].clone()), Vec::new());
+    }
+    if prefix.len() > 1 {
+        return (None, prefix.into_iter().cloned().collect());
+    }
+    // Substring match anywhere in key/title/description.
+    let substr: Vec<&AutomationBlueprint> = entries
+        .iter()
+        .filter(|b| {
+            b.key.to_lowercase().contains(&q)
+                || b.title.to_lowercase().contains(&q)
+                || b.description.to_lowercase().contains(&q)
+        })
+        .collect();
+    if substr.len() == 1 {
+        return (Some(substr[0].clone()), Vec::new());
+    }
+    if substr.len() > 1 {
+        return (None, substr.into_iter().cloned().collect());
+    }
+    // Fuzzy on keys (typo tolerance, difflib cutoff 0.6 parity).
+    let mut close: Vec<(f64, &AutomationBlueprint)> = entries
+        .iter()
+        .map(|b| (similarity(&q, &b.key.to_lowercase()), b))
+        .filter(|(score, _)| *score >= 0.6)
+        .collect();
+    close.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    close.truncate(3);
+    if close.len() == 1 {
+        return (Some(close[0].1.clone()), Vec::new());
+    }
+    if close.len() > 1 {
+        return (None, close.into_iter().map(|(_, b)| b.clone()).collect());
+    }
+    (None, Vec::new())
+}
+
+/// Closest blueprint keys for a no-match message (difflib cutoff 0.4).
+pub fn closest_blueprint_keys(query: &str) -> Vec<&'static str> {
+    let q = query.trim().to_lowercase();
+    let mut scored: Vec<(f64, &'static str)> = catalog()
+        .iter()
+        .map(|b| (similarity(&q, &b.key.to_lowercase()), b.key))
+        .filter(|(score, _)| *score >= 0.4)
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(3);
+    scored.into_iter().map(|(_, key)| key).collect()
+}
+
+/// Build the natural-language fill-request the agent will act on
+/// (hermes `build_blueprint_seed`): the agent reads this as a normal
+/// user turn, asks for each slot one at a time, then calls the
+/// `cronjob` tool with the rendered schedule + prompt.
+pub fn build_blueprint_seed(blueprint: &AutomationBlueprint) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!(
+        "Set up the '{}' automation for me (automation blueprint '{}'). {}",
+        blueprint.title, blueprint.key, blueprint.description
+    ));
+    lines.push(String::new());
+    lines.push(
+        "Ask me for each of these, one at a time, offering the default in \
+         brackets if I don't have a preference:"
+            .to_string(),
+    );
+    for slot in &blueprint.slots {
+        let mut bits = format!("- {} ({})", slot.label, slot.name);
+        if !slot.options.is_empty() {
+            bits.push_str(&format!(" — one of: {}", slot.options.join(", ")));
+        }
+        if let Some(default) = slot.default {
+            if !default.is_empty() {
+                bits.push_str(&format!(" [default: {default}]"));
+            }
+        }
+        if slot.optional {
+            bits.push_str(" (optional)");
+        }
+        if !slot.help.is_empty() {
+            bits.push_str(&format!(" — {}", slot.help));
+        }
+        lines.push(bits);
+    }
+    lines.push(String::new());
+    let presets = WEEKDAY_PRESETS
+        .iter()
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    lines.push(format!(
+        "Once you have my answers, create the job by calling the cronjob tool \
+         with action='create'. Build the schedule as a cron expression from \
+         this template: `{}` (fill {{minute}}/{{hour}} from the chosen time, \
+         {{dow}} from the weekday choice using {{{presets}}}, {{interval_min}} \
+         from any interval). Use this exact prompt for the job (substituting \
+         my answers into any {{slot}} placeholders): \"{}\". Confirm the \
+         schedule and what it will do before you create it.",
+        blueprint.schedule_template, blueprint.prompt_template
+    ));
+    lines.join("\n")
+}
+
+/// The catalog listing shown by bare `/blueprint` (hermes
+/// `_fmt_catalog`).
+pub fn format_catalog() -> String {
+    let mut lines = vec![
+        "Automation Blueprints — `/blueprint <name>` and I'll ask you what I need:"
+            .to_string(),
+        String::new(),
+    ];
+    for bp in catalog() {
+        lines.push(format!("  • {} — {}", bp.key, bp.title));
+        lines.push(format!("    {}", bp.description));
+    }
+    lines.push(String::new());
+    lines.push(
+        "Tip: `/blueprint <name>` walks you through it. Power users can pass \
+         values inline, e.g. `/blueprint morning-brief time=08:00`."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+/// Ambiguous-match listing (hermes `_fmt_candidates`).
+pub fn format_candidates(query: &str, candidates: &[AutomationBlueprint]) -> String {
+    let mut lines = vec![format!(
+        "'{query}' matches several blueprints — which one?\n"
+    )];
+    for bp in candidates {
+        lines.push(format!("  • {} — {}", bp.key, bp.title));
+    }
+    lines.push("\nRun `/blueprint <name>` with one of the names above.".to_string());
+    lines.join("\n")
+}
+
+/// No-match message with closest suggestions (hermes `_fmt_no_match`).
+pub fn format_no_match(query: &str) -> String {
+    let close = closest_blueprint_keys(query);
+    let mut msg = format!("No automation blueprint matches '{query}'.");
+    if !close.is_empty() {
+        msg.push_str(&format!(" Did you mean: {}?", close.join(", ")));
+    }
+    msg.push_str(" Run /blueprint to see the catalog.");
+    msg
+}
+
+/// Quote-aware tokenizer for `slot=value` arguments (the shlex.split
+/// step in hermes `handle_blueprint_command`).
+pub fn tokenize_blueprint_args(args: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = args.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => current.push(ch),
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1006,5 +1234,59 @@ mod tests {
         assert_eq!(by_key("workday-start"), "weekdays at 09:00");
         assert_eq!(by_key("weekly-review"), "sunday at 18:00");
         assert_eq!(by_key("hydration-move"), "weekdays, every hour");
+    }
+
+    #[test]
+    fn match_blueprint_exact_prefix_fuzzy() {
+        let (bp, cands) = match_blueprint("morning-brief");
+        assert_eq!(bp.unwrap().key, "morning-brief");
+        assert!(cands.is_empty());
+
+        let (bp, cands) = match_blueprint("morning");
+        assert_eq!(bp.unwrap().key, "morning-brief");
+        assert!(cands.is_empty());
+
+        // Ambiguous prefix -> candidates.
+        let (bp, cands) = match_blueprint("week");
+        assert!(bp.is_none());
+        assert!(cands.len() >= 2, "week* should match several");
+
+        // Typo tolerance.
+        let (bp, _) = match_blueprint("morning-breif");
+        assert_eq!(bp.unwrap().key, "morning-brief");
+
+        // No match.
+        let (bp, cands) = match_blueprint("zzzzz");
+        assert!(bp.is_none());
+        assert!(cands.is_empty());
+    }
+
+    #[test]
+    fn seed_lists_slots_and_templates() {
+        let bp = get_blueprint("custom-reminder").unwrap();
+        let seed = build_blueprint_seed(&bp);
+        assert!(seed.contains("Custom reminder"));
+        assert!(seed.contains("(what)"));
+        assert!(seed.contains("[default: take a break and stretch]"));
+        assert!(seed.contains("cronjob tool"));
+        assert!(seed.contains("{minute} {hour} * * {dow}"));
+    }
+
+    #[test]
+    fn catalog_and_candidate_formatting() {
+        let listing = format_catalog();
+        assert!(listing.contains("morning-brief"));
+        assert!(listing.contains("/blueprint morning-brief time=08:00"));
+        let (_, cands) = match_blueprint("week");
+        let rendered = format_candidates("week", &cands);
+        assert!(rendered.contains("which one"));
+        let no_match = format_no_match("morning-breif");
+        assert!(no_match.contains("Did you mean"));
+    }
+
+    #[test]
+    fn tokenizer_handles_quotes() {
+        let tokens = tokenize_blueprint_args(r#"what="stretch for 5 min" time=14:00"#);
+        assert_eq!(tokens, vec!["what=stretch for 5 min", "time=14:00"]);
     }
 }
