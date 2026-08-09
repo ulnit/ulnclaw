@@ -2221,6 +2221,8 @@ function gatewaySlashCommands(): [string, string][] {
     ["/restart", t.slash.restart],
     ["/queue", t.slash.queue],
     ["/steer", t.slash.steer],
+    ["/approvals", t.slash.approvals],
+    ["/debug", t.slash.debug],
   ];
 }
 

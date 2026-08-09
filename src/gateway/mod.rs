@@ -10748,6 +10748,8 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
   /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
   /background <prompt>  run a prompt in a background tracked run
+  /approvals [manual|smart|off]  show or persist the dangerous-command approval mode
+  /debug [no-redact]   write a redacted debug bundle under <home>/debug-bundles
   /queue [clear|<prompt>]  queue a prompt for the next turn (no interrupt)
   /steer <prompt>    inject a message after the next tool call (no interrupt)
   /approve [once|session|always] [run-id]  approve a pending dangerous command
@@ -11423,6 +11425,64 @@ async fn resolve_gateway_slash(
             } else {
                 "no running run found for this session.".to_string()
             }))
+        }
+        "/approvals" => {
+            // P681 (hermes /approvals parity): show or persist the
+            // dangerous-command approval mode (manual|smart|off).
+            let path = crate::config_cmd::config_path();
+            let current_mode = crate::config::UlncLawConfig::load(Some(&path))
+                .map(|c| c.approvals.mode)
+                .unwrap_or_else(|_| "manual".to_string());
+            let arg = rest.trim().to_ascii_lowercase();
+            if arg.is_empty() {
+                return Some(GatewaySlash::Direct(format!(
+                    "approvals.mode: {current_mode} (manual prompts a human; smart asks the auxiliary guardian first; off auto-approves except approvals.deny rules)\nusage: /approvals manual|smart|off"
+                )));
+            }
+            match persist_approvals_mode(&arg) {
+                Ok(mode) => Some(GatewaySlash::Direct(format!(
+                    "approvals.mode set to \"{mode}\" — applies to new runs"
+                ))),
+                Err(e) => Some(GatewaySlash::Direct(e)),
+            }
+        }
+        "/debug" => {
+            // P681 (hermes /debug local-mode parity): write a redacted
+            // debug bundle (system info + logs) under
+            // <home>/debug-bundles and report the paths.
+            let arg = rest.trim().to_ascii_lowercase();
+            let redact = match arg.as_str() {
+                "" | "redact" | "--redact" => true,
+                "no-redact" | "--no-redact" => false,
+                _ => {
+                    return Some(GatewaySlash::Direct(
+                        "usage: /debug [no-redact]".to_string(),
+                    ))
+                }
+            };
+            let home = match crate::config::ensure_home() {
+                Ok(home) => home,
+                Err(e) => {
+                    return Some(GatewaySlash::Direct(format!(
+                        "debug bundle failed: {e}"
+                    )))
+                }
+            };
+            let output = home
+                .join("debug-bundles")
+                .join(format!("ulnclaw-debug-{}", now_secs()));
+            let output_str = output.to_string_lossy().to_string();
+            let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+            match crate::debug_cmd::handle_debug_command(
+                &config,
+                None,
+                50,
+                redact,
+                Some(&output_str),
+            ) {
+                Ok(report) => Some(GatewaySlash::Direct(report.trim_end().to_string())),
+                Err(e) => Some(GatewaySlash::Direct(format!("debug bundle failed: {e}"))),
+            }
         }
         "/queue" => {
             // P680 (hermes /queue parity): FIFO prompts run as agent
@@ -16289,6 +16349,73 @@ mod tests {
         spawn_queue_drain(&state, "sess-q");
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(state.queue_draining.lock().unwrap().is_empty());
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_approvals_and_debug() {
+        // P681: /approvals shows or persists approvals.mode; /debug
+        // writes a redacted bundle under <home>/debug-bundles.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = test_state();
+
+        // Default mode is shown with usage.
+        match resolve_gateway_slash(&state, "sess-1", "/approvals").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("approvals.mode: manual"), "{text}")
+            }
+            _ => panic!("expected approvals reply"),
+        }
+
+        // Persist smart.
+        match resolve_gateway_slash(&state, "sess-1", "/approvals smart").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("set to \"smart\""), "{text}")
+            }
+            _ => panic!("expected set reply"),
+        }
+        match resolve_gateway_slash(&state, "sess-1", "/approvals").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("approvals.mode: smart"), "{text}")
+            }
+            _ => panic!("expected approvals reply"),
+        }
+
+        // Invalid mode is refused.
+        match resolve_gateway_slash(&state, "sess-1", "/approvals banana").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("must be one of"), "{text}")
+            }
+            _ => panic!("expected error reply"),
+        }
+
+        // /debug writes a redacted bundle under <home>/debug-bundles.
+        match resolve_gateway_slash(&state, "sess-1", "/debug").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("Debug bundle written to"), "{text}");
+                assert!(text.contains("debug-bundles"), "{text}");
+                assert!(text.contains("redacted"), "{text}");
+            }
+            _ => panic!("expected debug reply"),
+        }
+        let entries: Vec<_> = std::fs::read_dir(dir.path().join("debug-bundles"))
+            .unwrap()
+            .collect();
+        assert_eq!(entries.len(), 1);
+
+        // Invalid arg prints usage.
+        match resolve_gateway_slash(&state, "sess-1", "/debug banana").await {
+            Some(GatewaySlash::Direct(text)) => assert!(text.contains("usage:"), "{text}"),
+            _ => panic!("expected usage reply"),
+        }
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
