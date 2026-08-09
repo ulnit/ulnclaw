@@ -313,6 +313,78 @@ async fn run_handler(
         .map_err(|_| format!("handler returned non-JSON output: {stdout}"))
 }
 
+/// Interpreted outcome of a `command:<name>` hook sweep (hermes
+/// decision protocol: handlers may return `{"decision": ...}`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandHookDecision {
+    /// Proceed with normal dispatch (no decision / "allow").
+    Allow,
+    /// Block the command; `message` is the reply (or a default line).
+    Deny(String),
+    /// The hook fully handled the command; `message` is the reply
+    /// (empty stays silent).
+    Handled(String),
+    /// Rewrite the command text before core handling.
+    Rewrite { command: String, args: String },
+}
+
+/// Apply hermes' `command:*` decision protocol to collected hook
+/// results: first decisive result wins; "rewrite" re-resolves and
+/// stops the sweep (hermes `break`); empty/unknown decisions and
+/// non-object results are ignored.
+pub fn interpret_command_hook_results(results: &[Value]) -> CommandHookDecision {
+    for result in results {
+        let Value::Object(map) = result else {
+            continue;
+        };
+        let decision = map
+            .get("decision")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if decision.is_empty() || decision == "allow" {
+            continue;
+        }
+        let message = map
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        match decision.as_str() {
+            "deny" => {
+                return CommandHookDecision::Deny(if message.is_empty() {
+                    String::new()
+                } else {
+                    message
+                });
+            }
+            "handled" => return CommandHookDecision::Handled(message),
+            "rewrite" => {
+                let command = map
+                    .get("command_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .trim_start_matches('/')
+                    .to_string();
+                if command.is_empty() {
+                    continue;
+                }
+                let args = map
+                    .get("raw_args")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                return CommandHookDecision::Rewrite { command, args };
+            }
+            _ => continue,
+        }
+    }
+    CommandHookDecision::Allow
+}
+
 // ------------------------------------------------------------------
 // Process-wide registry (the gateway discovers once at startup and
 // fires from many call sites).
@@ -559,6 +631,53 @@ mod tests {
         assert_eq!(out.chars().count(), CONTEXT_TEXT_LIMIT + 1);
         assert!(out.ends_with('…'));
         assert_eq!(truncate_context_text("short"), "short");
+    }
+
+    #[test]
+    fn test_command_hook_decision_protocol() {
+        use super::CommandHookDecision::*;
+        // No results → allow.
+        assert_eq!(interpret_command_hook_results(&[]), Allow);
+        // Allow / empty decisions pass through.
+        assert_eq!(
+            interpret_command_hook_results(&[json!({"decision": "allow"}), json!({})]),
+            Allow
+        );
+        // Deny with custom message.
+        assert_eq!(
+            interpret_command_hook_results(&[json!({"decision": "deny", "message": "nope"})]),
+            Deny("nope".into())
+        );
+        // Deny without message → empty string (caller supplies default).
+        assert_eq!(
+            interpret_command_hook_results(&[json!({"decision": "DENY"})]),
+            Deny(String::new())
+        );
+        // Handled silently.
+        assert_eq!(
+            interpret_command_hook_results(&[json!({"decision": "handled"})]),
+            Handled(String::new())
+        );
+        // Rewrite strips the leading slash from command_name.
+        assert_eq!(
+            interpret_command_hook_results(&[
+                json!({"decision": "rewrite", "command_name": "/status", "raw_args": " full"})
+            ]),
+            Rewrite { command: "status".into(), args: "full".into() }
+        );
+        // Rewrite without command_name is ignored; first decisive wins.
+        assert_eq!(
+            interpret_command_hook_results(&[
+                json!({"decision": "rewrite"}),
+                json!({"decision": "handled", "message": "done"})
+            ]),
+            Handled("done".into())
+        );
+        // Non-object results ignored.
+        assert_eq!(
+            interpret_command_hook_results(&[json!("telemetry"), json!(42)]),
+            Allow
+        );
     }
 
     #[test]

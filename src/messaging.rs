@@ -1744,6 +1744,61 @@ impl Dispatcher {
                 transcript_echoes: Vec::new(),
             });
         }
+        // P737: command hooks (hermes `command:<canonical>`
+        // emit_collect with the decision protocol): fired after access
+        // control, before core handling; deny/handled/rewrite intercept
+        // dispatch exactly like hermes.
+        let mut event = event;
+        if let Some(cmd_word) = event.text.trim().split_whitespace().next() {
+            let canonical = crate::slash_access::normalize_command(cmd_word);
+            if crate::slash_access::is_known_command(&canonical) {
+                let raw_args = event
+                    .text
+                    .trim()
+                    .splitn(2, ' ')
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let hook_ctx = serde_json::json!({
+                    "platform": event.platform,
+                    "user_id": event.sender_id,
+                    "command": canonical,
+                    "raw_command": cmd_word,
+                    "args": raw_args,
+                    "raw_args": raw_args,
+                });
+                let hook_results = crate::event_hooks::emit_collect(
+                    &format!("command:{canonical}"),
+                    hook_ctx,
+                )
+                .await;
+                match crate::event_hooks::interpret_command_hook_results(&hook_results) {
+                    crate::event_hooks::CommandHookDecision::Deny(message) => {
+                        let reply = if message.is_empty() {
+                            format!("Command `/{canonical}` was blocked by a hook.")
+                        } else {
+                            message
+                        };
+                        return Ok(DispatchOutcome {
+                            reply,
+                            transcript_echoes: Vec::new(),
+                        });
+                    }
+                    crate::event_hooks::CommandHookDecision::Handled(message) => {
+                        return Ok(DispatchOutcome {
+                            reply: message,
+                            transcript_echoes: Vec::new(),
+                        });
+                    }
+                    crate::event_hooks::CommandHookDecision::Rewrite { command, args } => {
+                        event.text = format!("/{command} {args}");
+                        event.text = event.text.trim().to_string();
+                    }
+                    crate::event_hooks::CommandHookDecision::Allow => {}
+                }
+            }
+        }
         // Identity floor command (hermes /whoami) — always allowed.
         if event.text.trim() == "/whoami" {
             let name = if event.sender_name.is_empty() {
@@ -2323,14 +2378,27 @@ Use `/resume` with no                      arguments to see available sessions."
             .flatten()
             .is_none()
         {
-            self.store
+            let created = self
+                .store
                 .create_named_session(
                     &session_id,
                     &format!("platform:{}", event.platform),
                     Some(&self.agent.context().config.model.model),
                     None,
                 )
-                .ok();
+                .is_ok();
+            if created {
+                // P737: session hooks — first message of a new session
+                // (hermes session:start).
+                crate::event_hooks::emit(
+                    "session:start",
+                    serde_json::json!({
+                        "platform": event.platform,
+                        "chat_id": event.chat_id,
+                        "session_id": session_id,
+                    }),
+                );
+            }
         }
         let mut histories = chat_histories().lock().await;
         let history = histories.entry(key.to_string()).or_default();

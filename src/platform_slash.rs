@@ -211,6 +211,26 @@ pub async fn resolve(
                     "reset failed: could not create the new session.".to_string(),
                 ));
             }
+            // P737: session hooks — the old session ended and a fresh
+            // session entry was created (hermes session:end +
+            // session:reset).
+            crate::event_hooks::emit(
+                "session:end",
+                serde_json::json!({
+                    "platform": platform,
+                    "chat_id": chat_id,
+                    "session_id": session_id,
+                }),
+            );
+            crate::event_hooks::emit(
+                "session:reset",
+                serde_json::json!({
+                    "platform": platform,
+                    "chat_id": chat_id,
+                    "session_id": new_id,
+                    "previous_session_id": session_id,
+                }),
+            );
             crate::messaging::set_session_remap(session_id, &new_id);
             crate::messaging::drop_history_cache(session_id).await;
             Some(PlatformSlashOutcome::Direct(
