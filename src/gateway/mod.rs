@@ -8971,6 +8971,9 @@ struct SessionsQuery {
     /// P521: `?end_reason=<reason>` narrows rows to a single end
     /// reason; `end_reason=none` selects sessions that never ended.
     end_reason: Option<String>,
+    /// P628: attach per-row context_percent/context_used (conversation
+    /// estimate + one shared static-payload snapshot vs the budget).
+    context: Option<bool>,
 }
 
 /// Attach the owning project slug (longest-prefix folder match on the
@@ -9036,6 +9039,34 @@ async fn list_sessions(
                 .take(limit)
                 .collect();
             let mut data = enrich_sessions_with_projects(rows);
+            if query.context.unwrap_or(false) {
+                // One static-payload snapshot shared by every row.
+                let parts = state.agent.context_breakdown_parts().await;
+                let budget = state.agent.context_budget_tokens();
+                let static_cost = crate::context::breakdown::static_tokens(&parts);
+                for row in data.iter_mut() {
+                    let Some(id) = row.get("id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let history: Vec<Message> = state
+                        .store
+                        .load_messages(id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|m| m.role != Role::System)
+                        .collect();
+                    let conversation =
+                        crate::context::ContextCompressor::estimate_tokens(&history);
+                    let used = static_cost + conversation;
+                    if let Some(object) = row.as_object_mut() {
+                        object.insert("context_used".to_string(), json!(used));
+                        object.insert(
+                            "context_percent".to_string(),
+                            json!(crate::context::breakdown::percent_of(used, budget)),
+                        );
+                    }
+                }
+            }
             if query.preview.unwrap_or(false) {
                 let ids: Vec<String> = data
                     .iter()
@@ -14487,6 +14518,48 @@ mod tests {
             ApprovalRouter::new(),
         )
         .expect("state builds")
+    }
+
+    #[tokio::test]
+    async fn test_sessions_list_context_enrichment() {
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("ctx-list", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        // Seed an exchange so the conversation estimate is nonzero.
+        let reply = post_chat(app.clone(), &sid, "hello there").await;
+        assert_eq!(reply["response"], "Hello");
+
+        // Without context=true the fields stay absent.
+        let (status, body) = get_json(app.clone(), "/api/sessions", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let row = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == json!(sid))
+            .expect("row present")
+            .clone();
+        assert!(row.get("context_percent").is_none(), "{row}");
+
+        // With context=true every row carries usage vs the budget.
+        let (status, body) = get_json(app.clone(), "/api/sessions?context=true", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let row = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == json!(sid))
+            .expect("row present")
+            .clone();
+        assert!(row["context_used"].as_u64().unwrap() > 0, "{row}");
+        // Percent can legitimately round to 0 for tiny histories vs a
+        // 128k budget; the contract is a bounded integer.
+        let percent = row["context_percent"].as_u64().unwrap();
+        assert!(percent <= 100, "{row}");
     }
 
     #[tokio::test]

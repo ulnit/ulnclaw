@@ -43,6 +43,9 @@ export interface SessionRow {
   message_counts?: Record<string, number>;
   /** P627: live context-in-use summary (single-session fetches only). */
   context?: { used: number; max: number; percent: number };
+  /** P628: per-row context usage (list fetches with context=true). */
+  context_percent?: number;
+  context_used?: number;
 }
 
 /** P559/P560: single-session retitler result. */
@@ -1170,8 +1173,12 @@ export class GatewayClient {
     }
   }
 
-  async listSessions(preview = false): Promise<SessionRow[]> {
-    const response = await fetch(this.endpoint(`/api/sessions${preview ? "?preview=true" : ""}`), { headers: this.headers() });
+  async listSessions(preview = false, context = false): Promise<SessionRow[]> {
+    const params = new URLSearchParams();
+    if (preview) params.set("preview", "true");
+    if (context) params.set("context", "true");
+    const query = params.toString();
+    const response = await fetch(this.endpoint(`/api/sessions${query ? `?${query}` : ""}`), { headers: this.headers() });
     if (!response.ok) throw new Error(`sessions: HTTP ${response.status}`);
     const value = await response.json();
     // P421: /api/sessions answers {"object":"list","data":[…]} (hermes

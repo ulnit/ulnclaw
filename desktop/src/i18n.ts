@@ -84,7 +84,7 @@ export interface Translations {
     infoStarted: string; infoActivity: string; infoMessages: string; infoEndReason: string; infoTokens: string; infoContext: string; infoChildren: string; infoCensus: string; infoDuration: string; infoFirstUser: string; infoLastMessage: string;
     infoCopyId: string; infoCopied: string; infoCopyFailed: string;
     copyTitle: string; copyFailed: string;
-    dayToday: string; tokensTitle: string; unreadTitle: string; filterPlaceholder: string; filterNoMatch: string; dayJumpTitle: string; showAll: string; showLess: string; groupYesterday: string; groupWeek: string; groupOlder: string; sortByActivity: string; sortByTitle: string; showArchived: string; hideArchived: string; pinnedGroup: string;
+    dayToday: string; tokensTitle: string; ctxTitle: string; unreadTitle: string; filterPlaceholder: string; filterNoMatch: string; dayJumpTitle: string; showAll: string; showLess: string; groupYesterday: string; groupWeek: string; groupOlder: string; sortByActivity: string; sortByTitle: string; showArchived: string; hideArchived: string; pinnedGroup: string;
     whenNow: string;
   };
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
@@ -454,7 +454,7 @@ const en: Translations = {
     infoStarted: "Started", infoActivity: "Last activity", infoMessages: "Messages", infoEndReason: "End reason", infoTokens: "Total tokens", infoContext: "Context in use", infoChildren: "Forked children", infoCensus: "Message census", infoDuration: "Duration", infoFirstUser: "First message", infoLastMessage: "Last message",
     infoCopyId: "Copy ID", infoCopied: "Session ID copied", infoCopyFailed: "Copy failed",
     copyTitle: "Copy message", copyFailed: "Copy failed",
-    whenNow: "now", dayToday: "Today", tokensTitle: "Total tokens: {tokens}", unreadTitle: "Unread sessions: {count}", filterPlaceholder: "Filter sessions…", filterNoMatch: "No sessions match the filter", dayJumpTitle: "Jump to date", showAll: "Show all {count} sessions", showLess: "Show fewer", groupYesterday: "Yesterday", groupWeek: "Past 7 days", groupOlder: "Older", sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity", showArchived: "Show archived sessions", hideArchived: "Hide archived sessions", pinnedGroup: "Pinned",
+    whenNow: "now", dayToday: "Today", tokensTitle: "Total tokens: {tokens}", ctxTitle: "Context window in use: {pct}%", unreadTitle: "Unread sessions: {count}", filterPlaceholder: "Filter sessions…", filterNoMatch: "No sessions match the filter", dayJumpTitle: "Jump to date", showAll: "Show all {count} sessions", showLess: "Show fewer", groupYesterday: "Yesterday", groupWeek: "Past 7 days", groupOlder: "Older", sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity", showArchived: "Show archived sessions", hideArchived: "Hide archived sessions", pinnedGroup: "Pinned",
   },
   tools: { running: "running…", done: "done", thinking: "thinking", arguments: "arguments", result: "result", fallbackName: "tool" },
   contextUsage: { title: "Context usage", noData: "No context data yet — send a message first", freeSpace: "Free space", window: "Context window" },
@@ -999,7 +999,7 @@ const zh: Translations = {
     infoStarted: "开始时间", infoActivity: "最后活动", infoMessages: "消息数", infoEndReason: "结束原因", infoTokens: "总 token 数", infoContext: "上下文占用", infoChildren: "分叉子会话", infoCensus: "消息分布", infoDuration: "时长", infoFirstUser: "首条消息", infoLastMessage: "最近消息",
     infoCopyId: "复制 ID", infoCopied: "已复制会话 ID", infoCopyFailed: "复制失败",
     copyTitle: "复制消息", copyFailed: "复制失败",
-    whenNow: "刚刚", dayToday: "今天", tokensTitle: "总 token 数：{tokens}", unreadTitle: "未读会话：{count}", filterPlaceholder: "筛选会话…", filterNoMatch: "没有匹配过滤的会话", dayJumpTitle: "跳转到日期", showAll: "显示全部 {count} 个会话", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序", showArchived: "显示已归档会话", hideArchived: "隐藏已归档会话", pinnedGroup: "已置顶",
+    whenNow: "刚刚", dayToday: "今天", tokensTitle: "总 token 数：{tokens}", ctxTitle: "上下文窗口占用：{pct}%", unreadTitle: "未读会话：{count}", filterPlaceholder: "筛选会话…", filterNoMatch: "没有匹配过滤的会话", dayJumpTitle: "跳转到日期", showAll: "显示全部 {count} 个会话", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序", showArchived: "显示已归档会话", hideArchived: "隐藏已归档会话", pinnedGroup: "已置顶",
   },
   tools: { running: "运行中…", done: "完成", thinking: "思考中", arguments: "参数", result: "结果", fallbackName: "工具" },
   contextUsage: { title: "上下文占用", noData: "暂无上下文数据 —— 请先发送一条消息", freeSpace: "剩余空间", window: "上下文窗口" },
@@ -1544,7 +1544,7 @@ const zhHant: Translations = {
     infoStarted: "開始時間", infoActivity: "最後活動", infoMessages: "訊息數", infoEndReason: "結束原因", infoTokens: "總 token 數", infoContext: "上下文佔用", infoChildren: "分叉子會話", infoCensus: "訊息分佈", infoDuration: "時長", infoFirstUser: "首條訊息", infoLastMessage: "最近訊息",
     infoCopyId: "複製 ID", infoCopied: "已複製工作階段 ID", infoCopyFailed: "複製失敗",
     copyTitle: "複製訊息", copyFailed: "複製失敗",
-    whenNow: "剛剛", dayToday: "今天", tokensTitle: "總 token 數：{tokens}", unreadTitle: "未讀工作階段：{count}", filterPlaceholder: "篩選工作階段…", filterNoMatch: "沒有符合篩選的工作階段", dayJumpTitle: "跳轉到日期", showAll: "顯示全部 {count} 個工作階段", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序", showArchived: "顯示已歸檔工作階段", hideArchived: "隱藏已歸檔工作階段", pinnedGroup: "已置頂",
+    whenNow: "剛剛", dayToday: "今天", tokensTitle: "總 token 數：{tokens}", ctxTitle: "上下文視窗佔用：{pct}%", unreadTitle: "未讀工作階段：{count}", filterPlaceholder: "篩選工作階段…", filterNoMatch: "沒有符合篩選的工作階段", dayJumpTitle: "跳轉到日期", showAll: "顯示全部 {count} 個工作階段", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序", showArchived: "顯示已歸檔工作階段", hideArchived: "隱藏已歸檔工作階段", pinnedGroup: "已置頂",
   },
   tools: { running: "執行中…", done: "完成", thinking: "思考中", arguments: "參數", result: "結果", fallbackName: "工具" },
   contextUsage: { title: "上下文佔用", noData: "尚無上下文資料 —— 請先傳送一則訊息", freeSpace: "剩餘空間", window: "上下文視窗" },
@@ -2089,7 +2089,7 @@ const ja: Translations = {
     infoStarted: "開始", infoActivity: "最終アクティビティ", infoMessages: "メッセージ数", infoEndReason: "終了理由", infoTokens: "合計トークン", infoContext: "コンテキスト使用量", infoChildren: "フォークされた子セッション", infoCensus: "メッセージ内訳", infoDuration: "所要時間", infoFirstUser: "最初のメッセージ", infoLastMessage: "最後のメッセージ",
     infoCopyId: "ID をコピー", infoCopied: "セッション ID をコピーしました", infoCopyFailed: "コピーに失敗しました",
     copyTitle: "メッセージをコピー", copyFailed: "コピーに失敗しました",
-    whenNow: "たった今", dayToday: "今日", tokensTitle: "総トークン数：{tokens}", unreadTitle: "未読セッション：{count}", filterPlaceholder: "セッションを絞り込み…", filterNoMatch: "フィルターに一致するセッションはありません", dayJumpTitle: "日付へジャンプ", showAll: "{count} 件のセッションをすべて表示", showLess: "折りたたむ", groupYesterday: "昨日", groupWeek: "過去 7 日間", groupOlder: "それ以前", sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に", sortByTitle: "タイトル順 — クリックでアクティビティ順に", showArchived: "アーカイブ済みセッションを表示", hideArchived: "アーカイブ済みセッションを非表示", pinnedGroup: "ピン留め",
+    whenNow: "たった今", dayToday: "今日", tokensTitle: "総トークン数：{tokens}", ctxTitle: "コンテキストウィンドウ使用率: {pct}%", unreadTitle: "未読セッション：{count}", filterPlaceholder: "セッションを絞り込み…", filterNoMatch: "フィルターに一致するセッションはありません", dayJumpTitle: "日付へジャンプ", showAll: "{count} 件のセッションをすべて表示", showLess: "折りたたむ", groupYesterday: "昨日", groupWeek: "過去 7 日間", groupOlder: "それ以前", sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に", sortByTitle: "タイトル順 — クリックでアクティビティ順に", showArchived: "アーカイブ済みセッションを表示", hideArchived: "アーカイブ済みセッションを非表示", pinnedGroup: "ピン留め",
   },
   tools: { running: "実行中…", done: "完了", thinking: "思考中", arguments: "引数", result: "結果", fallbackName: "ツール" },
   contextUsage: { title: "コンテキスト使用量", noData: "コンテキストデータがありません — まずメッセージを送ってください", freeSpace: "空き領域", window: "コンテキストウィンドウ" },
@@ -2634,7 +2634,7 @@ const ar: Translations = {
     infoStarted: "بدأت", infoActivity: "آخر نشاط", infoMessages: "الرسائل", infoEndReason: "سبب الانتهاء", infoTokens: "إجمالي الرموز", infoContext: "السياق المستخدم", infoChildren: "الجلسات المتفرعة", infoCensus: "إحصاء الرسائل", infoDuration: "المدة", infoFirstUser: "الرسالة الأولى", infoLastMessage: "الرسالة الأخيرة",
     infoCopyId: "نسخ المعرف", infoCopied: "تم نسخ معرف الجلسة", infoCopyFailed: "فشل النسخ",
     copyTitle: "نسخ الرسالة", copyFailed: "فشل النسخ",
-    whenNow: "الآن", dayToday: "اليوم", tokensTitle: "إجمالي الرموز: {tokens}", unreadTitle: "جلسات غير مقروءة: {count}", filterPlaceholder: "تصفية الجلسات…", filterNoMatch: "لا توجد جلسات مطابقة للتصفية", dayJumpTitle: "الانتقال إلى التاريخ", showAll: "عرض كل الجلسات ({count})", showLess: "عرض أقل", groupYesterday: "أمس", groupWeek: "آخر 7 أيام", groupOlder: "أقدم", sortByActivity: "مرتبة حسب آخر نشاط — انقر للفرز حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للفرز حسب آخر نشاط", showArchived: "إظهار الجلسات المؤرشفة", hideArchived: "إخفاء الجلسات المؤرشفة", pinnedGroup: "مثبتة",
+    whenNow: "الآن", dayToday: "اليوم", tokensTitle: "إجمالي الرموز: {tokens}", ctxTitle: "السياق المستخدم: {pct}%", unreadTitle: "جلسات غير مقروءة: {count}", filterPlaceholder: "تصفية الجلسات…", filterNoMatch: "لا توجد جلسات مطابقة للتصفية", dayJumpTitle: "الانتقال إلى التاريخ", showAll: "عرض كل الجلسات ({count})", showLess: "عرض أقل", groupYesterday: "أمس", groupWeek: "آخر 7 أيام", groupOlder: "أقدم", sortByActivity: "مرتبة حسب آخر نشاط — انقر للفرز حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للفرز حسب آخر نشاط", showArchived: "إظهار الجلسات المؤرشفة", hideArchived: "إخفاء الجلسات المؤرشفة", pinnedGroup: "مثبتة",
   },
   tools: { running: "قيد التشغيل…", done: "تم", thinking: "يفكر", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },
   contextUsage: { title: "استخدام السياق", noData: "لا توجد بيانات سياق بعد — أرسل رسالة أولاً", freeSpace: "مساحة فارغة", window: "نافذة السياق" },

@@ -446,6 +446,15 @@ function renderSessions(): void {
     if (session.model) {
       whenEl.textContent += ` · ${session.model}`;
     }
+    // P628: per-row context-window usage (hermes session-picker
+    // context_pct parity); hot styling at 80%+.
+    if (typeof session.context_percent === "number" && session.context_percent > 0) {
+      const ctxEl = document.createElement("span");
+      ctxEl.className = "session-ctx-badge" + (session.context_percent >= 80 ? " hot" : "");
+      ctxEl.title = fmt(t.session.ctxTitle, { pct: String(session.context_percent) });
+      ctxEl.textContent = `${session.context_percent}% ctx`;
+      whenEl.appendChild(ctxEl);
+    }
     item.appendChild(main);
     if (session.project) {
       const badge = document.createElement("span");
@@ -1147,7 +1156,8 @@ async function refreshSessions(): Promise<void> {
   try {
     // P565: load last-message previews so the session picker (and any
     // future surface) can show snippets without extra round-trips.
-    state.sessions = await state.client.listSessions(true);
+    // P628: context=true adds per-row context_percent for the sidebar.
+    state.sessions = await state.client.listSessions(true, true);
     await refreshSessionTokens();
     // P545: usage just landed — refresh the open session's token chip.
     refreshTokenBadge();

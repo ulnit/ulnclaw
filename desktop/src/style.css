@@ -1823,6 +1823,9 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 .ctx-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--border, rgba(128,128,128,0.4)); }
 .ctx-window { padding: 6px 10px; font-size: 11px; opacity: 0.75; border-top: 1px solid var(--border, rgba(128,128,128,0.2)); margin-top: 4px; }
 #context-pop .notify-history-row { padding: 3px 10px; font-size: 12px; }
+/* P628: per-session context-window badge in sidebar rows */
+.session-ctx-badge { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 7px; font-size: 10px; background: color-mix(in srgb, var(--accent, #4a9eff) 18%, transparent); color: var(--accent, #4a9eff); }
+.session-ctx-badge.hot { background: rgba(221,51,51,0.16); color: #d33; }
 
 /* P360: clickable chat title opens the session info popover. */
 #chat-title { cursor: pointer; }

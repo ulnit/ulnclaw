@@ -46,6 +46,24 @@ fn chars_to_tokens(text: &str) -> usize {
     if text.is_empty() { 0 } else { (text.len() + 3) / 4 }
 }
 
+/// Token cost of the static per-call payload (system prompt, tool/MCP
+/// schemas, memory — everything except the conversation history). Lets
+/// list endpoints reuse one parts snapshot across many sessions.
+pub fn static_tokens(parts: &BreakdownParts) -> usize {
+    chars_to_tokens(&parts.system_prompt)
+        + chars_to_tokens(&parts.builtin_tools_json)
+        + chars_to_tokens(&parts.mcp_tools_json)
+        + chars_to_tokens(&parts.memory_block)
+}
+
+/// Rounded used/budget percentage capped at 100 (0 when budget is 0).
+pub fn percent_of(used: usize, budget: usize) -> usize {
+    if budget == 0 {
+        return 0;
+    }
+    ((used * 100 + budget / 2) / budget).min(100)
+}
+
 /// Compose the breakdown (hermes `compute_session_context_breakdown`).
 /// Categories keep the hermes declaration order; zero-cost ones are dropped.
 pub fn compute(
@@ -73,11 +91,7 @@ pub fn compute(
     // ulnclaw has no measured last-prompt-token gauge yet, so the estimate
     // stands in (hermes falls back the same way).
     let context_used = estimated_total;
-    let context_percent = if context_max > 0 {
-        ((context_used * 100 + context_max / 2) / context_max).min(100)
-    } else {
-        0
-    };
+    let context_percent = percent_of(context_used, context_max);
     ContextBreakdown {
         categories,
         context_max,
@@ -304,6 +318,18 @@ mod tests {
         assert!(with_grid.iter().any(|l| l.contains("Context window: 4,000 / 10,000 tokens (40%)")));
         let without = render_breakdown_lines(&payload, false);
         assert_eq!(without.len(), with_grid.len() - GRID_ROWS - 1);
+    }
+
+    #[test]
+    fn test_static_tokens_and_percent_of() {
+        let parts = parts();
+        // 4000 + 8000 + 0 + 2000 chars → 1000 + 2000 + 0 + 500 tokens.
+        assert_eq!(static_tokens(&parts), 3500);
+        assert_eq!(percent_of(50, 100), 50);
+        assert_eq!(percent_of(1, 3), 33);
+        assert_eq!(percent_of(2, 3), 67);
+        assert_eq!(percent_of(500, 100), 100);
+        assert_eq!(percent_of(10, 0), 0);
     }
 
     #[test]
