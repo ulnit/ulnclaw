@@ -395,6 +395,22 @@ pub(crate) fn remap_test_lock() -> std::sync::MutexGuard<'static, ()> {
 
 /// Per-chat conversation runner: one session per platform+chat
 /// (hermes gateway session routing).
+/// P710: RAII release of a turn lease — every run_turn exit path
+/// (including early returns and error unwinds) frees the lease, and
+/// release is ownership-checked + idempotent (hermes turn_lease).
+struct TurnLeaseGuard {
+    registry: Arc<crate::turn_lease::SessionTurnLeaseRegistry>,
+    token: Option<Arc<crate::turn_lease::TurnLeaseToken>>,
+}
+
+impl Drop for TurnLeaseGuard {
+    fn drop(&mut self) {
+        if let Some(token) = self.token.take() {
+            self.registry.release(&token);
+        }
+    }
+}
+
 pub struct Dispatcher {
     agent: Arc<Agent>,
     store: Arc<SqliteSessionStore>,
@@ -408,6 +424,11 @@ pub struct Dispatcher {
     /// delegated to that profile's dispatcher before any local state
     /// (busy/queue/sessions) is touched.
     profile_routing: Option<Arc<ProfileRoutingHub>>,
+    /// P710: per-session turn leases (hermes turn_lease, #64934):
+    /// serializes turns that share a session_id across routing keys.
+    turn_leases: Arc<crate::turn_lease::SessionTurnLeaseRegistry>,
+    /// Monotonic turn generation for lease ownership diagnostics.
+    turn_generation: std::sync::atomic::AtomicU64,
 }
 
 /// P709: factory that builds a profile's messaging dispatcher on
@@ -1465,6 +1486,10 @@ impl Dispatcher {
             busy: Arc::new(Mutex::new(HashMap::new())),
             queued: Arc::new(Mutex::new(HashMap::new())),
             profile_routing: None,
+            turn_leases: Arc::new(crate::turn_lease::SessionTurnLeaseRegistry::new(
+                crate::turn_lease::DEFAULT_MAX_LEASES,
+            )),
+            turn_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -1483,6 +1508,10 @@ impl Dispatcher {
             busy: Arc::new(Mutex::new(HashMap::new())),
             queued: Arc::new(Mutex::new(HashMap::new())),
             profile_routing: Some(hub),
+            turn_leases: Arc::new(crate::turn_lease::SessionTurnLeaseRegistry::new(
+                crate::turn_lease::DEFAULT_MAX_LEASES,
+            )),
+            turn_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -2032,6 +2061,25 @@ Use `/resume` with no                      arguments to see available sessions."
         // Resume remap (hermes /resume + /handoff): a chat may run
         // under another session id; default stays the deterministic key.
         let session_id = effective_session_id_for(key);
+        // P710: per-session turn lease (hermes turn_lease, #64934):
+        // the durable transcript is owned by session_id while the busy
+        // guards are keyed by routing key — and remapping makes that
+        // mapping many-to-one. Serialize the whole [load history → run
+        // → flush] region per session_id; fail-open on a stuck holder.
+        let lease_token = self
+            .turn_leases
+            .acquire(
+                &session_id,
+                key,
+                self.turn_generation
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                None,
+            )
+            .await;
+        let _lease_guard = TurnLeaseGuard {
+            registry: self.turn_leases.clone(),
+            token: lease_token,
+        };
         // Ensure the session row exists under a deterministic id.
         if self
             .store
@@ -7718,6 +7766,10 @@ mod tests {
         // P696: hermes busy-policy queue parity — messages arriving
         // mid-turn are queued with an ack, then drained in FIFO order
         // through the platform sender.
+        // The testplat sender registered below is process-global, so
+        // serialize against the restart-announcement test (which
+        // broadcasts through every registered sender).
+        let _env_guard = crate::models_dev::test_env_lock();
         let dispatcher = test_dispatcher();
         let key = "platform-testplat-chat-1".to_string();
         let sends = Arc::new(std::sync::Mutex::new(Vec::new()));

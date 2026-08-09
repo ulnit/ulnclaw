@@ -157,6 +157,7 @@ pub mod memory_monitor;
 pub mod messaging;
 pub mod mirror;
 pub mod profile_routing;
+pub mod turn_lease;
 pub mod oauth;
 pub mod pairing;
 pub mod profiles_cmd;
