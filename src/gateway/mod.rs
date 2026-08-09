@@ -4224,12 +4224,78 @@ async fn memory_status_api(State(state): State<Arc<GatewayState>>) -> Json<Value
             "bytes": file.bytes,
             "entries": file.entries,
         })).collect::<Vec<_>>(),
+        // P749: report the persisted limits from disk (the shell edits
+        // config.toml); fall back to the running snapshot when the file
+        // cannot be read.
         "char_limits": {
-            "memory": config.memory.memory_char_limit,
-            "user": config.memory.user_char_limit,
+            "memory": crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+                .map(|c| c.memory.memory_char_limit)
+                .unwrap_or(config.memory.memory_char_limit),
+            "user": crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+                .map(|c| c.memory.user_char_limit)
+                .unwrap_or(config.memory.user_char_limit),
         },
         "dir": crate::memory_cmd::memory_dir(&home),
     }))
+}
+
+/// `PUT /api/memory` — P749: persist the memory char limits from the
+/// shell. Body: `{"key": "memory_char_limit"|"user_char_limit",
+/// "value": ...|null}` — null removes the key (falls back to the
+/// default). Values must be positive integers. Applies to new runs.
+async fn memory_settings_set_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["memory_char_limit", "user_char_limit"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown memory key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    if let Some(v) = value {
+        if !v.is_null() && !v.as_u64().map(|n| n >= 1).unwrap_or(false) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("memory key '{key}' must be a positive integer") })),
+            );
+        }
+    }
+    let dotted = format!("memory.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => crate::config_cmd::set_config_value(&dotted, &v.to_string(), true).map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -8087,7 +8153,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/profiles", get(profiles_list).post(profiles_save))
         .route("/api/profiles/:name", delete(profiles_delete))
         .route("/api/profiles/:name/rename", post(profiles_rename))
-        .route("/api/memory", get(memory_status_api))
+        .route("/api/memory", get(memory_status_api).put(memory_settings_set_api))
         .route("/api/memory/reset", post(memory_reset_api))
         .route("/api/update/check", get(update_check_api))
         .route("/api/update", post(update_apply_api))
@@ -18625,6 +18691,74 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/delegation-settings", Some("sekret")).await;
         assert_eq!(body["max_concurrent_children"], 3, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_memory_settings_editor() {
+        // P749: PUT /api/memory persists the char limits; the GET
+        // census surfaces them under char_limits.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: 2200 memory / 1375 user chars.
+        let (status, body) = get_json(app.clone(), "/api/memory", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["char_limits"]["memory"], 2200, "{body}");
+        assert_eq!(body["char_limits"]["user"], 1375, "{body}");
+
+        // Persist both limits.
+        for (key, value) in [
+            ("memory_char_limit", json!(4000)),
+            ("user_char_limit", json!(2500)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/memory",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/memory", Some("sekret")).await;
+        assert_eq!(body["char_limits"]["memory"], 4000, "{body}");
+        assert_eq!(body["char_limits"]["user"], 2500, "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/memory", Some("sekret"),
+            json!({ "key": "memory_char_limit", "value": 0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/memory", Some("sekret"),
+            json!({ "key": "yolo", "value": 1 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/memory", Some("sekret"),
+            json!({ "key": "memory_char_limit", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/memory", Some("sekret")).await;
+        assert_eq!(body["char_limits"]["memory"], 2200, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

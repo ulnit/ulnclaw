@@ -3739,6 +3739,24 @@ export class GatewayClient {
     return (await response.json()) as MemoryStatus;
   }
 
+  /** P749: PUT /api/memory — persist a memory char limit; null removes
+   * the override. */
+  async updateMemorySetting(
+    key: string,
+    value: number | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/memory"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `memory PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
+  }
+
   /** POST /api/memory/reset — erase memory stores; returns deleted files (P323). */
   async memoryReset(target: "all" | "memory" | "user"): Promise<string[]> {
     const response = await fetch(this.endpoint("/api/memory/reset"), {

@@ -121,6 +121,17 @@ export class DoctorWidget {
           <span id="delegation-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-memory-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="memoryPanel.title">Memory limits</h3>
+        <div id="memory-settings-rows"></div>
+        <div id="memory-settings-editor" class="monitoring-row" hidden>
+          <select id="memory-settings-key" class="ghost"></select>
+          <input id="memory-settings-value" class="ghost" />
+          <button id="memory-settings-apply" class="ghost mcp-add-btn" data-i18n="memoryPanel.apply">Apply</button>
+          <button id="memory-settings-clear" class="ghost mcp-add-btn" data-i18n="memoryPanel.clear">Clear</button>
+          <span id="memory-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -374,6 +385,7 @@ export class DoctorWidget {
     this.loadAgentSettings().catch(() => undefined);
     this.loadWebSettings().catch(() => undefined);
     this.loadDelegationSettings().catch(() => undefined);
+    this.loadMemorySettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2457,6 +2469,80 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadMemorySettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-memory-settings") as HTMLElement;
+    const rows = this.root.querySelector("#memory-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.memoryStatus();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      addRow(t.memoryPanel.memoryLimit, String(payload.char_limits.memory));
+      addRow(t.memoryPanel.userLimit, String(payload.char_limits.user));
+      for (const file of payload.files) {
+        if (!file.exists) continue;
+        addRow(escapeHtmlDoctor(file.file), `${file.bytes}B \u00b7 ${file.entries}`);
+      }
+      // P749: memory limits editor — pick a key, type the value, Apply
+      // persists through PUT /api/memory, Clear removes the override;
+      // the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#memory-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#memory-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#memory-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#memory-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#memory-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#memory-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["memory_char_limit", "user_char_limit"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: number | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateMemorySetting(keySel.value, value);
+            await this.loadMemorySettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+            statusEl.textContent = t.memoryPanel.invalidNumber;
+            return;
+          }
+          void applyEdit(Number(raw));
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;
