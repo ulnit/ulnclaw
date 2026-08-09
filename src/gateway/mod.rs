@@ -10787,6 +10787,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /runs            list the tracked runs (newest first)
   /goal [text|status|show|pause|resume|clear]  standing goal (Ralph loop) control
   /learn <what>      learn a reusable skill from anything you describe
+  /moa <prompt>      one-shot Mixture-of-Agents synthesis (default preset)
   /subgoal [text|remove N|clear]  extra criteria on the active goal
   /reload-mcp [confirm]  rebuild the MCP tool surface (confirm when gated)
   /skills          list skills (invoke one: /<skill-name> [instruction])
@@ -10836,6 +10837,41 @@ fn is_real_user_turn(message: &Message) -> bool {
             .filter(|text| !text.is_empty())
             .map(|text| !text.starts_with('/'))
             .unwrap_or(false)
+}
+
+/// `/moa` no-args digest: configured presets (lean `print_moa_presets`
+/// twin for chat surfaces).
+fn moa_presets_digest(config: &crate::config::UlncLawConfig) -> String {
+    let moa = &config.moa;
+    if moa.presets.is_empty() {
+        return "no MoA presets configured — add [moa.presets.<name>] to config.toml.\n                usage: /moa <prompt>  (runs one prompt through the default preset)"
+            .to_string();
+    }
+    let default_name = moa
+        .default_preset
+        .clone()
+        .filter(|name| moa.presets.contains_key(name))
+        .unwrap_or_else(|| "default".to_string());
+    let mut names: Vec<&String> = moa.presets.keys().collect();
+    names.sort();
+    let mut lines = vec!["MoA presets:".to_string()];
+    for name in names {
+        let preset = &moa.presets[name];
+        let marker = if *name == default_name { "*" } else { " " };
+        lines.push(format!(
+            "{marker} {name}: {} reference(s), aggregator {}",
+            preset
+                .reference_models
+                .iter()
+                .filter(|slot| slot.enabled)
+                .count(),
+            preset.aggregator.label()
+        ));
+    }
+    lines.push(
+        "usage: /moa <prompt>  (runs one prompt through the default preset)".to_string(),
+    );
+    lines.join("\n")
 }
 
 async fn resolve_gateway_slash(
@@ -11420,6 +11456,38 @@ async fn resolve_gateway_slash(
             Some(GatewaySlash::AgentTurn(
                 crate::learn_prompt::build_learn_prompt(rest),
             ))
+        }
+        "/moa" => {
+            // hermes /moa parity (REPL /moa twin): one prompt through
+            // the default Mixture-of-Agents preset — parallel reference
+            // models + aggregator synthesis. Bare /moa lists presets.
+            if rest.is_empty() {
+                return Some(GatewaySlash::Direct(moa_presets_digest(
+                    &state.agent.context().config,
+                )));
+            }
+            let config = state.agent.context().config.clone();
+            let prompt = rest.to_string();
+            let reply = match crate::moa::run_moa(&config, &prompt, None).await {
+                Ok(outcome) => {
+                    let mut lines: Vec<String> = outcome
+                        .references
+                        .iter()
+                        .map(|reference| {
+                            if reference.failed() {
+                                format!("  \u{2717} {} failed", reference.label)
+                            } else {
+                                format!("  \u{2713} {}", reference.label)
+                            }
+                        })
+                        .collect();
+                    lines.push(String::new());
+                    lines.push(outcome.synthesis.clone());
+                    lines.join("\n")
+                }
+                Err(e) => format!("moa failed: {e}"),
+            };
+            Some(GatewaySlash::Direct(reply))
         }
         "/sessions" => {
             let limit = rest
@@ -16234,6 +16302,39 @@ mod tests {
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[test]
+    fn moa_presets_digest_reports_configured_presets() {
+        // P688: /moa no-args digest (lean print_moa_presets twin).
+        let mut config = crate::config::UlncLawConfig::default();
+        assert!(moa_presets_digest(&config).contains("no MoA presets configured"));
+
+        let preset: crate::config::MoaPreset = serde_json::from_value(serde_json::json!({
+            "reference_models": [
+                {"provider": "openai", "model": "gpt-x"},
+                {"provider": "anthropic", "model": "claude-y", "enabled": false}
+            ],
+            "aggregator": {"provider": "openai", "model": "gpt-x"}
+        }))
+        .expect("preset parses");
+        config.moa.presets.insert("default".to_string(), preset);
+        let digest = moa_presets_digest(&config);
+        assert!(digest.contains("* default"), "{digest}");
+        assert!(digest.contains("1 reference(s)"), "{digest}");
+        assert!(digest.contains("aggregator openai:gpt-x"), "{digest}");
+        assert!(digest.contains("/moa <prompt>"), "{digest}");
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_moa_usage_without_presets() {
+        let state = test_state();
+        match resolve_gateway_slash(&state, "sess-1", "/moa").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("no MoA presets configured"), "{text}");
+            }
+            _ => panic!("expected bare /moa to answer with the presets digest"),
         }
     }
 

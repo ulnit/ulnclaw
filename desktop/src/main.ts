@@ -2237,6 +2237,7 @@ function gatewaySlashCommands(): [string, string][] {
   return [
     ["/resume", t.slash.resume],
     ["/learn", t.slash.learn],
+    ["/moa", t.slash.moa],
     ["/help", t.slash.help],
     ["/skills", t.slash.skills],
     ["/tools", t.slash.tools],
