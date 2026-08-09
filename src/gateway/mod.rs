@@ -5525,6 +5525,33 @@ async fn delivery_ledger_api(State(state): State<Arc<GatewayState>>) -> Json<Val
     }))
 }
 
+/// `GET /api/dead-targets` — P713 ops surface over the P707
+/// dead-target registry: delivery targets confirmed permanently
+/// unreachable (deleted group, kicked/blocked bot, deactivated user),
+/// newest first. Self-healing: rows disappear once a send to the
+/// target succeeds again.
+async fn dead_targets_api() -> Json<Value> {
+    let mut targets: Vec<Value> = crate::dead_targets::registry()
+        .list()
+        .into_iter()
+        .map(|(key, mut entry)| {
+            if let Value::Object(map) = &mut entry {
+                map.insert("key".to_string(), Value::String(key));
+            }
+            entry
+        })
+        .collect();
+    targets.sort_by(|a, b| {
+        let marked_a = a.get("marked_at").and_then(Value::as_f64).unwrap_or(0.0);
+        let marked_b = b.get("marked_at").and_then(Value::as_f64).unwrap_or(0.0);
+        marked_b
+            .partial_cmp(&marked_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let count = targets.len();
+    Json(json!({ "targets": targets, "count": count }))
+}
+
 /// Build one messaging-platform payload row (lean hermes
 /// `_messaging_platform_payload` parity): enabled from
 /// `[messaging.<id>].enabled`, configured from the catalog's
@@ -6906,6 +6933,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/insights", get(insights))
         .route("/api/channels", get(channels_status))
         .route("/api/delivery-ledger", get(delivery_ledger_api))
+        .route("/api/dead-targets", get(dead_targets_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))

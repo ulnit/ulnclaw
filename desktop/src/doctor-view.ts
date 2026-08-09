@@ -69,6 +69,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="deliveryLedger.title">Delivery ledger</h3>
         <div id="delivery-ledger-rows"></div>
       </section>
+      <section id="doctor-dead-targets" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="deadTargets.title">Dead targets</h3>
+        <div id="dead-target-rows"></div>
+      </section>
       <section id="doctor-browser" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
         <div id="browser-rows"></div>
@@ -253,6 +257,7 @@ export class DoctorWidget {
     this.loadMonitoring().catch(() => undefined);
     this.loadGatewayHealth().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
+    this.loadDeadTargets().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2182,6 +2187,48 @@ export class DoctorWidget {
           `${obligation.platform} \u2192 ${obligation.chat_id}`,
           `${stateBadge(obligation.state)} \u00b7 ${t.deliveryLedger.attempts.replace("{n}", String(obligation.attempts))} \u00b7 ${escapeHtmlDoctor(when)}`,
         );
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** P713: confirmed-dead delivery targets (P707 registry surface). */
+  private async loadDeadTargets(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-dead-targets") as HTMLElement;
+    const rows = this.root.querySelector("#dead-target-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.deadTargets();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      addRow(t.deadTargets.count, String(payload.count));
+      if (payload.count === 0) {
+        addRow(t.deadTargets.empty, "");
+      } else {
+        for (const target of payload.targets.slice(0, 8)) {
+          const when = new Date(target.marked_at * 1000).toLocaleString();
+          addRow(
+            `${target.platform} \u2192 ${target.chat_id}`,
+            `<span class="models-view-badge warn">${escapeHtmlDoctor(target.reason)}</span> \u00b7 ${escapeHtmlDoctor(when)}`,
+          );
+        }
       }
       section.hidden = false;
     } catch {

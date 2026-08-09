@@ -550,6 +550,21 @@ export interface DeliveryLedgerPayload {
   outstanding: number;
 }
 
+/** One confirmed-dead delivery target (P707 registry row; P713 API). */
+export interface DeadTargetRow {
+  key: string;
+  platform: string;
+  chat_id: string;
+  reason: string;
+  marked_at: number;
+}
+
+/** GET /api/dead-targets payload (P713). */
+export interface DeadTargetsPayload {
+  targets: DeadTargetRow[];
+  count: number;
+}
+
 export interface SyncStatus {
   device_id: string;
   device_name: string;
@@ -2366,6 +2381,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`delivery-ledger HTTP ${response.status}`);
     return (await response.json()) as DeliveryLedgerPayload;
+  }
+
+  /** GET /api/dead-targets — P713 confirmed-unreachable delivery targets. */
+  async deadTargets(): Promise<DeadTargetsPayload> {
+    const response = await fetch(this.endpoint("/api/dead-targets"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`dead-targets HTTP ${response.status}`);
+    return (await response.json()) as DeadTargetsPayload;
   }
 
   /** GET /api/webhooks/subscriptions — dynamic webhook routes. */
