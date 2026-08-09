@@ -862,6 +862,13 @@ pub struct GatewayConfig {
     /// the prefix is accepted but ignored (single-profile behavior).
     #[serde(default)]
     pub multiplex_profiles: bool,
+    /// Hierarchical platform→profile routing rules (hermes
+    /// `gateway.profile_routes`): matching inbound messaging chats run
+    /// under the routed profile's agent/home instead of the default.
+    /// Only active when `multiplex_profiles` is on (hermes
+    /// `_profile_name_for_source` gating).
+    #[serde(default)]
+    pub profile_routes: Vec<crate::profile_routing::ProfileRouteSpec>,
     /// Cap on concurrently active chat sessions across all surfaces
     /// (hermes `max_concurrent_sessions`; 0/unset disables the cap).
     #[serde(default)]
@@ -883,6 +890,7 @@ impl Default for GatewayConfig {
             port: default_gateway_port(),
             key: None,
             multiplex_profiles: false,
+            profile_routes: Vec::new(),
             max_concurrent_sessions: None,
         }
     }

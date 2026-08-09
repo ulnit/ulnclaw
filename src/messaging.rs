@@ -403,6 +403,108 @@ pub struct Dispatcher {
     /// Per-chat FIFO of messages that arrived while a turn was busy
     /// (hermes busy-policy queue parity) — drained after each turn.
     queued: Arc<Mutex<HashMap<String, std::collections::VecDeque<MessageEvent>>>>,
+    /// P709: inbound profile routing (hermes `_profile_name_for_source`
+    /// + multiplexer): when set, events matching a configured route are
+    /// delegated to that profile's dispatcher before any local state
+    /// (busy/queue/sessions) is touched.
+    profile_routing: Option<Arc<ProfileRoutingHub>>,
+}
+
+/// P709: factory that builds a profile's messaging dispatcher on
+/// first routed use (hermes multiplexer profile-runtime laziness).
+/// The returned dispatcher owns the profile's agent + session store
+/// (`<home>/profiles/<name>`), mirroring the `/p/<profile>` HTTP
+/// stack isolation. A trait (not a type alias) so the
+/// factory→Dispatcher→hub cycle stays behind concrete types.
+pub trait ProfileDispatcherFactory: Send + Sync {
+    fn build(
+        &self,
+        profile: String,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = std::result::Result<Arc<Dispatcher>, String>>
+                + Send,
+        >,
+    >;
+}
+
+/// Closure adapter so callers can supply a plain async closure.
+impl<F, Fut> ProfileDispatcherFactory for F
+where
+    F: Fn(String) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = std::result::Result<Arc<Dispatcher>, String>> + Send + 'static,
+{
+    fn build(
+        &self,
+        profile: String,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = std::result::Result<Arc<Dispatcher>, String>>
+                + Send,
+        >,
+    > {
+        Box::pin(self(profile))
+    }
+}
+
+/// P709: inbound profile-routing hub (hermes `gateway.profile_routes`
+/// + `_profile_name_for_source` parity): matches events against the
+/// configured routes (most specific first) and lazily caches one
+/// dispatcher per routed profile.
+pub struct ProfileRoutingHub {
+    routes: Vec<crate::profile_routing::ProfileRoute>,
+    factory: Arc<dyn ProfileDispatcherFactory>,
+    cache: tokio::sync::Mutex<HashMap<String, Arc<Dispatcher>>>,
+}
+
+impl ProfileRoutingHub {
+    pub fn new(
+        routes: Vec<crate::profile_routing::ProfileRoute>,
+        factory: Arc<dyn ProfileDispatcherFactory>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            routes,
+            factory,
+            cache: tokio::sync::Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Profile the event routes to, if any route matches (hermes
+    /// `match_profile_route` over the event's source fields).
+    pub fn match_event(&self, platform: &str, chat_id: &str) -> Option<String> {
+        crate::profile_routing::match_profile_route(
+            &self.routes,
+            platform,
+            None,
+            Some(chat_id),
+            None,
+            None,
+        )
+        .map(|route| route.profile.clone())
+    }
+
+    /// The profile's dispatcher, built on first use (build failures
+    /// are logged and surface as None so the caller falls back to the
+    /// default profile — routing must never drop a message).
+    pub async fn dispatcher_for(&self, profile: &str) -> Option<Arc<Dispatcher>> {
+        {
+            let cache = self.cache.lock().await;
+            if let Some(dispatcher) = cache.get(profile) {
+                return Some(dispatcher.clone());
+            }
+        }
+        let built = match self.factory.build(profile.to_string()).await {
+            Ok(dispatcher) => dispatcher,
+            Err(e) => {
+                tracing::warn!(
+                    "[messaging] profile '{profile}' dispatcher build failed: {e}"
+                );
+                return None;
+            }
+        };
+        let mut cache = self.cache.lock().await;
+        Some(cache.entry(profile.to_string()).or_insert(built).clone())
+    }
 }
 
 /// Result of one dispatched platform message (hermes run-turn output):
@@ -1362,6 +1464,25 @@ impl Dispatcher {
             store,
             busy: Arc::new(Mutex::new(HashMap::new())),
             queued: Arc::new(Mutex::new(HashMap::new())),
+            profile_routing: None,
+        })
+    }
+
+    /// P709: build the default dispatcher with an inbound
+    /// profile-routing hub (hermes `gateway.profile_routes` under
+    /// multiplexing). Profile dispatchers built by the hub use plain
+    /// [`Dispatcher::new`], so routing never recurses.
+    pub fn new_with_routing(
+        agent: Arc<Agent>,
+        store: Arc<SqliteSessionStore>,
+        hub: Arc<ProfileRoutingHub>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            agent,
+            store,
+            busy: Arc::new(Mutex::new(HashMap::new())),
+            queued: Arc::new(Mutex::new(HashMap::new())),
+            profile_routing: Some(hub),
         })
     }
 
@@ -1372,6 +1493,26 @@ impl Dispatcher {
     /// Run one agent turn for the event's chat; returns the reply text
     /// plus transcript echoes (hermes `_echo_pending_stt_transcripts_once`).
     pub async fn handle_event(self: &Arc<Self>, event: MessageEvent) -> Result<DispatchOutcome> {
+        // P709: inbound profile routing (hermes
+        // `_profile_name_for_source`): an event matching a configured
+        // route is delegated wholesale to that profile's dispatcher —
+        // session, busy/queue state and approvals all live under the
+        // profile's own agent/store. A failed profile build falls
+        // back to the default profile; routing never drops a message.
+        if let Some(hub) = self.profile_routing.as_ref() {
+            if let Some(profile) = hub.match_event(&event.platform, &event.chat_id) {
+                if let Some(profile_dispatcher) = hub.dispatcher_for(&profile).await {
+                    // Boxed: handle_event recurses through routing (a
+                    // recursive async fn needs indirection).
+                    return Box::pin(profile_dispatcher.handle_event(event)).await;
+                }
+                tracing::warn!(
+                    "[messaging] profile '{profile}' unavailable for {}:{} — using default profile",
+                    event.platform,
+                    event.chat_id
+                );
+            }
+        }
         let key = Self::session_key(&event);
         // Channel directory observation (hermes gateway directory build):
         // every inbound event keeps the send_message target list fresh.
@@ -2301,8 +2442,12 @@ pub async fn run_messaging(
     config: &crate::config::UlncLawConfig,
     agent: Arc<Agent>,
     store: Arc<SqliteSessionStore>,
+    profile_routing: Option<Arc<ProfileRoutingHub>>,
 ) {
-    let dispatcher = Dispatcher::new(agent, store);
+    let dispatcher = match profile_routing {
+        Some(hub) => Dispatcher::new_with_routing(agent, store, hub),
+        None => Dispatcher::new(agent, store),
+    };
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let msg = &config.messaging;
     let pairing: Option<Arc<crate::pairing::PairingStore>> = if msg.pairing {
@@ -7177,6 +7322,118 @@ mod tests {
         let agent =
             crate::agent::Agent::new(provider, crate::tools::ToolRegistry::new()).with_store(store.clone());
         Dispatcher::new(Arc::new(agent), store)
+    }
+
+    /// Dispatcher whose provider is unreachable (turns fail AFTER the
+    /// session row is created) — used by the routing test.
+    fn test_dispatcher_parts() -> (Arc<crate::agent::Agent>, Arc<SqliteSessionStore>, Arc<Dispatcher>) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let provider = Arc::new(
+            crate::provider::openai::OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let agent = Arc::new(
+            crate::agent::Agent::new(provider, crate::tools::ToolRegistry::new())
+                .with_store(store.clone()),
+        );
+        let dispatcher = Dispatcher::new(agent.clone(), store.clone());
+        (agent, store, dispatcher)
+    }
+
+    #[tokio::test]
+    async fn profile_routing_delegates_matching_events_to_profile_stack() {
+        // P709: events matching a configured route run under the
+        // routed profile's dispatcher (its store gains the session);
+        // non-matching events stay on the default stack.
+        let (default_agent, default_store, _) = test_dispatcher_parts();
+        let (_profile_agent, profile_store, profile_dispatcher) = test_dispatcher_parts();
+        let captured = profile_dispatcher.clone();
+        let factory: Arc<dyn ProfileDispatcherFactory> = Arc::new(move |_name: String| {
+            let dispatcher = captured.clone();
+            async move { Ok(dispatcher) }
+        });
+        let route = crate::profile_routing::ProfileRouteSpec {
+            name: "work".into(),
+            platform: "testplat".into(),
+            profile: "work-profile".into(),
+            chat_id: Some("routed-chat".into()),
+            ..Default::default()
+        };
+        let routes = crate::profile_routing::parse_profile_routes(&[route]);
+        let hub = ProfileRoutingHub::new(routes, factory);
+        let router = Dispatcher::new_with_routing(default_agent, default_store.clone(), hub);
+
+        // Routed chat: the turn lands in the PROFILE store (the turn
+        // itself fails — unreachable test provider — but the session
+        // row is created before the provider call).
+        let _ = router
+            .handle_event(MessageEvent {
+                platform: "testplat".into(),
+                chat_id: "routed-chat".into(),
+                sender_id: "u1".into(),
+                sender_name: "User".into(),
+                text: "hello routed".into(),
+                message_id: "m1".into(),
+                attachments: Vec::new(),
+            })
+            .await;
+        assert_eq!(profile_store.count_sessions().unwrap(), 1);
+        assert_eq!(default_store.count_sessions().unwrap(), 0);
+
+        // Non-matching chat stays on the default stack.
+        let _ = router
+            .handle_event(MessageEvent {
+                platform: "testplat".into(),
+                chat_id: "other-chat".into(),
+                sender_id: "u1".into(),
+                sender_name: "User".into(),
+                text: "hello default".into(),
+                message_id: "m2".into(),
+                attachments: Vec::new(),
+            })
+            .await;
+        assert_eq!(profile_store.count_sessions().unwrap(), 1);
+        assert_eq!(default_store.count_sessions().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn profile_routing_falls_back_when_factory_fails() {
+        // P709: a profile build failure degrades to the default
+        // profile — routing never drops a message.
+        let (default_agent, default_store, _) = test_dispatcher_parts();
+        let factory: Arc<dyn ProfileDispatcherFactory> =
+            Arc::new(move |_name: String| async move { Err("boom".to_string()) });
+        let route = crate::profile_routing::ProfileRouteSpec {
+            name: "broken".into(),
+            platform: "testplat".into(),
+            profile: "broken-profile".into(),
+            chat_id: Some("routed-chat".into()),
+            ..Default::default()
+        };
+        let routes = crate::profile_routing::parse_profile_routes(&[route]);
+        let hub = ProfileRoutingHub::new(routes, factory);
+        let router = Dispatcher::new_with_routing(default_agent, default_store.clone(), hub);
+        let _ = router
+            .handle_event(MessageEvent {
+                platform: "testplat".into(),
+                chat_id: "routed-chat".into(),
+                sender_id: "u1".into(),
+                sender_name: "User".into(),
+                text: "hello fallback".into(),
+                message_id: "m1".into(),
+                attachments: Vec::new(),
+            })
+            .await;
+        // The default stack served the event.
+        assert_eq!(default_store.count_sessions().unwrap(), 1);
     }
 
     #[tokio::test]

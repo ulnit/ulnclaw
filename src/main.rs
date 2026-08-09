@@ -2408,6 +2408,47 @@ async fn build_gateway_stack(
     Ok(state)
 }
 
+/// P709: one profile's messaging stack for inbound profile routing
+/// (hermes multiplexer per-profile runtime): the same isolation as a
+/// `/p/<name>` HTTP mirror — `[profiles.<name>]` override + a
+/// profile-scoped home — without any background loops (the cron
+/// scheduler, monitoring and kanban dispatchers run once per process,
+/// owned by the default stack).
+async fn build_profile_messaging_stack(
+    config: &UlncLawConfig,
+    name: &str,
+    home: &std::path::Path,
+    gateway_key: Option<String>,
+) -> std::result::Result<std::sync::Arc<ulnclaw::messaging::Dispatcher>, String> {
+    let profile_config = config.clone().with_profile(name);
+    let profile_home = home.join("profiles").join(name);
+    std::fs::create_dir_all(&profile_home).ok();
+    let router = ulnclaw::gateway::ApprovalRouter::with_options(
+        std::time::Duration::from_secs(profile_config.approvals.timeout),
+        Some(profile_home.join("approvals.json")),
+    );
+    let state_holder: std::sync::Arc<
+        tokio::sync::OnceCell<std::sync::Arc<ulnclaw::gateway::GatewayState>>,
+    > = std::sync::Arc::new(tokio::sync::OnceCell::new());
+    let approve = ulnclaw::gateway::gateway_approve_fn(router.clone(), state_holder.clone());
+    let approve = ulnclaw::messaging::messaging_aware_approve_fn(approve);
+    let agent = make_agent_in(&profile_config, false, Some(approve), &profile_home, None).await?;
+    agent.context().set_async_delivery(true);
+    let state = ulnclaw::gateway::GatewayState::new(
+        agent.clone(),
+        profile_config.model.model.clone(),
+        profile_config.model.provider.clone(),
+        gateway_key,
+        router,
+    )
+    .map_err(|e| e.to_string())?;
+    state_holder.set(state.clone()).ok();
+    Ok(ulnclaw::messaging::Dispatcher::new(
+        agent,
+        state.store.clone(),
+    ))
+}
+
 /// `ulnclaw dashboard [run|status|stop]` — hermes `dashboard`/`serve`
 /// parity. The gateway process serves the dashboard, so `run` delegates to
 /// `gateway_cmd`; `status`/`stop` inspect/terminate the recorded pid.
@@ -2651,13 +2692,65 @@ async fn gateway_cmd(
     // covers every `[messaging.*]` section — `run_messaging` starts
     // each enabled platform loop (senders register on startup, which
     // cron delivery and clarify routing depend on).
+    //
+    // P709: inbound profile routing (hermes `gateway.profile_routes`):
+    // with multiplexing on and routes configured, matching inbound
+    // chats run under the routed profile's agent/home stack instead of
+    // the default profile's.
+    let profile_routing_hub: Option<std::sync::Arc<ulnclaw::messaging::ProfileRoutingHub>> = {
+        if gateway.multiplex_profiles && !gateway.profile_routes.is_empty() {
+            let known_profiles: std::collections::HashSet<String> =
+                config.profiles.keys().cloned().collect();
+            let specs: Vec<ulnclaw::profile_routing::ProfileRouteSpec> = gateway
+                .profile_routes
+                .iter()
+                .filter(|spec| {
+                    let profile = spec.profile.trim();
+                    let known = known_profiles.contains(profile);
+                    if !known {
+                        eprintln!(
+                            "[gateway] profile route '{}' targets unknown profile '{}' — skipped",
+                            spec.name, profile
+                        );
+                    }
+                    known
+                })
+                .cloned()
+                .collect();
+            let routes = ulnclaw::profile_routing::parse_profile_routes(&specs);
+            if routes.is_empty() {
+                None
+            } else {
+                let base_config = config.clone();
+                let base_home = home.clone();
+                let gateway_key = gateway.key.clone();
+                let factory: std::sync::Arc<dyn ulnclaw::messaging::ProfileDispatcherFactory> =
+                    std::sync::Arc::new(move |name: String| {
+                        let config = base_config.clone();
+                        let home = base_home.clone();
+                        let key = gateway_key.clone();
+                        async move {
+                            build_profile_messaging_stack(&config, &name, &home, key).await
+                        }
+                    });
+                eprintln!(
+                    "[gateway] profile routing active: {} route(s), most-specific-first",
+                    routes.len()
+                );
+                Some(ulnclaw::messaging::ProfileRoutingHub::new(routes, factory))
+            }
+        } else {
+            None
+        }
+    };
     let msg = &config.messaging;
     if msg.any_platform_enabled() {
         let messaging_config = config.clone();
         let agent = state.agent.clone();
         let store = state.store.clone();
+        let routing = profile_routing_hub.clone();
         tokio::spawn(async move {
-            ulnclaw::messaging::run_messaging(&messaging_config, agent, store).await;
+            ulnclaw::messaging::run_messaging(&messaging_config, agent, store, routing).await;
         });
     }
     if msg.bluebubbles.enabled {
