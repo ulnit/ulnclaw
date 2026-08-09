@@ -187,6 +187,20 @@ export class DoctorWidget {
           <span id="logging-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-cron-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="cronSettingsPanel.title">Cron delivery</h3>
+        <div id="cron-settings-rows"></div>
+        <div id="cron-settings-editor" class="monitoring-row" hidden>
+          <select id="cron-settings-key" class="ghost"></select>
+          <select id="cron-settings-value" class="ghost">
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+          <button id="cron-settings-apply" class="ghost mcp-add-btn" data-i18n="cronSettingsPanel.apply">Apply</button>
+          <button id="cron-settings-clear" class="ghost mcp-add-btn" data-i18n="cronSettingsPanel.clear">Clear</button>
+          <span id="cron-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -446,6 +460,7 @@ export class DoctorWidget {
     this.loadSecuritySettings().catch(() => undefined);
     this.loadToolOutputSettings().catch(() => undefined);
     this.loadLoggingSettings().catch(() => undefined);
+    this.loadCronSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2529,6 +2544,71 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadCronSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-cron-settings") as HTMLElement;
+    const rows = this.root.querySelector("#cron-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.cronSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(t.cronSettingsPanel.wrapResponse, payload.wrap_response ? on : off);
+      addRow(t.cronSettingsPanel.mirrorDelivery, payload.mirror_delivery ? on : off);
+      // P755: cron delivery editor — pick a key, choose true/false,
+      // Apply persists through PUT /api/cron-settings, Clear removes
+      // the override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#cron-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#cron-settings-key") as HTMLSelectElement;
+      const valueSel = this.root.querySelector("#cron-settings-value") as HTMLSelectElement;
+      const applyBtn = this.root.querySelector("#cron-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#cron-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#cron-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["wrap_response", "mirror_delivery"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateCronSetting(keySel.value, value);
+            await this.loadCronSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueSel.value === "true");
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

@@ -6022,6 +6022,79 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/cron-settings` — P755: cron delivery knobs for the
+/// shell: whether deliveries are wrapped with a job-name header/footer
+/// and whether successful deliveries mirror into the origin chat's
+/// session transcript (per-job `attach_to_session` still overrides).
+async fn cron_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let cron = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .map(|c| c.cron)
+        .unwrap_or_default();
+    Json(json!({
+        "wrap_response": cron.wrap_response,
+        "mirror_delivery": cron.mirror_delivery,
+    }))
+}
+
+/// `PUT /api/cron-settings` — P755: persist cron delivery knobs from
+/// the shell. Body: `{"key": "wrap_response"|"mirror_delivery",
+/// "value": true|false|null}` — null removes the key (falls back to
+/// the default). Applies to deliveries fired after the change.
+async fn update_cron_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["wrap_response", "mirror_delivery"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown cron key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    if let Some(v) = value {
+        if !v.is_null() && !v.is_boolean() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("cron key '{key}' must be a boolean") })),
+            );
+        }
+    }
+    let dotted = format!("cron.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => crate::config_cmd::set_config_value(&dotted, &v.to_string(), true).map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/logging-settings` — P754: gateway logging knobs for the
 /// shell: the periodic `[MEMORY] rss=...` monitor switch and its
 /// cadence.
@@ -8595,6 +8668,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/security-settings", get(security_settings_api).put(update_security_settings_api))
         .route("/api/tool-output-settings", get(tool_output_settings_api).put(update_tool_output_settings_api))
         .route("/api/logging-settings", get(logging_settings_api).put(update_logging_settings_api))
+        .route("/api/cron-settings", get(cron_settings_api).put(update_cron_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -19615,6 +19689,72 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/logging-settings", Some("sekret")).await;
         assert_eq!(body["memory_monitor"], true, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cron_settings_editor() {
+        // P755: GET /api/cron-settings surfaces delivery knobs; PUT
+        // persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: wrap on, mirror off.
+        let (status, body) = get_json(app.clone(), "/api/cron-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["wrap_response"], true, "{body}");
+        assert_eq!(body["mirror_delivery"], false, "{body}");
+
+        // Flip both knobs.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/cron-settings", Some("sekret"),
+            json!({ "key": "wrap_response", "value": false }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/cron-settings", Some("sekret"),
+            json!({ "key": "mirror_delivery", "value": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/cron-settings", Some("sekret")).await;
+        assert_eq!(body["wrap_response"], false, "{body}");
+        assert_eq!(body["mirror_delivery"], true, "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/cron-settings", Some("sekret"),
+            json!({ "key": "wrap_response", "value": "yes" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/cron-settings", Some("sekret"),
+            json!({ "key": "yolo", "value": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/cron-settings", Some("sekret"),
+            json!({ "key": "mirror_delivery", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/cron-settings", Some("sekret")).await;
+        assert_eq!(body["mirror_delivery"], false, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

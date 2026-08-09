@@ -628,6 +628,12 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/cron-settings` — P755 cron delivery knobs. */
+export interface CronSettingsPayload {
+  wrap_response: boolean;
+  mirror_delivery: boolean;
+}
+
 /** `GET /api/logging-settings` — P754 gateway logging knobs. */
 export interface LoggingSettingsPayload {
   memory_monitor: boolean;
@@ -4078,6 +4084,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/cron-settings — P755 cron delivery knobs. */
+  async cronSettings(): Promise<CronSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/cron-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`cron-settings HTTP ${response.status}`);
+    return (await response.json()) as CronSettingsPayload;
+  }
+
+  /** P755: PUT /api/cron-settings — persist a cron delivery knob; null
+   * removes the override. */
+  async updateCronSetting(
+    key: string,
+    value: boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/cron-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `cron-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/logging-settings — P754 gateway logging knobs. */
