@@ -28,6 +28,7 @@ const PLATFORM_SLASH_HELP: &str = "Commands you can send as chat messages:
   /recap           recap this chat's session
   /title [text]    show or set the session title
   /resume [name]   list or switch to a previous session
+  /learn <what>    learn a reusable skill from anything you describe
   /sethome         set this chat as the platform home channel
   /usage           this session's token usage
   /insights [N] [--days N] [--source S]   usage analytics across sessions
@@ -147,6 +148,9 @@ pub async fn resolve(
             };
             Some(PlatformSlashOutcome::Direct(result))
         }
+        "/learn" => Some(PlatformSlashOutcome::AgentTurn(
+            crate::learn_prompt::build_learn_prompt(rest),
+        )),
         "/sethome" | "/set-home" => {
             // hermes /sethome parity: make the current chat the home
             // channel for its platform — cron jobs and cross-platform
@@ -329,6 +333,25 @@ mod tests {
             message.contains("greet"),
             "expansion should reference the skill: {message}"
         );
+    }
+
+    #[tokio::test]
+    async fn learn_expands_to_agent_turn() {
+        // P687: /learn rewrites the turn into the skill-authoring prompt.
+        let (_dir, home, agent, store) = setup();
+        let outcome = resolve(&agent, &store, &home, "s1", "/learn docs/api.md focus on auth").await;
+        let Some(PlatformSlashOutcome::AgentTurn(message)) = outcome else {
+            panic!("expected agent turn expansion");
+        };
+        assert!(message.contains("docs/api.md focus on auth"), "{message}");
+        assert!(message.contains("skill_manage"), "{message}");
+
+        // Bare /learn falls back to the conversation workflow.
+        let outcome = resolve(&agent, &store, &home, "s1", "/learn").await;
+        let Some(PlatformSlashOutcome::AgentTurn(message)) = outcome else {
+            panic!("expected agent turn expansion");
+        };
+        assert!(message.contains("the workflow we just went through"), "{message}");
     }
 
     #[test]

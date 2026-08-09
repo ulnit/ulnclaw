@@ -10786,6 +10786,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /personality [name|none]  list or activate a personality (agent.personalities)
   /runs            list the tracked runs (newest first)
   /goal [text|status|show|pause|resume|clear]  standing goal (Ralph loop) control
+  /learn <what>      learn a reusable skill from anything you describe
   /subgoal [text|remove N|clear]  extra criteria on the active goal
   /reload-mcp [confirm]  rebuild the MCP tool surface (confirm when gated)
   /skills          list skills (invoke one: /<skill-name> [instruction])
@@ -11411,6 +11412,14 @@ async fn resolve_gateway_slash(
         "/memory" => {
             let home = state.agent.context().home.clone();
             Some(GatewaySlash::Direct(crate::memory_cmd::memory_status(&home)))
+        }
+        "/learn" => {
+            // hermes /learn parity: rewrite the turn into the
+            // standards-guided skill-authoring prompt; the agent does
+            // the gathering + authoring with its normal tools.
+            Some(GatewaySlash::AgentTurn(
+                crate::learn_prompt::build_learn_prompt(rest),
+            ))
         }
         "/sessions" => {
             let limit = rest
@@ -16225,6 +16234,28 @@ mod tests {
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_learn_expands_to_agent_turn() {
+        // P687: /learn rewrites the turn into the standards-guided
+        // skill-authoring prompt.
+        let state = test_state();
+        match resolve_gateway_slash(&state, "sess-1", "/learn docs/api.md focus on auth").await {
+            Some(GatewaySlash::AgentTurn(message)) => {
+                assert!(message.contains("docs/api.md focus on auth"), "{message}");
+                assert!(message.contains("skill_manage"), "{message}");
+            }
+            Some(GatewaySlash::Direct(text)) => panic!("expected agent turn, got direct: {text}"),
+            None => panic!("expected /learn to resolve"),
+        }
+        // Bare /learn falls back to the conversation-workflow prompt.
+        match resolve_gateway_slash(&state, "sess-1", "/learn").await {
+            Some(GatewaySlash::AgentTurn(message)) => {
+                assert!(message.contains("the workflow we just went through"), "{message}");
+            }
+            _ => panic!("expected bare /learn to resolve to an agent turn"),
         }
     }
 
