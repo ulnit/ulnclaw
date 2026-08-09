@@ -77,6 +77,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="stallWatch.title">Stall watch</h3>
         <div id="stall-watch-rows"></div>
       </section>
+      <section id="doctor-display" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="displayPanel.title">Display settings</h3>
+        <div id="display-rows"></div>
+      </section>
       <section id="doctor-lifecycle" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="lifecyclePanel.title">Lifecycle</h3>
         <div id="lifecycle-rows"></div>
@@ -276,6 +280,7 @@ export class DoctorWidget {
     this.loadStallWatch().catch(() => undefined);
     this.loadDrain().catch(() => undefined);
     this.loadLifecycle().catch(() => undefined);
+    this.loadDisplay().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2346,6 +2351,56 @@ export class DoctorWidget {
             `${badge}${escapeHtmlDoctor(idle)}${detail}`,
           );
         }
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadDisplay(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-display") as HTMLElement;
+    const rows = this.root.querySelector("#display-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.displaySettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const enabled = payload.platforms.filter((p) => p.enabled);
+      const shown = enabled.length > 0 ? enabled : payload.platforms.slice(0, 6);
+      if (enabled.length === 0) {
+        addRow(t.displayPanel.noneEnabled, "");
+      }
+      const flag = (value: string | number | boolean | null): string =>
+        value === true ? t.monitoring.on : value === false ? t.monitoring.off : "?";
+      for (const platform of shown) {
+        const s = platform.settings;
+        const summary = [
+          `${t.displayPanel.progress}=${s.tool_progress ?? "?"}`,
+          `${t.displayPanel.preview}=${s.tool_preview_length ?? 0}`,
+          `${t.displayPanel.heartbeats}=${flag(s.long_running_notifications)}`,
+          `${t.displayPanel.busyDetail}=${flag(s.busy_ack_detail)}`,
+          `${t.displayPanel.live}=${s.live_status ?? "?"}`,
+        ].join(" \u00b7 ");
+        const custom = platform.has_overrides
+          ? `<span class="models-view-badge ok">${escapeHtmlDoctor(t.displayPanel.custom)}</span> \u00b7 `
+          : "";
+        addRow(platform.platform, `${custom}${escapeHtmlDoctor(summary)}`);
       }
       section.hidden = false;
     } catch {

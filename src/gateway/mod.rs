@@ -5552,6 +5552,85 @@ async fn dead_targets_api() -> Json<Value> {
     Json(json!({ "targets": targets, "count": count }))
 }
 
+/// `GET /api/display` — P730 ops surface over the P721 per-platform
+/// display resolver: every configured platform's resolved display
+/// settings (platform override → global → tier default), so operators
+/// can see exactly why a platform renders the way it does.
+async fn display_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let result = tokio::task::spawn_blocking(|| {
+        let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let m = &config.messaging;
+        let roster: Vec<(&'static str, bool)> = vec![
+            ("telegram", m.telegram.enabled),
+            ("discord", m.discord.enabled),
+            ("slack", m.slack.enabled),
+            ("signal", m.signal.enabled),
+            ("weixin", m.weixin.enabled),
+            ("qq", m.qq.enabled),
+            ("yuanbao", m.yuanbao.enabled),
+            ("email", m.email.enabled),
+            ("mattermost", m.mattermost.enabled),
+            ("matrix", m.matrix.enabled),
+            ("dingtalk", m.dingtalk.enabled),
+            ("wecom", m.wecom.enabled),
+            ("feishu", m.feishu.enabled),
+            ("homeassistant", m.homeassistant.enabled),
+            ("sms", m.sms.enabled),
+            ("whatsapp", m.whatsapp.enabled),
+            ("irc", m.irc.enabled),
+            ("ntfy", m.ntfy.enabled),
+            ("simplex", m.simplex.enabled),
+            ("teams", m.teams.enabled),
+            ("line", m.line.enabled),
+            ("google_chat", m.google_chat.enabled),
+            ("buzz", m.buzz.enabled),
+            ("photon", m.photon.enabled),
+            ("raft", m.raft.enabled),
+            ("a2a", m.a2a.enabled),
+        ];
+        let mut rows: Vec<Value> = Vec::new();
+        for (platform, enabled) in roster {
+            let mut settings = serde_json::Map::new();
+            for setting in crate::display_config::DisplaySetting::all() {
+                let value =
+                    crate::display_config::resolve(&config.display, Some(platform), *setting);
+                settings.insert(
+                    setting.key().to_string(),
+                    match value {
+                        Some(crate::display_config::DisplayValue::Text(text)) => {
+                            Value::String(text)
+                        }
+                        Some(crate::display_config::DisplayValue::Flag(flag)) => {
+                            Value::Bool(flag)
+                        }
+                        Some(crate::display_config::DisplayValue::Number(num)) => json!(num),
+                        None => Value::Null,
+                    },
+                );
+            }
+            rows.push(json!({
+                "platform": platform,
+                "enabled": enabled,
+                "has_overrides": config
+                    .display
+                    .platforms
+                    .contains_key(&crate::display_config::platform_key(platform)),
+                "settings": Value::Object(settings),
+            }));
+        }
+        json!({
+            "overrideable_keys": crate::display_config::DisplaySetting::all()
+                .iter()
+                .map(|setting| setting.key())
+                .collect::<Vec<_>>(),
+            "platforms": rows,
+        })
+    })
+    .await
+    .unwrap_or_else(|_| json!({ "error": "display resolution panicked" }));
+    Json(result)
+}
+
 /// `GET /api/lifecycle` — P729 ops surface over the lifecycle ledger
 /// + shutdown backstops: prior-exit label, sentinel payload, loop
 /// heartbeat freshness (P726), and the shutdown forensics artifacts
@@ -7092,6 +7171,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
                 .delete(drain_cancel_api),
         )
         .route("/api/lifecycle", get(lifecycle_api))
+        .route("/api/display", get(display_settings_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -25607,6 +25687,53 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(body["obligations"].is_array(), "{body}");
         assert!(body["counts"].is_object(), "{body}");
         assert_eq!(body["outstanding"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_display_settings_endpoint_resolves_tiers() {
+        // P730: resolved per-platform display settings — tier defaults
+        // plus explicit overrides from config.toml.
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("config.toml"),
+            "[messaging.telegram]\nenabled = true\n\n[display.platforms.irc]\ntool_progress = \"verbose\"\n",
+        )
+        .unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/display", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let keys = body["overrideable_keys"].as_array().expect("keys");
+        assert!(keys.iter().any(|k| k == "tool_progress"), "{keys:?}");
+        let platforms = body["platforms"].as_array().expect("platforms");
+        assert_eq!(platforms.len(), 26, "{platforms:?}");
+
+        let by_id = |id: &str| -> &Value {
+            platforms
+                .iter()
+                .find(|row| row["platform"] == id)
+                .expect("row")
+        };
+        // Telegram: enabled via config, tier-1 with progress off.
+        let telegram = by_id("telegram");
+        assert_eq!(telegram["enabled"], true, "{telegram}");
+        assert_eq!(telegram["settings"]["tool_progress"], "off", "{telegram}");
+        assert_eq!(telegram["settings"]["busy_ack_detail"], false, "{telegram}");
+        // Discord tier default: reasoning subtext.
+        assert_eq!(by_id("discord")["settings"]["reasoning_style"], "subtext");
+        // IRC: explicit override beats the global tier.
+        let irc = by_id("irc");
+        assert_eq!(irc["settings"]["tool_progress"], "verbose", "{irc}");
+        assert_eq!(irc["has_overrides"], true, "{irc}");
+        assert_eq!(irc["enabled"], false, "{irc}");
+
+        match prev {
+            Some(home) => std::env::set_var("ULNCLAW_HOME", home),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

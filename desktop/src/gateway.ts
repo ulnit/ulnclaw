@@ -609,6 +609,19 @@ export interface ChannelsStatusPayload {
 }
 
 /** GET /api/stall-watch payload (P716). */
+/** `GET /api/display` — P730 resolved per-platform display settings. */
+export interface DisplayPlatformRow {
+  platform: string;
+  enabled: boolean;
+  has_overrides: boolean;
+  settings: Record<string, string | number | boolean | null>;
+}
+
+export interface DisplaySettingsPayload {
+  overrideable_keys: string[];
+  platforms: DisplayPlatformRow[];
+}
+
 /** `GET /api/lifecycle` — P729 lifecycle ledger + shutdown backstops. */
 export interface LifecyclePayload {
   previous_exit_label: "clean" | "unclean" | "unknown" | string;
@@ -2484,6 +2497,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`dead-targets HTTP ${response.status}`);
     return (await response.json()) as DeadTargetsPayload;
+  }
+
+  /** GET /api/display — P730 resolved per-platform display settings. */
+  async displaySettings(): Promise<DisplaySettingsPayload> {
+    const response = await fetch(this.endpoint("/api/display"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`display HTTP ${response.status}`);
+    return (await response.json()) as DisplaySettingsPayload;
   }
 
   /** GET /api/lifecycle — P729 lifecycle ledger + heartbeat + dumps. */
