@@ -12498,6 +12498,7 @@ async fn cron_cmd(config: &UlncLawConfig, action: CronAction) -> Result<(), Stri
                 deliver,
                 origin: None,
                 last_delivery_error: None,
+                attach_to_session: None,
             };
             let id = job.id.clone();
             store.add(&job).map_err(|e| e.to_string())?;

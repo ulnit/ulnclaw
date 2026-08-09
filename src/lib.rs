@@ -155,6 +155,7 @@ pub mod managed_gateway;
 pub mod media_cache;
 pub mod memory_monitor;
 pub mod messaging;
+pub mod mirror;
 pub mod oauth;
 pub mod pairing;
 pub mod profiles_cmd;

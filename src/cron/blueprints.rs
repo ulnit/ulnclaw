@@ -1175,6 +1175,7 @@ pub fn handle_blueprint_command(args: &str) -> BlueprintCommandResult {
         deliver: Some(deliver),
         origin: None,
         last_delivery_error: None,
+        attach_to_session: None,
     };
     match crate::cron::CronStore::open_default()
         .and_then(|store| store.add(&job))

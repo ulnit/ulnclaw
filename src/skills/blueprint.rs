@@ -171,6 +171,7 @@ pub fn blueprint_to_job(spec: &BlueprintSpec, name_override: Option<&str>) -> Re
         deliver: None,
         origin: None,
         last_delivery_error: None,
+        attach_to_session: None,
     })
 }
 

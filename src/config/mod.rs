@@ -1069,6 +1069,14 @@ pub struct CronConfig {
     /// user knows it is a cron delivery (hermes `cron.wrap_response`,
     /// default on).
     pub wrap_response: bool,
+    /// Mirror successful cron deliveries into the origin chat's session
+    /// transcript (hermes `cron.mirror_delivery`, default OFF): the
+    /// delivered text lands as a labelled user turn so the next reply
+    /// in that chat sees the cron output in context. Per-job
+    /// `attach_to_session` overrides this global (hermes
+    /// `_cron_mirror_delivery_enabled` precedence).
+    #[serde(default)]
+    pub mirror_delivery: bool,
     /// Chronos NAS fire-webhook verification (hermes `cron.chronos.*`).
     #[serde(default)]
     pub chronos: ChronosConfig,
@@ -1078,6 +1086,7 @@ impl Default for CronConfig {
     fn default() -> Self {
         Self {
             wrap_response: true,
+            mirror_delivery: false,
             chronos: ChronosConfig::default(),
         }
     }

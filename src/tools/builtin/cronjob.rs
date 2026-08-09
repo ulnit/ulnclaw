@@ -32,6 +32,7 @@ fn job_to_json(job: &CronJob) -> serde_json::Value {
         "deliver": job.deliver,
         "origin": job.origin,
         "last_delivery_error": job.last_delivery_error,
+        "attach_to_session": job.attach_to_session,
     })
 }
 
@@ -68,7 +69,8 @@ fn cronjob_tool() -> crate::tools::Tool {
                 "name": {"type": "string", "description": "Optional human-friendly name"},
                 "skills": {"type": "array", "items": {"type": "string"}, "description": "Skills to load before the prompt when the job runs"},
                 "repeat": {"type": "integer", "description": "Optional repeat count. Omit for defaults (once for one-shot, forever for recurring)."},
-                "deliver": {"type": "string", "description": "Where the final response is auto-delivered: 'origin' (the chat the job was created in, the default when created from a chat), 'local' (save only), a platform name ('telegram', 'discord', ...), 'platform:chat_id[:thread_id]', or a comma mix incl. 'all'. Defaults to origin when created inside a chat, else local."}
+                "deliver": {"type": "string", "description": "Where the final response is auto-delivered: 'origin' (the chat the job was created in, the default when created from a chat), 'local' (save only), a platform name ('telegram', 'discord', ...), 'platform:chat_id[:thread_id]', or a comma mix incl. 'all'. Defaults to origin when created inside a chat, else local."},
+                "attach_to_session": {"type": "boolean", "description": "Optional per-job delivery-mirror override: when true, each successful delivery to the job's origin chat is also appended to that chat's session transcript, so the next reply there sees the cron output in context. When false, mirroring is forced off for this job. Omit to follow the global cron.mirror_delivery setting (default off)."}
             },
             "required": ["action"]
         }))
@@ -136,6 +138,7 @@ fn cronjob_tool() -> crate::tools::Tool {
                         deliver: Some(deliver),
                         origin,
                         last_delivery_error: None,
+                        attach_to_session: args.get("attach_to_session").and_then(|v| v.as_bool()),
                     };
                     if let Err(e) = store.add(&job) {
                         return Ok(json!({"success": false, "error": e.to_string()}));
@@ -199,6 +202,9 @@ fn cronjob_tool() -> crate::tools::Tool {
                                 job.deliver = Some(crate::cron::delivery::normalize_deliver_value(
                                     Some(&serde_json::Value::String(deliver.to_string())),
                                 ));
+                            }
+                            if let Some(flag) = args.get("attach_to_session").and_then(|v| v.as_bool()) {
+                                job.attach_to_session = Some(flag);
                             }
                             store.update(&job).ok();
                             Ok(json!({"success": true, "action": "update", "job": job_to_json(&job)}))

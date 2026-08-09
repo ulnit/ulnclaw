@@ -12479,6 +12479,7 @@ async fn resolve_gateway_slash(
                 deliver: Some(deliver),
                 origin: None,
                 last_delivery_error: None,
+                attach_to_session: None,
             };
             match store.add(&job) {
                 Ok(()) => Some(GatewaySlash::Direct(format!(
@@ -13378,6 +13379,10 @@ struct CreateJobRequest {
     skills: Option<Vec<String>>,
     #[serde(default)]
     repeat: Option<i64>,
+    /// P708: per-job delivery-mirror override (hermes
+    /// `attach_to_session`).
+    #[serde(default)]
+    attach_to_session: Option<bool>,
 }
 
 fn validate_job_fields(name: &str, prompt: &str) -> std::result::Result<(), Response> {
@@ -13449,6 +13454,7 @@ async fn create_job(State(state): State<Arc<GatewayState>>, Json(request): Json<
         deliver: Some(deliver),
         origin: None,
         last_delivery_error: None,
+        attach_to_session: request.attach_to_session,
     };
     match store.add(&job) {
         Ok(()) => Json(json!({"job": job_value(&job)})).into_response(),
@@ -13527,6 +13533,7 @@ async fn instantiate_job_blueprint(
         deliver: Some(deliver),
         origin: None,
         last_delivery_error: None,
+        attach_to_session: None,
     };
     match store.add(&job) {
         Ok(()) => Json(json!({ "job": job_value(&job) })).into_response(),
@@ -13574,6 +13581,7 @@ async fn update_job(
         "repeat",
         "enabled",
         "deliver",
+        "attach_to_session",
     ];
     let updates: Vec<(&String, &Value)> = obj
         .iter()
@@ -13652,6 +13660,16 @@ async fn update_job(
                 let deliver = crate::cron::delivery::normalize_deliver_value(Some(value));
                 job.deliver = Some(deliver);
             }
+            "attach_to_session" => match value {
+                Value::Null => job.attach_to_session = None,
+                Value::Bool(flag) => job.attach_to_session = Some(*flag),
+                _ => {
+                    return jobs_error(
+                        StatusCode::BAD_REQUEST,
+                        "attach_to_session must be a boolean",
+                    )
+                }
+            },
             _ => {}
         }
     }
@@ -13972,6 +13990,19 @@ async fn deliver_job_result(store: &crate::session::SqliteSessionStore, job: &Cr
         content.to_string()
     };
     let (cleaned, _media) = crate::messaging::extract_media_tags(&body);
+    // P708: delivery-mirror gate (hermes `_cron_mirror_delivery_enabled`,
+    // default off). When on, each successful delivery to the job's OWN
+    // origin conversation is also appended to that chat's session
+    // transcript so the next reply there sees the cron output in
+    // context — fan-out targets are never mirrored (hermes
+    // `_target_matches_origin` scoping). Mirror the CLEAN, unwrapped
+    // output.
+    let mirror_enabled = crate::cron::delivery::mirror_delivery_enabled(
+        job,
+        &crate::config::UlncLawConfig::load(None)
+            .map(|config| config.cron)
+            .unwrap_or_default(),
+    );
     let mut errors: Vec<String> = Vec::new();
     let session_key = format!("cron-job:{}", job.id);
     for target in targets {
@@ -14017,6 +14048,38 @@ async fn deliver_job_result(store: &crate::session::SqliteSessionStore, job: &Cr
                 }
                 // P707: successful delivery clears any stale dead flag.
                 crate::dead_targets::revive(&key, &target.chat_id);
+                // P708: mirror the delivery into the origin chat's
+                // session transcript (best-effort, user-role + labelled
+                // prefix — hermes `_maybe_mirror_cron_delivery`).
+                if mirror_enabled
+                    && crate::cron::delivery::target_matches_origin(
+                        job.origin.as_ref(),
+                        &key,
+                        &target.chat_id,
+                        target.thread_id.as_deref(),
+                    )
+                {
+                    let job_label = if job.name.trim().is_empty() {
+                        job.id.clone()
+                    } else {
+                        job.name.clone()
+                    };
+                    let mirrored = crate::mirror::mirror_to_session(
+                        store,
+                        &key,
+                        &target.chat_id,
+                        &format!("[Cron delivery: {job_label}]\n{cleaned}"),
+                        "cron",
+                        crate::provider::Role::User,
+                    );
+                    if mirrored {
+                        tracing::info!(
+                            "[cron] mirrored delivery into {}:{} session transcript",
+                            key,
+                            target.chat_id
+                        );
+                    }
+                }
             }
             None => errors.push(format!(
                 "platform '{}' has no registered sender",
@@ -25395,6 +25458,7 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             deliver: None,
             origin: None,
             last_delivery_error: None,
+            attach_to_session: None,
         };
         cron_store.add(&job).unwrap();
 

@@ -57,6 +57,14 @@ pub struct CronJob {
     /// `last_delivery_error`).
     #[serde(default)]
     pub last_delivery_error: Option<String>,
+    /// Per-job delivery-mirror gate override (hermes job
+    /// `attach_to_session`): when Some, wins over the global
+    /// `cron.mirror_delivery` setting; when None the global applies.
+    /// Mirroring appends each successful origin-chat delivery to that
+    /// chat's session transcript so replies see the cron output in
+    /// context.
+    #[serde(default)]
+    pub attach_to_session: Option<bool>,
 }
 
 fn now() -> f64 {
@@ -298,7 +306,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     last_status TEXT,
     deliver TEXT,
     origin TEXT,
-    last_delivery_error TEXT
+    last_delivery_error TEXT,
+    attach_to_session INTEGER
 );
 "#;
 
@@ -308,6 +317,7 @@ const CRON_MIGRATION_COLUMNS: &[&str] = &[
     "deliver TEXT",
     "origin TEXT",
     "last_delivery_error TEXT",
+    "attach_to_session INTEGER",
 ];
 
 fn migrate_cron_schema(conn: &Connection) -> Result<()> {
@@ -358,8 +368,8 @@ impl CronStore {
     pub fn add(&self, job: &CronJob) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| AgentError::session(e.to_string()))?;
         conn.execute(
-            "INSERT INTO cron_jobs (id, name, schedule, prompt, skills, enabled, repeat, next_run, created_at, deliver, origin)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO cron_jobs (id, name, schedule, prompt, skills, enabled, repeat, next_run, created_at, deliver, origin, attach_to_session)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 job.id,
                 job.name,
@@ -372,6 +382,7 @@ impl CronStore {
                 job.created_at,
                 job.deliver,
                 job.origin.as_ref().and_then(|origin| serde_json::to_string(origin).ok()),
+                job.attach_to_session.map(|flag| flag as i32),
             ],
         )
         .map_err(|e| AgentError::session(format!("add job: {}", e)))?;
@@ -383,7 +394,7 @@ impl CronStore {
         conn.execute(
             "UPDATE cron_jobs SET name=?2, schedule=?3, prompt=?4, skills=?5, enabled=?6,
                 repeat=?7, next_run=?8, last_run=?9, last_status=?10, deliver=?11, origin=?12,
-                last_delivery_error=?13
+                last_delivery_error=?13, attach_to_session=?14
              WHERE id=?1",
             params![
                 job.id,
@@ -399,6 +410,7 @@ impl CronStore {
                 job.deliver,
                 job.origin.as_ref().and_then(|origin| serde_json::to_string(origin).ok()),
                 job.last_delivery_error,
+                job.attach_to_session.map(|flag| flag as i32),
             ],
         )
         .map_err(|e| AgentError::session(format!("update job: {}", e)))?;
@@ -410,7 +422,7 @@ impl CronStore {
         let row = conn
             .query_row(
                 "SELECT id, name, schedule, prompt, skills, enabled, repeat, next_run, created_at, last_run, last_status,
-                    deliver, origin, last_delivery_error
+                    deliver, origin, last_delivery_error, attach_to_session
                  FROM cron_jobs WHERE id = ?1",
                 params![id],
                 |row| {
@@ -429,6 +441,7 @@ impl CronStore {
                         row.get::<_, Option<String>>(11)?,
                         row.get::<_, Option<String>>(12)?,
                         row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<i32>>(14)?,
                     ))
                 },
             )
@@ -450,6 +463,7 @@ impl CronStore {
                 deliver,
                 origin,
                 last_delivery_error,
+                attach_to_session,
             )| {
                 CronJob {
                     id,
@@ -466,6 +480,7 @@ impl CronStore {
                     deliver,
                     origin: origin.and_then(|raw| serde_json::from_str(&raw).ok()),
                     last_delivery_error,
+                    attach_to_session: attach_to_session.map(|flag| flag != 0),
                 }
             },
         ))
@@ -919,12 +934,22 @@ mod tests {
                 thread_id: Some("7".into()),
             }),
             last_delivery_error: None,
+            attach_to_session: Some(true),
         };
         store.add(&job).unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
         let loaded = store.get("job-1").unwrap().unwrap();
         assert_eq!(loaded.deliver.as_deref(), Some("origin"));
         assert_eq!(loaded.origin.as_ref().unwrap().chat_id, "-100123");
+        assert_eq!(loaded.attach_to_session, Some(true));
+        // Update flips the override back to unset (NULL round-trip).
+        let mut updated = loaded.clone();
+        updated.attach_to_session = None;
+        store.update(&updated).unwrap();
+        assert_eq!(
+            store.get("job-1").unwrap().unwrap().attach_to_session,
+            None
+        );
         assert!(store.remove("job-1").unwrap());
         assert_eq!(store.list().unwrap().len(), 0);
     }
@@ -948,6 +973,7 @@ mod tests {
             deliver: None,
             origin: None,
             last_delivery_error: None,
+            attach_to_session: None,
         };
         store.add(&job).unwrap();
 
@@ -989,6 +1015,7 @@ mod tests {
             deliver: None,
             origin: None,
             last_delivery_error: None,
+            attach_to_session: None,
         }
     }
 

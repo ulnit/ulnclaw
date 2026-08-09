@@ -199,6 +199,50 @@ pub fn resolve_origin(job: &CronJob) -> Option<&JobOrigin> {
         .filter(|origin| !origin.platform.is_empty() && !origin.chat_id.is_empty())
 }
 
+/// Whether a delivery target IS the job's own origin conversation
+/// (hermes `_target_matches_origin`). Mirroring is scoped to the
+/// origin session by design: a job created from a live gateway chat
+/// stamps that chat as origin and that session is guaranteed to
+/// exist. Fan-out targets (`deliver=all`, an explicit other chat, a
+/// home-channel fallback) are broadcasts, not a continuation of a
+/// conversation, and are deliberately NOT mirrored.
+pub fn target_matches_origin(
+    origin: Option<&JobOrigin>,
+    platform: &str,
+    chat_id: &str,
+    thread_id: Option<&str>,
+) -> bool {
+    let Some(origin) = origin else {
+        return false;
+    };
+    if !origin.platform.eq_ignore_ascii_case(platform) {
+        return false;
+    }
+    if origin.chat_id != chat_id {
+        return false;
+    }
+    // thread_id must match when the origin pins one (topic-scoped
+    // chats); a target that lost the thread_id is not the same
+    // conversation lane.
+    if let Some(origin_thread) = origin.thread_id.as_deref() {
+        if origin_thread != thread_id.unwrap_or("") {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether a job's deliveries should also be mirrored into the target
+/// chat's session transcript (hermes `_cron_mirror_delivery_enabled`).
+/// Default OFF — preserves the historical isolation guarantee (cron
+/// output lives only in the job's own session) for everyone who does
+/// not opt in. Precedence (first decisive value wins): per-job
+/// `attach_to_session`, then global `cron.mirror_delivery`, then
+/// false.
+pub fn mirror_delivery_enabled(job: &CronJob, cron_config: &crate::config::CronConfig) -> bool {
+    job.attach_to_session.unwrap_or(cron_config.mirror_delivery)
+}
+
 /// Parse an explicit `rest` after `platform:` (approximation of hermes
 /// `tools.send_message_tool._parse_target_ref`): returns `(chat_id,
 /// thread_id, is_explicit)`. Matrix room ids contain `:` themselves, so
@@ -564,6 +608,7 @@ mod tests {
             deliver: deliver.map(String::from),
             origin,
             last_delivery_error: None,
+            attach_to_session: None,
         }
     }
 
@@ -573,6 +618,59 @@ mod tests {
             chat_id: chat_id.into(),
             thread_id: thread_id.map(String::from),
         }
+    }
+
+    fn cron_cfg(mirror_delivery: bool) -> crate::config::CronConfig {
+        crate::config::CronConfig {
+            mirror_delivery,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn mirror_gate_precedence_matches_hermes() {
+        // Per-job attach_to_session wins over the global setting in
+        // both directions; None falls through to the global; global
+        // default is off.
+        let mut job = test_job(Some("origin"), None);
+        assert!(!mirror_delivery_enabled(&job, &cron_cfg(false)));
+        assert!(mirror_delivery_enabled(&job, &cron_cfg(true)));
+        job.attach_to_session = Some(true);
+        assert!(mirror_delivery_enabled(&job, &cron_cfg(false)));
+        job.attach_to_session = Some(false);
+        assert!(!mirror_delivery_enabled(&job, &cron_cfg(true)));
+    }
+
+    #[test]
+    fn origin_matcher_scopes_mirroring_to_origin_chat() {
+        let no_origin = test_job(Some("all"), None);
+        assert!(!target_matches_origin(
+            no_origin.origin.as_ref(),
+            "telegram",
+            "42",
+            None
+        ));
+
+        let job = test_job(
+            Some("origin"),
+            Some(origin("telegram", "42", None)),
+        );
+        let origin_ref = job.origin.as_ref();
+        // Same chat (case-insensitive platform) matches.
+        assert!(target_matches_origin(origin_ref, "Telegram", "42", None));
+        // Fan-out targets never match.
+        assert!(!target_matches_origin(origin_ref, "telegram", "999", None));
+        assert!(!target_matches_origin(origin_ref, "discord", "42", None));
+
+        // A thread-pinned origin requires the same lane.
+        let threaded = test_job(
+            Some("origin"),
+            Some(origin("telegram", "42", Some("7"))),
+        );
+        let origin_ref = threaded.origin.as_ref();
+        assert!(target_matches_origin(origin_ref, "telegram", "42", Some("7")));
+        assert!(!target_matches_origin(origin_ref, "telegram", "42", Some("8")));
+        assert!(!target_matches_origin(origin_ref, "telegram", "42", None));
     }
 
     /// Env vars are process-global; tests that mutate them serialize on
