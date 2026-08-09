@@ -411,6 +411,26 @@ impl Drop for TurnLeaseGuard {
     }
 }
 
+/// P714: stamp mid-turn agent progress into the shared activity
+/// registry (hermes `get_activity_summary()` as the stall watcher's
+/// single progress source). Messaging agents are dedicated per
+/// adapter, so installing callbacks never displaces TUI wiring; the
+/// stamps read the current chat from the dispatch task-local.
+fn install_activity_callbacks(agent: &Agent) {
+    agent.try_set_callbacks(crate::agent::AgentCallbacks {
+        on_activity: Some(Box::new(|description: &str| {
+            if let Some(ctx) = current_messaging_ctx() {
+                crate::session_activity::touch(
+                    &ctx.session_key,
+                    description,
+                    "agent.progress",
+                );
+            }
+        })),
+        ..Default::default()
+    });
+}
+
 pub struct Dispatcher {
     agent: Arc<Agent>,
     store: Arc<SqliteSessionStore>,
@@ -795,6 +815,70 @@ pub fn platform_sender_names() -> Vec<String> {
     let mut names: Vec<String> = platform_senders().lock().unwrap().keys().cloned().collect();
     names.sort();
     names
+}
+
+/// P714: one parked inbound message visible to the stall watcher
+/// (hermes `_pending_messages` observation surface).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PendingInboundRow {
+    pub session_key: String,
+    pub platform: String,
+    pub chat_id: String,
+    pub queued_at: f64,
+}
+
+fn pending_inbound_directory() -> &'static std::sync::Mutex<HashMap<String, PendingInboundRow>> {
+    static DIRECTORY: std::sync::OnceLock<std::sync::Mutex<HashMap<String, PendingInboundRow>>> =
+        std::sync::OnceLock::new();
+    DIRECTORY.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Publish a parked follow-up to the pending-inbound directory (hermes
+/// `_pending_messages` visibility for the session stall watcher).
+pub fn register_pending_inbound(session_key: &str, platform: &str, chat_id: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    pending_inbound_directory().lock().unwrap().insert(
+        session_key.to_string(),
+        PendingInboundRow {
+            session_key: session_key.to_string(),
+            platform: platform.to_string(),
+            chat_id: chat_id.to_string(),
+            queued_at: now,
+        },
+    );
+}
+
+/// Drop a session's pending-inbound row when its queue drains.
+pub fn unregister_pending_inbound(session_key: &str) {
+    pending_inbound_directory().lock().unwrap().remove(session_key);
+}
+
+/// Every session with parked inbound messages (stall watcher scan).
+pub fn pending_inbound_snapshot() -> Vec<PendingInboundRow> {
+    pending_inbound_directory()
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect()
+}
+
+/// Fresh re-check of one session's pending state right before a stall
+/// notice goes out (hermes #76354 review S2).
+pub fn pending_inbound_contains(session_key: &str) -> bool {
+    pending_inbound_directory()
+        .lock()
+        .unwrap()
+        .contains_key(session_key)
+}
+
+/// Test-only full clear (the directory is process-wide).
+#[doc(hidden)]
+pub fn clear_pending_inbound_for_tests() {
+    pending_inbound_directory().lock().unwrap().clear();
 }
 
 /// Announce a gateway restart to each live platform's most recently
@@ -1480,6 +1564,7 @@ pub fn messaging_clarify_fn() -> crate::tools::context::ClarifyFn {
 
 impl Dispatcher {
     pub fn new(agent: Arc<Agent>, store: Arc<SqliteSessionStore>) -> Arc<Self> {
+        install_activity_callbacks(&agent);
         Arc::new(Self {
             agent,
             store,
@@ -1502,6 +1587,7 @@ impl Dispatcher {
         store: Arc<SqliteSessionStore>,
         hub: Arc<ProfileRoutingHub>,
     ) -> Arc<Self> {
+        install_activity_callbacks(&agent);
         Arc::new(Self {
             agent,
             store,
@@ -1657,6 +1743,10 @@ impl Dispatcher {
                     queue.push_back(event.clone());
                     queue.len()
                 };
+                // P714: publish the parked follow-up to the pending-inbound
+                // directory (hermes `_pending_messages` visibility) so the
+                // session stall watcher can see it.
+                register_pending_inbound(&key, &event.platform, &event.chat_id);
                 return Ok(DispatchOutcome {
                     reply: format!(
                         "(queued \u{2014} message {depth} in queue; runs after the current turn)"
@@ -1690,6 +1780,10 @@ impl Dispatcher {
                 .get_mut(key)
                 .and_then(std::collections::VecDeque::pop_front);
             let Some(event) = next else {
+                // Queue drained: drop the empty entry and the P714
+                // pending-inbound directory row.
+                self.queued.lock().await.remove(key);
+                unregister_pending_inbound(key);
                 return;
             };
             let chat_ref = PlatformChatRef {
@@ -2058,6 +2152,9 @@ Use `/resume` with no                      arguments to see available sessions."
 
     async fn run_turn(&self, key: &str, event: &MessageEvent) -> Result<DispatchOutcome> {
         use crate::provider::Role;
+        // P714: activity stamp for the session stall watcher (hermes
+        // `_touch_activity`) — turn start is progress.
+        crate::session_activity::touch(key, "turn started", "gateway.turn");
         // Resume remap (hermes /resume + /handoff): a chat may run
         // under another session id; default stays the deterministic key.
         let session_id = effective_session_id_for(key);
@@ -2219,6 +2316,8 @@ Use `/resume` with no                      arguments to see available sessions."
             .into_iter()
             .filter(|m| m.role != Role::System)
             .collect();
+        // P714: turn completion is progress (hermes `_touch_activity`).
+        crate::session_activity::touch(key, "turn completed", "gateway.turn");
         // Fire the gateway pre-dispatch observers' counterpart: the
         // session hooks already cover lifecycle; keep this minimal.
         Ok(DispatchOutcome {
@@ -7837,6 +7936,35 @@ mod tests {
         assert!(captured[1].1.contains("queued turn failed"), "{captured:?}");
 
         unregister_platform_sender_for_tests("testplat");
+    }
+
+    #[tokio::test]
+    async fn parked_messages_publish_pending_inbound_directory() {
+        // P714: stall-watcher visibility — parking registers the chat
+        // in the pending-inbound directory; draining unregisters it.
+        let _env_guard = crate::models_dev::test_env_lock();
+        clear_pending_inbound_for_tests();
+        let dispatcher = test_dispatcher();
+        let key = "platform-testplat-chat-1".to_string();
+
+        dispatcher.busy.lock().await.insert(key.clone(), true);
+        let outcome = dispatcher
+            .handle_event(test_event("parked", "m1"))
+            .await
+            .unwrap();
+        assert!(outcome.reply.contains("queued"), "{}", outcome.reply);
+        let rows = pending_inbound_snapshot();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].session_key, key);
+        assert_eq!(rows[0].platform, "testplat");
+        assert_eq!(rows[0].chat_id, "chat-1");
+        assert!(pending_inbound_contains(&key));
+
+        dispatcher.busy.lock().await.insert(key.clone(), false);
+        dispatcher.drain_queued(&key).await;
+        assert!(pending_inbound_snapshot().is_empty());
+        assert!(!pending_inbound_contains(&key));
+        clear_pending_inbound_for_tests();
     }
 
     #[tokio::test]

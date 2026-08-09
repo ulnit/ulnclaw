@@ -8072,9 +8072,32 @@ pub async fn serve_multiplex(
     } else {
         None
     };
+    // P714: session stall watchdog (hermes session_stall, #72016):
+    // parked inbound follow-ups + stale agent progress get a one-shot
+    // "appears stalled" notice in the chat. Progress stamps come from
+    // the shared activity contract; 0 disables the watchdog.
+    let stall_timeout = crate::session_stall::resolve_stall_timeout(
+        state.agent.context().config.gateway.session_stall_timeout_secs,
+    );
+    let stall_watcher = if stall_timeout > 0.0 {
+        tracing::info!(
+            "session stall watchdog armed: {}s timeout, {}s cadence",
+            stall_timeout,
+            crate::session_stall::DEFAULT_WATCHER_INTERVAL_SECONDS
+        );
+        Some(tokio::spawn(crate::session_stall::run_stall_watcher(
+            stall_timeout,
+            crate::session_stall::DEFAULT_WATCHER_INTERVAL_SECONDS,
+        )))
+    } else {
+        None
+    };
     let serve_result = axum::serve(listener, app)
         .await
         .map_err(|e| AgentError::config(format!("gateway serve: {}", e)));
+    if let Some(handle) = stall_watcher {
+        handle.abort();
+    }
     if let Some(handle) = raft_bridge {
         crate::raft::stop_bridge(handle).await;
     }

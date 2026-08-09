@@ -670,6 +670,7 @@ async fn handle_prompt(state: &Arc<ServerState>, id: Value, params: Value) {
         })),
         on_step: None,
         on_approval_request: None,
+        on_activity: None,
     };
     agent.set_callbacks(callbacks).await;
 

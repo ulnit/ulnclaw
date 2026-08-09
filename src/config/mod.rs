@@ -887,6 +887,14 @@ pub struct GatewayConfig {
     /// (hermes `max_concurrent_sessions`; 0/unset disables the cap).
     #[serde(default)]
     pub max_concurrent_sessions: Option<u32>,
+    /// Seconds of progress silence before a messaging session with
+    /// parked inbound follow-ups receives a one-shot "appears stalled"
+    /// notice (hermes `HERMES_SESSION_STALL_TIMEOUT`, default 300;
+    /// 0 disables the watchdog). Progress stamps come from the shared
+    /// activity contract — turn boundaries, tool calls and streaming
+    /// deltas — never from turn-start or inbound clocks.
+    #[serde(default = "default_session_stall_timeout")]
+    pub session_stall_timeout_secs: f64,
 }
 
 fn default_gateway_host() -> String {
@@ -895,6 +903,10 @@ fn default_gateway_host() -> String {
 
 fn default_gateway_port() -> u16 {
     8642
+}
+
+fn default_session_stall_timeout() -> f64 {
+    300.0
 }
 
 impl Default for GatewayConfig {
@@ -908,6 +920,7 @@ impl Default for GatewayConfig {
             message_timestamps: false,
             systemd_watchdog_seconds: 0,
             max_concurrent_sessions: None,
+            session_stall_timeout_secs: default_session_stall_timeout(),
         }
     }
 }
@@ -929,6 +942,11 @@ impl GatewayConfig {
         if let Ok(key) = std::env::var("ULNCLAW_GATEWAY_KEY") {
             if !key.trim().is_empty() {
                 config.key = Some(key.trim().to_string());
+            }
+        }
+        if let Ok(raw) = std::env::var("ULNCLAW_SESSION_STALL_TIMEOUT") {
+            if let Ok(value) = raw.trim().parse::<f64>() {
+                config.session_stall_timeout_secs = value;
             }
         }
         config

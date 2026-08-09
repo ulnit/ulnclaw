@@ -164,6 +164,12 @@ pub struct AgentCallbacks {
     pub on_step: Option<Box<dyn Fn(u32) + Send + Sync>>,
     /// Called when an approval prompt is raised (informational).
     pub on_approval_request: Option<Box<dyn Fn(&str) + Send + Sync>>,
+    /// P714: shared session-activity progress stamp (hermes
+    /// `_touch_activity`): fires at every observable agent progress
+    /// point (tool start/complete, stream delta, step, approval) with
+    /// a short description. Observation-only — stall policy lives in
+    /// `session_stall`.
+    pub on_activity: Option<Box<dyn Fn(&str) + Send + Sync>>,
 }
 
 impl Default for AgentCallbacks {
@@ -175,6 +181,7 @@ impl Default for AgentCallbacks {
             on_thinking: None,
             on_step: None,
             on_approval_request: None,
+            on_activity: None,
         }
     }
 }
@@ -391,6 +398,20 @@ impl Agent {
     /// agent in an Arc; the callback set itself is behind a mutex).
     pub async fn set_callbacks(&self, callbacks: AgentCallbacks) {
         *self.callbacks.lock().await = callbacks;
+    }
+
+    /// Synchronous construction-time variant of [`Self::set_callbacks`]:
+    /// messaging dispatchers install activity stamps on fresh agents
+    /// whose callback mutex is uncontended. Returns false (no-op) when
+    /// the lock is held.
+    pub fn try_set_callbacks(&self, callbacks: AgentCallbacks) -> bool {
+        match self.callbacks.try_lock() {
+            Ok(mut guard) => {
+                *guard = callbacks;
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Set the shared tool context (session id, workdir, callbacks...).
@@ -1004,6 +1025,9 @@ impl Agent {
                 if let Some(ref on_step) = callbacks.on_step {
                     on_step(iteration as u32 + 1);
                 }
+                if let Some(ref on_activity) = callbacks.on_activity {
+                    on_activity(&format!("agent step {}", iteration as u32 + 1));
+                }
                 continue;
             }
 
@@ -1266,6 +1290,9 @@ impl Agent {
                             if let Some(ref on_delta) = callbacks.on_stream_delta {
                                 on_delta(&visible);
                             }
+                            if let Some(ref on_activity) = callbacks.on_activity {
+                                on_activity("streaming response");
+                            }
                         }
                         content.push_str(&visible);
                     }
@@ -1296,6 +1323,9 @@ impl Agent {
                     let callbacks = self.callbacks.lock().await;
                     if let Some(ref on_delta) = callbacks.on_stream_delta {
                         on_delta(&tail);
+                    }
+                    if let Some(ref on_activity) = callbacks.on_activity {
+                        on_activity("streaming response");
                     }
                 }
                 content.push_str(&tail);
@@ -1481,6 +1511,9 @@ impl Agent {
                     if let Some(ref hook) = callbacks.on_approval_request {
                         hook(command);
                     }
+                    if let Some(ref on_activity) = callbacks.on_activity {
+                        on_activity("approval requested");
+                    }
                 }
                 let approve = self.context.approve.clone();
                 let approved = match approve {
@@ -1518,6 +1551,9 @@ impl Agent {
                 let callbacks = self.callbacks.lock().await;
                 if let Some(ref on_tool_start) = callbacks.on_tool_start {
                     on_tool_start(&tool_call.function.name, &args);
+                }
+                if let Some(ref on_activity) = callbacks.on_activity {
+                    on_activity(&format!("tool call: {}", tool_call.function.name));
                 }
             }
 
@@ -1620,6 +1656,9 @@ impl Agent {
                 let callbacks = self.callbacks.lock().await;
                 if let Some(ref on_tool_complete) = callbacks.on_tool_complete {
                     on_tool_complete(&tool_call.function.name, &result_value);
+                }
+                if let Some(ref on_activity) = callbacks.on_activity {
+                    on_activity(&format!("tool result: {}", tool_call.function.name));
                 }
             }
             emit_stream_event(StreamEvent::ToolProgress {
