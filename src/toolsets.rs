@@ -304,6 +304,38 @@ pub fn apply_toolset_policy(
     }
 }
 
+/// Text digest of the toolset catalog (P672 — the `/toolsets` slash,
+/// hermes `/toolsets` parity). `enabled` marks toolsets registered with
+/// the current agent; descriptions are clipped to one short line.
+pub fn format_toolsets_digest(enabled: &[String]) -> String {
+    let catalog = toolsets();
+    let mut names: Vec<&str> = catalog.keys().copied().collect();
+    names.sort_unstable();
+    let mut out = format!("toolsets ({} defined):\n", names.len());
+    for name in names {
+        let def = &catalog[name];
+        let mark = if enabled.iter().any(|toolset| toolset == name) {
+            "\u{2713}"
+        } else {
+            " "
+        };
+        let description = def.description.split_whitespace().collect::<Vec<_>>().join(" ");
+        let description = if description.chars().count() > 64 {
+            let clipped: String = description.chars().take(61).collect();
+            format!("{clipped}...")
+        } else {
+            description
+        };
+        out.push_str(&format!(
+            "  {mark} {:<14} {:>2} tools  {}\n",
+            name,
+            def.tools.len(),
+            description
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +366,16 @@ mod tests {
         let names: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
         assert!(names.contains(&"web_search".to_string()));
         assert!(!names.iter().any(|n| n == "terminal"));
+    }
+
+    #[test]
+    fn toolsets_digest_marks_enabled_and_lists_catalog() {
+        // P672: /toolsets digest formatting.
+        let out = format_toolsets_digest(&["web".to_string()]);
+        assert!(out.contains("toolsets ("), "{out}");
+        assert!(out.contains("\u{2713} web"), "{out}");
+        assert!(out.contains("vision"), "{out}");
+        // A long description gets clipped, not wrapped.
+        assert!(!out.contains("Available when xAI                           credentials"), "{out}");
     }
 }
