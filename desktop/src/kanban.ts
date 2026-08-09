@@ -2,7 +2,7 @@
 // (same kanban.db the CLI `ulnclaw kanban` and the agent kanban_* tools
 // use) as a four-column card wall with quick actions.
 
-import type { FsEntry, GatewayClient, KanbanBoard, KanbanTask } from "./gateway";
+import type { FsEntry, GatewayClient, KanbanBoard, KanbanTask, KanbanTaskRun } from "./gateway";
 import { fmt, t } from "./i18n";
 
 function escapeHtmlKanban(text: string): string {
@@ -80,6 +80,7 @@ export class KanbanWidget {
           <textarea id="kanban-detail-body-edit" class="kanban-detail-body" style="display: none"></textarea>
           <div id="kanban-detail-attachments" class="kanban-detail-attachments"></div>
           <div id="kanban-detail-events" class="kanban-events"></div>
+          <div id="kanban-detail-runs" class="kanban-runs"></div>
           <div id="kanban-detail-comments" class="kanban-comments"></div>
           <div class="kanban-detail-compose">
             <input id="kanban-comment-input" type="text" placeholder="Add a comment…" data-i18n-ph="kanban.addComment" />
@@ -92,6 +93,8 @@ export class KanbanWidget {
             <button id="kanban-detail-reassign" type="button" data-i18n="kanban.reassignAction">Reassign</button>
             <button id="kanban-detail-archive" type="button" data-i18n="kanban.archiveAction">Archive</button>
             <button id="kanban-detail-delete" type="button" data-i18n="kanban.deleteAction">Delete</button>
+            <button id="kanban-detail-promote" type="button" data-i18n="kanban.promoteAction">Promote</button>
+            <button id="kanban-detail-reclaim" type="button" data-i18n="kanban.reclaimAction">Reclaim</button>
             <button id="kanban-detail-claim" value="claim" data-i18n="kanban.claim">Claim</button>
             <button id="kanban-detail-unblock" value="unblock" data-i18n="kanban.unblock">Unblock</button>
             <button id="kanban-detail-block" value="block" data-i18n="kanban.blockEllipsis">Block…</button>
@@ -309,6 +312,39 @@ export class KanbanWidget {
       void client.kanbanReassign(taskId, assignee.trim() || "none").then((result) => {
         if (!result.ok) {
           window.alert(result.error || "reassign failed");
+          return;
+        }
+        dialogEl.close();
+        void this.refresh();
+      });
+    };
+
+    // P659: promote (todo/blocked -> ready) and reclaim (release a
+    // running claim) from the detail dialog.
+    (this.root.querySelector("#kanban-detail-promote") as HTMLButtonElement).onclick = () => {
+      const dialogEl = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
+      const taskId = dialogEl.dataset.taskId || "";
+      const client = this.client();
+      if (!taskId || !client) return;
+      const reason = window.prompt(t.kanban.promotePrompt) || "";
+      void client.kanbanPromote(taskId, reason.trim()).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "promote failed");
+          return;
+        }
+        dialogEl.close();
+        void this.refresh();
+      });
+    };
+    (this.root.querySelector("#kanban-detail-reclaim") as HTMLButtonElement).onclick = () => {
+      const dialogEl = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
+      const taskId = dialogEl.dataset.taskId || "";
+      const client = this.client();
+      if (!taskId || !client) return;
+      if (!window.confirm(t.kanban.reclaimConfirm)) return;
+      void client.kanbanReclaim(taskId).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "reclaim failed");
           return;
         }
         dialogEl.close();
@@ -970,6 +1006,49 @@ export class KanbanWidget {
       }
     }
 
+    // P659: run history (hermes `kanban runs`) — status, outcome,
+    // timing, and error per run, newest first.
+    const runsEl = this.root.querySelector("#kanban-detail-runs") as HTMLElement;
+    runsEl.innerHTML = "";
+    {
+      const runs: KanbanTaskRun[] = await client.kanbanTaskRuns(detail.task.id);
+      if (runs.length > 0) {
+        const heading = document.createElement("h3");
+        heading.className = "config-section";
+        heading.textContent = t.kanban.runsTitle;
+        runsEl.appendChild(heading);
+        for (const run of runs.slice(0, 20)) {
+          const row = document.createElement("div");
+          row.className = "kanban-event";
+          const started = new Date(run.started_at * 1000).toLocaleString();
+          const duration =
+            run.ended_at !== null && run.ended_at !== undefined
+              ? `${Math.max(0, run.ended_at - run.started_at)}s`
+              : "…";
+          const head = document.createElement("span");
+          head.className = "kanban-event-head";
+          const bits = [run.status];
+          if (run.outcome) bits.push(run.outcome);
+          if (run.worker_pid) bits.push(`pid ${run.worker_pid}`);
+          bits.push(duration);
+          head.textContent = bits.join(" · ");
+          const stamp = document.createElement("span");
+          stamp.className = "kanban-event-when";
+          stamp.textContent = started;
+          row.appendChild(head);
+          row.appendChild(stamp);
+          const note = run.error || run.summary;
+          if (note) {
+            const noteEl = document.createElement("div");
+            noteEl.className = "kanban-event-note";
+            noteEl.textContent = note;
+            row.appendChild(noteEl);
+          }
+          runsEl.appendChild(row);
+        }
+      }
+    }
+
     const comments = this.root.querySelector("#kanban-detail-comments")!;
     comments.innerHTML = "";
     for (const comment of detail.comments) {
@@ -1009,6 +1088,10 @@ export class KanbanWidget {
     scheduleBtn.style.display = ["todo", "ready", "blocked"].includes(detail.task.status) ? "" : "none";
     const reassignBtn = this.root.querySelector("#kanban-detail-reassign") as HTMLButtonElement;
     reassignBtn.style.display = ["done", "archived"].includes(detail.task.status) ? "none" : "";
+    const promoteBtn = this.root.querySelector("#kanban-detail-promote") as HTMLButtonElement;
+    promoteBtn.style.display = ["todo", "blocked"].includes(detail.task.status) ? "" : "none";
+    const reclaimBtn = this.root.querySelector("#kanban-detail-reclaim") as HTMLButtonElement;
+    reclaimBtn.style.display = detail.task.status === "running" ? "" : "none";
     const archiveBtn = this.root.querySelector("#kanban-detail-archive") as HTMLButtonElement;
     archiveBtn.style.display = detail.task.status === "archived" ? "none" : "";
     const deleteBtn = this.root.querySelector("#kanban-detail-delete") as HTMLButtonElement;

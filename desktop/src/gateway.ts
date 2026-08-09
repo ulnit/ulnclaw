@@ -337,6 +337,21 @@ export interface CronJob {
   last_delivery_error?: string | null;
 }
 
+/** P659: one run in a kanban task's run history. */
+export interface KanbanTaskRun {
+  id: number;
+  task_id: string;
+  profile: string | null;
+  step_key: string | null;
+  status: string;
+  worker_pid: number | null;
+  started_at: number;
+  ended_at: number | null;
+  outcome: string | null;
+  summary: string | null;
+  error: string | null;
+}
+
 /** P655: one fillable slot on an automation blueprint. */
 export interface JobBlueprintField {
   name: string;
@@ -3915,6 +3930,67 @@ export class GatewayClient {
       return { ok: true };
     } catch (error) {
       return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P659: promote a todo/blocked task straight to ready. */
+  async kanbanPromote(
+    id: string,
+    reason?: string,
+    force?: boolean,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(
+        this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/promote`),
+        {
+          headers: { ...this.headers(), "content-type": "application/json" },
+          method: "POST",
+          body: JSON.stringify({ reason: reason || "", force: force === true }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P659: reclaim a running task back to ready (release the claim). */
+  async kanbanReclaim(id: string, reason?: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(
+        this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/reclaim`),
+        {
+          headers: { ...this.headers(), "content-type": "application/json" },
+          method: "POST",
+          body: JSON.stringify({ reason: reason || "" }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P659: run history for a task (newest first). */
+  async kanbanTaskRuns(id: string): Promise<KanbanTaskRun[]> {
+    try {
+      const response = await fetch(
+        this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/runs`),
+        { headers: this.headers() },
+      );
+      if (!response.ok) return [];
+      const value = await response.json();
+      return (value.runs || []) as KanbanTaskRun[];
+    } catch {
+      return [];
     }
   }
 

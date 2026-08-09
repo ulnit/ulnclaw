@@ -6721,6 +6721,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/boards/:slug/rename", post(kanban::rename_board))
         .route("/api/kanban/boards/:slug/workdir", post(kanban::set_board_workdir))
         .route("/api/kanban/boards/:slug", delete(kanban::remove_board))
+        .route("/api/kanban/stats", get(kanban::board_stats))
         .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))
         .route("/api/kanban/dispatch", post(kanban::dispatch))
         .route("/api/kanban/tasks/:id", get(kanban::get_task).delete(kanban::delete_task))
@@ -6738,6 +6739,10 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/tasks/:id/attach", post(kanban::attach_task))
         .route("/api/kanban/tasks/:id/schedule", post(kanban::schedule_task))
         .route("/api/kanban/tasks/:id/reassign", post(kanban::reassign_task))
+        .route("/api/kanban/tasks/:id/promote", post(kanban::promote_task))
+        .route("/api/kanban/tasks/:id/reclaim", post(kanban::reclaim_task))
+        .route("/api/kanban/tasks/:id/assign", post(kanban::assign_task))
+        .route("/api/kanban/tasks/:id/runs", get(kanban::task_runs))
         .route("/api/kanban/attachments/:aid", delete(kanban::remove_attachment))
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
@@ -15766,6 +15771,106 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kanban_task_lifecycle_endpoints() {
+        // P659: promote / assign / claim / reclaim plus task runs and
+        // board stats endpoints (hermes kanban promote|assign|reclaim|
+        // runs|stats parity).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "lifecycle task"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let task_id = body["task"]["id"].as_str().unwrap().to_string();
+        assert_eq!(body["task"]["status"], "todo", "{body}");
+
+        // Promote todo -> ready.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{task_id}/promote"), None,
+            json!({"reason": "urgent"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["status"], "ready", "{body}");
+
+        // Promoting a ready task fails (only todo/blocked promote).
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{task_id}/promote"), None,
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Assign, claim (ready -> running), reclaim back to ready.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{task_id}/assign"), None,
+            json!({"assignee": "alice"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["assignee"], "alice", "{body}");
+
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{task_id}/claim"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["status"], "running", "{body}");
+
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{task_id}/reclaim"), None,
+            json!({"reason": "worker stuck"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["task"]["status"], "ready", "{body}");
+
+        // Reclaiming a non-running task fails.
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{task_id}/reclaim"), None, json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Run history records the reclaimed run.
+        let (status, body) = get_json(
+            app.clone(), &format!("/api/kanban/tasks/{task_id}/runs"), None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let runs = body["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 1, "{body}");
+        assert_eq!(runs[0]["status"], "reclaimed", "{body}");
+        assert_eq!(runs[0]["outcome"], "reclaimed", "{body}");
+
+        // Board stats reflect at least one ready task.
+        let (status, body) = get_json(app.clone(), "/api/kanban/stats", None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let ready = body["by_status"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["status"] == "ready")
+            .cloned()
+            .unwrap_or_else(|| json!({"count": 0}));
+        assert!(ready["count"].as_i64().unwrap() >= 1, "{body}");
+        assert!(body["now"].as_i64().unwrap() > 0, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

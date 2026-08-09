@@ -709,6 +709,156 @@ pub async fn reassign_task(Path(id): Path<String>, Json(body): Json<ReassignBody
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct PromoteBody {
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub force: Option<bool>,
+}
+
+/// `POST /api/kanban/tasks/:id/promote` — move a todo/blocked task
+/// straight to ready (hermes `kanban promote`). `force` skips the
+/// dependency check.
+pub async fn promote_task(Path(id): Path<String>, Json(body): Json<PromoteBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.promote_task(&id, body.reason.as_deref().unwrap_or(""), body.force.unwrap_or(false)) {
+        Ok(task) => Json(json!({
+            "object": "ulnclaw.kanban.task",
+            "task": task_json(&store, &task),
+        }))
+        .into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct ReclaimBody {
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `POST /api/kanban/tasks/:id/reclaim` — release an active worker
+/// claim on a running task without completing it; back to ready for a
+/// fresh worker (hermes `kanban reclaim`).
+pub async fn reclaim_task(Path(id): Path<String>, Json(body): Json<ReclaimBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.reclaim_task(&id, body.reason.as_deref().unwrap_or("")) {
+        Ok(task) => Json(json!({
+            "object": "ulnclaw.kanban.task",
+            "task": task_json(&store, &task),
+        }))
+        .into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AssignBody {
+    pub assignee: String,
+}
+
+/// `POST /api/kanban/tasks/:id/assign` — set a task's assignee
+/// without reclaiming an active claim (hermes `kanban assign`).
+pub async fn assign_task(Path(id): Path<String>, Json(body): Json<AssignBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.assign_task(&id, &body.assignee) {
+        Ok(task) => Json(json!({
+            "object": "ulnclaw.kanban.task",
+            "task": task_json(&store, &task),
+        }))
+        .into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct TaskRunsQuery {
+    #[serde(default)]
+    pub include_active: Option<bool>,
+    #[serde(default)]
+    pub state_type: Option<String>,
+    #[serde(default)]
+    pub state_name: Option<String>,
+}
+
+/// `GET /api/kanban/tasks/:id/runs` — run history for a task (hermes
+/// `kanban runs`): newest first, optionally filtered by status/outcome.
+pub async fn task_runs(Path(id): Path<String>, Query(query): Query<TaskRunsQuery>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match store.list_runs(
+        &id,
+        query.include_active.unwrap_or(true),
+        query.state_type.as_deref().filter(|v| !v.is_empty()),
+        query.state_name.as_deref().filter(|v| !v.is_empty()),
+    ) {
+        Ok(runs) => Json(json!({
+            "object": "ulnclaw.kanban.task.run.list",
+            "task_id": id,
+            "runs": runs,
+        }))
+        .into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+/// `GET /api/kanban/stats` — per-status + per-assignee counts plus
+/// oldest-ready age of the current board (hermes `kanban stats`).
+pub async fn board_stats() -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    match store.board_stats() {
+        Ok(stats) => Json(json!({
+            "object": "ulnclaw.kanban.board.stats",
+            "by_status": stats.by_status.iter().map(|(status, count)| {
+                json!({ "status": status, "count": count })
+            }).collect::<Vec<_>>(),
+            "by_assignee": stats.by_assignee.iter().map(|(assignee, rows)| {
+                json!({
+                    "assignee": assignee,
+                    "statuses": rows.iter().map(|(status, count)| {
+                        json!({ "status": status, "count": count })
+                    }).collect::<Vec<_>>(),
+                })
+            }).collect::<Vec<_>>(),
+            "oldest_ready_age_seconds": stats.oldest_ready_age_seconds,
+            "now": stats.now,
+        }))
+        .into_response(),
+        Err(e) => super::server_error(&e.to_string()),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct AttachBody {
     /// Attachment kind; defaults to "file" (hermes kanban attach).
