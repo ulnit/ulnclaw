@@ -77,6 +77,7 @@ export class KanbanWidget {
             <button id="kanban-comment-send" value="comment" data-i18n="kanban.comment">Comment</button>
           </div>
           <menu>
+            <button id="kanban-detail-attach" type="button" data-i18n="kanban.attachAction">Attach</button>
             <button id="kanban-detail-edit" type="button" data-i18n="kanban.editAction">Edit</button>
             <button id="kanban-detail-archive" type="button" data-i18n="kanban.archiveAction">Archive</button>
             <button id="kanban-detail-delete" type="button" data-i18n="kanban.deleteAction">Delete</button>
@@ -119,6 +120,25 @@ export class KanbanWidget {
       if (!title || !title.trim()) return;
       void client.kanbanCreateTask(title.trim()).then((task) => {
         if (task) void this.refresh();
+      });
+    };
+
+    // P645: attach a file path or link to the task.
+    (this.root.querySelector("#kanban-detail-attach") as HTMLButtonElement).onclick = () => {
+      const dialogEl = this.root.querySelector("#kanban-detail") as HTMLDialogElement;
+      const taskId = dialogEl.dataset.taskId || "";
+      const client = this.client();
+      if (!taskId || !client) return;
+      const value = window.prompt(t.kanban.attachPrompt);
+      if (!value || !value.trim()) return;
+      const trimmed = value.trim();
+      const kind = /^https?:\/\//i.test(trimmed) ? "link" : "file";
+      void client.kanbanAttach(taskId, kind, trimmed).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "attach failed");
+          return;
+        }
+        void this.openDetail(taskId);
       });
     };
 
@@ -545,17 +565,37 @@ export class KanbanWidget {
     };
 
     const attachEl = this.root.querySelector("#kanban-detail-attachments") as HTMLElement;
-    if (detail.attachments.length > 0) {
-      attachEl.innerHTML =
-        `<h3 class="config-section">${escapeHtmlKanban(t.kanban.attachmentsTitle)}</h3>` +
-        detail.attachments
-          .map(
-            (attachment) =>
-              `<div class="kanban-attachment"><span class="models-view-badge">${escapeHtmlKanban(attachment.kind)}</span> <code>${escapeHtmlKanban(attachment.value)}</code></div>`,
-          )
-          .join("");
-    } else {
-      attachEl.innerHTML = "";
+    attachEl.innerHTML = "";
+    {
+      const heading = document.createElement("h3");
+      heading.className = "config-section";
+      heading.textContent = t.kanban.attachmentsTitle;
+      attachEl.appendChild(heading);
+      for (const attachment of detail.attachments) {
+        const row = document.createElement("div");
+        row.className = "kanban-attachment";
+        const badge = document.createElement("span");
+        badge.className = "models-view-badge";
+        badge.textContent = attachment.kind;
+        const value = document.createElement("code");
+        value.textContent = attachment.value;
+        const remove = document.createElement("button");
+        remove.textContent = "\u2715";
+        remove.title = t.kanban.removeAttachmentTitle;
+        remove.onclick = () => {
+          const c = this.client();
+          if (!c) return;
+          void c.kanbanRemoveAttachment(attachment.id).then((result) => {
+            if (!result.ok) {
+              window.alert(result.error || "remove failed");
+              return;
+            }
+            void this.openDetail(task.id);
+          });
+        };
+        row.append(badge, document.createTextNode(" "), value, remove);
+        attachEl.appendChild(row);
+      }
     }
 
     // P638: task activity trail (hermes event log) — kind + compact

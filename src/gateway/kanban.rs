@@ -380,10 +380,10 @@ pub async fn get_task(Path(id): Path<String>) -> Response {
         })
         .collect();
     let attachments: Vec<Value> = store
-        .attachments(&id)
+        .attachments_with_ids(&id)
         .unwrap_or_default()
         .iter()
-        .map(|(kind, value)| json!({"kind": kind, "value": value}))
+        .map(|(aid, kind, value)| json!({"id": aid, "kind": kind, "value": value}))
         .collect();
     let events: Vec<Value> = store
         .events(&id)
@@ -535,6 +535,70 @@ pub async fn unblock_task(Path(id): Path<String>) -> Response {
     match store.unblock_task(&id) {
         Ok(task) => Json(json!({"object": "ulnclaw.kanban.task", "task": task_json(&store, &task)})).into_response(),
         Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AttachBody {
+    /// Attachment kind; defaults to "file" (hermes kanban attach).
+    #[serde(default = "default_attach_kind")]
+    pub kind: String,
+    /// Attachment value: an existing file path for kind "file", any
+    /// reference string otherwise (link, pr, ...).
+    pub value: String,
+}
+
+fn default_attach_kind() -> String {
+    "file".to_string()
+}
+
+/// `POST /api/kanban/tasks/:id/attach` — attach a file (validated to
+/// exist, stored absolute) or an arbitrary reference to a task
+/// (hermes `kanban attach`).
+pub async fn attach_task(Path(id): Path<String>, Json(body): Json<AttachBody>) -> Response {
+    let kind = body.kind.trim().to_string();
+    let value = body.value.trim().to_string();
+    if kind.is_empty() || value.is_empty() {
+        return super::bad_request("kind and value are required", None);
+    }
+    if kind == "file" {
+        let path = std::path::Path::new(&value);
+        if !path.is_file() {
+            return super::bad_request(&format!("{value} is not a file"), None);
+        }
+    }
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let stored = if kind == "file" {
+        std::fs::canonicalize(&value)
+            .map(|p| p.display().to_string())
+            .unwrap_or(value.clone())
+    } else {
+        value.clone()
+    };
+    match store.attach(&id, &kind, &stored) {
+        Ok(()) => Json(json!({ "ok": true, "kind": kind, "value": stored })).into_response(),
+        Err(e) => super::bad_request(&e.to_string(), None),
+    }
+}
+
+/// `DELETE /api/kanban/attachments/:aid` — delete an attachment by id
+/// (hermes `kanban attach-rm`).
+pub async fn remove_attachment(Path(aid): Path<i64>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    match store.remove_attachment(aid) {
+        Ok(true) => Json(json!({ "ok": true })).into_response(),
+        Ok(false) => super::not_found(&format!("attachment {aid} not found")),
+        Err(e) => super::server_error(&e.to_string()),
     }
 }
 

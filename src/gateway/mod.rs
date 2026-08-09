@@ -26,7 +26,8 @@
 //!     `POST /api/kanban/tasks/:id/set-reasoning`,
 //!     `POST /api/kanban/tasks/:id/set-model`,
 //!     `POST /api/kanban/tasks/:id/edit`,
-//!     `POST /api/kanban/tasks/:id/archive`, `DELETE /api/kanban/tasks/:id`
+//!     `POST /api/kanban/tasks/:id/archive`, `DELETE /api/kanban/tasks/:id`,
+//!     `POST /api/kanban/tasks/:id/attach`, `DELETE /api/kanban/attachments/:aid`
 //!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/computer-use` — cua-driver status + config (deep
 //!     health report with `?deep=true`) for the desktop Doctor panel
@@ -6721,6 +6722,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/tasks/:id/set-model", post(kanban::set_model))
         .route("/api/kanban/tasks/:id/edit", post(kanban::edit_task))
         .route("/api/kanban/tasks/:id/archive", post(kanban::archive_task))
+        .route("/api/kanban/tasks/:id/attach", post(kanban::attach_task))
+        .route("/api/kanban/attachments/:aid", delete(kanban::remove_attachment))
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
         .route("/api/jobs/:id/run", post(run_job_now))
@@ -15350,6 +15353,94 @@ mod tests {
         assert!(body["config"]["capture_after_mode"].is_string(), "{body}");
         // Shallow call never carries a health payload.
         assert!(body.get("health").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn test_kanban_attach_remove_endpoints() {
+        // P645: POST .../attach adds file/link attachments (file kind
+        // validates existence); DELETE /api/kanban/attachments/:aid
+        // removes by id (hermes attach / attach-rm).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "attach test"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let id = body["task"]["id"].as_str().unwrap().to_string();
+
+        // File attachment: must exist.
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/attach"), None,
+            json!({"kind": "file", "value": "/nonexistent/nope.txt"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("is not a file"), "{body}");
+
+        let file_path = dir.path().join("artifact.txt");
+        std::fs::write(&file_path, "deliverable").unwrap();
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/attach"), None,
+            json!({"kind": "file", "value": file_path.display().to_string()}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        // Link attachment (no existence check).
+        let (status, body) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{id}/attach"), None,
+            json!({"kind": "link", "value": "https://example.com/pr/1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        // Both surface on the task with ids.
+        let (_, body) = get_json(app.clone(), &format!("/api/kanban/tasks/{id}"), None).await;
+        let attachments = body["attachments"].as_array().unwrap();
+        assert_eq!(attachments.len(), 2, "{body}");
+        let aid = attachments[0]["id"].as_i64().expect("attachment id");
+        assert!(attachments[0]["kind"].is_string(), "{body}");
+
+        // Delete the first attachment.
+        let (status, body) = send_json(
+            app.clone(), "DELETE", &format!("/api/kanban/attachments/{aid}"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true, "{body}");
+        let (_, body) = get_json(app.clone(), &format!("/api/kanban/tasks/{id}"), None).await;
+        assert_eq!(body["attachments"].as_array().unwrap().len(), 1, "{body}");
+
+        // Deleting again 404s.
+        let (status, _) = send_json(
+            app.clone(), "DELETE", &format!("/api/kanban/attachments/{aid}"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Unknown task 404s on attach.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks/nope123/attach", None,
+            json!({"kind": "link", "value": "x"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

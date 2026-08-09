@@ -287,7 +287,7 @@ export interface KanbanTaskEvent {
 export interface KanbanDetail {
   task: KanbanTask;
   comments: KanbanComment[];
-  attachments: { kind: string; value: string }[];
+  attachments: { id: number; kind: string; value: string }[];
   events: KanbanTaskEvent[];
 }
 
@@ -3716,6 +3716,41 @@ export class GatewayClient {
       body: JSON.stringify({ reasoning_effort: effort }),
     });
     return (value?.task || null) as KanbanTask | null;
+  }
+
+  /** P645: attach a file/link to a task. */
+  async kanbanAttach(id: string, kind: string, value: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/attach`), {
+        headers: this.headers(),
+        method: "POST",
+        body: JSON.stringify({ kind, value }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P645: remove an attachment by id. */
+  async kanbanRemoveAttachment(attachmentId: number): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/attachments/${attachmentId}`), {
+        headers: this.headers(),
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
   }
 
   /** P640: archive a task (park it off the active board). */
