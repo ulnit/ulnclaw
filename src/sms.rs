@@ -516,13 +516,21 @@ pub async fn sms_handle_webhook(
     let (reply_text, _media) = crate::messaging::extract_media_tags(&full);
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        let client = reqwest::Client::new();
-        let formatted = strip_markdown(&reply_text);
-        for chunk in crate::messaging::chunk_text(&formatted, MAX_SMS_LENGTH) {
-            if let Err(e) = send_sms(&client, &resolved, &from, &chunk).await {
-                eprintln!("[sms] reply to {from} failed: {e}");
-            }
-        }
+        // P705: ledger-protected reply delivery (all chunks).
+        dispatcher
+            .try_send_with_ledger("sms", &from, &reply_text, || async {
+                let client = reqwest::Client::new();
+                let formatted = strip_markdown(&reply_text);
+                let mut ok = true;
+                for chunk in crate::messaging::chunk_text(&formatted, MAX_SMS_LENGTH) {
+                    if let Err(e) = send_sms(&client, &resolved, &from, &chunk).await {
+                        eprintln!("[sms] reply to {from} failed: {e}");
+                        ok = false;
+                    }
+                }
+                ok
+            })
+            .await;
     }
     twiml(200)
 }

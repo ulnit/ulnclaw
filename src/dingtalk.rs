@@ -1029,25 +1029,32 @@ async fn handle_bot_message(
         // With a card template configured the reply rides an AI Card
         // (hermes `_create_and_stream_card`); any failure falls back to
         // the session-webhook markdown.
-        let mut sent = false;
-        if !runtime.cfg.card_template_id.is_empty() {
-            match runtime
-                .send_ai_card(is_group, &conversation_id, &sender_staff_id, &reply_text)
-                .await
-            {
-                Ok(track_id) => {
-                    eprintln!("[dingtalk] AI card created+finalized: {track_id}");
-                    sent = true;
+        // P705: ledger-protected reply delivery (card first, webhook
+        // fallback).
+        let sent = dispatcher
+            .try_send_with_ledger("dingtalk", &chat_id, &reply_text, || async {
+                let mut sent = false;
+                if !runtime.cfg.card_template_id.is_empty() {
+                    match runtime
+                        .send_ai_card(is_group, &conversation_id, &sender_staff_id, &reply_text)
+                        .await
+                    {
+                        Ok(track_id) => {
+                            eprintln!("[dingtalk] AI card created+finalized: {track_id}");
+                            sent = true;
+                        }
+                        Err(e) => eprintln!("[dingtalk] AI card failed, falling back to webhook: {e}"),
+                    }
                 }
-                Err(e) => eprintln!("[dingtalk] AI card failed, falling back to webhook: {e}"),
-            }
-        }
-        if !sent {
-            match runtime.send_markdown(&chat_id, &reply_text).await {
-                Ok(()) => sent = true,
-                Err(e) => eprintln!("[dingtalk] reply failed: {e}"),
-            }
-        }
+                if !sent {
+                    match runtime.send_markdown(&chat_id, &reply_text).await {
+                        Ok(()) => sent = true,
+                        Err(e) => eprintln!("[dingtalk] reply failed: {e}"),
+                    }
+                }
+                sent
+            })
+            .await;
         if sent {
             if let Some((target_msg, target_conv)) =
                 runtime.take_done_reaction(&chat_id).await

@@ -766,17 +766,32 @@ async fn dispatch_wecom_event(
         send_media_path(runtime, &chat_id, &reply_req, path).await;
     }
     if !reply_text_out.trim().is_empty() {
-        if !reply_req.is_empty() {
-            if let Err(e) = runtime.send_reply_markdown(&reply_req, &reply_text_out).await {
-                eprintln!("[wecom] reply failed: {e}");
-            }
-        } else if !is_group {
-            if let Err(e) = runtime.send_proactive_markdown(&chat_id, &reply_text_out).await {
-                eprintln!("[wecom] proactive send failed: {e}");
-            }
-        } else {
-            eprintln!("[wecom] cannot reply to group {chat_id}: no inbound req_id cached");
-        }
+        // P705: ledger-protected reply delivery (reply-markdown, then
+        // proactive DM fallback).
+        dispatcher
+            .try_send_with_ledger("wecom", &chat_id, &reply_text_out, || async {
+                if !reply_req.is_empty() {
+                    match runtime.send_reply_markdown(&reply_req, &reply_text_out).await {
+                        Ok(()) => true,
+                        Err(e) => {
+                            eprintln!("[wecom] reply failed: {e}");
+                            false
+                        }
+                    }
+                } else if !is_group {
+                    match runtime.send_proactive_markdown(&chat_id, &reply_text_out).await {
+                        Ok(()) => true,
+                        Err(e) => {
+                            eprintln!("[wecom] proactive send failed: {e}");
+                            false
+                        }
+                    }
+                } else {
+                    eprintln!("[wecom] cannot reply to group {chat_id}: no inbound req_id cached");
+                    false
+                }
+            })
+            .await;
     }
 }
 

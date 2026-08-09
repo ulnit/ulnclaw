@@ -765,7 +765,12 @@ async fn handle_event(
     let (reply_text, media) = crate::messaging::extract_media_tags(&full);
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        send_reply(runtime, &chat_id, &reply_text).await;
+        // P705: ledger-protected reply delivery.
+        dispatcher
+            .send_with_ledger("line", &chat_id, &reply_text, || {
+                send_reply(runtime, &chat_id, &reply_text)
+            })
+            .await;
     }
     for path in &media {
         send_media_file(runtime, &chat_id, path).await;

@@ -1300,9 +1300,18 @@ async fn handle_event(
     let (reply_text, _media) = crate::messaging::extract_media_tags(&full);
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        if let Err(e) = send_via_cli(cfg, channel_id, &reply_text).await {
-            eprintln!("[buzz] reply to {channel_id} failed: {e}");
-        }
+        // P705: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("buzz", channel_id, &reply_text, || async {
+                match send_via_cli(cfg, channel_id, &reply_text).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[buzz] reply to {channel_id} failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
     // Post-dispatch "seen" tapback (hermes adds 👀 after
     // `handle_message`) — signals receipt + processing.

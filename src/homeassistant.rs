@@ -447,10 +447,19 @@ async fn handle_event(runtime: &Arc<Runtime>, dispatcher: &Arc<Dispatcher>, enve
     full.push_str(&outcome.reply);
     let (reply_text, _media) = crate::messaging::extract_media_tags(&full);
     if !reply_text.trim().is_empty() {
-        // Replies land as persistent notifications on the event channel.
-        if let Err(e) = send_notification(runtime, &reply_text).await {
-            eprintln!("[homeassistant] notification failed: {e}");
-        }
+        // Replies land as persistent notifications on the event channel
+        // (P705: ledger-protected).
+        dispatcher
+            .try_send_with_ledger("homeassistant", "ha_events", &reply_text, || async {
+                match send_notification(runtime, &reply_text).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[homeassistant] notification failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
 }
 

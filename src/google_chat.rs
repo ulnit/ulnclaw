@@ -833,8 +833,13 @@ async fn process_envelope(
     let (reply_text, media) = crate::messaging::extract_media_tags(&full);
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        let thread = runtime.threads.lock().await.get(&space_name).cloned();
-        send_patching_typing(runtime, &space_name, &reply_text, thread.as_deref()).await;
+        // P705: ledger-protected reply delivery.
+        dispatcher
+            .send_with_ledger("google_chat", &space_name, &reply_text, || async {
+                let thread = runtime.threads.lock().await.get(&space_name).cloned();
+                send_patching_typing(runtime, &space_name, &reply_text, thread.as_deref()).await;
+            })
+            .await;
     } else if let Some(name) = runtime.take_typing_slot(&space_name).await {
         // No reply text — finalize the marker instead of stranding a
         // "thinking" card (hermes on_processing_complete "(interrupted)"

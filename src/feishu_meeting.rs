@@ -292,9 +292,19 @@ pub async fn handle_meeting_invited_event(
         return;
     }
     let api = crate::feishu::feishu_api(cfg);
-    if let Err(e) = api.send_text(&sender_id, &reply_text).await {
-        eprintln!("[feishu-meeting] reply to {sender_id} failed: {e}");
-    }
+    // P705: ledger-protected reply delivery (platform id "feishu" —
+    // the meeting satellite shares the Feishu sender for redelivery).
+    dispatcher
+        .try_send_with_ledger("feishu", &sender_id, &reply_text, || async {
+            match api.send_text(&sender_id, &reply_text).await {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("[feishu-meeting] reply to {sender_id} failed: {e}");
+                    false
+                }
+            }
+        })
+        .await;
 }
 
 // ---------------------------------------------------------------------------

@@ -383,9 +383,18 @@ async fn handle_message(
     let (reply_text, _media) = crate::messaging::extract_media_tags(&full);
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        if let Err(e) = publish(runtime, &topic, &reply_text).await {
-            eprintln!("[ntfy] reply to {topic} failed: {e}");
-        }
+        // P705: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("ntfy", &topic, &reply_text, || async {
+                match publish(runtime, &topic, &reply_text).await {
+                    Ok(_) => true,
+                    Err(e) => {
+                        eprintln!("[ntfy] reply to {topic} failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
 }
 

@@ -995,9 +995,18 @@ async fn dispatch_photon_event(
     }
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        if let Err(e) = send_message(runtime, space_id, &reply_text).await {
-            eprintln!("[photon] reply to {space_id} failed: {e}");
-        }
+        // P705: ledger-protected reply delivery.
+        dispatcher
+            .try_send_with_ledger("photon", space_id, &reply_text, || async {
+                match send_message(runtime, space_id, &reply_text).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("[photon] reply to {space_id} failed: {e}");
+                        false
+                    }
+                }
+            })
+            .await;
     }
     ok
 }

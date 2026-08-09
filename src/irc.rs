@@ -617,10 +617,15 @@ async fn handle_privmsg(
         return;
     }
     let formatted = strip_markdown_irc(&reply_text);
-    for line in split_message(&formatted, &chat_id, runtime.cfg.max_message_length) {
-        let _ = send_raw(stream, &format!("PRIVMSG {chat_id} :{line}")).await;
-        tokio::time::sleep(SEND_PAUSE).await;
-    }
+    // P705: ledger-protected reply delivery (the whole line batch).
+    dispatcher
+        .send_with_ledger("irc", &chat_id, &reply_text, || async {
+            for line in split_message(&formatted, &chat_id, runtime.cfg.max_message_length) {
+                let _ = send_raw(stream, &format!("PRIVMSG {chat_id} :{line}")).await;
+                tokio::time::sleep(SEND_PAUSE).await;
+            }
+        })
+        .await;
 }
 
 /// Sender for clarify/cron delivery — routes through the live session

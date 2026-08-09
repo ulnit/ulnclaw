@@ -677,7 +677,12 @@ async fn dispatch_event(runtime: &Arc<Runtime>, dispatcher: &Arc<Dispatcher>, mu
     }
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        send_chat_text(runtime, &chat_id, &reply_text).await;
+        // P705: ledger-protected reply delivery.
+        dispatcher
+            .send_with_ledger("simplex", &chat_id, &reply_text, || {
+                send_chat_text(runtime, &chat_id, &reply_text)
+            })
+            .await;
     }
 }
 

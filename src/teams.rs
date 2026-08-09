@@ -571,11 +571,19 @@ pub async fn teams_handle_webhook(
     let (reply_text, _media) = crate::messaging::extract_media_tags(&full);
     let reply_text = reply_text.trim().to_string();
     if !reply_text.is_empty() {
-        for chunk in crate::messaging::chunk_text(&reply_text, MAX_MESSAGE_LENGTH) {
-            if let Err(e) = runtime.send_activity(&conversation_id, &chunk).await {
-                eprintln!("[teams] reply failed: {e}");
-            }
-        }
+        // P705: ledger-protected reply delivery (all chunks).
+        dispatcher
+            .try_send_with_ledger("teams", &conversation_id, &reply_text, || async {
+                let mut ok = true;
+                for chunk in crate::messaging::chunk_text(&reply_text, MAX_MESSAGE_LENGTH) {
+                    if let Err(e) = runtime.send_activity(&conversation_id, &chunk).await {
+                        eprintln!("[teams] reply failed: {e}");
+                        ok = false;
+                    }
+                }
+                ok
+            })
+            .await;
     }
     TeamsWebhookResponse {
         status: 200,
