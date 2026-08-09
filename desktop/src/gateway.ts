@@ -418,6 +418,21 @@ export interface HealthDetailed {
   runs_tracked: number;
 }
 
+export interface ComputerUseStatus {
+  installed: boolean;
+  driver: string | null;
+  version: string | null;
+  install_hint: string;
+  config: {
+    cua_telemetry: boolean;
+    max_image_dimension: number;
+    capture_after_mode: string;
+    no_overlay: boolean | null;
+  };
+  health?: Record<string, unknown>;
+  health_error?: string;
+}
+
 export interface SystemInfo {
   service: string;
   version: string;
@@ -1744,6 +1759,16 @@ export class GatewayClient {
     } catch {
       return null;
     }
+  }
+
+  /** GET /api/computer-use — cua-driver status + config (P641). */
+  async computerUseStatus(deep = false): Promise<ComputerUseStatus> {
+    const query = deep ? "?deep=true" : "";
+    const response = await fetch(this.endpoint(`/api/computer-use${query}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as ComputerUseStatus;
   }
 
   /** GET /api/system — gateway/system facts for the Doctor panel. */

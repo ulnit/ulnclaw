@@ -318,6 +318,7 @@ export interface Translations {
   kanbanPanel: { title: string; none: string; openOf: string; current: string; byStatus: string; blocked: string; };
   storagePanel: { title: string; size: string; contents: string; counts: string; path: string; optimize: string; optimizeTitle: string; optimizing: string; optimized: string; optimizeFailed: string; };
   systemPanel: { title: string; version: string; platform: string; uptime: string; contents: string; sessionsWord: string; messagesWord: string; runsWord: string; jobs: string; enabledWord: string; disabledWord: string; plugins: string; home: string; config: string; desktopManaged: string; };
+  computerUsePanel: { title: string; driver: string; notInstalled: string; telemetry: string; maxDimension: string; captureAfter: string; overlay: string; overlayAuto: string; overlayOn: string; overlayOff: string; runDoctor: string; running: string; overall: string; };
   metricsPanel: { title: string; summary: string; };
   egressPanel: { title: string; };
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; test: string; stateConnected: string; stateNotConfigured: string; };
@@ -790,6 +791,7 @@ const en: Translations = {
   kanbanPanel: { title: "Kanban diagnostics", none: "No kanban boards configured.", openOf: "{open} open · {total} total", current: "current", byStatus: "Status counts", blocked: "Blocked tasks" },
   storagePanel: { title: "Session store", size: "Database size", contents: "Contents", counts: "{sessions} sessions · {messages} messages", path: "Path", optimize: "Optimize", optimizeTitle: "Merge FTS segments and VACUUM the session store (ulnclaw sessions optimize)", optimizing: "Optimizing…", optimized: "{indexes} index(es) merged · {before} → {after}", optimizeFailed: "Optimize failed: {error}" },
   systemPanel: { title: "System", version: "Version", platform: "Platform", uptime: "Uptime", contents: "Store", sessionsWord: "sessions", messagesWord: "messages", runsWord: "active runs", jobs: "Cron jobs", enabledWord: "enabled", disabledWord: "disabled", plugins: "Plugins", home: "Home", config: "Config", desktopManaged: "desktop-managed" },
+  computerUsePanel: { title: "Computer Use", driver: "Driver", notInstalled: "not installed", telemetry: "Telemetry", maxDimension: "Max image dimension", captureAfter: "Capture after", overlay: "Overlay", overlayAuto: "auto", overlayOn: "force-on", overlayOff: "force-off", runDoctor: "Run doctor", running: "Running\u2026", overall: "Overall" },
   metricsPanel: { title: "Prometheus metrics", summary: "Show raw /metrics exposition" },
   egressPanel: { title: "Egress proxy" },
   channelsPanel: { title: "Messaging channels", enabled: "Enabled", disabled: "Disabled", noneEnabled: "(none)", test: "Test", stateConnected: "connected", stateNotConfigured: "not configured" },
@@ -1339,6 +1341,7 @@ const zh: Translations = {
   kanbanPanel: { title: "看板诊断", none: "未配置看板。", openOf: "{open} 进行中 · 共 {total}", current: "当前", byStatus: "状态计数", blocked: "受阻任务" },
   storagePanel: { title: "会话存储", size: "数据库大小", contents: "内容", counts: "{sessions} 个会话 · {messages} 条消息", path: "路径", optimize: "优化", optimizeTitle: "合并 FTS 段并 VACUUM 会话存储（等同 ulnclaw sessions optimize）", optimizing: "优化中…", optimized: "已合并 {indexes} 个索引 · {before} → {after}", optimizeFailed: "优化失败:{error}" },
   systemPanel: { title: "系统", version: "版本", platform: "平台", uptime: "运行时长", contents: "存储", sessionsWord: "会话", messagesWord: "消息", runsWord: "活动运行", jobs: "定时任务", enabledWord: "启用", disabledWord: "禁用", plugins: "插件", home: "主目录", config: "配置", desktopManaged: "桌面托管" },
+  computerUsePanel: { title: "Computer Use（电脑操作）", driver: "驱动", notInstalled: "未安装", telemetry: "遥测", maxDimension: "最大图像边长", captureAfter: "截图时机", overlay: "覆盖层", overlayAuto: "自动", overlayOn: "强制开", overlayOff: "强制关", runDoctor: "运行体检", running: "运行中…", overall: "总体" },
   metricsPanel: { title: "Prometheus 指标", summary: "显示 /metrics 原始输出" },
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "消息通道", enabled: "已启用", disabled: "未启用", noneEnabled: "（无）", test: "测试", stateConnected: "已连接", stateNotConfigured: "未配置" },
@@ -1888,6 +1891,7 @@ const zhHant: Translations = {
   kanbanPanel: { title: "看板診斷", none: "未設定看板。", openOf: "{open} 進行中 · 共 {total}", current: "目前", byStatus: "狀態計數", blocked: "受阻工作" },
   storagePanel: { title: "會話儲存", size: "資料庫大小", contents: "內容", counts: "{sessions} 個會話 · {messages} 則訊息", path: "路徑", optimize: "最佳化", optimizeTitle: "合併 FTS 段並 VACUUM 會話儲存（等同 ulnclaw sessions optimize）", optimizing: "最佳化中…", optimized: "已合併 {indexes} 個索引 · {before} → {after}", optimizeFailed: "最佳化失敗:{error}" },
   systemPanel: { title: "系統", version: "版本", platform: "平台", uptime: "執行時長", contents: "儲存", sessionsWord: "會話", messagesWord: "訊息", runsWord: "活動執行", jobs: "排程工作", enabledWord: "啟用", disabledWord: "停用", plugins: "外掛", home: "主目錄", config: "設定", desktopManaged: "桌面託管" },
+  computerUsePanel: { title: "Computer Use（電腦操作）", driver: "驅動", notInstalled: "未安裝", telemetry: "遙測", maxDimension: "最大影像邊長", captureAfter: "截圖時機", overlay: "覆蓋層", overlayAuto: "自動", overlayOn: "強制開", overlayOff: "強制關", runDoctor: "執行體檢", running: "執行中…", overall: "總體" },
   metricsPanel: { title: "Prometheus 指標", summary: "顯示 /metrics 原始輸出" },
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "訊息通道", enabled: "已啟用", disabled: "未啟用", noneEnabled: "（無）", test: "測試", stateConnected: "已連線", stateNotConfigured: "未設定" },
@@ -2437,6 +2441,7 @@ const ja: Translations = {
   kanbanPanel: { title: "カンバン診断", none: "カンバンボードは未設定です。", openOf: "未完了 {open} · 全 {total}", current: "現在", byStatus: "ステータス別件数", blocked: "ブロック中タスク" },
   storagePanel: { title: "セッションストア", size: "データベースサイズ", contents: "内容", counts: "{sessions} セッション · {messages} メッセージ", path: "パス", optimize: "最適化", optimizeTitle: "FTS セグメントをマージしセッションストアを VACUUM（ulnclaw sessions optimize と同等）", optimizing: "最適化中…", optimized: "{indexes} 件のインデックスをマージ · {before} → {after}", optimizeFailed: "最適化に失敗しました: {error}" },
   systemPanel: { title: "システム", version: "バージョン", platform: "プラットフォーム", uptime: "稼働時間", contents: "ストア", sessionsWord: "セッション", messagesWord: "メッセージ", runsWord: "実行中", jobs: "cron ジョブ", enabledWord: "有効", disabledWord: "無効", plugins: "プラグイン", home: "ホーム", config: "設定", desktopManaged: "デスクトップ管理" },
+  computerUsePanel: { title: "Computer Use", driver: "ドライバー", notInstalled: "未インストール", telemetry: "テレメトリ", maxDimension: "最大画像サイズ", captureAfter: "キャプチャ時機", overlay: "オーバーレイ", overlayAuto: "自動", overlayOn: "強制オン", overlayOff: "強制オフ", runDoctor: "ドクターを実行", running: "実行中…", overall: "総合" },
   metricsPanel: { title: "Prometheus メトリクス", summary: "/metrics 生の出力を表示" },
   egressPanel: { title: "エグレスプロキシ" },
   channelsPanel: { title: "メッセージングチャネル", enabled: "有効", disabled: "無効", noneEnabled: "（なし）", test: "テスト", stateConnected: "接続済み", stateNotConfigured: "未設定" },
@@ -2986,6 +2991,7 @@ const ar: Translations = {
   kanbanPanel: { title: "تشخيصات كانبان", none: "لا توجد لوحات كانبان مهيأة.", openOf: "{open} مفتوحة · {total} الإجمالي", current: "الحالية", byStatus: "أعداد الحالات", blocked: "المهام المحظورة" },
   storagePanel: { title: "مخزن الجلسات", size: "حجم قاعدة البيانات", contents: "المحتويات", counts: "{sessions} جلسة · {messages} رسالة", path: "المسار", optimize: "تحسين", optimizeTitle: "دمج مقاطع FTS وتفريغ مخزن الجلسات (يعادل ulnclaw sessions optimize)", optimizing: "جارٍ التحسين…", optimized: "تم دمج {indexes} فهرسًا · {before} ← {after}", optimizeFailed: "فشل التحسين: {error}" },
   systemPanel: { title: "النظام", version: "الإصدار", platform: "المنصة", uptime: "مدة التشغيل", contents: "المخزن", sessionsWord: "جلسة", messagesWord: "رسالة", runsWord: "تشغيل نشط", jobs: "مهام cron", enabledWord: "مفعلة", disabledWord: "معطلة", plugins: "الإضافات", home: "المجلد الرئيسي", config: "الإعدادات", desktopManaged: "بإدارة سطح المكتب" },
+  computerUsePanel: { title: "التحكم بالحاسوب", driver: "برنامج التشغيل", notInstalled: "غير مثبت", telemetry: "القياس عن بعد", maxDimension: "أقصى بُعد للصورة", captureAfter: "الالتقاط بعد", overlay: "التراكب", overlayAuto: "تلقائي", overlayOn: "تشغيل إجباري", overlayOff: "إيقاف إجباري", runDoctor: "تشغيل الفحص", running: "جارٍ التشغيل…", overall: "الإجمالي" },
   metricsPanel: { title: "مقاييس Prometheus", summary: "عرض إخراج /metrics الخام" },
   egressPanel: { title: "وكيل الخروج" },
   channelsPanel: { title: "قنوات المراسلة", enabled: "مفعلة", disabled: "معطلة", noneEnabled: "(لا شيء)", test: "اختبار", stateConnected: "متصل", stateNotConfigured: "غير مهيأ" },

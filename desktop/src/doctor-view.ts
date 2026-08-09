@@ -99,6 +99,14 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="systemPanel.title">System</h3>
         <div id="system-rows"></div>
       </section>
+      <section id="doctor-computer-use" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="computerUsePanel.title">Computer Use</h3>
+        <div id="computer-use-rows"></div>
+        <div class="kanban-detail-model">
+          <button id="computer-use-doctor" type="button" data-i18n="computerUsePanel.runDoctor">Run doctor</button>
+        </div>
+        <div id="computer-use-health"></div>
+      </section>
       <section id="doctor-storage" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="storagePanel.title">Session store</h3>
         <div id="storage-rows"></div>
@@ -223,6 +231,7 @@ export class DoctorWidget {
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
     this.loadSystem().catch(() => undefined);
+    this.loadComputerUse().catch(() => undefined);
     this.loadStorage().catch(() => undefined);
     this.loadBackups().catch(() => undefined);
     this.loadCheckpoints().catch(() => undefined);
@@ -781,6 +790,122 @@ export class DoctorWidget {
       section.hidden = false;
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** Computer Use (P641): cua-driver discovery, config, and an
+   * opt-in deep health report (hermes computer-use status/doctor). */
+  private async loadComputerUse(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-computer-use") as HTMLElement;
+    const rows = this.root.querySelector("#computer-use-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const info = await client.computerUseStatus();
+      const v = t.computerUsePanel;
+      const entries: [string, string][] = [
+        [
+          v.driver,
+          info.installed
+            ? `${info.driver}${info.version ? ` \u00B7 ${info.version}` : ""}`
+            : v.notInstalled,
+        ],
+        [v.telemetry, info.config.cua_telemetry ? "on" : "off"],
+        [v.maxDimension, String(info.config.max_image_dimension)],
+        [v.captureAfter, info.config.capture_after_mode],
+        [
+          v.overlay,
+          info.config.no_overlay === null
+            ? v.overlayAuto
+            : info.config.no_overlay
+              ? v.overlayOff
+              : v.overlayOn,
+        ],
+      ];
+      rows.innerHTML = "";
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        valueEl.title = value;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      }
+      if (!info.installed) {
+        const hint = document.createElement("div");
+        hint.className = "config-note";
+        hint.textContent = info.install_hint;
+        rows.appendChild(hint);
+      }
+      const btn = this.root.querySelector("#computer-use-doctor") as HTMLButtonElement;
+      btn.onclick = () => void this.runComputerDoctor();
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** P641: deep health report — renders overall + per-check rows. */
+  private async runComputerDoctor(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const v = t.computerUsePanel;
+    const btn = this.root.querySelector("#computer-use-doctor") as HTMLButtonElement;
+    const health = this.root.querySelector("#computer-use-health") as HTMLElement;
+    btn.disabled = true;
+    btn.textContent = v.running;
+    try {
+      const info = await client.computerUseStatus(true);
+      health.innerHTML = "";
+      if (info.health_error) {
+        const note = document.createElement("div");
+        note.className = "config-note";
+        note.textContent = info.health_error;
+        health.appendChild(note);
+        return;
+      }
+      const report = info.health || {};
+      const overall = document.createElement("div");
+      overall.className = "monitoring-row";
+      const labelEl = document.createElement("span");
+      labelEl.className = "monitoring-label";
+      labelEl.textContent = v.overall;
+      const valueEl = document.createElement("span");
+      valueEl.className = "monitoring-value";
+      valueEl.textContent = String(report.overall ?? "unknown");
+      overall.append(labelEl, valueEl);
+      health.appendChild(overall);
+      const checks = Array.isArray(report.checks) ? (report.checks as Record<string, unknown>[]) : [];
+      for (const check of checks) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const name = document.createElement("span");
+        name.className = "monitoring-label";
+        name.textContent = `[${String(check.status ?? "?")}] ${String(check.name ?? "?")}`;
+        const detail = document.createElement("span");
+        detail.className = "monitoring-value";
+        detail.textContent = String(check.detail ?? check.message ?? "");
+        detail.title = detail.textContent;
+        row.append(name, detail);
+        health.appendChild(row);
+      }
+    } catch (error) {
+      health.innerHTML = "";
+      const note = document.createElement("div");
+      note.className = "config-note";
+      note.textContent = String(error);
+      health.appendChild(note);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = v.runDoctor;
     }
   }
 

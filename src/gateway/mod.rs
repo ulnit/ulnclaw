@@ -28,6 +28,8 @@
 //!     `POST /api/kanban/tasks/:id/edit`,
 //!     `POST /api/kanban/tasks/:id/archive`, `DELETE /api/kanban/tasks/:id`
 //!     — kanban board API shared with the CLI + agent tools
+//!   - `GET  /api/computer-use` — cua-driver status + config (deep
+//!     health report with `?deep=true`) for the desktop Doctor panel
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
 //!   - `GET/PUT /api/fast` — Priority Processing (service_tier) toggle
@@ -5460,6 +5462,48 @@ async fn egress_status(State(_state): State<Arc<GatewayState>>) -> Response {
     }
 }
 
+#[derive(Deserialize, Default)]
+struct ComputerUseQuery {
+    /// Run the hermes-style deep health report (spawns the driver MCP
+    /// briefly); off by default so the panel loads instantly.
+    #[serde(default)]
+    deep: Option<bool>,
+}
+
+/// `GET /api/computer-use` — Computer Use (cua-driver) status for the
+/// desktop Doctor panel: driver discovery + version + effective
+/// config; `?deep=true` additionally runs the health report
+/// (hermes `ulnclaw computer-use status/doctor` parity).
+async fn computer_use_status(Query(query): Query<ComputerUseQuery>) -> Response {
+    use crate::computer_use as cu;
+    let config = match crate::config::UlncLawConfig::load(None) {
+        Ok(c) => c,
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let cfg = &config.computer_use;
+    let driver = cu::resolve_cua_driver_cmd();
+    let version = driver.as_deref().and_then(cu::driver_version);
+    let mut payload = json!({
+        "installed": driver.is_some(),
+        "driver": driver,
+        "version": version,
+        "install_hint": cu::cua_driver_install_hint(),
+        "config": {
+            "cua_telemetry": cfg.cua_telemetry,
+            "max_image_dimension": cfg.max_image_dimension,
+            "capture_after_mode": cfg.capture_after_mode,
+            "no_overlay": cfg.no_overlay,
+        },
+    });
+    if query.deep.unwrap_or(false) {
+        match cu::health_report(cfg).await {
+            Ok(report) => payload["health"] = report,
+            Err(e) => payload["health_error"] = json!(e.to_string()),
+        }
+    }
+    Json(payload).into_response()
+}
+
 /// `GET /api/system` — gateway/system facts for the desktop Doctor
 /// system panel: version, platform, home/config paths, uptime, process
 /// id and store/run/cron/plugins counts (ulnclaw extension; hermes
@@ -6449,6 +6493,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
         .route("/api/egress/status", get(egress_status))
         .route("/api/system", get(system_info))
+        .route("/api/computer-use", get(computer_use_status))
         .route("/api/pairing", get(pairing_status))
         .route("/api/pairing/approve", post(pairing_approve))
         .route("/api/pairing/revoke", post(pairing_revoke))
@@ -15121,6 +15166,24 @@ mod tests {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_computer_use_status_endpoint() {
+        // P641: GET /api/computer-use surfaces driver discovery +
+        // effective config (deep health is opt-in and untested here —
+        // it would spawn the driver).
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        let (status, body) = get_json(app.clone(), "/api/computer-use", None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["installed"].is_boolean(), "{body}");
+        assert!(body["install_hint"].as_str().map(str::len).unwrap_or(0) > 0, "{body}");
+        assert!(body["config"]["max_image_dimension"].is_number(), "{body}");
+        assert!(body["config"]["capture_after_mode"].is_string(), "{body}");
+        // Shallow call never carries a health payload.
+        assert!(body.get("health").is_none(), "{body}");
     }
 
     #[tokio::test]
