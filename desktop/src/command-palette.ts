@@ -56,6 +56,7 @@ export interface CommandPaletteHooks {
   unarchiveSession(): void | Promise<void>;
   openInSessionsBrowser(): void;
   toggleFileTree(): void | Promise<void>;
+  quickEntry(): void;
 }
 
 /** Subsequence fuzzy score (higher = better, null = no match). */
@@ -191,6 +192,7 @@ export class CommandPalette {
       { id: "new-session-in-project", label: t.palette.newSessionInProject, group: t.palette.sessionGroup, run: () => hooks.newSessionInProject() },
       { id: "view-in-sessions", label: t.palette.viewInSessionsBrowser, group: t.palette.sessionGroup, run: () => hooks.openInSessionsBrowser() },
       { id: "toggle-file-tree", label: t.palette.fileTree, group: t.palette.sessionGroup, hint: "Ctrl/Cmd+Shift+T", run: () => hooks.toggleFileTree() },
+      { id: "quick-entry", label: t.palette.quickEntry, group: t.palette.sessionGroup, hint: "Ctrl/Cmd+Shift+Q", run: () => hooks.quickEntry() },
     ];
     const current = hooks.currentSessionId();
     for (const session of hooks.sessions()) {

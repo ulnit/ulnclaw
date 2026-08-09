@@ -24,6 +24,7 @@ import { PetOverlay } from "./pet";
 import { ModelPickerOverlay } from "./model-picker";
 import { FindBar } from "./find-bar";
 import { CommandPalette } from "./command-palette";
+import { QuickEntry } from "./quick-entry";
 import { ArtifactsOverlay } from "./artifacts";
 import { LearningOverlay } from "./learning";
 import { FileTreePanel } from "./file-tree";
@@ -145,6 +146,7 @@ const state = {
   picker: null as ModelPickerOverlay | null,
   findBar: null as FindBar | null,
   palette: null as CommandPalette | null,
+  quickEntry: null as QuickEntry | null,
   artifacts: null as ArtifactsOverlay | null,
   learning: null as LearningOverlay | null,
   fileTree: null as FileTreePanel | null,
@@ -3834,7 +3836,28 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     archiveSession: () => runArchiveSession(),
     unarchiveSession: () => runUnarchiveSession(),
     toggleFileTree: () => toggleFileTree(),
+    quickEntry: () => state.quickEntry?.toggle(),
   });
+
+  // Quick Entry (hermes quick-entry parity): Ctrl/Cmd+Shift+Q opens a
+  // one-input capture composer targeting the current, a new, or a recent
+  // session; the text rides the primary composer's submit path.
+  state.quickEntry = new QuickEntry({
+    connected: () => state.client !== null,
+    sessions: () => state.sessions,
+    currentSessionId: () => state.current?.id ?? null,
+    openSession: async (session) => {
+      await openSession(session);
+    },
+    newSession: () => el.newSession.click(),
+    sendText: (text) => {
+      switchView("chat");
+      el.input.value = text;
+      refreshCharCount();
+      void sendTurn();
+    },
+  });
+  state.quickEntry.mount();
 
   // Translate widget skeletons mounted after the initial applyStatic
   // (idempotent — covers non-en persisted locales on cold boot).
@@ -4295,6 +4318,7 @@ function shortcutRows(): [string, string][] {
     [`${mod}+Shift+A`, t.chrome.scArchive],
     [`${mod}+Shift+E`, t.chrome.scExport],
     [`${mod}+Shift+T`, t.chrome.scFileTree],
+    [`${mod}+Shift+Q`, t.chrome.scQuickEntry],
     [`${mod}+,`, t.chrome.scSettings],
     [`${mod}+B`, t.chrome.scSidebar],
     [`${mod}+K`, t.chrome.scPalette],
