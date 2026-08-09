@@ -8879,6 +8879,25 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     )
                     .map_err(|e| e.to_string())
                 };
+                // P630: conversation-token estimate vs the configured
+                // budget for the details pane (same chars/4 heuristic
+                // as the gateway breakdown endpoint).
+                let context_home = home.clone();
+                let context_budget = config.agent.context_budget_tokens;
+                let context = move |id: &str| -> Option<(usize, usize)> {
+                    let store =
+                        SqliteSessionStore::open(context_home.join("state.db")).ok()?;
+                    let history: Vec<ulnclaw::provider::Message> = store
+                        .load_messages(id)
+                        .ok()?
+                        .into_iter()
+                        .filter(|m| m.role != ulnclaw::provider::Role::System)
+                        .collect();
+                    Some((
+                        ulnclaw::context::ContextCompressor::estimate_tokens(&history),
+                        context_budget,
+                    ))
+                };
                 match run_session_browse_tui(
                     rows.clone(),
                     project_by_session.clone(),
@@ -8890,6 +8909,7 @@ async fn sessions_cmd(action: SessionAction, config: &UlncLawConfig) -> Result<(
                     Some(&rename),
                     Some(&fork),
                     Some(&export),
+                    Some(&context),
                 ) {
                     Ok(selected) => selected,
                     Err(_) => run_session_browse_stdin(&rows, &project_by_session)?, // raw mode unavailable
@@ -9366,6 +9386,7 @@ fn run_session_browse_tui(
     rename: Option<&dyn Fn(&str, &str) -> Result<(), String>>,
     fork: Option<&dyn Fn(&str) -> Result<String, String>>,
     export: Option<&dyn Fn(&str) -> Result<std::path::PathBuf, String>>,
+    context: Option<&dyn Fn(&str) -> Option<(usize, usize)>>,
 ) -> Result<Option<String>, String> {
     use crossterm::{
         cursor,
@@ -9416,6 +9437,10 @@ fn run_session_browse_tui(
     // per highlighted session, cached by id, toggled with F3.
     let mut show_preview = preview.is_some();
     let mut preview_cache: std::collections::HashMap<String, Vec<(String, Option<String>)>> =
+        std::collections::HashMap::new();
+    // P630: live context-in-use per highlighted session (used, budget),
+    // cached by id so redraws don't re-read the store.
+    let mut context_cache: std::collections::HashMap<String, Option<(usize, usize)>> =
         std::collections::HashMap::new();
     // P340: transcript-search state — `/` opens the query prompt, Enter
     // runs the FTS search and narrows the list to matching sessions,
@@ -9678,10 +9703,18 @@ fn run_session_browse_tui(
             )
             .map_err(|e| e.to_string())?;
             if let Some(selected_row) = filtered.get(cursor_idx) {
+                let context_value = context
+                    .map(|context_fn| {
+                        *context_cache
+                            .entry(selected_row.id.clone())
+                            .or_insert_with(|| context_fn(&selected_row.id))
+                    })
+                    .flatten();
                 let mut pane_lines = browse_details_pane_lines(
                     selected_row,
                     projects.get(&selected_row.id).map(String::as_str),
                     content_w,
+                    context_value,
                 );
                 // P340: transcript-match snippet above the preview.
                 if let Some(hits) = search_hits.as_ref() {
@@ -10382,6 +10415,7 @@ fn browse_details_pane_lines(
     row: &ulnclaw::session::sqlite::BrowseRow,
     project: Option<&str>,
     width: usize,
+    context: Option<(usize, usize)>,
 ) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let title = row
@@ -10430,6 +10464,17 @@ fn browse_details_pane_lines(
             &format!("tokens: {}", row.total_tokens),
             width,
         ));
+    }
+    // P630: live context-in-use (conversation estimate vs budget),
+    // mirroring the desktop session-info row (P627).
+    if let Some((used, budget)) = context {
+        let line = if budget > 0 {
+            let percent = ulnclaw::context::breakdown::percent_of(used, budget);
+            format!("context: {used} / {budget} tokens ({percent}%)")
+        } else {
+            format!("context: {used} tokens")
+        };
+        lines.extend(ulnclaw::tui_text::wrap_display_text(&line, width));
     }
     // P562: session duration (started → last activity).
     let duration_secs = (row.last_active - row.started_at).max(0.0) as u64;
