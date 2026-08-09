@@ -4473,7 +4473,7 @@ async fn handle_slash(
         }
         "/help" => {
             println!(
-                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /blueprint [name] [slot=val…]   automation blueprints: catalog, guided setup, or direct create\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /kanban [list|show|create|done|block|unblock|comment|boards|promote|reclaim|assign|runs|stats]   coordination board (hermes /kanban)\n  /egress [--show-tokens]   Docker egress proxy status (hermes /egress)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /reload-mcp     reload MCP servers from config (prompt-cache warning + confirm)\n  /quit           exit"
+                "Commands:\n  /new            start a fresh conversation\n  /history        show turn count\n  /recap          recap recent activity in this conversation\n  /moa <prompt>   one-shot Mixture-of-Agents synthesis (default preset)\n  /search <text>  search past sessions\n  /tools          list enabled tools\n  /browser <status|connect [url]|disconnect>   browser CDP endpoint\n  /skills         list skills\n  /<bundle>       invoke a skill bundle (ulnclaw bundles)\n  /memory         show persistent memory\n  /goal [text|status|show|draft|pause|resume|clear|wait|unwait]   standing goal (Ralph loop)\n  /subgoal [text|remove <n>|clear]   extra criteria on the active goal\n  /blueprint [name] [slot=val…]   automation blueprints: catalog, guided setup, or direct create\n  /suggestions [accept N|dismiss N|catalog|clear]   suggested automations\n  /cron [list|show|pause|resume|run|remove|status]   manage scheduled jobs (hermes /cron)\n  /sessions       list recent sessions\n  /usage          token usage of this conversation\n  /insights [days]  usage analytics across sessions (hermes insights)\n  /rollback [N|hash] [file]   list/restore checkpoints (hermes-style)\n  /rollback diff <N|hash>     preview changes since a checkpoint\n  /diff [N|hash|session]      cumulative session diff / vs a checkpoint\n  /gitdiff [staged|all]     git working-tree diff (what changed here?)\n  /focus [on|off|status]    focus view: just prompt + answer, hidden-line count (hermes /focus)\n  /verbose [off|new|all|verbose]   tool-progress mode (hermes /verbose)\n  /stash [text|list|pop [n]|drop <n>|clear]   park/restore draft prompts (hermes Ctrl+S stash)\n  /kanban [list|show|create|done|block|unblock|comment|boards|promote|reclaim|assign|runs|stats]   coordination board (hermes /kanban)\n  /egress [--show-tokens]   Docker egress proxy status (hermes /egress)\n  /pet [toggle|list|scale <n>|off|<slug>]   petdex mascot (hermes /pet)\n  /hatch <description>   generate a brand-new pet (hermes /hatch)\n  /paste            save the clipboard image to the ulnclaw home (hermes clipboard)\n  /reload-mcp     reload MCP servers from config (prompt-cache warning + confirm)\n  /quit           exit"
             );
         }
         "/reload-mcp" => {
@@ -4897,6 +4897,17 @@ async fn handle_slash(
         }
         "/suggestions" => {
             println!("{}", ulnclaw::cron::suggestions::handle_suggestions_command(rest));
+        }
+        "/cron" => {
+            // Hermes /cron parity (P663): manage scheduled jobs inline;
+            // `run <id>` seeds the job's prompt as the next user turn
+            // via `pending`.
+            let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+            let result = ulnclaw::cron::run_slash(&home, rest);
+            print!("{}", result.text);
+            if let Some(seed) = result.run_prompt {
+                pending.replace(seed);
+            }
         }
         "/sessions" => {
             if let Some(store) = agent.tool_context().store.clone() {

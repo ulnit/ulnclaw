@@ -10528,6 +10528,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /usage           this session's token usage
   /kanban <title>  add a task to the current kanban board
   /blueprint [name] [slot=val…]  automation blueprints: catalog, guided setup, or direct create
+  /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /compress        compress this session's context now (summary of older turns)
   /branch [name]   fork this session into a child branch
@@ -11586,6 +11587,18 @@ async fn resolve_gateway_slash(
                     "failed to create the job: {e}"
                 ))),
             }
+        }
+        "/cron" => {
+            // Hermes /cron parity (P663): manage scheduled jobs inline.
+            // `run <id>` hands the job's prompt to this session as an
+            // agent turn; the other arms are store-backed and reply
+            // directly.
+            let home = crate::config::ulnclaw_home();
+            let result = crate::cron::run_slash(&home, rest);
+            if let Some(prompt) = result.run_prompt {
+                return Some(GatewaySlash::AgentTurn(prompt));
+            }
+            Some(GatewaySlash::Direct(result.text.trim_end().to_string()))
         }
         "/verbose" => {
             // Show or persist agent.verbose (takes effect for new runs).

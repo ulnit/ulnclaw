@@ -567,6 +567,283 @@ where
     }
 }
 
+// ---------------------------------------------------------------------------
+// `/cron` slash command (P663 — hermes `/cron` parity)
+// ---------------------------------------------------------------------------
+
+/// Outcome of one `/cron` slash invocation (P663): the formatted reply
+/// plus an optional agent-turn seed — `/cron run <id>` hands the job's
+/// prompt back so the REPL/gateway can execute it as the next turn.
+#[derive(Debug, Default)]
+pub struct CronSlashResult {
+    pub text: String,
+    /// Present when the command resolved to "run this job now".
+    pub run_prompt: Option<String>,
+}
+
+fn slash_ok(text: String) -> CronSlashResult {
+    CronSlashResult { text, run_prompt: None }
+}
+
+/// Humanize a duration in seconds (`5s`, `3m`, `2h`, `4d`).
+fn human_duration(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86400 {
+        format!("{}h", seconds / 3600)
+    } else {
+        format!("{}d", seconds / 86400)
+    }
+}
+
+/// Humanize a unix timestamp relative to now (`in 5m` / `3m ago` / `due now`).
+fn human_ts(ts: f64) -> String {
+    let delta = ts - now();
+    if delta.abs() < 30.0 {
+        "due now".to_string()
+    } else if delta > 0.0 {
+        format!("in {}", human_duration(delta as i64))
+    } else {
+        format!("{} ago", human_duration((-delta) as i64))
+    }
+}
+
+/// Resolve a `/cron` argument to a job: exact id, unique id prefix, or
+/// name (case-insensitive).
+fn resolve_job<'a>(jobs: &'a [CronJob], needle: &str) -> Option<&'a CronJob> {
+    if let Some(job) = jobs.iter().find(|j| j.id == needle) {
+        return Some(job);
+    }
+    let mut prefix_matches = jobs.iter().filter(|j| j.id.starts_with(needle));
+    let first = prefix_matches.next();
+    if let Some(job) = first {
+        if prefix_matches.next().is_none() {
+            return Some(job);
+        }
+    }
+    let lowered = needle.to_lowercase();
+    if let Some(job) = jobs.iter().find(|j| j.name.to_lowercase() == lowered) {
+        return Some(job);
+    }
+    None
+}
+
+const CRON_SLASH_USAGE: &str = "(o_o) usage: /cron [list|show <id>|pause <id>|resume <id>|run <id>|remove <id>|status]\n";
+
+/// Shared `/cron` dispatch for REPL and gateway (P663): one formatted
+/// string back (plus an optional run seed), no process spawn. The store
+/// lives at `<home>/state.db`, matching `ulnclaw cron` and the gateway
+/// scheduler.
+pub fn run_slash(home: &std::path::Path, rest: &str) -> CronSlashResult {
+    let mut parts = rest.split_whitespace();
+    let sub = parts.next().unwrap_or("list");
+    let store = match CronStore::open(&home.join("state.db")) {
+        Ok(s) => s,
+        Err(e) => return slash_ok(format!("(._.) cron error: {e}\n")),
+    };
+    match sub {
+        "list" | "ls" => {
+            let jobs = match store.list() {
+                Ok(jobs) => jobs,
+                Err(e) => return slash_ok(format!("(._.) cron error: {e}\n")),
+            };
+            if jobs.is_empty() {
+                return slash_ok(
+                    "(o_o) no cron jobs. Create one with /blueprint or `ulnclaw cron create`.\n"
+                        .to_string(),
+                );
+            }
+            let mut out = String::new();
+            for job in &jobs {
+                let state = if job.enabled { "active" } else { "paused" };
+                out.push_str(&format!(
+                    "{}  [{:<6}]  {}  ({})\n",
+                    job.id, state, job.name, job.schedule
+                ));
+                let mut detail = String::new();
+                if job.enabled {
+                    if let Some(next) = job.next_run {
+                        detail.push_str(&format!("next {}", human_ts(next)));
+                    }
+                }
+                if let Some(repeat) = job.repeat {
+                    if !detail.is_empty() {
+                        detail.push_str("  ");
+                    }
+                    detail.push_str(&format!("{repeat} run(s) left"));
+                }
+                if let Some(status) = &job.last_status {
+                    if !detail.is_empty() {
+                        detail.push_str("  ");
+                    }
+                    let when = job
+                        .last_run
+                        .map(|ts| format!(" ({})", human_ts(ts)))
+                        .unwrap_or_default();
+                    detail.push_str(&format!("last: {status}{when}"));
+                }
+                if !detail.is_empty() {
+                    out.push_str(&format!("      {detail}\n"));
+                }
+            }
+            slash_ok(out)
+        }
+        "show" => {
+            let needle = parts.collect::<Vec<_>>().join(" ");
+            if needle.is_empty() {
+                return slash_ok("(o_o) usage: /cron show <id>\n".to_string());
+            }
+            let jobs = match store.list() {
+                Ok(jobs) => jobs,
+                Err(e) => return slash_ok(format!("(._.) cron error: {e}\n")),
+            };
+            let Some(job) = resolve_job(&jobs, &needle) else {
+                return slash_ok(format!("(._.) cron job '{needle}' not found\n"));
+            };
+            let mut out = String::new();
+            out.push_str(&format!("id:       {}\n", job.id));
+            out.push_str(&format!("name:     {}\n", job.name));
+            out.push_str(&format!("schedule: {}\n", job.schedule));
+            out.push_str(&format!("enabled:  {}\n", job.enabled));
+            if let Some(repeat) = job.repeat {
+                out.push_str(&format!("repeat:   {repeat} run(s) remaining\n"));
+            }
+            if let Some(deliver) = &job.deliver {
+                out.push_str(&format!("deliver:  {deliver}\n"));
+            }
+            if !job.skills.is_empty() {
+                out.push_str(&format!("skills:   {}\n", job.skills.join(", ")));
+            }
+            if let Some(next) = job.next_run {
+                out.push_str(&format!("next:     {}\n", human_ts(next)));
+            }
+            if let Some(last) = job.last_run {
+                out.push_str(&format!("last:     {}\n", human_ts(last)));
+            }
+            if let Some(status) = &job.last_status {
+                out.push_str(&format!("status:   {status}\n"));
+            }
+            if let Some(err) = &job.last_delivery_error {
+                out.push_str(&format!("deliver-error: {err}\n"));
+            }
+            out.push_str("prompt:\n");
+            out.push_str(&job.prompt);
+            out.push('\n');
+            slash_ok(out)
+        }
+        "pause" | "resume" => {
+            let needle = parts.collect::<Vec<_>>().join(" ");
+            if needle.is_empty() {
+                return slash_ok(format!("(o_o) usage: /cron {sub} <id>\n"));
+            }
+            let jobs = match store.list() {
+                Ok(jobs) => jobs,
+                Err(e) => return slash_ok(format!("(._.) cron error: {e}\n")),
+            };
+            let Some(job) = resolve_job(&jobs, &needle) else {
+                return slash_ok(format!("(._.) cron job '{needle}' not found\n"));
+            };
+            let mut updated = job.clone();
+            if sub == "pause" {
+                updated.enabled = false;
+            } else {
+                updated.enabled = true;
+                if let Ok(schedule) = parse_schedule(&updated.schedule) {
+                    updated.next_run = next_run(&schedule);
+                }
+            }
+            match store.update(&updated) {
+                Ok(()) => slash_ok(format!(
+                    "{} {} ({})\n",
+                    if sub == "pause" { "⏸" } else { "▶" },
+                    updated.id,
+                    if sub == "pause" { "paused" } else { "resumed" }
+                )),
+                Err(e) => slash_ok(format!("(._.) cron error: {e}\n")),
+            }
+        }
+        "remove" | "rm" | "delete" => {
+            let needle = parts.collect::<Vec<_>>().join(" ");
+            if needle.is_empty() {
+                return slash_ok("(o_o) usage: /cron remove <id>\n".to_string());
+            }
+            let jobs = match store.list() {
+                Ok(jobs) => jobs,
+                Err(e) => return slash_ok(format!("(._.) cron error: {e}\n")),
+            };
+            let Some(job) = resolve_job(&jobs, &needle) else {
+                return slash_ok(format!("(._.) cron job '{needle}' not found\n"));
+            };
+            match store.remove(&job.id) {
+                Ok(true) => slash_ok(format!("🗑 removed {}\n", job.id)),
+                Ok(false) => slash_ok(format!("(._.) cron job '{}' not found\n", job.id)),
+                Err(e) => slash_ok(format!("(._.) cron error: {e}\n")),
+            }
+        }
+        "run" => {
+            // hermes `cron run`: fire the job once, now. The REPL/gateway
+            // runs the job's prompt as an agent turn (unattended semantics
+            // belong to the scheduler; the slash runs it in-session).
+            let needle = parts.collect::<Vec<_>>().join(" ");
+            if needle.is_empty() {
+                return slash_ok("(o_o) usage: /cron run <id>\n".to_string());
+            }
+            let jobs = match store.list() {
+                Ok(jobs) => jobs,
+                Err(e) => return slash_ok(format!("(._.) cron error: {e}\n")),
+            };
+            let Some(job) = resolve_job(&jobs, &needle) else {
+                return slash_ok(format!("(._.) cron job '{needle}' not found\n"));
+            };
+            if job.prompt.trim().is_empty() {
+                return slash_ok(format!("(._.) cron job '{}' has no prompt to run\n", job.id));
+            }
+            CronSlashResult {
+                text: format!("▶ running cron job {} ({}) now…\n", job.id, job.name),
+                run_prompt: Some(job.prompt.clone()),
+            }
+        }
+        "status" => {
+            let jobs = match store.list() {
+                Ok(jobs) => jobs,
+                Err(e) => return slash_ok(format!("(._.) cron error: {e}\n")),
+            };
+            let active = jobs.iter().filter(|j| j.enabled).count();
+            let paused = jobs.len() - active;
+            let mut out = String::new();
+            out.push_str("cron status:\n");
+            out.push_str(&format!("  jobs:      {} active, {} paused\n", active, paused));
+            let next_fire = jobs
+                .iter()
+                .filter(|j| j.enabled)
+                .filter_map(|j| j.next_run.map(|ts| (ts, j)))
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            if let Some((ts, job)) = next_fire {
+                out.push_str(&format!("  next fire: {} ({})\n", human_ts(ts), job.name));
+            } else if active > 0 {
+                out.push_str("  next fire: (none scheduled)\n");
+            }
+            let failures = jobs
+                .iter()
+                .filter(|j| {
+                    j.last_status
+                        .as_deref()
+                        .map(|s| s.starts_with("error"))
+                        .unwrap_or(false)
+                })
+                .count();
+            if failures > 0 {
+                out.push_str(&format!("  ⚠ {failures} job(s) with a last-run error\n"));
+            }
+            slash_ok(out)
+        }
+        _ => slash_ok(CRON_SLASH_USAGE.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,5 +970,95 @@ mod tests {
         // Rescheduled into the future, still enabled.
         assert!(updated.next_run.unwrap() > now());
         assert!(updated.enabled);
+    }
+
+    // P663: /cron slash coverage.
+    fn slash_job(id: &str, name: &str, schedule: &str) -> CronJob {
+        CronJob {
+            id: id.to_string(),
+            name: name.to_string(),
+            schedule: schedule.to_string(),
+            prompt: format!("prompt for {name}"),
+            skills: vec![],
+            enabled: true,
+            repeat: None,
+            next_run: Some(now() + 300.0),
+            created_at: now(),
+            last_run: None,
+            last_status: None,
+            deliver: None,
+            origin: None,
+            last_delivery_error: None,
+        }
+    }
+
+    fn slash_home_with_jobs() -> (tempfile::TempDir, CronStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CronStore::open(&dir.path().join("state.db")).unwrap();
+        store.add(&slash_job("aabbccddeeff", "Morning briefing", "@daily")).unwrap();
+        store.add(&slash_job("ffeeddccbbaa", "Inbox sweep", "@every 30m")).unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn cron_slash_list_and_status() {
+        let (dir, _store) = slash_home_with_jobs();
+        let out = run_slash(dir.path(), "").text;
+        assert!(out.contains("Morning briefing"), "{out}");
+        assert!(out.contains("Inbox sweep"), "{out}");
+        assert!(out.contains("[active"), "{out}");
+        assert!(out.contains("next in"), "{out}");
+
+        let out = run_slash(dir.path(), "status").text;
+        assert!(out.contains("2 active, 0 paused"), "{out}");
+        assert!(out.contains("next fire"), "{out}");
+    }
+
+    #[test]
+    fn cron_slash_show_pause_resume_remove() {
+        let (dir, store) = slash_home_with_jobs();
+
+        // Name resolution works for show.
+        let out = run_slash(dir.path(), "show morning briefing").text;
+        assert!(out.contains("id:       aabbccddeeff"), "{out}");
+        assert!(out.contains("prompt for Morning briefing"), "{out}");
+
+        // Prefix resolution works for pause.
+        let out = run_slash(dir.path(), "pause aabb").text;
+        assert!(out.contains("paused"), "{out}");
+        assert!(!store.get("aabbccddeeff").unwrap().unwrap().enabled);
+
+        let out = run_slash(dir.path(), "resume aabbccddeeff").text;
+        assert!(out.contains("resumed"), "{out}");
+        assert!(store.get("aabbccddeeff").unwrap().unwrap().enabled);
+
+        let out = run_slash(dir.path(), "remove Inbox sweep").text;
+        assert!(out.contains("removed"), "{out}");
+        assert!(store.get("ffeeddccbbaa").unwrap().is_none());
+
+        let out = run_slash(dir.path(), "show zzz").text;
+        assert!(out.contains("not found"), "{out}");
+    }
+
+    #[test]
+    fn cron_slash_run_seeds_agent_turn() {
+        let (dir, _store) = slash_home_with_jobs();
+        let result = run_slash(dir.path(), "run morning briefing");
+        assert_eq!(result.run_prompt.as_deref(), Some("prompt for Morning briefing"));
+        assert!(result.text.contains("running cron job"), "{}", result.text);
+
+        let empty = run_slash(dir.path(), "run missing");
+        assert!(empty.text.contains("not found"), "{}", empty.text);
+        assert!(empty.run_prompt.is_none());
+    }
+
+    #[test]
+    fn cron_slash_usage_and_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = run_slash(dir.path(), "bogus").text;
+        assert!(out.contains("usage:"), "{out}");
+
+        let out = run_slash(dir.path(), "list").text;
+        assert!(out.contains("no cron jobs"), "{out}");
     }
 }
