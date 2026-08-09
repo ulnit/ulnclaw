@@ -3920,6 +3920,13 @@ async function openSessionInfo(): Promise<void> {
   if (typeof detail.total_tokens === "number") {
     rows.push([t.session.infoTokens, formatTokens(detail.total_tokens)]);
   }
+  // P627: live context-in-use (breakdown endpoint's summary fields).
+  if (detail.context && detail.context.max > 0) {
+    rows.push([
+      t.session.infoContext,
+      `${formatTokens(detail.context.used)} / ${formatTokens(detail.context.max)} (${detail.context.percent}%)`,
+    ]);
+  }
   // P561: per-role message census from the enriched payload.
   if (detail.message_counts && Object.keys(detail.message_counts).length) {
     const census = Object.entries(detail.message_counts)

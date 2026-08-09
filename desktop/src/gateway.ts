@@ -41,6 +41,8 @@ export interface SessionRow {
   total_tokens?: number;
   /** P561: per-role message census (single-session fetches only). */
   message_counts?: Record<string, number>;
+  /** P627: live context-in-use summary (single-session fetches only). */
+  context?: { used: number; max: number; percent: number };
 }
 
 /** P559/P560: single-session retitler result. */

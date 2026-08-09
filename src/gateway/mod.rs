@@ -9155,6 +9155,32 @@ async fn get_session(State(state): State<Arc<GatewayState>>, Path(id): Path<Stri
                     "last_message".to_string(),
                     Value::String(crate::title_generator::truncate_chars(&last_message, 280)),
                 );
+                // P627: live context-in-use summary for the session-info
+                // surfaces (same computation as GET /api/sessions/:id/context).
+                let history: Vec<Message> = state
+                    .store
+                    .load_messages(&id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|m| m.role != Role::System)
+                    .collect();
+                let conversation_tokens =
+                    crate::context::ContextCompressor::estimate_tokens(&history);
+                let parts = state.agent.context_breakdown_parts().await;
+                let budget = state.agent.context_budget_tokens();
+                let breakdown = crate::context::breakdown::compute(
+                    &parts,
+                    conversation_tokens,
+                    budget,
+                );
+                object.insert(
+                    "context".to_string(),
+                    json!({
+                        "used": breakdown.context_used,
+                        "max": breakdown.context_max,
+                        "percent": breakdown.context_percent,
+                    }),
+                );
             }
             Json(value).into_response()
         }
@@ -20341,6 +20367,11 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         // Content snippets for at-a-glance context (P564).
         assert_eq!(row["first_user_message"], "hello");
         assert_eq!(row["last_message"], "hello");
+        // P627: live context-in-use summary (conversation estimate +
+        // static payload against the agent's budget).
+        assert!(row["context"]["max"].as_u64().unwrap() > 0, "{row}");
+        assert!(row["context"]["used"].as_u64().unwrap() > 0, "{row}");
+        assert!(row["context"]["percent"].as_u64().unwrap() <= 100, "{row}");
     }
 
     #[tokio::test]
