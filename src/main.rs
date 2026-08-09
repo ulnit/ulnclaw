@@ -2795,6 +2795,10 @@ async fn gateway_cmd(
     // (inside serve_multiplex), STOPPING=1 on the way down.
     ulnclaw::systemd_notify::arm_watchdog(gateway.systemd_watchdog_seconds);
 
+    // P717: snapshot the running binary so health surfaces can detect
+    // an in-place update underneath the gateway (hermes code_skew).
+    ulnclaw::code_skew::record_boot_fingerprint();
+
     // Register this instance in the pidfile; a startup failure or a
     // clean shutdown removes it (best-effort — a stale file only
     // weakens the guard, and the liveness check self-heals it).

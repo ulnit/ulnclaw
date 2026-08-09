@@ -525,6 +525,8 @@ export interface HealthDetailed {
   gateway_drainable?: boolean;
   restart_loop_tripped?: boolean;
   previous_exit_label?: string;
+  /** P717: stale-binary drift (boot vs on-disk fingerprint). */
+  code_skew?: { boot: string; disk: string };
   updated_at?: string;
   uptime_seconds?: number;
   pid?: number;

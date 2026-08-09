@@ -2131,6 +2131,13 @@ export class DoctorWidget {
           ? `<span class="models-view-badge warn">${escapeHtmlDoctor(t.gatewayHealth.tripped)}</span>`
           : escapeHtmlDoctor(t.gatewayHealth.calm),
       );
+      if (detailed.code_skew) {
+        addRow(
+          t.gatewayHealth.codeSkew,
+          `<span class="models-view-badge warn">${escapeHtmlDoctor(t.gatewayHealth.codeSkewStale)}</span>` +
+            ` \u00b7 ${escapeHtmlDoctor(detailed.code_skew.boot)} \u2192 ${escapeHtmlDoctor(detailed.code_skew.disk)}`,
+        );
+      }
       if (detailed.previous_exit_label) {
         const label =
           detailed.previous_exit_label === "clean"

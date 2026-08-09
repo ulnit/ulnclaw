@@ -8374,6 +8374,8 @@ async fn health_detailed(State(state): State<Arc<GatewayState>>) -> Json<Value> 
         "active_agents": active_agents,
         "gateway_busy": gateway_state == "running" && active_agents > 0,
         "gateway_drainable": gateway_state == "running",
+        "code_skew": crate::code_skew::detect_code_skew()
+            .map(|(boot, disk)| json!({ "boot": boot, "disk": disk })),
         "restart_loop_tripped": crate::restart_loop_guard::is_restart_loop_tripped(
             &crate::config::ulnclaw_home(),
             crate::restart_loop_guard::DEFAULT_MAX_RESTARTS,
