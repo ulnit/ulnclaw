@@ -1063,9 +1063,142 @@ pub fn run_slash(home: &std::path::Path, rest: &str) -> String {
                 Err(e) => format!("(._.) kanban error: {e}\n"),
             }
         }
+        "promote" => {
+            // P662: hermes `kanban promote` — todo/blocked straight to
+            // ready; --force skips the dependency check.
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban promote <id> [--force] [reason]\n".to_string();
+            };
+            let rest: Vec<&str> = parts.collect();
+            let force = rest.iter().any(|p| *p == "--force");
+            let reason: Vec<&str> = rest.into_iter().filter(|p| *p != "--force").collect();
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                _ => return format!("(._.) task '{id}' not found\n"),
+            };
+            match store.promote_task(&id, &reason.join(" "), force) {
+                Ok(t) => format!("{} {} (ready)  {}\n", status_icon("ready"), t.id, t.title),
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "reclaim" => {
+            // P662: hermes `kanban reclaim` — release an active worker
+            // claim on a running task back to ready.
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban reclaim <id> [reason]\n".to_string();
+            };
+            let reason: Vec<&str> = parts.collect();
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                _ => return format!("(._.) task '{id}' not found\n"),
+            };
+            match store.reclaim_task(&id, &reason.join(" ")) {
+                Ok(t) => format!("{} {} (ready)  {}\n", status_icon("ready"), t.id, t.title),
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "assign" => {
+            // P662: hermes `kanban assign` — set the assignee without
+            // touching an active claim.
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban assign <id> <assignee>\n".to_string();
+            };
+            let Some(assignee) = parts.next() else {
+                return "(o_o) usage: /kanban assign <id> <assignee>\n".to_string();
+            };
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                _ => return format!("(._.) task '{id}' not found\n"),
+            };
+            match store.assign_task(&id, assignee) {
+                Ok(t) => format!(
+                    "{} {}  assigned to {}\n",
+                    status_icon(&t.status),
+                    t.id,
+                    t.assignee.as_deref().unwrap_or("(none)")
+                ),
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "runs" => {
+            // P662: hermes `kanban runs` — run history for a task.
+            let Some(id) = parts.next() else {
+                return "(o_o) usage: /kanban runs <id>\n".to_string();
+            };
+            let id = match resolve_any_id(&store, id) {
+                Ok(Some(id)) => id,
+                _ => return format!("(._.) task '{id}' not found\n"),
+            };
+            match store.list_runs(&id, true, None, None) {
+                Ok(runs) => {
+                    if runs.is_empty() {
+                        return format!("(o_o) no runs recorded for {id}\n");
+                    }
+                    let mut out = String::new();
+                    for run in runs {
+                        let duration = run
+                            .ended_at
+                            .map(|end| format!("{}s", (end - run.started_at).max(0)))
+                            .unwrap_or_else(|| "running".to_string());
+                        out.push_str(&format!(
+                            "#{}  {:<10} {:<12} {}
+",
+                            run.id,
+                            run.status,
+                            run.outcome.as_deref().unwrap_or("-"),
+                            duration
+                        ));
+                        if let Some(error) = &run.error {
+                            out.push_str(&format!("     error: {error}\n"));
+                        }
+                    }
+                    out
+                }
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
+        "stats" => {
+            // P662: hermes `kanban stats` — per-status + per-assignee
+            // counts and oldest-ready age for the current board.
+            match store.board_stats() {
+                Ok(stats) => {
+                    let mut out = String::new();
+                    out.push_str("by status:\n");
+                    for (status, count) in &stats.by_status {
+                        out.push_str(&format!("  {:<10} {}\n", status, count));
+                    }
+                    if let Some(age) = stats.oldest_ready_age_seconds {
+                        let human = if age < 60 {
+                            format!("{age}s")
+                        } else if age < 3600 {
+                            format!("{}m", age / 60)
+                        } else if age < 86400 {
+                            format!("{}h", age / 3600)
+                        } else {
+                            format!("{}d", age / 86400)
+                        };
+                        out.push_str(&format!("oldest ready: {human}\n"));
+                    }
+                    if !stats.by_assignee.is_empty() {
+                        out.push_str("by assignee:\n");
+                        for (assignee, rows) in &stats.by_assignee {
+                            let detail = rows
+                                .iter()
+                                .map(|(status, count)| format!("{status} {count}"))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            out.push_str(&format!("  {assignee}: {detail}\n"));
+                        }
+                    }
+                    out
+                }
+                Err(e) => format!("(._.) kanban error: {e}\n"),
+            }
+        }
         _ => {
             "(o_o) usage: /kanban [boards|list [status]|show <id>|create <title>|done <id> \
-             [result]|block <id> <reason>|unblock <id>|comment <id> <text>]\n"
+             [result]|block <id> <reason>|unblock <id>|comment <id> <text>|promote <id> \
+             [--force] [reason]|reclaim <id> [reason]|assign <id> <assignee>|runs <id>|stats]\n"
                 .to_string()
         }
     }
@@ -10596,5 +10729,70 @@ mod tests {
             );
             assert_eq!(task.branch_name.as_deref(), Some("demo/custom-branch"));
         });
+    }
+
+    // P662: REPL slash coverage for the new /kanban arms.
+    fn slash_home() -> (tempfile::TempDir, KanbanStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KanbanStore::open(dir.path().join("kanban.db")).unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn slash_kanban_promote_assign_stats() {
+        let (dir, store) = slash_home();
+        let task = make_task(&store, "Promote me");
+
+        let out = run_slash(dir.path(), &format!("promote {}", task.id));
+        assert!(out.contains("(ready)"), "{out}");
+        assert_eq!(store.get_task(&task.id).unwrap().unwrap().status, "ready");
+
+        let out = run_slash(dir.path(), &format!("assign {} worker-a", task.id));
+        assert!(out.contains("assigned to worker-a"), "{out}");
+
+        let out = run_slash(dir.path(), "stats");
+        assert!(out.contains("by status:"), "{out}");
+        assert!(out.contains("ready"), "{out}");
+        assert!(out.contains("worker-a"), "{out}");
+    }
+
+    #[test]
+    fn slash_kanban_reclaim_releases_claim() {
+        let (dir, store) = slash_home();
+        let task = make_task(&store, "Reclaim me");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "worker-a", 60).unwrap();
+
+        let out = run_slash(dir.path(), &format!("reclaim {} worker died", task.id));
+        assert!(out.contains("(ready)"), "{out}");
+        let back = store.get_task(&task.id).unwrap().unwrap();
+        assert_eq!(back.status, "ready");
+        assert!(back.claim_lock.is_none());
+    }
+
+    #[test]
+    fn slash_kanban_runs_lists_history() {
+        let (dir, store) = slash_home();
+        let task = make_task(&store, "Run me");
+        store.ready_task(&task.id).unwrap();
+        store.claim_task(&task.id, "worker-a", 60).unwrap();
+        store.complete_task(&task.id, Some("done")).unwrap();
+
+        let out = run_slash(dir.path(), &format!("runs {}", task.id));
+        assert!(out.contains("#1"), "{out}");
+        assert!(!out.contains("no runs"), "{out}");
+    }
+
+    #[test]
+    fn slash_kanban_new_arms_usage_and_not_found() {
+        let (dir, _store) = slash_home();
+        for sub in ["promote", "reclaim", "assign", "runs"] {
+            let out = run_slash(dir.path(), sub);
+            assert!(out.contains("usage:"), "{sub}: {out}");
+        }
+        let out = run_slash(dir.path(), "promote t_missing");
+        assert!(out.contains("not found"), "{out}");
+        let out = run_slash(dir.path(), "runs t_missing");
+        assert!(out.contains("not found"), "{out}");
     }
 }
