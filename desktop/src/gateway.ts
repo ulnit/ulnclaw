@@ -386,6 +386,24 @@ export interface JobBlueprint {
   appUrl: string;
 }
 
+/** P673: one pending automation suggestion (`/api/jobs/suggestions`). */
+export interface JobSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  source: string;
+  status: string;
+  dedup_key: string;
+  created_at: string;
+  job_spec: {
+    name?: string;
+    prompt: string;
+    schedule: string;
+    skills?: string[];
+    deliver?: string;
+  };
+}
+
 const SETTINGS_KEY = "ulnclaw.gateway";
 
 export interface UsageSessionRow {
@@ -4264,6 +4282,72 @@ export class GatewayClient {
         return { ok: false, error: payload?.error || `HTTP ${response.status}` };
       }
       return { ok: true, job: payload?.job as CronJob };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P673: GET /api/jobs/suggestions — pending automation suggestions. */
+  async listJobSuggestions(): Promise<JobSuggestion[]> {
+    const response = await fetch(this.endpoint("/api/jobs/suggestions"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`suggestions HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.suggestions || []) as JobSuggestion[];
+  }
+
+  /** P673: POST /api/jobs/suggestions/accept — schedule a suggestion. */
+  async acceptJobSuggestion(
+    reference: string,
+  ): Promise<{ ok: boolean; name?: string; schedule?: string; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint("/api/jobs/suggestions/accept"), {
+        headers: { ...this.headers(), "content-type": "application/json" },
+        method: "POST",
+        body: JSON.stringify({ reference }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        return { ok: false, error: payload?.error || `HTTP ${response.status}` };
+      }
+      return { ok: true, name: payload?.name, schedule: payload?.schedule };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P673: POST /api/jobs/suggestions/dismiss — never offer it again. */
+  async dismissJobSuggestion(reference: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint("/api/jobs/suggestions/dismiss"), {
+        headers: { ...this.headers(), "content-type": "application/json" },
+        method: "POST",
+        body: JSON.stringify({ reference }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        return { ok: false, error: payload?.error || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P673: POST /api/jobs/suggestions/catalog — seed starter automations. */
+  async seedJobSuggestionCatalog(): Promise<{ ok: boolean; created?: string[]; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint("/api/jobs/suggestions/catalog"), {
+        headers: { ...this.headers(), "content-type": "application/json" },
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        return { ok: false, error: payload?.error || `HTTP ${response.status}` };
+      }
+      return { ok: true, created: payload?.created };
     } catch (error) {
       return { ok: false, error: String(error) };
     }

@@ -2,7 +2,7 @@
 // cron store as the `ulnclaw cron` CLI): list/pause/resume/run-now,
 // create + edit + delete. Hermes cron-dashboard parity (P166).
 
-import type { CronJob, GatewayClient, JobBlueprint } from "./gateway";
+import type { CronJob, GatewayClient, JobBlueprint, JobSuggestion } from "./gateway";
 import { fmt, t } from "./i18n";
 
 const SORT_KEY = "ulnclaw.jobs.sort";
@@ -30,6 +30,8 @@ export class JobsWidget {
   private blueprints: JobBlueprint[] = [];
   /** P655: blueprint currently open in the slot form. */
   private activeBlueprint: JobBlueprint | null = null;
+  /** P673: pending automation suggestions. */
+  private suggestions: JobSuggestion[] = [];
 
   constructor(
     private root: HTMLElement,
@@ -49,8 +51,13 @@ export class JobsWidget {
         </select>
         <button id="jobs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
         <button id="jobs-blueprints" class="ghost" data-i18n="jobs.blueprintsAction">Templates</button>
+        <button id="jobs-ideas" class="ghost" data-i18n="jobs.ideasAction">Ideas</button>
         <button id="jobs-new" class="primary" data-i18n="jobs.newJob">New job</button>
       </header>
+      <section id="jobs-suggestions" hidden>
+        <h3 class="config-section" data-i18n="jobs.suggestionsTitle">Suggested automations</h3>
+        <div id="jobs-suggestions-list" class="jobs-suggestions-list"></div>
+      </section>
       <div id="jobs-list"></div>
       <dialog id="job-create">
         <form method="dialog">
@@ -122,6 +129,19 @@ export class JobsWidget {
     });
     (this.root.querySelector("#jobs-new") as HTMLButtonElement).onclick = () =>
       this.openCreateDialog();
+    // P673: suggestions panel — seed the catalog, accept/dismiss rows.
+    (this.root.querySelector("#jobs-ideas") as HTMLButtonElement).onclick = () =>
+      void this.seedSuggestionCatalog();
+    this.root.querySelector("#jobs-suggestions-list")!.addEventListener("click", (event) => {
+      const target = (event.target as HTMLElement).closest("button[data-ref]");
+      if (!target) return;
+      const ref = target.getAttribute("data-ref") || "";
+      if (target.classList.contains("jobs-suggestion-accept")) {
+        void this.acceptSuggestion(ref);
+      } else if (target.classList.contains("jobs-suggestion-dismiss")) {
+        void this.dismissSuggestion(ref);
+      }
+    });
     // P655: automation-blueprint gallery + slot form (hermes blueprint
     // catalog parity).
     (this.root.querySelector("#jobs-blueprints") as HTMLButtonElement).onclick = () =>
@@ -304,7 +324,94 @@ export class JobsWidget {
     if (!client) return;
     this.jobs = await client.jobsList(true);
     void this.cacheDeliveryTargets();
+    void this.refreshSuggestions();
     this.render();
+  }
+
+  /** P673: fetch pending suggestions (best-effort) and render the panel. */
+  private async refreshSuggestions(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    try {
+      this.suggestions = await client.listJobSuggestions();
+    } catch {
+      this.suggestions = [];
+    }
+    this.renderSuggestions();
+  }
+
+  /** P673: render pending suggestions with accept/dismiss actions. */
+  private renderSuggestions(): void {
+    const section = this.root.querySelector("#jobs-suggestions") as HTMLElement;
+    const list = this.root.querySelector("#jobs-suggestions-list") as HTMLElement;
+    if (!section || !list) return;
+    if (this.suggestions.length === 0) {
+      section.hidden = true;
+      list.innerHTML = "";
+      return;
+    }
+    section.hidden = false;
+    list.innerHTML = this.suggestions
+      .map((suggestion) => {
+        const title = suggestion.title.replace(/</g, "&lt;");
+        const description = suggestion.description.replace(/</g, "&lt;");
+        const schedule = suggestion.job_spec?.schedule || "";
+        const source = suggestion.source.replace(/</g, "&lt;");
+        return `
+        <div class="jobs-suggestion-row">
+          <div class="jobs-suggestion-main">
+            <strong>${title}</strong>
+            <span class="jobs-suggestion-meta">[${source}] ${schedule}</span>
+            <div class="jobs-suggestion-desc">${description}</div>
+          </div>
+          <button class="jobs-suggestion-accept" data-ref="${suggestion.id}" data-i18n="jobs.suggestionsAccept">Accept</button>
+          <button class="ghost jobs-suggestion-dismiss" data-ref="${suggestion.id}" data-i18n="jobs.suggestionsDismiss">Dismiss</button>
+        </div>`;
+      })
+      .join("");
+  }
+
+  /** P673: accept a suggestion — schedules it into the cron store. */
+  private async acceptSuggestion(reference: string): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const result = await client.acceptJobSuggestion(reference);
+    if (result.ok) {
+      window.alert(
+        t.jobs.suggestionsScheduled
+          .replace("{name}", result.name || reference)
+          .replace("{schedule}", result.schedule || ""),
+      );
+    } else {
+      window.alert(result.error || "accept failed");
+    }
+    await this.refresh();
+  }
+
+  /** P673: dismiss a suggestion so it is never re-offered. */
+  private async dismissSuggestion(reference: string): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    await client.dismissJobSuggestion(reference);
+    await this.refresh();
+  }
+
+  /** P673: seed the curated starter catalog, then show what is pending. */
+  private async seedSuggestionCatalog(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const result = await client.seedJobSuggestionCatalog();
+    if (result.ok) {
+      const created = result.created || [];
+      window.alert(
+        created.length > 0
+          ? t.jobs.suggestionsSeeded.replace("{count}", String(created.length))
+          : t.jobs.suggestionsSeedNone,
+      );
+    } else {
+      window.alert(result.error || "seed failed");
+    }
+    await this.refresh();
   }
 
   /** P507: cache known delivery-target ids for edit-time validation. */

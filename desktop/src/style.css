@@ -437,6 +437,12 @@ dialog menu button.danger { background: var(--bad); border-color: var(--bad); co
 }
 #jobs-header .spacer { flex: 1; }
 .jobs-counts { opacity: 0.65; font-size: 0.85em; }
+/* P673: suggested automations panel in the Jobs view. */
+.jobs-suggestions-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.jobs-suggestion-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border, #333); border-radius: 8px; }
+.jobs-suggestion-main { flex: 1; min-width: 0; }
+.jobs-suggestion-meta { opacity: 0.6; font-size: 0.85em; margin-left: 6px; }
+.jobs-suggestion-desc { opacity: 0.75; font-size: 0.9em; margin-top: 2px; }
 #jobs-list { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .jobs-empty { opacity: 0.6; font-size: 0.9em; margin: 8px 0; }
 .job-row {

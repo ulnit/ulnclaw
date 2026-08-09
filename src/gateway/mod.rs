@@ -6679,6 +6679,20 @@ pub fn router(state: Arc<GatewayState>) -> Router {
             "/api/jobs/blueprints/instantiate",
             post(instantiate_job_blueprint),
         )
+        .route("/api/jobs/suggestions", get(list_job_suggestions))
+        .route(
+            "/api/jobs/suggestions/accept",
+            post(accept_job_suggestion),
+        )
+        .route(
+            "/api/jobs/suggestions/dismiss",
+            post(dismiss_job_suggestion),
+        )
+        .route(
+            "/api/jobs/suggestions/catalog",
+            post(seed_job_suggestion_catalog),
+        )
+        .route("/api/jobs/suggestions/clear", post(clear_job_suggestions))
         .route("/api/jobs/delivery-targets", get(job_delivery_targets))
         .route("/api/jobs/fire", post(fire_job))
         .route(
@@ -12716,6 +12730,71 @@ async fn resume_job(State(state): State<Arc<GatewayState>>, Path(id): Path<Strin
     set_job_enabled(&state, &id, true).await
 }
 
+/// One suggestion the desktop accepted/dismissed (P673).
+#[derive(Deserialize)]
+struct SuggestionReferenceRequest {
+    reference: String,
+}
+
+/// `GET /api/jobs/suggestions` — pending automation suggestions
+/// (hermes suggestions surface parity; P673).
+async fn list_job_suggestions() -> Response {
+    let store = crate::cron::suggestions::SuggestionStore::open_default();
+    let pending = store.list_pending();
+    Json(json!({ "suggestions": pending })).into_response()
+}
+
+/// `POST /api/jobs/suggestions/accept` — schedule a pending suggestion
+/// into the shared cron store (P673). 404 when nothing matches.
+async fn accept_job_suggestion(Json(request): Json<SuggestionReferenceRequest>) -> Response {
+    let store = crate::cron::suggestions::SuggestionStore::open_default();
+    match store.accept(&request.reference) {
+        Ok(Some(job)) => Json(json!({
+            "scheduled": true,
+            "job_id": job.id,
+            "name": job.name,
+            "schedule": job.schedule,
+        }))
+        .into_response(),
+        Ok(None) => jobs_error(
+            StatusCode::NOT_FOUND,
+            &format!("No pending suggestion matches '{}'", request.reference),
+        ),
+        Err(e) => jobs_error(StatusCode::UNPROCESSABLE_ENTITY, &e),
+    }
+}
+
+/// `POST /api/jobs/suggestions/dismiss` — dismiss a pending suggestion
+/// so it is never re-offered (P673). 404 when nothing matches.
+async fn dismiss_job_suggestion(Json(request): Json<SuggestionReferenceRequest>) -> Response {
+    let store = crate::cron::suggestions::SuggestionStore::open_default();
+    if store.dismiss(&request.reference) {
+        Json(json!({ "dismissed": true })).into_response()
+    } else {
+        jobs_error(
+            StatusCode::NOT_FOUND,
+            &format!("No pending suggestion matches '{}'", request.reference),
+        )
+    }
+}
+
+/// `POST /api/jobs/suggestions/catalog` — seed the curated starter
+/// catalog (P673); returns the newly added titles.
+async fn seed_job_suggestion_catalog() -> Response {
+    let store = crate::cron::suggestions::SuggestionStore::open_default();
+    let created = crate::cron::suggestions::seed_catalog_suggestions(&store);
+    let titles: Vec<String> = created.iter().map(|suggestion| suggestion.title.clone()).collect();
+    Json(json!({ "created": titles })).into_response()
+}
+
+/// `POST /api/jobs/suggestions/clear` — drop resolved (accepted)
+/// records; dismissed ones stay for their dedup keys (P673).
+async fn clear_job_suggestions() -> Response {
+    let store = crate::cron::suggestions::SuggestionStore::open_default();
+    let removed = store.clear_resolved();
+    Json(json!({ "removed": removed })).into_response()
+}
+
 /// `GET /api/jobs/delivery-targets` — delivery targets the dropdown
 /// should offer (hermes `GET /api/cron/delivery-targets`): always the
 /// implicit `local` option plus every connected gateway platform, with
@@ -17586,6 +17665,84 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_suggestions_endpoints() {
+        // P673: suggestions HTTP surface — seed catalog, list pending,
+        // accept (schedules into the default cron store), dismiss,
+        // clear.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        // Empty at first.
+        let (status, body) = get_json(app.clone(), "/api/jobs/suggestions", Some(token)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["suggestions"].as_array().unwrap().len(), 0, "{body}");
+
+        // Seed the curated catalog.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs/suggestions/catalog", Some(token), json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!body["created"].as_array().unwrap().is_empty(), "{body}");
+
+        // Pending list is populated.
+        let (_, body) = get_json(app.clone(), "/api/jobs/suggestions", Some(token)).await;
+        let suggestions = body["suggestions"].as_array().unwrap().clone();
+        assert!(!suggestions.is_empty(), "{body}");
+        let reference = suggestions[0]["id"].as_str().unwrap().to_string();
+
+        // Accept schedules a real cron job into the default store.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs/suggestions/accept", Some(token),
+            json!({"reference": reference}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["scheduled"], true, "{body}");
+        let cron = crate::cron::CronStore::open_default().expect("cron store");
+        assert_eq!(cron.list().unwrap().len(), 1);
+
+        // Dismiss the next pending suggestion.
+        let (_, body) = get_json(app.clone(), "/api/jobs/suggestions", Some(token)).await;
+        let remaining = body["suggestions"].as_array().unwrap().clone();
+        let second = remaining[0]["id"].as_str().unwrap().to_string();
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs/suggestions/dismiss", Some(token),
+            json!({"reference": second}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["dismissed"], true, "{body}");
+
+        // Unknown reference -> 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/jobs/suggestions/accept", Some(token),
+            json!({"reference": "nope"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Clear drops accepted records.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs/suggestions/clear", Some(token), json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["removed"].as_u64().unwrap() >= 1, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]
