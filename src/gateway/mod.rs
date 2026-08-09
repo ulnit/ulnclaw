@@ -10791,6 +10791,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /reload            reload <home>/.env vars into the running gateway
   /history [N]       recent transcript of this session (tool chatter collapsed)
   /handoff [platform]  hand this session off to a platform home channel
+  /platform [list|pause|resume] [name]   gateway platform retry controls
   /subgoal [text|remove N|clear]  extra criteria on the active goal
   /reload-mcp [confirm]  rebuild the MCP tool surface (confirm when gated)
   /skills          list skills (invoke one: /<skill-name> [instruction])
@@ -11473,6 +11474,13 @@ async fn resolve_gateway_slash(
             // the gathering + authoring with its normal tools.
             Some(GatewaySlash::AgentTurn(
                 crate::learn_prompt::build_learn_prompt(rest),
+            ))
+        }
+        "/platform" => {
+            // hermes /platform parity: list connected + retry/pause
+            // queue; pause/resume a failing platform's retries.
+            Some(GatewaySlash::Direct(
+                crate::messaging::run_platform_slash(rest),
             ))
         }
         "/handoff" => {
@@ -16496,6 +16504,37 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((chat_id.to_string(), text.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_platform_list_pause_resume() {
+        // P694: /platform list|pause|resume.
+        let state = test_state();
+        match resolve_gateway_slash(&state, "sess-1", "/platform list").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("Gateway platforms"), "{text}");
+                assert!(text.contains("Failed/paused: (none)"), "{text}");
+            }
+            _ => panic!("expected direct reply"),
+        }
+        match resolve_gateway_slash(&state, "sess-1", "/platform pause telegram").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("telegram paused"), "{text}");
+            }
+            _ => panic!("expected direct reply"),
+        }
+        match resolve_gateway_slash(&state, "sess-1", "/platform resume telegram").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("telegram resumed"), "{text}");
+            }
+            _ => panic!("expected direct reply"),
+        }
+        match resolve_gateway_slash(&state, "sess-1", "/platform pause ghost").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("Unknown platform"), "{text}");
+            }
+            _ => panic!("expected direct reply"),
         }
     }
 

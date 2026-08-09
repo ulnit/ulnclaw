@@ -90,7 +90,7 @@ export interface Translations {
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
   /** P624: context-window breakdown popup in the chat header. */
   contextUsage: { title: string; noData: string; freeSpace: string; window: string };
-  slash: { help: string; skills: string; tools: string; recap: string; title: string; retitle: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; insights: string; compress: string; skillFallback: string; resume: string; doctor: string; runs: string; projects: string; config: string; webhooks: string; models: string; plugins: string; archive: string; unarchive: string; exportSession: string; forkSession: string; search: string; open: string; openNotFound: string; status: string; context: string; whoami: string; version: string; commands: string; profile: string; model: string; reasoning: string; memory: string; sessions: string; stop: string; retry: string; undo: string; verbose: string; yolo: string; personality: string; goal: string; subgoal: string; reloadMcp: string; fast: string; branch: string; diff: string; rollback: string; blueprint: string; cron: string; suggestions: string; init: string; agents: string; journey: string; snapshot: string; platforms: string; curator: string; bundles: string; toolsets: string; approve: string; deny: string; background: string; restart: string; queue: string; steer: string; approvals: string; debug: string; image: string; learn: string; moa: string; reload: string; history: string; handoff: string };
+  slash: { help: string; skills: string; tools: string; recap: string; title: string; retitle: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; insights: string; compress: string; skillFallback: string; resume: string; doctor: string; runs: string; projects: string; config: string; webhooks: string; models: string; plugins: string; archive: string; unarchive: string; exportSession: string; forkSession: string; search: string; open: string; openNotFound: string; status: string; context: string; whoami: string; version: string; commands: string; profile: string; model: string; reasoning: string; memory: string; sessions: string; stop: string; retry: string; undo: string; verbose: string; yolo: string; personality: string; goal: string; subgoal: string; reloadMcp: string; fast: string; branch: string; diff: string; rollback: string; blueprint: string; cron: string; suggestions: string; init: string; agents: string; journey: string; snapshot: string; platforms: string; curator: string; bundles: string; toolsets: string; approve: string; deny: string; background: string; restart: string; queue: string; steer: string; approvals: string; debug: string; image: string; learn: string; moa: string; reload: string; history: string; handoff: string; platform: string };
   /** P682: composer busy-behavior toggle (hermes /busy parity). */
   busy: { titlePlain: string; title: string; queue: string; steer: string; interrupt: string; queued: string; steerSent: string; interruptQueued: string; modeChanged: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
@@ -489,6 +489,7 @@ const en: Translations = {
     reload: "reload <home>/.env vars into the running gateway",
     history: "recent transcript of this session (tool chatter collapsed)",
     handoff: "hand this session off to a platform home channel",
+    platform: "gateway platform retry controls (list/pause/resume)",
   },
   busy: {
     titlePlain: "Busy behavior",
@@ -1062,6 +1063,7 @@ const zh: Translations = {
     reload: "把 <home>/.env 变量重新载入运行中的网关",
     history: "本会话最近转录（工具消息折叠）",
     handoff: "把本会话移交给平台主频道继续",
+    platform: "网关平台重试控制（list/pause/resume）",
   },
   busy: {
     titlePlain: "忙碌时行为",
@@ -1635,6 +1637,7 @@ const zhHant: Translations = {
     reload: "把 <home>/.env 變數重新載入執行中的閘道",
     history: "本工作階段最近轉錄（工具訊息折疊）",
     handoff: "把本工作階段移交給平台主頻道繼續",
+    platform: "閘道平台重試控制（list/pause/resume）",
   },
   busy: {
     titlePlain: "忙碌時行為",
@@ -2208,6 +2211,7 @@ const ja: Translations = {
     reload: "実行中のゲートウェイに <home>/.env 変数を再読み込み",
     history: "このセッションの最近のトランスクリプト（ツール表示を折りたたみ）",
     handoff: "このセッションをプラットフォームのホームチャンネルへ引き継ぐ",
+    platform: "ゲートウェイプラットフォームの再試行制御（list/pause/resume）",
   },
   busy: {
     titlePlain: "ビジー時の動作",
@@ -2781,6 +2785,7 @@ const ar: Translations = {
     reload: "إعادة تحميل متغيرات <home>/.env في البوابة قيد التشغيل",
     history: "النسخة الأخيرة من هذه الجلسة (طي رسائل الأدوات)",
     handoff: "تسليم هذه الجلسة إلى القناة الرئيسية للمنصة",
+    platform: "التحكم في إعادة محاولة منصات البوابة (list/pause/resume)",
   },
   busy: {
     titlePlain: "السلوك أثناء الانشغال",

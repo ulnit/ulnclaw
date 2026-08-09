@@ -539,16 +539,100 @@ fn clear_platform_lifecycles_for_tests() {
     platform_lifecycles().lock().unwrap().clear();
 }
 
-/// Spawn one platform loop with lifecycle bookkeeping: `starting` now,
-/// `exited` when the loop future completes (senders flip it to
-/// `running` on registration).
-fn spawn_platform_task<F>(tasks: &mut Vec<tokio::task::JoinHandle<()>>, platform: &'static str, fut: F)
-where
-    F: std::future::Future<Output = ()> + Send + 'static,
+/// Retry policy for crashed platform loops (lean hermes
+/// reconnect-watcher parity): bounded attempts with a fixed backoff.
+const MAX_PLATFORM_RETRIES: usize = 3;
+const PLATFORM_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Pause flags for platform retries (hermes `/platform pause|resume`).
+fn platform_pauses() -> &'static std::sync::Mutex<HashMap<String, bool>> {
+    static PAUSES: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+    PAUSES.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Retry-attempt counters (the `/platform list` digest shows them).
+fn platform_retry_counts() -> &'static std::sync::Mutex<HashMap<String, usize>> {
+    static COUNTS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, usize>>> =
+        std::sync::OnceLock::new();
+    COUNTS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Pause retrying for a platform (takes effect when the loop next
+/// exits; a loop already waiting in the retry poll wakes up).
+pub fn pause_platform_retries(platform: &str) {
+    platform_pauses()
+        .lock()
+        .unwrap()
+        .insert(platform.to_string(), true);
+}
+
+/// Clear a pause flag so the retry poll proceeds.
+pub fn resume_platform_retries(platform: &str) {
+    platform_pauses().lock().unwrap().remove(platform);
+}
+
+pub fn platform_retries_paused(platform: &str) -> bool {
+    platform_pauses()
+        .lock()
+        .unwrap()
+        .get(platform)
+        .copied()
+        .unwrap_or(false)
+}
+
+pub fn platform_retry_count(platform: &str) -> usize {
+    platform_retry_counts()
+        .lock()
+        .unwrap()
+        .get(platform)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Spawn one platform loop with lifecycle + retry bookkeeping:
+/// `starting` → `running` (sender registration) → on exit, retry up to
+/// [`MAX_PLATFORM_RETRIES`] times (state `retrying`, honoring pause
+/// flags) before settling on `exited` (hermes reconnect-watcher lean
+/// parity). The factory rebuilds the loop future on every attempt.
+fn spawn_platform_task<F, Fut>(
+    tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+    platform: &'static str,
+    factory: F,
+) where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     set_platform_lifecycle(platform, "starting");
     tasks.push(tokio::spawn(async move {
-        fut.await;
+        let mut attempt = 0usize;
+        loop {
+            factory().await;
+            // Paused before the retry decision: park until resumed.
+            if platform_retries_paused(platform) {
+                set_platform_lifecycle(platform, "paused");
+                while platform_retries_paused(platform) {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+            if attempt >= MAX_PLATFORM_RETRIES {
+                break;
+            }
+            attempt += 1;
+            platform_retry_counts()
+                .lock()
+                .unwrap()
+                .insert(platform.to_string(), attempt);
+            set_platform_lifecycle(platform, "retrying");
+            tokio::time::sleep(PLATFORM_RETRY_DELAY).await;
+            if platform_retries_paused(platform) {
+                set_platform_lifecycle(platform, "paused");
+                while platform_retries_paused(platform) {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+            set_platform_lifecycle(platform, "starting");
+        }
         set_platform_lifecycle(platform, "exited");
     }));
 }
@@ -834,6 +918,8 @@ pub fn platform_state_rows() -> Vec<(&'static str, &'static str, String)> {
                 match platform_lifecycle(entry.id).as_deref() {
                     Some("exited") => "exited",
                     Some("starting") => "starting",
+                    Some("retrying") => "retrying",
+                    Some("paused") => "paused",
                     _ => "connected",
                 }
             };
@@ -861,11 +947,93 @@ pub fn format_platforms_digest(rows: &[(&str, &str, String)]) -> String {
             "connected" => "\u{2713}",
             "not_configured" => "\u{26a0}",
             "exited" => "\u{2717}",
+            "retrying" => "\u{21bb}",
+            "paused" => "\u{23f8}",
             _ => "\u{25cb}",
         };
         out.push_str(&format!("  {glyph} {:<14} {:<14} {id}\n", name, state));
     }
     out
+}
+
+/// hermes `/platform list` digest: connected platforms plus the
+/// retry/pause queue (retrying attempts, paused, exited loops).
+pub fn platform_ops_digest() -> String {
+    let rows = platform_state_rows();
+    let connected: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.2 == "connected")
+        .map(|r| r.0)
+        .collect();
+    let mut lines = vec!["**Gateway platforms**".to_string()];
+    lines.push(if connected.is_empty() {
+        "Connected: (none)".to_string()
+    } else {
+        format!("Connected: {}", connected.join(", "))
+    });
+    let mut issues = Vec::new();
+    for (id, _name, state) in &rows {
+        match state.as_str() {
+            "paused" => issues.push(format!(
+                "  \u{b7} {id} \u{2014} PAUSED. Resume with `/platform resume {id}`."
+            )),
+            "retrying" => issues.push(format!(
+                "  \u{b7} {id} \u{2014} retrying (attempt {})",
+                platform_retry_count(id)
+            )),
+            "exited" => issues.push(format!(
+                "  \u{b7} {id} \u{2014} exited (retries exhausted)"
+            )),
+            "starting" => issues.push(format!("  \u{b7} {id} \u{2014} starting")),
+            _ => {}
+        }
+    }
+    if issues.is_empty() {
+        lines.push("Failed/paused: (none)".to_string());
+    } else {
+        lines.extend(issues);
+    }
+    lines.join("\n")
+}
+
+/// `/platform list|pause|resume [name]` runner (hermes `/platform`
+/// parity, shared by REPL and gateway).
+pub fn run_platform_slash(rest: &str) -> String {
+    let mut parts = rest.split_whitespace();
+    let action = parts.next().unwrap_or("list").to_lowercase();
+    let target = parts.next().map(|t| t.to_lowercase());
+    match action.as_str() {
+        "list" => platform_ops_digest(),
+        "pause" => {
+            let Some(target) = target else {
+                return "Usage: /platform pause <name>".to_string();
+            };
+            if !platform_catalog().iter().any(|entry| entry.id == target) {
+                return format!("Unknown platform: {target}");
+            }
+            pause_platform_retries(&target);
+            format!(
+                "\u{2713} {target} paused. Resume with `/platform resume {target}`."
+            )
+        }
+        "resume" => {
+            let Some(target) = target else {
+                return "Usage: /platform resume <name>".to_string();
+            };
+            if !platform_catalog().iter().any(|entry| entry.id == target) {
+                return format!("Unknown platform: {target}");
+            }
+            let was_paused = platform_retries_paused(&target);
+            resume_platform_retries(&target);
+            if was_paused {
+                format!("\u{2713} {target} resumed \u{2014} restarting.")
+            } else {
+                format!("\u{2713} {target} resumed \u{2014} nothing was paused.")
+            }
+        }
+        _ => "Usage: /platform <list|pause|resume> [name]\n  /platform list \u{2014} show platform status\n  /platform pause <name> \u{2014} stop retrying a failing platform\n  /platform resume <name> \u{2014} re-queue a paused platform"
+            .to_string(),
+    }
 }
 
 /// Parse a reply to a pending slash-confirm prompt (hermes gateway/run.py
@@ -1967,96 +2135,192 @@ pub async fn run_messaging(
         let cfg = msg.telegram.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "telegram", async move {
-            telegram::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "telegram", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { telegram::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.discord.enabled {
         let cfg = msg.discord.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "discord", async move {
-            discord::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "discord", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { discord::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.slack.enabled {
         let cfg = msg.slack.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "slack", async move {
-            slack::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "slack", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { slack::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.signal.enabled {
         let cfg = msg.signal.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "signal", async move {
-            crate::signal::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "signal", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::signal::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.weixin.enabled {
         let cfg = msg.weixin.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "weixin", async move {
-            crate::weixin::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "weixin", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::weixin::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.qq.enabled {
         let cfg = msg.qq.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "qq", async move {
-            crate::qqbot::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "qq", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::qqbot::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.yuanbao.enabled {
         let cfg = msg.yuanbao.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "yuanbao", async move {
-            crate::yuanbao::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "yuanbao", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::yuanbao::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.email.enabled {
         let cfg = msg.email.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "email", async move {
-            crate::email_platform::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "email", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::email_platform::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.mattermost.enabled {
         let cfg = msg.mattermost.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "mattermost", async move {
-            crate::mattermost::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "mattermost", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::mattermost::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.matrix.enabled {
         let cfg = msg.matrix.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "matrix", async move {
-            crate::matrix::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "matrix", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::matrix::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.dingtalk.enabled {
         let cfg = msg.dingtalk.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "dingtalk", async move {
-            crate::dingtalk::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "dingtalk", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::dingtalk::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.wecom.enabled {
         let cfg = msg.wecom.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "wecom", async move {
-            crate::wecom::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "wecom", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::wecom::run(cfg, dispatcher, pairing).await }
+
         });
     }
     // Standalone `notify/notify` sender (hermes `_standalone_send`):
@@ -2067,40 +2331,80 @@ pub async fn run_messaging(
         let cfg = msg.homeassistant.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "homeassistant", async move {
-            crate::homeassistant::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "homeassistant", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::homeassistant::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.whatsapp.enabled {
         let cfg = msg.whatsapp.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "whatsapp", async move {
-            crate::whatsapp::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "whatsapp", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::whatsapp::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.irc.enabled {
         let cfg = msg.irc.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "irc", async move {
-            crate::irc::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "irc", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::irc::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.ntfy.enabled {
         let cfg = msg.ntfy.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "ntfy", async move {
-            crate::ntfy::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "ntfy", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::ntfy::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.simplex.enabled {
         let cfg = msg.simplex.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "simplex", async move {
-            crate::simplex::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "simplex", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::simplex::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.teams.enabled {
@@ -2121,8 +2425,10 @@ pub async fn run_messaging(
         {
             let dispatcher = dispatcher.clone();
             let pairing = pairing.clone();
-            spawn_platform_task(&mut tasks, "google_chat", async move {
-                crate::google_chat::run_pubsub(dispatcher, pairing).await;
+            spawn_platform_task(&mut tasks, "google_chat", move || {
+                let dispatcher = dispatcher.clone();
+                let pairing = pairing.clone();
+                async move { crate::google_chat::run_pubsub(dispatcher, pairing).await }
             });
         }
     }
@@ -2130,16 +2436,32 @@ pub async fn run_messaging(
         let cfg = msg.buzz.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "buzz", async move {
-            crate::buzz::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "buzz", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::buzz::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.photon.enabled {
         let cfg = msg.photon.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "photon", async move {
-            crate::photon::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "photon", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::photon::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.feishu.enabled
@@ -2150,8 +2472,16 @@ pub async fn run_messaging(
         let cfg = msg.feishu.clone();
         let dispatcher = dispatcher.clone();
         let pairing = pairing.clone();
-        spawn_platform_task(&mut tasks, "feishu", async move {
-            crate::feishu_ws::run(cfg, dispatcher, pairing).await;
+        spawn_platform_task(&mut tasks, "feishu", move || {
+
+            let cfg = cfg.clone();
+
+            let dispatcher = dispatcher.clone();
+
+            let pairing = pairing.clone();
+
+            async move { crate::feishu_ws::run(cfg, dispatcher, pairing).await }
+
         });
     }
     if msg.a2a.enabled {

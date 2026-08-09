@@ -2241,6 +2241,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/reload", t.slash.reload],
     ["/history", t.slash.history],
     ["/handoff", t.slash.handoff],
+    ["/platform", t.slash.platform],
     ["/help", t.slash.help],
     ["/skills", t.slash.skills],
     ["/tools", t.slash.tools],
