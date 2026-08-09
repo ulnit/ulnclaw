@@ -6022,6 +6022,122 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/voice-settings` — P756: voice pipeline knobs for the
+/// shell: the STT master switch, transcript echo, active STT provider
+/// and language hint, plus the TTS provider and edge voice.
+async fn voice_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    Json(json!({
+        "stt_enabled": config.stt.enabled,
+        "stt_echo_transcripts": config.stt.echo_transcripts,
+        "stt_provider": config.stt.provider,
+        "stt_language": config.stt.language,
+        "tts_provider": config.tts.provider,
+        "tts_edge_voice": config.tts.edge.voice,
+    }))
+}
+
+/// `PUT /api/voice-settings` — P756: persist voice pipeline knobs from
+/// the shell. Body: `{"key": "stt_enabled"|"stt_echo_transcripts"|
+/// "stt_provider"|"stt_language"|"tts_provider"|"tts_edge_voice",
+/// "value": ...|null}` — null removes the key (falls back to the
+/// default). `tts_provider` is validated against edge/openai/
+/// elevenlabs. Applies to new voice messages.
+async fn update_voice_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    let dotted = match key.as_str() {
+        "stt_enabled" => "stt.enabled",
+        "stt_echo_transcripts" => "stt.echo_transcripts",
+        "stt_provider" => "stt.provider",
+        "stt_language" => "stt.language",
+        "tts_provider" => "tts.provider",
+        "tts_edge_voice" => "tts.edge.voice",
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!("unknown voice key '{other}'"),
+                    "valid_keys": ["stt_enabled", "stt_echo_transcripts", "stt_provider", "stt_language", "tts_provider", "tts_edge_voice"],
+                })),
+            )
+        }
+    };
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "stt_enabled" | "stt_echo_transcripts" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("voice key '{key}' must be a boolean") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "tts_provider" => {
+                    let text = v.as_str().map(str::trim).unwrap_or("");
+                    if !matches!(text, "edge" | "openai" | "elevenlabs") {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "tts.provider must be one of edge|openai|elevenlabs" })),
+                        );
+                    }
+                    raw = Some(text.to_string());
+                }
+                "stt_provider" | "stt_language" | "tts_edge_voice" => {
+                    let text = v.as_str().map(str::trim).unwrap_or("");
+                    if text.is_empty() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("voice key '{key}' must be a non-empty string") })),
+                        );
+                    }
+                    raw = Some(text.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(_) => crate::config_cmd::set_config_value(dotted, raw.as_deref().unwrap_or(""), true)
+            .map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/cron-settings` — P755: cron delivery knobs for the
 /// shell: whether deliveries are wrapped with a job-name header/footer
 /// and whether successful deliveries mirror into the origin chat's
@@ -8669,6 +8785,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/tool-output-settings", get(tool_output_settings_api).put(update_tool_output_settings_api))
         .route("/api/logging-settings", get(logging_settings_api).put(update_logging_settings_api))
         .route("/api/cron-settings", get(cron_settings_api).put(update_cron_settings_api))
+        .route("/api/voice-settings", get(voice_settings_api).put(update_voice_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -19755,6 +19872,93 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/cron-settings", Some("sekret")).await;
         assert_eq!(body["mirror_delivery"], false, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_voice_settings_editor() {
+        // P756: GET /api/voice-settings surfaces STT/TTS knobs; PUT
+        // persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: STT on (local, en, echo on), TTS openai, edge voice
+        // en-US-AriaNeural.
+        let (status, body) = get_json(app.clone(), "/api/voice-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["stt_enabled"], true, "{body}");
+        assert_eq!(body["stt_echo_transcripts"], true, "{body}");
+        assert_eq!(body["stt_provider"], "local", "{body}");
+        assert_eq!(body["stt_language"], "en", "{body}");
+        assert_eq!(body["tts_provider"], "openai", "{body}");
+        assert_eq!(body["tts_edge_voice"], "en-US-AriaNeural", "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("stt_enabled", json!(false)),
+            ("stt_echo_transcripts", json!(false)),
+            ("stt_provider", json!("groq")),
+            ("stt_language", json!("zh")),
+            ("tts_provider", json!("edge")),
+            ("tts_edge_voice", json!("zh-CN-XiaoxiaoNeural")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/voice-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/voice-settings", Some("sekret")).await;
+        assert_eq!(body["stt_enabled"], false, "{body}");
+        assert_eq!(body["stt_echo_transcripts"], false, "{body}");
+        assert_eq!(body["stt_provider"], "groq", "{body}");
+        assert_eq!(body["stt_language"], "zh", "{body}");
+        assert_eq!(body["tts_provider"], "edge", "{body}");
+        assert_eq!(body["tts_edge_voice"], "zh-CN-XiaoxiaoNeural", "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/voice-settings", Some("sekret"),
+            json!({ "key": "tts_provider", "value": "espeak" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/voice-settings", Some("sekret"),
+            json!({ "key": "stt_enabled", "value": "on" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/voice-settings", Some("sekret"),
+            json!({ "key": "stt_language", "value": "  " }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/voice-settings", Some("sekret"),
+            json!({ "key": "tts_provider", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/voice-settings", Some("sekret")).await;
+        assert_eq!(body["tts_provider"], "openai", "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

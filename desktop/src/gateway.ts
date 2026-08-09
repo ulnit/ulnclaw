@@ -628,6 +628,16 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/voice-settings` — P756 voice pipeline knobs. */
+export interface VoiceSettingsPayload {
+  stt_enabled: boolean;
+  stt_echo_transcripts: boolean;
+  stt_provider: string;
+  stt_language: string;
+  tts_provider: string;
+  tts_edge_voice: string;
+}
+
 /** `GET /api/cron-settings` — P755 cron delivery knobs. */
 export interface CronSettingsPayload {
   wrap_response: boolean;
@@ -4084,6 +4094,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/voice-settings — P756 voice pipeline knobs. */
+  async voiceSettings(): Promise<VoiceSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/voice-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`voice-settings HTTP ${response.status}`);
+    return (await response.json()) as VoiceSettingsPayload;
+  }
+
+  /** P756: PUT /api/voice-settings — persist a voice pipeline knob;
+   * null removes the override. */
+  async updateVoiceSetting(
+    key: string,
+    value: string | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/voice-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `voice-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/cron-settings — P755 cron delivery knobs. */
