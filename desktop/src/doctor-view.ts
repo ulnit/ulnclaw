@@ -81,6 +81,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
       </section>
+      <section id="doctor-hooks" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="hooksPanel.title">Event hooks</h3>
+        <div id="hooks-rows"></div>
+      </section>
       <section id="doctor-cgroup" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="cgroupPanel.title">Cgroup reaper</h3>
         <div id="cgroup-rows"></div>
@@ -296,6 +300,7 @@ export class DoctorWidget {
     this.loadPhrases().catch(() => undefined);
     this.loadTerminal().catch(() => undefined);
     this.loadCgroup().catch(() => undefined);
+    this.loadHooks().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2417,6 +2422,50 @@ export class DoctorWidget {
         addRow(
           platform,
           `${catalog.status_count} ${t.phrasesPanel.statusWord} \u00b7 ${catalog.generic_count} ${t.phrasesPanel.genericWord}`,
+        );
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadHooks(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-hooks") as HTMLElement;
+    const rows = this.root.querySelector("#hooks-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.hooksInfo();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      addRow(
+        t.hooksPanel.count,
+        payload.count > 0
+          ? String(payload.count)
+          : t.monitoring.off,
+      );
+      for (const hook of payload.hooks) {
+        const desc = hook.description
+          ? ` \u00b7 ${escapeHtmlDoctor(hook.description)}`
+          : "";
+        addRow(
+          hook.name,
+          `${escapeHtmlDoctor(hook.events.join(", "))}${desc}`,
         );
       }
       section.hidden = false;

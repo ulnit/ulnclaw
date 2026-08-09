@@ -628,6 +628,19 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/hooks` — P736 loaded event hooks. */
+export interface HookInfoRow {
+  name: string;
+  description: string;
+  events: string[];
+  path: string;
+}
+
+export interface HooksInfoPayload {
+  hooks: HookInfoRow[];
+  count: number;
+}
+
 /** `GET /api/cgroup` — P733 cgroup orphan-reaper posture. */
 export interface CgroupInfoPayload {
   supported: boolean;
@@ -2553,6 +2566,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`status-phrases HTTP ${response.status}`);
     return (await response.json()) as StatusPhrasesPayload;
+  }
+
+  /** GET /api/hooks — P736 loaded event hooks. */
+  async hooksInfo(): Promise<HooksInfoPayload> {
+    const response = await fetch(this.endpoint("/api/hooks"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`hooks HTTP ${response.status}`);
+    return (await response.json()) as HooksInfoPayload;
   }
 
   /** GET /api/cgroup — P733 cgroup orphan-reaper posture. */

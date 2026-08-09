@@ -130,6 +130,7 @@ pub mod shutdown_watchdog;
 pub mod shutdown_flush;
 pub mod shutdown_forensics;
 pub mod doctor;
+pub mod event_hooks;
 pub mod dump;
 pub mod env_guard;
 pub mod env_probe;

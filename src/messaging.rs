@@ -2445,6 +2445,20 @@ Use `/resume` with no                      arguments to see available sessions."
             }
         }
         prompt.push_str(&attachment_note_refs(&referenced));
+        // P736: event hooks — agent:start (hermes hooks.py emit with
+        // the documented context fields; message truncated to 500).
+        crate::event_hooks::emit(
+            "agent:start",
+            serde_json::json!({
+                "platform": event.platform,
+                "user_id": event.sender_id,
+                "chat_id": event.chat_id,
+                "thread_id": "",
+                "chat_type": crate::channel_directory::chat_type_for(&event.platform, &event.chat_id).unwrap_or_default(),
+                "session_id": session_id,
+                "message": crate::event_hooks::truncate_context_text(&event.text),
+            }),
+        );
         let result = self
             .agent
             .run_with_session_images(&prompt, images, Some(history.clone()), Some(&session_id))
@@ -2470,6 +2484,20 @@ Use `/resume` with no                      arguments to see available sessions."
         } else {
             result.content
         };
+        // P736: event hooks — agent:end adds the truncated response.
+        crate::event_hooks::emit(
+            "agent:end",
+            serde_json::json!({
+                "platform": event.platform,
+                "user_id": event.sender_id,
+                "chat_id": event.chat_id,
+                "thread_id": "",
+                "chat_type": crate::channel_directory::chat_type_for(&event.platform, &event.chat_id).unwrap_or_default(),
+                "session_id": session_id,
+                "message": crate::event_hooks::truncate_context_text(&event.text),
+                "response": crate::event_hooks::truncate_context_text(&reply),
+            }),
+        );
         Ok(DispatchOutcome {
             reply,
             transcript_echoes,

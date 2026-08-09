@@ -5610,6 +5610,24 @@ async fn cgroup_info_api(State(_state): State<Arc<GatewayState>>) -> Json<Value>
     }))
 }
 
+/// `GET /api/hooks` — P736 ops surface over the event-hook registry
+/// (hermes hooks.py): metadata for every loaded hook.
+async fn hooks_info_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let hooks: Vec<Value> = crate::event_hooks::loaded_hooks()
+        .into_iter()
+        .map(|hook| {
+            json!({
+                "name": hook.name,
+                "description": hook.description,
+                "events": hook.events,
+                "path": hook.path,
+            })
+        })
+        .collect();
+    let count = hooks.len();
+    Json(json!({ "hooks": hooks, "count": count }))
+}
+
 /// `GET /api/status-phrases` — P731 ops surface over the P722
 /// status-phrase catalogs: the resolved global catalog (built-ins +
 /// conventional profile files + `[display.status_phrases]`), which
@@ -7300,6 +7318,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/status-phrases", get(status_phrases_api))
         .route("/api/terminal", get(terminal_info_api))
         .route("/api/cgroup", get(cgroup_info_api))
+        .route("/api/hooks", get(hooks_info_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -8458,6 +8477,13 @@ pub async fn serve_multiplex(
     } else {
         None
     };
+    // P736: event hooks (hermes hooks.py) — discover user hooks under
+    // <home>/hooks/ once, then announce gateway:startup.
+    if let Ok(home) = crate::config::ensure_home() {
+        crate::event_hooks::init(&home);
+        crate::event_hooks::emit("gateway:startup", serde_json::json!({}));
+    }
+
     // P726: loop heartbeat file + out-of-loop liveness watchdog
     // (hermes shutdown_watchdog): external monitors can tell "process
     // alive" from "runtime frozen", and a frozen runtime is hard-exited
@@ -25900,6 +25926,19 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             // entry presence is environment dependent.
             assert!(body["cgroup_path"].is_string() || body["cgroup_path"].is_null(), "{body}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_hooks_endpoint_shape() {
+        // P736: hooks surface is auth-gated and lists loaded hooks
+        // (empty unless <home>/hooks carries discovered hooks).
+        let app = router(test_state());
+        let (status, _) = get_json(app.clone(), "/api/hooks", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, body) = get_json(app, "/api/hooks", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["hooks"].is_array(), "{body}");
+        assert!(body["count"].is_u64(), "{body}");
     }
 
     #[tokio::test]
