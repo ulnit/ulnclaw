@@ -881,6 +881,13 @@ pub struct GatewayConfig {
     /// prefixes so persisted transcripts stay clean regardless.
     #[serde(default)]
     pub message_timestamps: bool,
+    /// Out-of-loop runtime liveness watchdog (hermes
+    /// `gateway.loop_watchdog`, default on): a plain OS thread probes
+    /// the async runtime every 30 s and hard-exits with the
+    /// service-restart code after 3 consecutive missed probes so the
+    /// supervisor can revive a frozen gateway.
+    #[serde(default = "default_true")]
+    pub loop_watchdog: bool,
     /// systemd watchdog interval in seconds (hermes
     /// `gateway.systemd_watchdog_seconds`, 0 = disabled): arms the
     /// sd_notify WATCHDOG=1 sampler + READY/STOPPING notifications
@@ -923,6 +930,7 @@ impl Default for GatewayConfig {
             multiplex_profiles: false,
             profile_routes: Vec::new(),
             message_timestamps: false,
+            loop_watchdog: true,
             systemd_watchdog_seconds: 0,
             max_concurrent_sessions: None,
             session_stall_timeout_secs: default_session_stall_timeout(),

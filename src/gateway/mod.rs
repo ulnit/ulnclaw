@@ -8152,6 +8152,25 @@ pub async fn serve_multiplex(
     } else {
         None
     };
+    // P726: loop heartbeat file + out-of-loop liveness watchdog
+    // (hermes shutdown_watchdog): external monitors can tell "process
+    // alive" from "runtime frozen", and a frozen runtime is hard-exited
+    // after 3 missed probes so the supervisor revives the gateway.
+    let heartbeat_task = tokio::spawn(crate::shutdown_watchdog::loop_heartbeat_forever(
+        std::time::Duration::from_secs(crate::shutdown_watchdog::DEFAULT_HEARTBEAT_INTERVAL_S as u64),
+        None,
+    ));
+    let mut loop_watchdog = if state.agent.context().config.gateway.loop_watchdog {
+        crate::shutdown_watchdog::start_loop_liveness_watchdog(
+            tokio::runtime::Handle::current(),
+            std::time::Duration::from_secs(crate::shutdown_watchdog::DEFAULT_LOOP_WATCHDOG_INTERVAL_S as u64),
+            std::time::Duration::from_secs(crate::shutdown_watchdog::DEFAULT_LOOP_WATCHDOG_TIMEOUT_S as u64),
+            crate::shutdown_watchdog::DEFAULT_LOOP_WATCHDOG_MAX_STRIKES,
+            GATEWAY_SERVICE_RESTART_EXIT_CODE,
+        )
+    } else {
+        None
+    };
     // P725: external drain-marker watcher (hermes drain_control):
     // the dashboard writes/removes `<home>/.drain_request.json`;
     // presence stamped with the current instantiation epoch flips the
@@ -8164,6 +8183,10 @@ pub async fn serve_multiplex(
         .await
         .map_err(|e| AgentError::config(format!("gateway serve: {}", e)));
     drain_watcher.abort();
+    heartbeat_task.abort();
+    if let Some(watchdog) = loop_watchdog.as_mut() {
+        watchdog.stop();
+    }
     if let Some(handle) = stall_watcher {
         handle.abort();
     }
@@ -12187,6 +12210,30 @@ async fn resolve_gateway_slash(
             let active = active_run_count(state).await;
             let draining = state.clone();
             tokio::spawn(async move {
+                // P726: out-of-loop shutdown watchdog (hermes
+                // shutdown_watchdog.arm_shutdown_watchdog) — if the
+                // drain path wedges past drain-timeout + grace, a
+                // plain OS thread dumps diagnostics and forces the
+                // exit so the supervisor can revive the gateway.
+                let watchdog_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                crate::shutdown_watchdog::arm_shutdown_watchdog(
+                    watchdog_done.clone(),
+                    crate::shutdown_watchdog::ShutdownWatchdogOptions {
+                        delay: std::time::Duration::from_secs_f64(
+                            crate::shutdown_watchdog::resolve_shutdown_watchdog_delay(
+                                RESTART_DRAIN_TIMEOUT_SECS as f64,
+                                crate::shutdown_watchdog::DEFAULT_SHUTDOWN_WATCHDOG_GRACE_S,
+                            ),
+                        ),
+                        snapshot_fn: Some(std::sync::Arc::new(|| {
+                            serde_json::json!({"trigger": "restart_drain"})
+                        })),
+                        exit_code: GATEWAY_SERVICE_RESTART_EXIT_CODE,
+                        dump_path: None,
+                        home: None,
+                        exit_fn: std::sync::Arc::new(|code| std::process::exit(code)),
+                    },
+                );
                 let remaining = drain_active_runs(
                     &draining,
                     std::time::Duration::from_secs(RESTART_DRAIN_TIMEOUT_SECS),
@@ -12197,6 +12244,9 @@ async fn resolve_gateway_slash(
                         "gateway restart drain timeout: {remaining} run(s) still active"
                     );
                 }
+                // P726: drain settled (or timed out in-band) — disarm
+                // the hard-exit backstop; the normal exit path runs.
+                watchdog_done.store(true, std::sync::atomic::Ordering::SeqCst);
                 // Best-effort pidfile cleanup so the single-instance
                 // guard never points at a dead process between exit
                 // and the supervisor restart.
