@@ -870,6 +870,13 @@ export interface ModelInfoPayload {
   capabilities: { vision: boolean; reasoning: boolean; tools: boolean } | null;
 }
 
+/** P635: approvals mode state (GET /api/approvals). */
+export interface ApprovalsPayload {
+  mode: string;
+  modes: string[];
+  note?: string;
+}
+
 /** P626: Priority Processing state (GET /api/fast). */
 export interface FastState {
   supported: boolean;
@@ -3328,6 +3335,24 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`recap HTTP ${response.status}`);
     const value = await response.json();
     return typeof value.recap === "string" ? value.recap : "";
+  }
+
+  /** P635: GET /api/approvals — approvals mode + allowed values. */
+  async approvalsGet(): Promise<ApprovalsPayload> {
+    const response = await fetch(this.endpoint(`/api/approvals`), { headers: this.headers() });
+    if (!response.ok) throw new Error(`approvals HTTP ${response.status}`);
+    return (await response.json()) as ApprovalsPayload;
+  }
+
+  /** P635: PUT /api/approvals — persist approvals.mode. */
+  async approvalsSet(mode: string): Promise<{ ok: boolean; mode: string }> {
+    const response = await fetch(this.endpoint(`/api/approvals`), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ mode }),
+    });
+    if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
+    return (await response.json()) as { ok: boolean; mode: string };
   }
 
   /** P626: GET /api/fast — Priority Processing state. */

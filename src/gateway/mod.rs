@@ -27,6 +27,7 @@
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
 //!   - `GET/PUT /api/fast` — Priority Processing (service_tier) toggle
+//!   - `GET/PUT /api/approvals` — approvals.mode (manual|smart|off) picker
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
 //!     `POST /v1/runs/:id/stop`
 //!   - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/{id}`,
@@ -1485,6 +1486,34 @@ fn session_cwd(state: &GatewayState, session_id: &str) -> std::path::PathBuf {
         })
 }
 
+/// Persist `approvals.mode` in config.toml (manual|smart|off; hermes
+/// approval-mode-menu parity). Shared by the `/yolo` slash command and
+/// `PUT /api/approvals` (P635). Returns the normalized mode written.
+fn persist_approvals_mode(mode: &str) -> std::result::Result<String, String> {
+    let normalized = match mode.trim().to_ascii_lowercase().as_str() {
+        "manual" | "smart" | "off" => mode.trim().to_ascii_lowercase(),
+        other => {
+            return Err(format!(
+                "approvals.mode must be one of manual|smart|off, got: {other}"
+            ))
+        }
+    };
+    let path = crate::config_cmd::config_path();
+    let mut doc = crate::config_cmd::load_toml(&path)?;
+    let Some(root) = doc.as_table_mut() else {
+        return Err("config root is not a table".to_string());
+    };
+    let approvals_entry = root
+        .entry("approvals".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let Some(approvals_table) = approvals_entry.as_table_mut() else {
+        return Err("config [approvals] is not a table".to_string());
+    };
+    approvals_table.insert("mode".to_string(), toml::Value::String(normalized.clone()));
+    crate::config_cmd::save_toml(&path, &doc)?;
+    Ok(normalized)
+}
+
 /// Persist `agent.service_tier` in config.toml ("fast" or "normal";
 /// hermes `/fast --global`). Shared by the `/fast` slash command and
 /// `PUT /api/fast` (P625). Returns the normalized value written.
@@ -1665,6 +1694,36 @@ async fn reasoning_set(Json(body): Json<Value>) -> Response {
         }))
         .into_response(),
         Err(e) if e.contains("reasoning_effort must be one of") => bad_request(&e, None),
+        Err(e) => server_error(&e),
+    }
+}
+
+/// `GET /api/approvals` — the persisted approvals mode + the allowed
+/// values (P635; hermes approval-mode-menu backend parity).
+async fn approvals_get() -> Json<Value> {
+    let path = crate::config_cmd::config_path();
+    let mode = crate::config::UlncLawConfig::load(Some(&path))
+        .map(|c| c.approvals.mode)
+        .unwrap_or_else(|_| "manual".to_string());
+    Json(json!({
+        "mode": mode,
+        "modes": ["manual", "smart", "off"],
+        "note": "manual prompts a human; smart asks the auxiliary guardian first; off auto-approves except approvals.deny rules",
+    }))
+}
+
+/// `PUT /api/approvals` — persist `approvals.mode` (manual|smart|off);
+/// applies to new runs.
+async fn approvals_set(Json(body): Json<Value>) -> Response {
+    let raw = body["mode"].as_str().map(str::trim).unwrap_or("");
+    match persist_approvals_mode(raw) {
+        Ok(mode) => Json(json!({
+            "ok": true,
+            "mode": mode,
+            "note": "applies to new runs",
+        }))
+        .into_response(),
+        Err(e) if e.contains("must be one of") => bad_request(&e, None),
         Err(e) => server_error(&e),
     }
 }
@@ -6282,6 +6341,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model/recommended-default", get(model_recommended_default))
         .route("/api/reasoning", get(reasoning_get).put(reasoning_set))
         .route("/api/fast", get(fast_get).put(fast_set))
+        .route("/api/approvals", get(approvals_get).put(approvals_set))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -11320,28 +11380,9 @@ async fn resolve_gateway_slash(
                     ))
                 }
             };
-            let mut doc = match crate::config_cmd::load_toml(&path) {
-                Ok(v) => v,
-                Err(e) => {
-                    return Some(GatewaySlash::Direct(format!("config load failed: {e}")))
-                }
-            };
-            let Some(root) = doc.as_table_mut() else {
-                return Some(GatewaySlash::Direct(
-                    "config root is not a table".to_string(),
-                ));
-            };
-            let approvals_entry = root
-                .entry("approvals".to_string())
-                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-            let Some(approvals_table) = approvals_entry.as_table_mut() else {
-                return Some(GatewaySlash::Direct(
-                    "config [approvals] is not a table".to_string(),
-                ));
-            };
-            approvals_table.insert("mode".to_string(), toml::Value::String(mode.to_string()));
-            if let Err(e) = crate::config_cmd::save_toml(&path, &doc) {
-                return Some(GatewaySlash::Direct(format!("config save failed: {e}")));
+            match persist_approvals_mode(mode) {
+                Ok(_) => {}
+                Err(e) => return Some(GatewaySlash::Direct(e)),
             }
             Some(GatewaySlash::Direct(if mode == "off" {
                 "yolo ON \u{2014} approvals.mode=\"off\" persisted: dangerous commands auto-approve except approvals.deny rules; applies to new runs".to_string()
@@ -14953,6 +14994,54 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("not supported"));
+    }
+
+    #[tokio::test]
+    async fn test_approvals_endpoint_round_trip() {
+        // P635 write path: PUT /api/approvals persists approvals.mode
+        // (isolated ULNCLAW_HOME under the env lock).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        // Default mode surfaces with the allowed values.
+        let (status, body) = get_json(app.clone(), "/api/approvals", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["mode"], "manual", "{body}");
+        assert_eq!(body["modes"], json!(["manual", "smart", "off"]), "{body}");
+
+        // Switch to smart, verify on disk.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/approvals", None, json!({"mode": "smart"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "smart", "{body}");
+        let config_text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(config_text.contains("mode = \"smart\""), "{config_text}");
+        let (_, body) = get_json(app.clone(), "/api/approvals", None).await;
+        assert_eq!(body["mode"], "smart", "{body}");
+
+        // Invalid mode → 400 with the allowed-list message.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/approvals", None, json!({"mode": "yolo"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("manual|smart|off"));
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

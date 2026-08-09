@@ -97,6 +97,10 @@ const state = {
   fastMode: "normal" as string,
   fastSupported: false,
   fastLoaded: false,
+  /** P635: approvals-mode chip state. */
+  approvalsMode: "manual" as string,
+  approvalsModes: [] as string[],
+  approvalsLoaded: false,
   reasoningLevels: [] as string[],
   reasoningLoaded: false,
   /** P620: active personality name + configured personas. */
@@ -215,6 +219,8 @@ const el = {
   contextPop: document.getElementById("context-pop")!,
   fastBadge: document.getElementById("fast-badge")!,
   fastPop: document.getElementById("fast-pop")!,
+  approvalsBadge: document.getElementById("approvals-badge")!,
+  approvalsPop: document.getElementById("approvals-pop")!,
   dayJump: document.getElementById("day-jump") as HTMLSelectElement,
   chatActions: document.getElementById("chat-header-actions")!,
   chatRename: document.getElementById("chat-rename") as HTMLButtonElement,
@@ -1612,6 +1618,66 @@ async function loadReasoningState(): Promise<void> {
   }
 }
 
+/** P635: approvals-mode chip (hermes approval-mode-menu parity):
+ * shows the persisted approvals.mode; the popup switches it through
+ * PUT /api/approvals. */
+function refreshApprovalsBadge(): void {
+  const mode = state.approvalsMode;
+  el.approvalsBadge.textContent = `\u{1F6E1} ${mode}`;
+  el.approvalsBadge.title = t.chrome.approvalsTitle;
+  el.approvalsBadge.classList.toggle("pinned", mode === "off");
+  el.approvalsBadge.hidden = false;
+}
+
+async function loadApprovalsState(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const payload = await state.client.approvalsGet();
+    state.approvalsMode = payload.mode;
+    state.approvalsModes = payload.modes ?? [];
+    refreshApprovalsBadge();
+  } catch {
+    // Gateway without /api/approvals (or unreachable): keep chip hidden.
+  }
+}
+
+function toggleApprovalsPop(): void {
+  if (!el.approvalsPop.hidden) {
+    el.approvalsPop.hidden = true;
+    return;
+  }
+  const modes = state.approvalsModes.length
+    ? state.approvalsModes
+    : ["manual", "smart", "off"];
+  el.approvalsPop.innerHTML = modes
+    .map((mode) => {
+      const active = mode === state.approvalsMode;
+      return `<div class="slash-item${active ? " selected" : ""}" data-mode="${mode}">\u{1F6E1} ${escapeHtmlInfo(mode)}</div>`;
+    })
+    .join("");
+  const rect = el.approvalsBadge.getBoundingClientRect();
+  el.approvalsPop.style.position = "fixed";
+  el.approvalsPop.style.left = `${rect.left}px`;
+  el.approvalsPop.style.top = `${rect.bottom + 6}px`;
+  el.approvalsPop.style.right = "auto";
+  el.approvalsPop.style.bottom = "auto";
+  el.approvalsPop.style.minWidth = "120px";
+  el.approvalsPop.hidden = false;
+}
+
+async function applyApprovalsPick(mode: string): Promise<void> {
+  el.approvalsPop.hidden = true;
+  if (!state.client) return;
+  try {
+    const payload = await state.client.approvalsSet(mode);
+    state.approvalsMode = payload.mode;
+    refreshApprovalsBadge();
+    notifySuccess(`\u{1F6E1} ${payload.mode}`);
+  } catch (error) {
+    notifyError(String(error));
+  }
+}
+
 /** P626: Priority Processing chip (hermes /fast desktop parity) —
  * hidden unless the gateway reports the model supports it. */
 function refreshFastBadge(): void {
@@ -1977,6 +2043,11 @@ async function pollHealth(): Promise<void> {
     if (!state.fastLoaded) {
       state.fastLoaded = true;
       void loadFastState();
+    }
+    // P635: one-shot approvals-mode chip load.
+    if (!state.approvalsLoaded) {
+      state.approvalsLoaded = true;
+      void loadApprovalsState();
     }
     // P365: enrich the dot tooltip with the detailed open probe.
     const detailed = await state.client.healthDetailed();
@@ -3609,6 +3680,22 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     const target = event.target as Node;
     if (el.fastPop.contains(target) || el.fastBadge.contains(target)) return;
     el.fastPop.hidden = true;
+  });
+  el.approvalsBadge.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleApprovalsPop();
+  });
+  el.approvalsPop.addEventListener("click", (event) => {
+    const item = (event.target as HTMLElement).closest(".slash-item") as HTMLElement | null;
+    if (!item) return;
+    const mode = item.dataset.mode;
+    if (mode) void applyApprovalsPick(mode);
+  });
+  document.addEventListener("click", (event) => {
+    if (el.approvalsPop.hidden) return;
+    const target = event.target as Node;
+    if (el.approvalsPop.contains(target) || el.approvalsBadge.contains(target)) return;
+    el.approvalsPop.hidden = true;
   });
   document.addEventListener("click", (event) => {
     if (el.contextPop.hidden) return;
