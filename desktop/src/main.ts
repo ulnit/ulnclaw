@@ -1993,6 +1993,14 @@ async function updateStatusBar(): Promise<void> {
         "usage",
       ]);
     }
+    // P633: the open session's context-window usage (hermes status-bar
+    // context parity) — snapshot maintained by the chat-header meter.
+    if (state.contextBreakdown && state.contextBreakdown.context_max > 0) {
+      segs.push([
+        t.chrome.statusCtx.replace("{pct}", String(state.contextBreakdown.context_percent)),
+        "chat",
+      ]);
+    }
     if (tasks) {
       const todo = tasks.filter((task) =>
         ["todo", "ready", "scheduled"].includes(task.status),
