@@ -77,6 +77,17 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="stallWatch.title">Stall watch</h3>
         <div id="stall-watch-rows"></div>
       </section>
+      <section id="doctor-gateway-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="gatewaySettingsPanel.title">Gateway settings</h3>
+        <div id="gateway-settings-rows"></div>
+        <div id="gateway-settings-editor" class="monitoring-row" hidden>
+          <select id="gateway-settings-key" class="ghost"></select>
+          <input id="gateway-settings-value" class="ghost" />
+          <button id="gateway-settings-apply" class="ghost mcp-add-btn" data-i18n="gatewaySettingsPanel.apply">Apply</button>
+          <button id="gateway-settings-clear" class="ghost mcp-add-btn" data-i18n="gatewaySettingsPanel.clear">Clear</button>
+          <span id="gateway-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -326,6 +337,7 @@ export class DoctorWidget {
     }
     this.loadMonitoring().catch(() => undefined);
     this.loadGatewayHealth().catch(() => undefined);
+    this.loadGatewaySettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2409,6 +2421,117 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadGatewaySettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-gateway-settings") as HTMLElement;
+    const rows = this.root.querySelector("#gateway-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.gatewaySettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      const envBadge = `<span class="models-view-badge warn">${escapeHtmlDoctor(t.gatewaySettingsPanel.envOverride)}</span>`;
+      const listener = `${escapeHtmlDoctor(payload.host)}:${payload.port}`;
+      addRow(
+        t.gatewaySettingsPanel.address,
+        payload.host_env_override || payload.port_env_override
+          ? `${listener} \u00b7 ${envBadge}`
+          : listener,
+      );
+      addRow(
+        t.gatewaySettingsPanel.apiKey,
+        payload.key_configured
+          ? payload.key_env_override
+            ? `${on} \u00b7 ${envBadge}`
+            : on
+          : off,
+      );
+      addRow(t.gatewaySettingsPanel.multiplex, payload.multiplex_profiles ? on : off);
+      addRow(t.gatewaySettingsPanel.profileRoutes, String(payload.profile_routes));
+      addRow(t.gatewaySettingsPanel.messageTimestamps, payload.message_timestamps ? on : off);
+      addRow(t.gatewaySettingsPanel.loopWatchdog, payload.loop_watchdog ? on : off);
+      addRow(
+        t.gatewaySettingsPanel.systemdWatchdog,
+        payload.systemd_watchdog_seconds > 0 ? `${payload.systemd_watchdog_seconds}s` : off,
+      );
+      addRow(
+        t.gatewaySettingsPanel.sessionCap,
+        payload.max_concurrent_sessions !== null && payload.max_concurrent_sessions > 0
+          ? String(payload.max_concurrent_sessions)
+          : off,
+      );
+      addRow(
+        t.gatewaySettingsPanel.stallTimeout,
+        payload.session_stall_env_override
+          ? `${payload.session_stall_timeout_secs}s \u00b7 ${envBadge}`
+          : `${payload.session_stall_timeout_secs}s`,
+      );
+      // P745: gateway behavior editor — pick a key, type the value,
+      // Apply persists through PUT /api/gateway-settings, Clear removes
+      // the override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#gateway-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#gateway-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#gateway-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#gateway-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#gateway-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#gateway-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = [
+          "multiplex_profiles",
+          "message_timestamps",
+          "loop_watchdog",
+          "systemd_watchdog_seconds",
+          "max_concurrent_sessions",
+          "session_stall_timeout_secs",
+        ];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | number | boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateGatewaySetting(keySel.value, value);
+            await this.loadGatewaySettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number | boolean =
+            raw === "true" ? true : raw === "false" ? false : /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

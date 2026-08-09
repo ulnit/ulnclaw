@@ -628,6 +628,24 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/gateway-settings` — P745 resolved gateway settings. */
+export interface GatewaySettingsPayload {
+  host: string;
+  port: number;
+  host_env_override: boolean;
+  port_env_override: boolean;
+  key_configured: boolean;
+  key_env_override: boolean;
+  multiplex_profiles: boolean;
+  profile_routes: number;
+  message_timestamps: boolean;
+  loop_watchdog: boolean;
+  systemd_watchdog_seconds: number;
+  max_concurrent_sessions: number | null;
+  session_stall_timeout_secs: number;
+  session_stall_env_override: boolean;
+}
+
 /** `GET /api/status-phrases/preview` — P743 live rotation sample. */
 export interface StatusPhrasesPreviewPayload {
   platform: string | null;
@@ -3968,6 +3986,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/gateway-settings — P745 resolved gateway settings. */
+  async gatewaySettings(): Promise<GatewaySettingsPayload> {
+    const response = await fetch(this.endpoint("/api/gateway-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`gateway-settings HTTP ${response.status}`);
+    return (await response.json()) as GatewaySettingsPayload;
+  }
+
+  /** P745: PUT /api/gateway-settings — persist a gateway behavior knob;
+   * null removes the override. Listener identity stays read-only. */
+  async updateGatewaySetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/gateway-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `gateway-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** P744: PUT /api/approvals/settings — persist an approvals knob

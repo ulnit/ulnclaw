@@ -5956,6 +5956,150 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/gateway-settings` — P745: resolved gateway listener +
+/// behavior settings for the shell. Host/port/key report the effective
+/// values after env overrides (`ULNCLAW_GATEWAY_HOST/PORT/KEY`) with
+/// override flags, but the key itself is never leaked — only whether
+/// one is configured. Behavior knobs (multiplexing, message
+/// timestamps, watchdogs, session cap, stall timeout) come straight
+/// from `config.toml`.
+async fn gateway_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let gateway = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .map(|c| c.gateway)
+        .unwrap_or_default();
+    let resolved = gateway.resolved();
+    let env_set = |name: &str| {
+        std::env::var(name)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    };
+    Json(json!({
+        "host": resolved.host,
+        "port": resolved.port,
+        "host_env_override": env_set("ULNCLAW_GATEWAY_HOST"),
+        "port_env_override": env_set("ULNCLAW_GATEWAY_PORT"),
+        "key_configured": resolved
+            .key
+            .as_deref()
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false),
+        "key_env_override": env_set("ULNCLAW_GATEWAY_KEY"),
+        "multiplex_profiles": gateway.multiplex_profiles,
+        "profile_routes": gateway.profile_routes.len(),
+        "message_timestamps": gateway.message_timestamps,
+        "loop_watchdog": gateway.loop_watchdog,
+        "systemd_watchdog_seconds": gateway.systemd_watchdog_seconds,
+        "max_concurrent_sessions": gateway.max_concurrent_sessions,
+        "session_stall_timeout_secs": gateway.session_stall_timeout_secs,
+        "session_stall_env_override": env_set("ULNCLAW_SESSION_STALL_TIMEOUT"),
+    }))
+}
+
+/// `PUT /api/gateway-settings` — P745: persist gateway behavior knobs
+/// from the shell. Body: `{"key": "multiplex_profiles"|
+/// "message_timestamps"|"loop_watchdog"|"systemd_watchdog_seconds"|
+/// "max_concurrent_sessions"|"session_stall_timeout_secs",
+/// "value": ...|null}` — null removes the key (falls back to the
+/// default). Listener identity (host/port/key) is deliberately not
+/// editable here: a bad write could strand the dashboard, and the key
+/// is a secret. Applies on gateway restart.
+async fn update_gateway_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "multiplex_profiles",
+        "message_timestamps",
+        "loop_watchdog",
+        "systemd_watchdog_seconds",
+        "max_concurrent_sessions",
+        "session_stall_timeout_secs",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown gateway key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "multiplex_profiles" | "message_timestamps" | "loop_watchdog" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("gateway key '{key}' must be a boolean") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "systemd_watchdog_seconds" | "max_concurrent_sessions" => {
+                    if !v.is_u64() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("gateway key '{key}' must be a non-negative integer") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "session_stall_timeout_secs" => {
+                    let number = v
+                        .as_f64()
+                        .filter(|n| n.is_finite() && *n >= 0.0);
+                    let Some(number) = number else {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "gateway.session_stall_timeout_secs must be a non-negative number" })),
+                        );
+                    };
+                    raw = Some(if number.fract() == 0.0 {
+                        format!("{:.1}", number)
+                    } else {
+                        number.to_string()
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    let dotted = format!("gateway.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(_) => crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true)
+            .map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/portal` — P742 (hermes `/api/portal` parity): read-only
 /// portal-auth snapshot for the dashboard — refresh-free by contract,
 /// so polling never performs an OAuth refresh or burns a refresh token.
@@ -7611,6 +7755,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/fast", get(fast_get).put(fast_set))
         .route("/api/approvals", get(approvals_get).put(approvals_set))
         .route("/api/approvals/settings", put(update_approvals_settings_api))
+        .route("/api/gateway-settings", get(gateway_settings_api).put(update_gateway_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -17859,6 +18004,100 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/approvals", Some("sekret")).await;
         assert_eq!(body["timeout"], 300, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_settings_editor() {
+        // P745: GET /api/gateway-settings surfaces the resolved gateway
+        // settings; PUT persists behavior knobs with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[gateway]\nkey = \"hunter2\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: local listener on 8642, configured key surfaces as
+        // a flag (never the value), watchdog on, stall 300s.
+        let (status, body) = get_json(app.clone(), "/api/gateway-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["host"], "127.0.0.1", "{body}");
+        assert_eq!(body["port"], 8642, "{body}");
+        assert_eq!(body["key_configured"], true, "{body}");
+        assert_eq!(body["key_env_override"], false, "{body}");
+        assert!(body.to_string().contains("hunter2") == false, "{body}");
+        assert_eq!(body["loop_watchdog"], true, "{body}");
+        assert_eq!(body["message_timestamps"], false, "{body}");
+        assert_eq!(body["multiplex_profiles"], false, "{body}");
+        assert_eq!(body["session_stall_timeout_secs"], 300.0, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("message_timestamps", json!(true)),
+            ("loop_watchdog", json!(false)),
+            ("multiplex_profiles", json!(true)),
+            ("systemd_watchdog_seconds", json!(30)),
+            ("max_concurrent_sessions", json!(8)),
+            ("session_stall_timeout_secs", json!(120.5)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/gateway-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/gateway-settings", Some("sekret")).await;
+        assert_eq!(body["message_timestamps"], true, "{body}");
+        assert_eq!(body["loop_watchdog"], false, "{body}");
+        assert_eq!(body["multiplex_profiles"], true, "{body}");
+        assert_eq!(body["systemd_watchdog_seconds"], 30, "{body}");
+        assert_eq!(body["max_concurrent_sessions"], 8, "{body}");
+        assert_eq!(body["session_stall_timeout_secs"], 120.5, "{body}");
+
+        // Listener identity is not editable through this surface.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/gateway-settings", Some("sekret"),
+            json!({ "key": "port", "value": 1234 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/gateway-settings", Some("sekret"),
+            json!({ "key": "loop_watchdog", "value": "yes" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/gateway-settings", Some("sekret"),
+            json!({ "key": "session_stall_timeout_secs", "value": -5 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/gateway-settings", Some("sekret"),
+            json!({ "key": "message_timestamps", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/gateway-settings", Some("sekret")).await;
+        assert_eq!(body["message_timestamps"], false, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
