@@ -460,6 +460,24 @@ dialog menu button.danger { background: var(--bad); border-color: var(--bad); co
   background: var(--panel-2); color: var(--text); border: 1px solid var(--hover);
   border-radius: 8px; padding: 6px 10px; font-family: inherit;
 }
+/* P655: automation blueprint gallery + slot form */
+#jobs-blueprint-gallery { max-width: 640px; width: 94%; }
+#jobs-blueprint-filter { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+.jobs-blueprint-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; max-height: 46vh; overflow-y: auto; }
+.jobs-blueprint-card { text-align: left; background: var(--panel-2); color: var(--text); border: 1px solid var(--hover); border-radius: 10px; padding: 10px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+.jobs-blueprint-card:hover { border-color: var(--accent); }
+.jobs-blueprint-card-title { font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.jobs-blueprint-card-when { font-weight: 400; font-size: 0.72em; opacity: 0.7; white-space: nowrap; }
+.jobs-blueprint-card-desc { font-size: 0.8em; opacity: 0.8; }
+.jobs-blueprint-card-meta { font-size: 0.7em; opacity: 0.55; }
+#jobs-blueprint-form { max-width: 480px; width: 92%; }
+.jobs-blueprint-desc { font-size: 0.85em; opacity: 0.8; margin: 4px 0 10px; }
+.jobs-blueprint-fields { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.jobs-blueprint-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85em; }
+.jobs-blueprint-fields input, .jobs-blueprint-fields select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--hover);
+  border-radius: 8px; padding: 6px 10px; font-family: inherit;
+}
 
 
 /* ---- Model picker overlay (hermes model-picker parity) ---- */

@@ -337,6 +337,32 @@ export interface CronJob {
   last_delivery_error?: string | null;
 }
 
+/** P655: one fillable slot on an automation blueprint. */
+export interface JobBlueprintField {
+  name: string;
+  type: "time" | "enum" | "text" | "weekdays";
+  label: string;
+  default: string | null;
+  options: string[];
+  optional: boolean;
+  strict: boolean;
+  help: string;
+}
+
+/** P655: a curated automation blueprint (hermes blueprint catalog). */
+export interface JobBlueprint {
+  key: string;
+  title: string;
+  description: string;
+  category: string;
+  tags: string[];
+  fields: JobBlueprintField[];
+  schedule: string;
+  scheduleHuman: string;
+  command: string;
+  appUrl: string;
+}
+
 const SETTINGS_KEY = "ulnclaw.gateway";
 
 export interface UsageSessionRow {
@@ -4113,6 +4139,37 @@ export class GatewayClient {
     const query = includeDisabled ? "?include_disabled=true" : "";
     const value = await this.kanbanJson(`/api/jobs${query}`);
     return (value?.jobs || []) as CronJob[];
+  }
+
+  /** P655: GET /api/jobs/blueprints — curated automation blueprint catalog. */
+  async jobsBlueprints(): Promise<JobBlueprint[]> {
+    const response = await fetch(this.endpoint("/api/jobs/blueprints"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`blueprints HTTP ${response.status}`);
+    const value = await response.json();
+    return (value.blueprints || []) as JobBlueprint[];
+  }
+
+  /** P655: POST /api/jobs/blueprints/instantiate — fill slots, create job. */
+  async jobsInstantiateBlueprint(
+    blueprint: string,
+    values: Record<string, string>,
+  ): Promise<{ ok: boolean; job?: CronJob; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint("/api/jobs/blueprints/instantiate"), {
+        headers: { ...this.headers(), "content-type": "application/json" },
+        method: "POST",
+        body: JSON.stringify({ blueprint, values }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        return { ok: false, error: payload?.error || `HTTP ${response.status}` };
+      }
+      return { ok: true, job: payload?.job as CronJob };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
   }
 
   /** GET /api/jobs/delivery-targets — where cron results can be delivered. */

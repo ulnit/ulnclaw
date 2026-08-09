@@ -50,6 +50,7 @@
 //!     `POST /api/jobs/{id}/pause|resume|run`,
 //!     `GET /api/jobs/delivery-targets`, `POST /api/jobs/fire` —
 //!     cron job management + external delivery + Chronos fire webhook
+//!     + automation-blueprint catalog/instantiation (hermes blueprints)
 //!   - `GET /v1/skills`, `GET /v1/toolsets` — discovery endpoints
 //!
 //! Bearer-token auth via `[gateway] key` / `ULNCLAW_GATEWAY_KEY` (optional;
@@ -6673,6 +6674,11 @@ pub fn router(state: Arc<GatewayState>) -> Router {
                 .delete(learning_node_delete),
         )
         .route("/api/jobs", get(list_jobs).post(create_job))
+        .route("/api/jobs/blueprints", get(list_job_blueprints))
+        .route(
+            "/api/jobs/blueprints/instantiate",
+            post(instantiate_job_blueprint),
+        )
         .route("/api/jobs/delivery-targets", get(job_delivery_targets))
         .route("/api/jobs/fire", post(fire_job))
         .route(
@@ -12272,6 +12278,84 @@ async fn create_job(State(state): State<Arc<GatewayState>>, Json(request): Json<
     }
 }
 
+#[derive(Deserialize)]
+struct InstantiateBlueprintRequest {
+    blueprint: String,
+    #[serde(default)]
+    values: std::collections::HashMap<String, String>,
+}
+
+/// `GET /api/jobs/blueprints` — automation blueprint catalog (hermes
+/// `/api/cron/blueprints` parity): form schemas + ready-to-paste
+/// command + human-readable schedule for every curated blueprint.
+async fn list_job_blueprints() -> Response {
+    let entries: Vec<Value> = crate::cron::blueprints::catalog()
+        .iter()
+        .map(crate::cron::blueprints::blueprint_catalog_entry)
+        .collect();
+    Json(json!({ "blueprints": entries })).into_response()
+}
+
+/// `POST /api/jobs/blueprints/instantiate` — fill a blueprint's slots
+/// and create the cron job (hermes `/api/cron/blueprints/instantiate`
+/// parity). Slot-validation errors return 422 with the field message.
+async fn instantiate_job_blueprint(
+    State(state): State<Arc<GatewayState>>,
+    Json(request): Json<InstantiateBlueprintRequest>,
+) -> Response {
+    let blueprint = match crate::cron::blueprints::get_blueprint(&request.blueprint) {
+        Some(bp) => bp,
+        None => {
+            return jobs_error(
+                StatusCode::NOT_FOUND,
+                &format!("Unknown blueprint: {}", request.blueprint),
+            )
+        }
+    };
+    let filled = match crate::cron::blueprints::fill_blueprint(&blueprint, &request.values) {
+        Ok(filled) => filled,
+        Err(e) => return jobs_error(StatusCode::UNPROCESSABLE_ENTITY, &e),
+    };
+    if let Err(response) = validate_job_fields(&filled.name, &filled.prompt) {
+        return response;
+    }
+    let store = match cron_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    let deliver_value = Value::String(filled.deliver.clone());
+    let deliver = crate::cron::delivery::normalize_deliver_value(Some(&deliver_value));
+    let parsed = match crate::cron::parse_schedule(&filled.schedule) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return jobs_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid schedule: {}", e),
+            )
+        }
+    };
+    let job = CronJob {
+        id: uuid::Uuid::new_v4().simple().to_string()[..12].to_string(),
+        name: filled.name,
+        schedule: filled.schedule,
+        prompt: filled.prompt,
+        skills: filled.skills,
+        enabled: true,
+        repeat: None,
+        next_run: crate::cron::next_run(&parsed),
+        created_at: now_secs(),
+        last_run: None,
+        last_status: None,
+        deliver: Some(deliver),
+        origin: None,
+        last_delivery_error: None,
+    };
+    match store.add(&job) {
+        Ok(()) => Json(json!({ "job": job_value(&job) })).into_response(),
+        Err(e) => server_error(&e.to_string()),
+    }
+}
+
 async fn get_job(State(state): State<Arc<GatewayState>>, Path(id): Path<String>) -> Response {
     let store = match cron_store(&state) {
         Ok(store) => store,
@@ -17027,6 +17111,63 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], true);
         let (status, _) = get_json(app.clone(), &format!("/api/jobs/{}", job_id), Some(token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_blueprints_list_and_instantiate() {
+        // P655: GET /api/jobs/blueprints serves the curated catalog and
+        // POST /api/jobs/blueprints/instantiate fills slots into a real
+        // cron job (hermes blueprint parity).
+        let (state, _temp) = jobs_state();
+        let token = "sekret";
+        let app = router(state.clone());
+
+        let (status, body) = get_json(app.clone(), "/api/jobs/blueprints", Some(token)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let blueprints = body["blueprints"].as_array().unwrap();
+        assert_eq!(blueprints.len(), 14, "{body}");
+        let first = &blueprints[0];
+        assert_eq!(first["key"], "morning-brief", "{body}");
+        assert!(first["fields"].is_array(), "{body}");
+        assert!(first["scheduleHuman"].as_str().unwrap().len() > 0, "{body}");
+        assert!(first["command"].as_str().unwrap().starts_with("/blueprint morning-brief"), "{body}");
+
+        // Instantiate with slot overrides creates a job.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs/blueprints/instantiate", Some(token),
+            json!({"blueprint": "morning-brief", "values": {"time": "07:15", "deliver": "local"}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["job"]["name"], "Morning briefing", "{body}");
+        assert_eq!(body["job"]["schedule"], "15 7 * * *", "{body}");
+        assert_eq!(body["job"]["deliver"], "local", "{body}");
+        assert!(body["job"]["prompt"].as_str().unwrap().contains("morning briefing"), "{body}");
+
+        // Slot validation error -> 422 with the field message.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/jobs/blueprints/instantiate", Some(token),
+            json!({"blueprint": "morning-brief", "values": {"time": "25:99"}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert!(body["error"].as_str().unwrap().contains("invalid time"), "{body}");
+
+        // Unknown slot names are rejected.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/jobs/blueprints/instantiate", Some(token),
+            json!({"blueprint": "morning-brief", "values": {"tiem": "07:15"}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Unknown blueprint -> 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/jobs/blueprints/instantiate", Some(token),
+            json!({"blueprint": "nope", "values": {}}),
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 

@@ -2,7 +2,7 @@
 // cron store as the `ulnclaw cron` CLI): list/pause/resume/run-now,
 // create + edit + delete. Hermes cron-dashboard parity (P166).
 
-import type { CronJob, GatewayClient } from "./gateway";
+import type { CronJob, GatewayClient, JobBlueprint } from "./gateway";
 import { fmt, t } from "./i18n";
 
 const SORT_KEY = "ulnclaw.jobs.sort";
@@ -26,6 +26,10 @@ export class JobsWidget {
   private deliveryTargetIds = new Set<string>();
   /** P536: live filter text over name/schedule/prompt/skills. */
   private filterText = "";
+  /** P655: cached automation-blueprint catalog. */
+  private blueprints: JobBlueprint[] = [];
+  /** P655: blueprint currently open in the slot form. */
+  private activeBlueprint: JobBlueprint | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -44,6 +48,7 @@ export class JobsWidget {
           <option value="next_run" data-i18n="jobs.sortNextRun">Next run first</option>
         </select>
         <button id="jobs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="jobs-blueprints" class="ghost" data-i18n="jobs.blueprintsAction">Templates</button>
         <button id="jobs-new" class="primary" data-i18n="jobs.newJob">New job</button>
       </header>
       <div id="jobs-list"></div>
@@ -73,6 +78,29 @@ export class JobsWidget {
             <button id="job-create-save" value="save" data-i18n="jobs.create">Create</button>
           </menu>
         </form>
+      </dialog>
+      <dialog id="jobs-blueprint-gallery">
+        <form method="dialog">
+          <h2 data-i18n="jobs.blueprintsTitle">Automation templates</h2>
+          <input id="jobs-blueprint-filter" type="search" data-i18n-ph="jobs.blueprintsFilterPh" />
+          <div id="jobs-blueprint-cards" class="jobs-blueprint-cards"></div>
+          <div id="jobs-blueprint-gallery-status" class="config-note"></div>
+          <menu>
+            <button value="cancel" data-i18n="chrome.cancel">Cancel</button>
+          </menu>
+        </form>
+      </dialog>
+      <dialog id="jobs-blueprint-form">
+        <form method="dialog">
+          <h2 id="jobs-blueprint-form-title"></h2>
+          <p id="jobs-blueprint-form-desc" class="jobs-blueprint-desc"></p>
+          <div id="jobs-blueprint-fields" class="jobs-blueprint-fields"></div>
+          <div id="jobs-blueprint-form-status" class="config-note"></div>
+          <menu>
+            <button value="cancel" data-i18n="chrome.cancel">Cancel</button>
+            <button id="jobs-blueprint-create" value="create" data-i18n="jobs.blueprintCreate">Create job</button>
+          </menu>
+        </form>
       </dialog>`;
 
     (this.root.querySelector("#jobs-refresh") as HTMLButtonElement).onclick = () =>
@@ -94,11 +122,165 @@ export class JobsWidget {
     });
     (this.root.querySelector("#jobs-new") as HTMLButtonElement).onclick = () =>
       this.openCreateDialog();
+    // P655: automation-blueprint gallery + slot form (hermes blueprint
+    // catalog parity).
+    (this.root.querySelector("#jobs-blueprints") as HTMLButtonElement).onclick = () =>
+      void this.openBlueprintGallery();
+    this.root.querySelector("#jobs-blueprint-filter")!.addEventListener("input", () => {
+      const filter = (
+        this.root.querySelector("#jobs-blueprint-filter") as HTMLInputElement
+      ).value;
+      this.renderBlueprintCards(filter);
+    });
+    (this.root.querySelector("#jobs-blueprint-create") as HTMLButtonElement).onclick = (
+      event,
+    ) => {
+      event.preventDefault();
+      void this.instantiateActiveBlueprint();
+    };
     const dialog = this.root.querySelector("#job-create") as HTMLDialogElement;
     dialog.addEventListener("close", () => {
       if (dialog.returnValue !== "save") return;
       void this.createJob();
     });
+  }
+
+  // ---- P655: automation blueprints -----------------------------------
+
+  private async openBlueprintGallery(): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const dialog = this.root.querySelector("#jobs-blueprint-gallery") as HTMLDialogElement;
+    const status = this.root.querySelector("#jobs-blueprint-gallery-status")!;
+    const filterInput = this.root.querySelector(
+      "#jobs-blueprint-filter",
+    ) as HTMLInputElement;
+    filterInput.value = "";
+    status.textContent = "";
+    this.root.querySelector("#jobs-blueprint-cards")!.innerHTML = "";
+    if (!dialog.open) dialog.showModal();
+    if (this.blueprints.length === 0) {
+      try {
+        this.blueprints = await client.jobsBlueprints();
+      } catch (error) {
+        status.textContent = fmt(t.jobs.blueprintsFailed, { error });
+        return;
+      }
+    }
+    this.renderBlueprintCards("");
+  }
+
+  private renderBlueprintCards(filter: string): void {
+    const wrap = this.root.querySelector("#jobs-blueprint-cards")!;
+    const status = this.root.querySelector("#jobs-blueprint-gallery-status")!;
+    wrap.innerHTML = "";
+    const query = (filter || "").trim().toLowerCase();
+    const visible = query
+      ? this.blueprints.filter(
+          (bp) =>
+            bp.title.toLowerCase().includes(query) ||
+            bp.description.toLowerCase().includes(query) ||
+            bp.category.toLowerCase().includes(query) ||
+            bp.tags.some((tag) => tag.toLowerCase().includes(query)),
+        )
+      : this.blueprints;
+    if (visible.length === 0) {
+      status.textContent = t.jobs.blueprintsEmpty;
+      return;
+    }
+    status.textContent = "";
+    for (const blueprint of visible) {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "jobs-blueprint-card";
+      const title = document.createElement("div");
+      title.className = "jobs-blueprint-card-title";
+      title.textContent = blueprint.title;
+      const when = document.createElement("span");
+      when.className = "jobs-blueprint-card-when";
+      when.textContent = blueprint.scheduleHuman;
+      title.appendChild(when);
+      const desc = document.createElement("div");
+      desc.className = "jobs-blueprint-card-desc";
+      desc.textContent = blueprint.description;
+      const meta = document.createElement("div");
+      meta.className = "jobs-blueprint-card-meta";
+      meta.textContent = [blueprint.category, ...blueprint.tags].join(" · ");
+      card.appendChild(title);
+      card.appendChild(desc);
+      card.appendChild(meta);
+      card.onclick = () => this.openBlueprintForm(blueprint);
+      wrap.appendChild(card);
+    }
+  }
+
+  private openBlueprintForm(blueprint: JobBlueprint): void {
+    this.activeBlueprint = blueprint;
+    const gallery = this.root.querySelector(
+      "#jobs-blueprint-gallery",
+    ) as HTMLDialogElement;
+    gallery.close();
+    const dialog = this.root.querySelector("#jobs-blueprint-form") as HTMLDialogElement;
+    this.root.querySelector("#jobs-blueprint-form-title")!.textContent = blueprint.title;
+    this.root.querySelector("#jobs-blueprint-form-desc")!.textContent = blueprint.description;
+    this.root.querySelector("#jobs-blueprint-form-status")!.textContent = "";
+    const fields = this.root.querySelector("#jobs-blueprint-fields")!;
+    fields.innerHTML = "";
+    for (const field of blueprint.fields) {
+      const label = document.createElement("label");
+      const caption = document.createElement("span");
+      caption.textContent = field.label;
+      label.appendChild(caption);
+      let control: HTMLInputElement | HTMLSelectElement;
+      if (field.type === "enum" || field.type === "weekdays") {
+        const select = document.createElement("select");
+        for (const option of field.options) {
+          const optionEl = document.createElement("option");
+          optionEl.value = option;
+          optionEl.textContent = option;
+          select.appendChild(optionEl);
+        }
+        select.value = field.default || field.options[0] || "";
+        control = select;
+      } else if (field.type === "time") {
+        const input = document.createElement("input");
+        input.type = "time";
+        input.value = field.default || "08:00";
+        control = input;
+      } else {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.value = field.default || "";
+        control = input;
+      }
+      control.id = `jobs-blueprint-field-${field.name}`;
+      if (field.help) control.title = field.help;
+      label.appendChild(control);
+      fields.appendChild(label);
+    }
+    if (!dialog.open) dialog.showModal();
+  }
+
+  private async instantiateActiveBlueprint(): Promise<void> {
+    const client = this.client();
+    const blueprint = this.activeBlueprint;
+    if (!client || !blueprint) return;
+    const status = this.root.querySelector("#jobs-blueprint-form-status")!;
+    const values: Record<string, string> = {};
+    for (const field of blueprint.fields) {
+      const control = this.root.querySelector(
+        `#jobs-blueprint-field-${field.name}`,
+      ) as HTMLInputElement | HTMLSelectElement | null;
+      if (control) values[field.name] = control.value;
+    }
+    const result = await client.jobsInstantiateBlueprint(blueprint.key, values);
+    if (!result.ok) {
+      status.textContent = result.error || t.jobs.createFailed;
+      return;
+    }
+    (this.root.querySelector("#jobs-blueprint-form") as HTMLDialogElement).close();
+    this.activeBlueprint = null;
+    void this.refresh();
   }
 
   /** Load data when the tab becomes visible; poll every 10 s. */

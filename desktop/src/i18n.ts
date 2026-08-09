@@ -142,6 +142,7 @@ export interface Translations {
     scheduleLabel: string; promptLabel: string; skillsLabel: string; repeatLabel: string; deliverLabel: string;
     create: string; createFailed: string; counts: string; empty: string; meta: string;
     runsLeft: string; deleteConfirm: string;
+    blueprintsAction: string; blueprintsTitle: string; blueprintsFilterPh: string; blueprintsEmpty: string; blueprintsFailed: string; blueprintCreate: string;
     deliverBadge: string; deliverTitle: string; deliveryError: string; deliverPrompt: string;
     sortTitle: string; sortDefault: string; sortNextRun: string;
     filterPlaceholder: string; filterNoMatch: string;
@@ -554,6 +555,7 @@ const en: Translations = {
     promptLabel: "Prompt", skillsLabel: "Skills (comma-separated, optional)",
     repeatLabel: "Repeat (runs remaining; empty = forever)", create: "Create", deliverLabel: "Deliver result to",
     createFailed: "Job creation failed (gateway unreachable or invalid schedule).",
+    blueprintsAction: "Templates", blueprintsTitle: "Automation templates", blueprintsFilterPh: "Filter templates…", blueprintsEmpty: "No templates match your filter.", blueprintsFailed: "Template load failed: {error}", blueprintCreate: "Create job",
     counts: "{active} active / {total} jobs",
     empty: "No cron jobs yet — create one, or use `ulnclaw cron add` in the terminal.",
     meta: "next: {next} · last: {last}", runsLeft: " · {count} run(s) left",
@@ -1109,6 +1111,7 @@ const zh: Translations = {
     promptLabel: "提示词", skillsLabel: "技能（逗号分隔，可选）",
     repeatLabel: "重复（剩余运行次数；留空 = 永远）", create: "创建", deliverLabel: "结果投递到",
     createFailed: "任务创建失败（网关不可达或调度无效）。",
+    blueprintsAction: "模板", blueprintsTitle: "自动化模板", blueprintsFilterPh: "筛选模板…", blueprintsEmpty: "没有匹配筛选条件的模板。", blueprintsFailed: "模板加载失败：{error}", blueprintCreate: "创建任务",
     counts: "{active} 活跃 / 共 {total} 个任务",
     empty: "还没有定时任务 —— 创建一个，或在终端使用 `ulnclaw cron add`。",
     meta: "下次：{next} · 上次：{last}", runsLeft: " · 剩余 {count} 次运行",
@@ -1664,6 +1667,7 @@ const zhHant: Translations = {
     promptLabel: "提示詞", skillsLabel: "技能（逗號分隔，選填）",
     repeatLabel: "重複（剩餘執行次數；留空 = 永遠）", create: "建立", deliverLabel: "結果投遞到",
     createFailed: "工作建立失敗（閘道不可達或排程無效）。",
+    blueprintsAction: "範本", blueprintsTitle: "自動化範本", blueprintsFilterPh: "篩選範本…", blueprintsEmpty: "沒有符合篩選條件的範本。", blueprintsFailed: "範本載入失敗：{error}", blueprintCreate: "建立工作",
     counts: "{active} 活躍 / 共 {total} 個工作",
     empty: "還沒有定時工作 —— 建立一個，或在終端機使用 `ulnclaw cron add`。",
     meta: "下次：{next} · 上次：{last}", runsLeft: " · 剩餘 {count} 次執行",
@@ -2219,6 +2223,7 @@ const ja: Translations = {
     promptLabel: "プロンプト", skillsLabel: "スキル（カンマ区切り、任意）",
     repeatLabel: "繰り返し（残り実行回数；空 = 無期限）", create: "作成", deliverLabel: "結果の配信先",
     createFailed: "ジョブの作成に失敗（ゲートウェイ到達不能またはスケジュールが無効）。",
+    blueprintsAction: "テンプレート", blueprintsTitle: "自動化テンプレート", blueprintsFilterPh: "テンプレートを絞り込み…", blueprintsEmpty: "絞り込み条件に一致するテンプレートはありません。", blueprintsFailed: "テンプレートの読み込みに失敗：{error}", blueprintCreate: "ジョブを作成",
     counts: "有効 {active} / 合計 {total} ジョブ",
     empty: "まだ cron ジョブがありません — 作成するか、ターミナルで `ulnclaw cron add` を使用してください。",
     meta: "次回：{next} · 前回：{last}", runsLeft: " · 残り {count} 回",
@@ -2774,6 +2779,7 @@ const ar: Translations = {
     promptLabel: "المطالب", skillsLabel: "المهارات (مفصولة بفواصل، اختيارية)",
     repeatLabel: "التكرار (مرات التشغيل المتبقية؛ فارغ = للأبد)", create: "إنشاء", deliverLabel: "تسليم النتيجة إلى",
     createFailed: "فشل إنشاء المهمة (البوابة غير متاحة أو الجدولة غير صالحة).",
+    blueprintsAction: "القوالب", blueprintsTitle: "قوالب الأتمتة", blueprintsFilterPh: "تصفية القوالب…", blueprintsEmpty: "لا توجد قوالب تطابق التصفية.", blueprintsFailed: "فشل تحميل القوالب: {error}", blueprintCreate: "إنشاء المهمة",
     counts: "{active} نشطة / {total} مهام",
     empty: "لا مهام cron بعد — أنشئ واحدة أو استخدم `ulnclaw cron add` في الطرفي.",
     meta: "التالية: {next} · الأخيرة: {last}", runsLeft: " · {count} تشغيلات متبقية",
