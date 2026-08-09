@@ -402,6 +402,13 @@ pub struct GatewayState {
     /// In-flight provider OAuth device-flow sessions (P350), keyed by
     /// session id; a background poller updates each entry.
     pub oauth_sessions: Arc<Mutex<HashMap<String, OAuthPendingSession>>>,
+    /// P679: restart/drain flag — `/restart` sets it; while set, new
+    /// runs are refused (hermes drain_control parity).
+    pub restart: Arc<std::sync::atomic::AtomicBool>,
+    /// P679: exit hook invoked once the restart drain completes
+    /// (default: `std::process::exit` with the service-restart code;
+    /// tests replace it with a recorder).
+    pub restart_exit: Arc<dyn Fn(i32) + Send + Sync>,
 }
 
 impl GatewayState {
@@ -431,8 +438,66 @@ impl GatewayState {
             metrics: Arc::new(GatewayMetrics::default()),
             started_at: std::time::Instant::now(),
             oauth_sessions: Arc::new(Mutex::new(HashMap::new())),
+            restart: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            restart_exit: Arc::new(|code| std::process::exit(code)),
         }))
     }
+}
+
+/// EX_TEMPFAIL from sysexits.h — the gateway exits with this code
+/// after a graceful `/restart` drain so the service manager revives it
+/// (hermes `GATEWAY_SERVICE_RESTART_EXIT_CODE`, P679).
+pub const GATEWAY_SERVICE_RESTART_EXIT_CODE: i32 = 75;
+
+/// Default in-band restart drain budget in seconds (hermes
+/// `restart_after_turn_timeout` — wait for active turns BEFORE the
+/// shutdown begins).
+pub const RESTART_DRAIN_TIMEOUT_SECS: u64 = 60;
+
+/// Runs that keep the gateway alive during a `/restart` drain (P679).
+async fn active_run_count(state: &GatewayState) -> usize {
+    let runs = state.runs.lock().await;
+    runs.values()
+        .filter(|run| run.status == "running" || run.status == "waiting_for_approval")
+        .count()
+}
+
+/// Wait until no runs are active or the budget is exhausted; returns
+/// the number of runs still active (hermes in-band restart after-turn
+/// wait, P679).
+pub async fn drain_active_runs(state: &GatewayState, timeout: std::time::Duration) -> usize {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let active = active_run_count(state).await;
+        if active == 0 || std::time::Instant::now() >= deadline {
+            return active;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+/// Whether a supervisor will revive the gateway after it exits (hermes
+/// `is_gateway_supervisor_process`, P679): systemd sets INVOCATION_ID,
+/// launchd sets XPC_SERVICE_NAME, and `ULNCLAW_GATEWAY_SUPERVISOR=1`
+/// covers custom wrappers.
+pub fn gateway_supervised() -> bool {
+    if std::env::var_os("INVOCATION_ID").is_some() {
+        return true;
+    }
+    if let Some(xpc) = std::env::var_os("XPC_SERVICE_NAME") {
+        if !xpc.is_empty() && xpc != "0" {
+            return true;
+        }
+    }
+    matches!(
+        std::env::var("ULNCLAW_GATEWAY_SUPERVISOR")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    )
 }
 
 /// One in-flight provider OAuth device-flow session (P350).
@@ -10591,6 +10656,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /memory          memory store status (files, entries, sizes)
   /sessions [N]    list the N most recent sessions (default 10)
   /stop            request a stop for this session's running run
+  /restart         drain active runs and exit (code 75) for the supervisor to restart
   /retry           truncate the transcript to the last user turn and re-run it
   /undo [N]        drop the last N user turns (default 1), echoing what was removed
   /verbose [on|off] show or persist agent.verbose
@@ -11284,6 +11350,49 @@ async fn resolve_gateway_slash(
             } else {
                 "no running run found for this session.".to_string()
             }))
+        }
+        "/restart" => {
+            // P679 (hermes /restart parity): drain active runs, then
+            // exit with the service-restart code so the supervisor
+            // revives the gateway.
+            if state
+                .restart
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Some(GatewaySlash::Direct(
+                    "restart already in progress — draining active runs.".to_string(),
+                ));
+            }
+            let active = active_run_count(state).await;
+            let draining = state.clone();
+            tokio::spawn(async move {
+                let remaining = drain_active_runs(
+                    &draining,
+                    std::time::Duration::from_secs(RESTART_DRAIN_TIMEOUT_SECS),
+                )
+                .await;
+                if remaining > 0 {
+                    tracing::warn!(
+                        "gateway restart drain timeout: {remaining} run(s) still active"
+                    );
+                }
+                // Best-effort pidfile cleanup so the single-instance
+                // guard never points at a dead process between exit
+                // and the supervisor restart.
+                if let Ok(home) = crate::config::ensure_home() {
+                    let _ = std::fs::remove_file(crate::gateway_pidfile::pidfile_path(&home));
+                }
+                (draining.restart_exit)(GATEWAY_SERVICE_RESTART_EXIT_CODE);
+            });
+            let mut text = format!(
+                "♻ restart scheduled — draining {active} active run(s) (max {RESTART_DRAIN_TIMEOUT_SECS}s), then the gateway exits with code {GATEWAY_SERVICE_RESTART_EXIT_CODE} for the supervisor to revive it."
+            );
+            if !gateway_supervised() {
+                text.push_str(
+                    " note: no supervisor detected (systemd/launchd or ULNCLAW_GATEWAY_SUPERVISOR=1) — the gateway will not come back on its own.",
+                );
+            }
+            Some(GatewaySlash::Direct(text))
         }
         "/retry" => {
             // Hermes /retry parity: find the last real user turn, drop
@@ -14073,6 +14182,14 @@ async fn start_run(
         )
             .into_response();
     }
+    // P679: a draining gateway (after /restart) refuses new runs.
+    if state.restart.load(std::sync::atomic::Ordering::SeqCst) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": {"message": "gateway is draining for a restart — no new runs", "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    }
     let run_id = uuid::Uuid::new_v4().to_string();
     // Runs always own a session so approvals can be session-scoped and the
     // conversation stays continuable.
@@ -15848,6 +15965,126 @@ mod tests {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
             None => std::env::remove_var("ULNCLAW_HOME"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_restart_drains_and_refuses_new_runs() {
+        // P679: /restart sets the drain flag, waits for active runs,
+        // then invokes the exit hook with the service-restart code;
+        // while draining, POST /v1/runs is refused.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let mut state = test_state();
+        // Replace the process-exit hook with a recorder so the drain
+        // task cannot kill the test binary.
+        let exits: Arc<std::sync::Mutex<Vec<i32>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = exits.clone();
+        Arc::get_mut(&mut state).expect("fresh state").restart_exit =
+            Arc::new(move |code| recorded.lock().unwrap().push(code));
+
+        // Seed one active run that completes shortly.
+        let run_id = uuid::Uuid::new_v4().to_string();
+        state.runs.lock().await.insert(
+            run_id.clone(),
+            RunState {
+                run_id: run_id.clone(),
+                status: "running".to_string(),
+                session_id: Some("sess-r".to_string()),
+                message: "drain me".to_string(),
+                created_at: now_secs(),
+                finished_at: None,
+                result: None,
+                error: None,
+                iterations: None,
+                stop_requested: false,
+                approval: None,
+                job_id: None,
+            },
+        );
+        let completer = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            completer.runs.lock().await.get_mut(&run_id).unwrap().status =
+                "completed".to_string();
+        });
+
+        match resolve_gateway_slash(&state, "sess-1", "/restart").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("restart scheduled"), "{text}");
+                assert!(text.contains("draining 1 active run(s)"), "{text}");
+            }
+            _ => panic!("expected restart reply"),
+        }
+        assert!(state.restart.load(std::sync::atomic::Ordering::SeqCst));
+
+        // A second /restart reports the drain already in progress.
+        match resolve_gateway_slash(&state, "sess-1", "/restart").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("already in progress"), "{text}")
+            }
+            _ => panic!("expected duplicate reply"),
+        }
+
+        // The draining gateway refuses new runs.
+        let app = router(state.clone());
+        let (status, _) = send_json(
+            app.clone(), "POST", "/v1/runs", Some("sekret"),
+            json!({"message": "late run"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+        // Once the seeded run completes, the drain ends and the exit
+        // hook fires with the service-restart code.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if !exits.lock().unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "exit hook never fired"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(exits.lock().unwrap()[0], GATEWAY_SERVICE_RESTART_EXIT_CODE);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_drain_active_runs_timeout() {
+        // P679: the drain helper honors its budget when a run stays
+        // active (waiting_for_approval counts as active).
+        let _guard = crate::models_dev::test_env_lock();
+        let state = test_state();
+        let run_id = uuid::Uuid::new_v4().to_string();
+        state.runs.lock().await.insert(
+            run_id.clone(),
+            RunState {
+                run_id,
+                status: "waiting_for_approval".to_string(),
+                session_id: Some("sess-w".to_string()),
+                message: "stuck".to_string(),
+                created_at: now_secs(),
+                finished_at: None,
+                result: None,
+                error: None,
+                iterations: None,
+                stop_requested: false,
+                approval: None,
+                job_id: None,
+            },
+        );
+        let remaining = drain_active_runs(&state, std::time::Duration::from_millis(300)).await;
+        assert_eq!(remaining, 1);
     }
 
     #[tokio::test]

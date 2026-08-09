@@ -2218,6 +2218,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/approve", t.slash.approve],
     ["/deny", t.slash.deny],
     ["/background", t.slash.background],
+    ["/restart", t.slash.restart],
   ];
 }
 
