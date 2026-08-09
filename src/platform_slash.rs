@@ -27,6 +27,7 @@ const PLATFORM_SLASH_HELP: &str = "Commands you can send as chat messages:
   /tools           list enabled tools
   /recap           recap this chat's session
   /title [text]    show or set the session title
+  /sethome         set this chat as the platform home channel
   /usage           this session's token usage
   /insights [N] [--days N] [--source S]   usage analytics across sessions
   /reload-mcp      reload MCP servers (may ask confirmation)
@@ -145,6 +146,33 @@ pub async fn resolve(
             };
             Some(PlatformSlashOutcome::Direct(result))
         }
+        "/sethome" | "/set-home" => {
+            // hermes /sethome parity: make the current chat the home
+            // channel for its platform — cron jobs and cross-platform
+            // send_message deliveries land here. Persisted as the
+            // legacy home env var (send_message_tool home_channel).
+            let Some((platform, chat_id)) = parse_platform_session_key(session_id) else {
+                return Some(PlatformSlashOutcome::Direct(
+                    "Failed to save home channel: not a platform chat session".to_string(),
+                ));
+            };
+            let chat_name = crate::channel_directory::list_channels(Some(platform))
+                .into_iter()
+                .find(|(_, entry)| entry.id == chat_id)
+                .map(|(_, entry)| entry.name)
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| chat_id.to_string());
+            let env_name = crate::send_message_tool::home_channel_env(platform);
+            match crate::config_cmd::set_env_value(&env_name, chat_id) {
+                Ok(()) => Some(PlatformSlashOutcome::Direct(format!(
+                    "✅ Home channel set to **{chat_name}** (ID: {chat_id}).
+                     Cron jobs and cross-platform messages will be delivered here."
+                ))),
+                Err(error) => Some(PlatformSlashOutcome::Direct(format!(
+                    "Failed to save home channel: {error}"
+                ))),
+            }
+        }
         _ => {
             // Bundles win over single skills (hermes bundle-over-skill slash
             // precedence); unknown names fall through to the agent.
@@ -164,6 +192,18 @@ pub async fn resolve(
             None
         }
     }
+}
+
+/// Split a platform session key (`platform-{platform}-{chat_id}`,
+/// messaging.rs `session_key`) back into (platform, chat_id). Platform
+/// ids never contain `-`; chat ids may.
+fn parse_platform_session_key(session_id: &str) -> Option<(&str, &str)> {
+    let rest = session_id.strip_prefix("platform-")?;
+    let (platform, chat_id) = rest.split_once('-')?;
+    if platform.is_empty() || chat_id.is_empty() {
+        return None;
+    }
+    Some((platform, chat_id))
 }
 
 #[cfg(test)]
@@ -288,5 +328,78 @@ mod tests {
             message.contains("greet"),
             "expansion should reference the skill: {message}"
         );
+    }
+
+    #[test]
+    fn platform_session_key_parsing() {
+        assert_eq!(
+            parse_platform_session_key("platform-telegram-chat-123"),
+            Some(("telegram", "chat-123"))
+        );
+        assert_eq!(
+            parse_platform_session_key("platform-whatsapp_cloud-1@s.whatsapp.net"),
+            Some(("whatsapp_cloud", "1@s.whatsapp.net"))
+        );
+        assert_eq!(parse_platform_session_key("s1"), None);
+        assert_eq!(parse_platform_session_key("platform-"), None);
+        assert_eq!(parse_platform_session_key("platform-telegram-"), None);
+    }
+
+    #[tokio::test]
+    async fn sethome_persists_platform_home_channel() {
+        // P685: hermes /sethome parity — persist the calling chat as
+        // the platform home channel env var.
+        let _guard = crate::models_dev::test_env_lock();
+        let (dir, home, agent, store) = setup();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        crate::channel_directory::reset_for_tests();
+        crate::channel_directory::record_channel(
+            "telegram", "chat-123", "Team Chat", "group", "m1",
+        );
+
+        let outcome = resolve(
+            &agent,
+            &store,
+            &home,
+            "platform-telegram-chat-123",
+            "/sethome",
+        )
+        .await;
+        let Some(PlatformSlashOutcome::Direct(reply)) = outcome else {
+            panic!("expected direct reply");
+        };
+        assert!(
+            reply.contains("Home channel set to **Team Chat** (ID: chat-123)"),
+            "{reply}"
+        );
+        assert!(reply.contains("Cron jobs and cross-platform"), "{reply}");
+        assert_eq!(
+            crate::config::get_env_value("TELEGRAM_HOME_CHANNEL").as_deref(),
+            Some("chat-123")
+        );
+
+        // Alias + chat-id name fallback when the directory has no entry.
+        let outcome = resolve(&agent, &store, &home, "platform-discord-999", "/set-home").await;
+        let Some(PlatformSlashOutcome::Direct(reply)) = outcome else {
+            panic!("expected direct reply");
+        };
+        assert!(reply.contains("(ID: 999)"), "{reply}");
+        assert_eq!(
+            crate::config::get_env_value("DISCORD_HOME_CHANNEL").as_deref(),
+            Some("999")
+        );
+
+        // Non-platform session keys cannot set a home channel.
+        let outcome = resolve(&agent, &store, &home, "s1", "/sethome").await;
+        assert!(matches!(
+            outcome,
+            Some(PlatformSlashOutcome::Direct(ref t)) if t.contains("Failed to save home channel")
+        ));
+
+        crate::channel_directory::reset_for_tests();
+        if let Some(prev) = prev_home {
+            std::env::set_var("ULNCLAW_HOME", prev);
+        }
     }
 }
