@@ -5552,6 +5552,65 @@ async fn dead_targets_api() -> Json<Value> {
     Json(json!({ "targets": targets, "count": count }))
 }
 
+/// `GET /api/stall-watch` — P716 ops surface over the P714 session
+/// stall machinery: parked inbound sessions joined with their shared
+/// activity stamps, plus the resolved watchdog timeout. Stalled rows
+/// sort first, then most-idle first.
+async fn stall_watch_api(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let configured = state
+        .agent
+        .context()
+        .config
+        .gateway
+        .session_stall_timeout_secs;
+    let timeout_seconds = crate::session_stall::resolve_stall_timeout(configured);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let mut rows: Vec<Value> = Vec::new();
+    for row in crate::messaging::pending_inbound_snapshot() {
+        let activity = crate::session_activity::snapshot(&row.session_key);
+        let idle_seconds = crate::session_stall::resolve_session_idle_seconds_from_activity(
+            activity.as_ref(),
+            now,
+        );
+        let stalled = timeout_seconds > 0.0
+            && idle_seconds
+                .map(|idle| idle >= timeout_seconds)
+                .unwrap_or(false);
+        rows.push(json!({
+            "session_key": row.session_key,
+            "platform": row.platform,
+            "chat_id": row.chat_id,
+            "queued_at": row.queued_at,
+            "queued_seconds": (now - row.queued_at).max(0.0),
+            "last_activity_at": activity.as_ref().map(|a| a.last_activity_at),
+            "description": activity.as_ref().map(|a| a.description.clone()),
+            "provenance": activity.as_ref().map(|a| a.provenance.clone()),
+            "idle_seconds": idle_seconds,
+            "stalled": stalled,
+        }));
+    }
+    rows.sort_by(|a, b| {
+        let stalled_a = a.get("stalled").and_then(Value::as_bool).unwrap_or(false);
+        let stalled_b = b.get("stalled").and_then(Value::as_bool).unwrap_or(false);
+        stalled_b.cmp(&stalled_a).then_with(|| {
+            let idle_a = a.get("idle_seconds").and_then(Value::as_f64).unwrap_or(-1.0);
+            let idle_b = b.get("idle_seconds").and_then(Value::as_f64).unwrap_or(-1.0);
+            idle_b
+                .partial_cmp(&idle_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+    Json(json!({
+        "timeout_seconds": timeout_seconds,
+        "watcher_enabled": timeout_seconds > 0.0,
+        "pending_count": rows.len(),
+        "rows": rows,
+    }))
+}
+
 /// Build one messaging-platform payload row (lean hermes
 /// `_messaging_platform_payload` parity): enabled from
 /// `[messaging.<id>].enabled`, configured from the catalog's
@@ -6934,6 +6993,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/channels", get(channels_status))
         .route("/api/delivery-ledger", get(delivery_ledger_api))
         .route("/api/dead-targets", get(dead_targets_api))
+        .route("/api/stall-watch", get(stall_watch_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -25345,6 +25405,50 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(body["obligations"].is_array(), "{body}");
         assert!(body["counts"].is_object(), "{body}");
         assert_eq!(body["outstanding"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_stall_watch_endpoint_shape() {
+        // P716: the stall-watch ops surface reports the resolved
+        // timeout + parked-inbound rows joined with activity stamps
+        // (empty directory → zero rows). Global registries involved —
+        // serialize with the env-lock family.
+        let _env_guard = crate::models_dev::test_env_lock();
+        crate::messaging::clear_pending_inbound_for_tests();
+        crate::session_activity::clear_for_tests();
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/stall-watch", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["timeout_seconds"].is_number(), "{body}");
+        assert!(body["watcher_enabled"].is_boolean(), "{body}");
+        assert_eq!(body["pending_count"], 0);
+        assert!(body["rows"].is_array(), "{body}");
+
+        // A parked session with a stale activity stamp renders stalled.
+        let key = "platform-stallwatch-chat-1";
+        crate::messaging::register_pending_inbound(key, "stallwatch", "chat-1");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        crate::session_activity::touch_at(
+            key,
+            "tool call: shell",
+            "agent.progress",
+            now - 3600.0,
+        );
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/stall-watch", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["pending_count"], 1, "{body}");
+        let row = &body["rows"][0];
+        assert_eq!(row["platform"], "stallwatch");
+        assert!(row["idle_seconds"].as_f64().unwrap() >= 3500.0, "{row}");
+        // Default timeout is 300s → an hour-idle parked chat is stalled.
+        assert_eq!(row["stalled"], true, "{row}");
+        assert_eq!(row["description"], "tool call: shell", "{row}");
+        crate::messaging::clear_pending_inbound_for_tests();
+        crate::session_activity::clear_for_tests();
     }
 
     #[tokio::test]

@@ -565,6 +565,28 @@ export interface DeadTargetsPayload {
   count: number;
 }
 
+/** One parked inbound session joined with its activity stamp (P716). */
+export interface StallWatchRow {
+  session_key: string;
+  platform: string;
+  chat_id: string;
+  queued_at: number;
+  queued_seconds: number;
+  last_activity_at: number | null;
+  description: string | null;
+  provenance: string | null;
+  idle_seconds: number | null;
+  stalled: boolean;
+}
+
+/** GET /api/stall-watch payload (P716). */
+export interface StallWatchPayload {
+  timeout_seconds: number;
+  watcher_enabled: boolean;
+  pending_count: number;
+  rows: StallWatchRow[];
+}
+
 export interface SyncStatus {
   device_id: string;
   device_name: string;
@@ -2390,6 +2412,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`dead-targets HTTP ${response.status}`);
     return (await response.json()) as DeadTargetsPayload;
+  }
+
+  /** GET /api/stall-watch — P716 parked inbound + activity stamps. */
+  async stallWatch(): Promise<StallWatchPayload> {
+    const response = await fetch(this.endpoint("/api/stall-watch"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`stall-watch HTTP ${response.status}`);
+    return (await response.json()) as StallWatchPayload;
   }
 
   /** GET /api/webhooks/subscriptions — dynamic webhook routes. */

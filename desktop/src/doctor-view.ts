@@ -73,6 +73,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="deadTargets.title">Dead targets</h3>
         <div id="dead-target-rows"></div>
       </section>
+      <section id="doctor-stall-watch" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="stallWatch.title">Stall watch</h3>
+        <div id="stall-watch-rows"></div>
+      </section>
       <section id="doctor-browser" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
         <div id="browser-rows"></div>
@@ -258,6 +262,7 @@ export class DoctorWidget {
     this.loadGatewayHealth().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
+    this.loadStallWatch().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2227,6 +2232,60 @@ export class DoctorWidget {
           addRow(
             `${target.platform} \u2192 ${target.chat_id}`,
             `<span class="models-view-badge warn">${escapeHtmlDoctor(target.reason)}</span> \u00b7 ${escapeHtmlDoctor(when)}`,
+          );
+        }
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadStallWatch(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-stall-watch") as HTMLElement;
+    const rows = this.root.querySelector("#stall-watch-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.stallWatch();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      addRow(
+        t.stallWatch.timeout,
+        payload.watcher_enabled
+          ? `${Math.round(payload.timeout_seconds)}s`
+          : escapeHtmlDoctor(t.stallWatch.disabled),
+      );
+      addRow(t.stallWatch.pending, String(payload.pending_count));
+      if (payload.pending_count === 0) {
+        addRow(t.stallWatch.empty, "");
+      } else {
+        for (const parked of payload.rows.slice(0, 8)) {
+          const idle =
+            parked.idle_seconds === null ? "?" : `${Math.round(parked.idle_seconds)}s`;
+          const badge = parked.stalled
+            ? `<span class="models-view-badge warn">${escapeHtmlDoctor(t.stallWatch.stalled)}</span> \u00b7 `
+            : "";
+          const detail = parked.description
+            ? ` \u00b7 ${escapeHtmlDoctor(parked.description)}`
+            : "";
+          addRow(
+            `${parked.platform} \u2192 ${parked.chat_id}`,
+            `${badge}${escapeHtmlDoctor(idle)}${detail}`,
           );
         }
       }
