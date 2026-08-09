@@ -1493,6 +1493,64 @@ fn persist_reasoning_effort(
 /// Working directory a session-scoped command should operate on
 /// (P631): the session's recorded cwd when it has one, else the gateway
 /// process cwd (hermes falls back to TERMINAL_CWD the same way).
+/// Resolve a pending dangerous-command approval from a chat slash
+/// (P675 — hermes `/approve` + `/deny` parity). Without an explicit
+/// run id the newest waiting run wins, runs of the current session
+/// first. Mirrors `POST /v1/runs/:id/approval` state bookkeeping.
+async fn resolve_pending_approval(
+    state: &Arc<GatewayState>,
+    session_id: &str,
+    run_id: Option<&str>,
+    decision: &str,
+) -> String {
+    let target = match run_id {
+        Some(id) => {
+            if !state.pending_approvals.lock().await.contains_key(id) {
+                return format!("run {id} has no pending approval");
+            }
+            id.to_string()
+        }
+        None => {
+            let runs = state.runs.lock().await;
+            let mut waiting: Vec<&RunState> = runs
+                .values()
+                .filter(|run| run.status == "waiting_for_approval")
+                .collect();
+            // This session's runs first, then newest first.
+            waiting.sort_by(|a, b| {
+                let own_a = a.session_id.as_deref() == Some(session_id);
+                let own_b = b.session_id.as_deref() == Some(session_id);
+                own_b
+                    .cmp(&own_a)
+                    .then_with(|| {
+                        b.created_at
+                            .partial_cmp(&a.created_at)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            });
+            match waiting.first() {
+                Some(run) => run.run_id.clone(),
+                None => return "no pending approvals right now".to_string(),
+            }
+        }
+    };
+    let responder = state.pending_approvals.lock().await.remove(&target);
+    let Some(responder) = responder else {
+        return format!("run {target} has no pending approval");
+    };
+    responder.send(decision.to_string()).ok();
+    let mut runs = state.runs.lock().await;
+    if let Some(run) = runs.get_mut(&target) {
+        if run.status == "waiting_for_approval" {
+            run.status = "running".to_string();
+        }
+        if let Some(approval) = run.approval.as_mut() {
+            approval["resolved"] = serde_json::json!(decision);
+        }
+    }
+    format!("run {target}: {decision}")
+}
+
 fn session_cwd(state: &GatewayState, session_id: &str) -> std::path::PathBuf {
     state
         .store
@@ -10549,6 +10607,8 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /blueprint [name] [slot=val…]  automation blueprints: catalog, guided setup, or direct create
   /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
   /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
+  /approve [once|session|always] [run-id]  approve a pending dangerous command
+  /deny [run-id]     deny a pending dangerous command
   /init [notes]      generate or update AGENTS.md from a project scan
   /agents            active agents + recent delegations
   /journey           the learning timeline (skills + memory cards)
@@ -11668,6 +11728,39 @@ async fn resolve_gateway_slash(
                     .trim_end()
                     .to_string(),
             ))
+        }
+        "/approve" => {
+            // Hermes /approve parity (P675): resolve a pending
+            // dangerous-command approval from chat. Optional decision
+            // (once|session|always, default once) and run id (default:
+            // the newest waiting run, this session first).
+            let mut decision = "once";
+            let mut run_id: Option<String> = None;
+            for token in rest.split_whitespace() {
+                match token {
+                    "once" | "session" | "always" => decision = token,
+                    "deny" => {
+                        return Some(GatewaySlash::Direct(
+                            "use /deny to reject a pending command".to_string(),
+                        ))
+                    }
+                    other => run_id = Some(other.to_string()),
+                }
+            }
+            let reply =
+                resolve_pending_approval(&state, session_id, run_id.as_deref(), decision).await;
+            Some(GatewaySlash::Direct(reply))
+        }
+        "/deny" => {
+            // Hermes /deny parity (P675): reject a pending
+            // dangerous-command approval from chat.
+            let run_id = rest
+                .split_whitespace()
+                .next()
+                .map(|token| token.to_string());
+            let reply =
+                resolve_pending_approval(&state, session_id, run_id.as_deref(), "deny").await;
+            Some(GatewaySlash::Direct(reply))
         }
         "/init" => {
             // Hermes /init parity (P665): generate or update AGENTS.md
@@ -15657,6 +15750,99 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("manual|smart|off"));
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_approve_deny() {
+        // P675: /approve + /deny resolve pending run approvals from
+        // chat (this-session preference, explicit run ids, bookkeeping).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = test_state();
+
+        // Nothing pending yet.
+        match resolve_gateway_slash(&state, "sess-1", "/approve").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("no pending approvals"), "{text}")
+            }
+            _ => panic!("expected direct reply"),
+        }
+
+        // Seed a waiting run + responder for this session.
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        state.pending_approvals.lock().await.insert("run-wait".into(), tx);
+        state.runs.lock().await.insert(
+            "run-wait".into(),
+            RunState {
+                run_id: "run-wait".into(),
+                status: "waiting_for_approval".into(),
+                session_id: Some("sess-1".into()),
+                message: "dangerous".into(),
+                created_at: now_secs(),
+                finished_at: None,
+                result: None,
+                error: None,
+                iterations: None,
+                stop_requested: false,
+                approval: Some(json!({"command": "dangerous"})),
+                job_id: None,
+            },
+        );
+
+        // /approve defaults to "once" and flips the run back to running.
+        match resolve_gateway_slash(&state, "sess-1", "/approve").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("run-wait: once"), "{text}")
+            }
+            _ => panic!("expected approve reply"),
+        }
+        assert_eq!(rx.await.unwrap(), "once");
+        {
+            let runs = state.runs.lock().await;
+            let run = runs.get("run-wait").unwrap();
+            assert_eq!(run.status, "running");
+            assert_eq!(run.approval.as_ref().unwrap()["resolved"], "once");
+        }
+
+        // /deny with an explicit run id from another session.
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        state
+            .pending_approvals
+            .lock()
+            .await
+            .insert("run-wait-2".into(), tx);
+        state.runs.lock().await.insert(
+            "run-wait-2".into(),
+            RunState {
+                run_id: "run-wait-2".into(),
+                status: "waiting_for_approval".into(),
+                session_id: Some("sess-9".into()),
+                message: "curl".into(),
+                created_at: now_secs(),
+                finished_at: None,
+                result: None,
+                error: None,
+                iterations: None,
+                stop_requested: false,
+                approval: None,
+                job_id: None,
+            },
+        );
+        match resolve_gateway_slash(&state, "sess-1", "/deny run-wait-2").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("run-wait-2: deny"), "{text}")
+            }
+            _ => panic!("expected deny reply"),
+        }
+        assert_eq!(rx.await.unwrap(), "deny");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

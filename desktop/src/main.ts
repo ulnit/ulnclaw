@@ -2215,6 +2215,8 @@ function gatewaySlashCommands(): [string, string][] {
     ["/curator", t.slash.curator],
     ["/bundles", t.slash.bundles],
     ["/toolsets", t.slash.toolsets],
+    ["/approve", t.slash.approve],
+    ["/deny", t.slash.deny],
   ];
 }
 
