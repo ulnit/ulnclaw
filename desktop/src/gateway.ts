@@ -628,6 +628,16 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/portal` — P742 read-only portal-auth snapshot. */
+export interface PortalStatusPayload {
+  logged_in: boolean;
+  expires_at: number;
+  expired: boolean;
+  scope: string;
+  refresh_token_stored: boolean;
+  portal_url: string;
+}
+
 /** `GET /api/hooks` — P736 loaded event hooks. */
 export interface HookInfoRow {
   name: string;
@@ -2566,6 +2576,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`status-phrases HTTP ${response.status}`);
     return (await response.json()) as StatusPhrasesPayload;
+  }
+
+  /** GET /api/portal — P742 read-only portal-auth snapshot. */
+  async portalStatus(): Promise<PortalStatusPayload> {
+    const response = await fetch(this.endpoint("/api/portal"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`portal HTTP ${response.status}`);
+    return (await response.json()) as PortalStatusPayload;
   }
 
   /** GET /api/hooks — P736 loaded event hooks. */

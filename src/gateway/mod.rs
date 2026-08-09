@@ -5817,6 +5817,25 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/portal` — P742 (hermes `/api/portal` parity): read-only
+/// portal-auth snapshot for the dashboard — refresh-free by contract,
+/// so polling never performs an OAuth refresh or burns a refresh token.
+async fn portal_status_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let home = crate::config::ulnclaw_home();
+    let tokens = crate::oauth::load_tokens(&home);
+    let portal_url = crate::config::UlncLawConfig::load(None)
+        .map(|config| config.oauth.portal_url)
+        .unwrap_or_default();
+    Json(json!({
+        "logged_in": tokens.logged_in(),
+        "expires_at": tokens.expires_at,
+        "expired": tokens.logged_in() && tokens.expired(),
+        "scope": tokens.scope,
+        "refresh_token_stored": !tokens.refresh_token.is_empty(),
+        "portal_url": portal_url,
+    }))
+}
+
 /// `GET /api/status-phrases` — P731 ops surface over the P722
 /// status-phrase catalogs: the resolved global catalog (built-ins +
 /// conventional profile files + `[display.status_phrases]`), which
@@ -7508,6 +7527,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/terminal", get(terminal_info_api).put(update_terminal_api))
         .route("/api/cgroup", get(cgroup_info_api))
         .route("/api/hooks", get(hooks_info_api))
+        .route("/api/portal", get(portal_status_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -26275,6 +26295,40 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["removed"], true, "{body}");
         let written = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
         assert!(!written.contains("tool_preview_length"), "{written}");
+
+        match prev_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_portal_endpoint_shape() {
+        // P742: portal auth snapshot — auth-gated, refresh-free read of
+        // the stored tokens (absent file → logged-out shape).
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+
+        let app = router(test_state());
+        let (status, _) = get_json(app.clone(), "/api/portal", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, body) = get_json(app.clone(), "/api/portal", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["logged_in"], false, "{body}");
+        assert_eq!(body["refresh_token_stored"], false, "{body}");
+        // Stored tokens flip the snapshot (expired token stays visible).
+        std::fs::write(
+            temp.path().join("oauth_tokens.json"),
+            r#"{"access_token": "tok", "refresh_token": "ref", "expires_at": 1, "scope": "all"}"#,
+        )
+        .unwrap();
+        let (_, body) = get_json(app, "/api/portal", Some("sekret")).await;
+        assert_eq!(body["logged_in"], true, "{body}");
+        assert_eq!(body["expired"], true, "{body}");
+        assert_eq!(body["refresh_token_stored"], true, "{body}");
+        assert_eq!(body["scope"], "all", "{body}");
 
         match prev_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

@@ -81,6 +81,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
       </section>
+      <section id="doctor-portal" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="portalPanel.title">Portal auth</h3>
+        <div id="portal-rows"></div>
+      </section>
       <section id="doctor-hooks" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="hooksPanel.title">Event hooks</h3>
         <div id="hooks-rows"></div>
@@ -316,6 +320,7 @@ export class DoctorWidget {
     this.loadTerminal().catch(() => undefined);
     this.loadCgroup().catch(() => undefined);
     this.loadHooks().catch(() => undefined);
+    this.loadPortal().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2438,6 +2443,56 @@ export class DoctorWidget {
           platform,
           `${catalog.status_count} ${t.phrasesPanel.statusWord} \u00b7 ${catalog.generic_count} ${t.phrasesPanel.genericWord}`,
         );
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadPortal(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-portal") as HTMLElement;
+    const rows = this.root.querySelector("#portal-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.portalStatus();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      const status = payload.logged_in
+        ? payload.expired
+          ? `<span class="models-view-badge warn">${escapeHtmlDoctor(t.portalPanel.expired)}</span>`
+          : `<span class="models-view-badge ok">${escapeHtmlDoctor(t.portalPanel.loggedIn)}</span>`
+        : escapeHtmlDoctor(off);
+      addRow(t.portalPanel.status, status);
+      if (payload.logged_in) {
+        addRow(
+          t.portalPanel.expires,
+          payload.expires_at > 0
+            ? escapeHtmlDoctor(new Date(payload.expires_at * 1000).toLocaleString())
+            : escapeHtmlDoctor(t.portalPanel.unknown),
+        );
+        addRow(t.portalPanel.scope, payload.scope ? escapeHtmlDoctor(payload.scope) : off);
+        addRow(t.portalPanel.refreshToken, payload.refresh_token_stored ? on : off);
+      }
+      if (payload.portal_url) {
+        addRow(t.portalPanel.portalUrl, escapeHtmlDoctor(payload.portal_url));
       }
       section.hidden = false;
     } catch {
