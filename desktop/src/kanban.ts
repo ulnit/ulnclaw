@@ -95,6 +95,33 @@ export class KanbanWidget {
             <button value="cancel" data-i18n="kanban.close">Close</button>
           </menu>
         </form>
+      </dialog>
+      <dialog id="kanban-create">
+        <form method="dialog">
+          <h2 data-i18n="kanban.newTaskTitle">New task</h2>
+          <div class="kanban-create-grid">
+            <label for="kanban-create-title" data-i18n="kanban.newTaskTitleField">Title</label>
+            <input id="kanban-create-title" type="text" />
+            <label for="kanban-create-body" data-i18n="kanban.newTaskBody">Description</label>
+            <textarea id="kanban-create-body"></textarea>
+            <label for="kanban-create-assignee" data-i18n="kanban.metaAssignee">Assignee</label>
+            <input id="kanban-create-assignee" type="text" />
+            <label for="kanban-create-priority" data-i18n="kanban.metaPriority">Priority</label>
+            <input id="kanban-create-priority" type="number" value="0" />
+            <label for="kanban-create-model" data-i18n="kanban.modelLabel">Model</label>
+            <input id="kanban-create-model" type="text" data-i18n-ph="kanban.modelInherit" />
+            <label for="kanban-create-provider" data-i18n="kanban.providerOptional">Provider</label>
+            <input id="kanban-create-provider" type="text" />
+            <label for="kanban-create-reasoning" data-i18n="kanban.reasoningLabel">Reasoning effort</label>
+            <select id="kanban-create-reasoning"></select>
+            <label for="kanban-create-skills" data-i18n="kanban.skillsWord">Skills</label>
+            <input id="kanban-create-skills" type="text" data-i18n-ph="kanban.skillsPlaceholder" />
+          </div>
+          <menu>
+            <button id="kanban-create-save" value="create" class="primary" data-i18n="kanban.createAction">Create</button>
+            <button value="cancel" data-i18n="kanban.close">Close</button>
+          </menu>
+        </form>
       </dialog>`;
 
     const select = this.root.querySelector("#kanban-board") as HTMLSelectElement;
@@ -119,15 +146,12 @@ export class KanbanWidget {
     });
     (this.root.querySelector("#kanban-dispatch") as HTMLButtonElement).onclick = () =>
       void this.dispatch();
-    // P574: quick task creation from the toolbar (palette quick-add parity).
+    // P574/P649: the toolbar button opens the full creation dialog
+    // (title, body, assignee, priority, model/provider, reasoning,
+    // skills); the palette quick-add keeps its one-line flow.
+    this.wireCreateDialog();
     (this.root.querySelector("#kanban-new") as HTMLButtonElement).onclick = () => {
-      const client = this.client();
-      if (!client) return;
-      const title = window.prompt(t.kanban.newTaskPrompt);
-      if (!title || !title.trim()) return;
-      void client.kanbanCreateTask(title.trim()).then((task) => {
-        if (task) void this.refresh();
-      });
+      this.openCreateDialog();
     };
 
     // P645: attach a file path or link to the task.
@@ -495,6 +519,64 @@ export class KanbanWidget {
 
     card.onclick = () => void this.openDetail(task.id);
     return card;
+  }
+
+  /** P649: build the create dialog once (reasoning levels + submit). */
+  private wireCreateDialog(): void {
+    const dialog = this.root.querySelector("#kanban-create") as HTMLDialogElement;
+    const reasoning = this.root.querySelector("#kanban-create-reasoning") as HTMLSelectElement;
+    const levels = ["", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+    for (const level of levels) {
+      const option = document.createElement("option");
+      option.value = level;
+      option.textContent = level === "" ? t.kanban.reasoningInherit : level;
+      reasoning.appendChild(option);
+    }
+    dialog.addEventListener("close", () => {
+      if (dialog.returnValue !== "create") return;
+      const client = this.client();
+      if (!client) return;
+      const title = (this.root.querySelector("#kanban-create-title") as HTMLInputElement).value.trim();
+      if (!title) return;
+      const body = (this.root.querySelector("#kanban-create-body") as HTMLTextAreaElement).value;
+      const assignee = (this.root.querySelector("#kanban-create-assignee") as HTMLInputElement).value.trim();
+      const priorityRaw = (this.root.querySelector("#kanban-create-priority") as HTMLInputElement).value;
+      const model = (this.root.querySelector("#kanban-create-model") as HTMLInputElement).value.trim();
+      const provider = (this.root.querySelector("#kanban-create-provider") as HTMLInputElement).value.trim();
+      const reasoningEffort = reasoning.value;
+      const skills = (this.root.querySelector("#kanban-create-skills") as HTMLInputElement).value
+        .split(",")
+        .map((skill) => skill.trim())
+        .filter((skill) => skill.length > 0);
+      const priority = Number.parseInt(priorityRaw, 10);
+      void client
+        .kanbanCreateTask(title, body, {
+          assignee: assignee || undefined,
+          priority: Number.isFinite(priority) ? priority : 0,
+          model: model || undefined,
+          provider: provider || undefined,
+          reasoning_effort: reasoningEffort || undefined,
+          skills: skills.length > 0 ? skills : undefined,
+        })
+        .then((task) => {
+          if (task) void this.refresh();
+        });
+    });
+  }
+
+  /** P649: reset + open the create dialog. */
+  private openCreateDialog(): void {
+    const dialog = this.root.querySelector("#kanban-create") as HTMLDialogElement;
+    (this.root.querySelector("#kanban-create-title") as HTMLInputElement).value = "";
+    (this.root.querySelector("#kanban-create-body") as HTMLTextAreaElement).value = "";
+    (this.root.querySelector("#kanban-create-assignee") as HTMLInputElement).value = "";
+    (this.root.querySelector("#kanban-create-priority") as HTMLInputElement).value = "0";
+    (this.root.querySelector("#kanban-create-model") as HTMLInputElement).value = "";
+    (this.root.querySelector("#kanban-create-provider") as HTMLInputElement).value = "";
+    (this.root.querySelector("#kanban-create-reasoning") as HTMLSelectElement).value = "";
+    (this.root.querySelector("#kanban-create-skills") as HTMLInputElement).value = "";
+    dialog.showModal();
+    (this.root.querySelector("#kanban-create-title") as HTMLInputElement).focus();
   }
 
   /** P639: flip the detail dialog between display and edit mode. */

@@ -3651,10 +3651,28 @@ export class GatewayClient {
     return (value?.tasks || []) as KanbanTask[];
   }
 
-  async kanbanCreateTask(title: string, body?: string): Promise<KanbanTask | null> {
+  async kanbanCreateTask(
+    title: string,
+    body?: string,
+    options?: {
+      assignee?: string;
+      priority?: number;
+      model?: string;
+      provider?: string;
+      reasoning_effort?: string;
+      skills?: string[];
+    },
+  ): Promise<KanbanTask | null> {
+    const payload: Record<string, unknown> = { title, body: body || "" };
+    if (options?.assignee) payload.assignee = options.assignee;
+    if (options?.priority !== undefined) payload.priority = options.priority;
+    if (options?.model) payload.model = options.model;
+    if (options?.provider) payload.provider = options.provider;
+    if (options?.reasoning_effort) payload.reasoning_effort = options.reasoning_effort;
+    if (options?.skills && options.skills.length > 0) payload.skills = options.skills;
     const value = await this.kanbanJson("/api/kanban/tasks", {
       method: "POST",
-      body: JSON.stringify({ title, body: body || "" }),
+      body: JSON.stringify(payload),
     });
     return (value?.task || null) as KanbanTask | null;
   }
