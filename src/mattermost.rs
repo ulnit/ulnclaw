@@ -716,10 +716,10 @@ async fn handle_ws_event(
                     .send_post(&channel_id, &reply_text, thread_id.as_deref())
                     .await
                 {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[mattermost] reply failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

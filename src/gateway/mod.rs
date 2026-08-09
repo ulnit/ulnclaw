@@ -13976,6 +13976,25 @@ async fn deliver_job_result(store: &crate::session::SqliteSessionStore, job: &Cr
     let session_key = format!("cron-job:{}", job.id);
     for target in targets {
         let key = crate::cron::delivery::sender_key_for(&target.platform);
+        // P707: skip targets already proven permanently unreachable
+        // (hermes dead-target registry) — re-sending wastes a send
+        // against flood control. Reported as a delivery error so the
+        // job's last_delivery_error stays observable; a successful
+        // send to the target later clears the flag (self-healing).
+        if !target.chat_id.trim().is_empty()
+            && crate::dead_targets::is_dead(&key, &target.chat_id)
+        {
+            tracing::info!(
+                "[cron] skipping delivery to known-dead target {}:{} (send to it again to clear)",
+                key,
+                target.chat_id
+            );
+            errors.push(format!(
+                "target {}:{} previously confirmed unreachable (dead target)",
+                key, target.chat_id
+            ));
+            continue;
+        }
         match crate::messaging::platform_sender(&key) {
             Some(sender) => {
                 // P700: durable delivery obligation around the send
@@ -13996,6 +14015,8 @@ async fn deliver_job_result(store: &crate::session::SqliteSessionStore, job: &Cr
                 if let Some(id) = &obligation {
                     crate::delivery_ledger::mark_delivered(store, id);
                 }
+                // P707: successful delivery clears any stale dead flag.
+                crate::dead_targets::revive(&key, &target.chat_id);
             }
             None => errors.push(format!(
                 "platform '{}' has no registered sender",

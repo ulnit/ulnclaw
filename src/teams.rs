@@ -574,14 +574,16 @@ pub async fn teams_handle_webhook(
         // P705: ledger-protected reply delivery (all chunks).
         dispatcher
             .try_send_with_ledger("teams", &conversation_id, &reply_text, || async {
-                let mut ok = true;
+                let mut result: Result<(), String> = Ok(());
                 for chunk in crate::messaging::chunk_text(&reply_text, MAX_MESSAGE_LENGTH) {
                     if let Err(e) = runtime.send_activity(&conversation_id, &chunk).await {
                         eprintln!("[teams] reply failed: {e}");
-                        ok = false;
+                        if result.is_ok() {
+                            result = Err(e.to_string());
+                        }
                     }
                 }
-                ok
+                result
             })
             .await;
     }

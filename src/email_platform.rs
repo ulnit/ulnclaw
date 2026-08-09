@@ -1351,10 +1351,10 @@ async fn dispatch_email(
         dispatcher
             .try_send_with_ledger("email", &inbound.sender_addr, &reply_text, || async {
                 match send_email(runtime, &inbound.sender_addr, &reply_text, &media_paths).await {
-                    Ok(_) => true,
+                    Ok(_) => Ok(()),
                     Err(e) => {
                         eprintln!("[email] reply to {} failed: {e}", inbound.sender_addr);
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

@@ -772,23 +772,25 @@ async fn dispatch_wecom_event(
             .try_send_with_ledger("wecom", &chat_id, &reply_text_out, || async {
                 if !reply_req.is_empty() {
                     match runtime.send_reply_markdown(&reply_req, &reply_text_out).await {
-                        Ok(()) => true,
+                        Ok(()) => Ok(()),
                         Err(e) => {
                             eprintln!("[wecom] reply failed: {e}");
-                            false
+                            Err(e.to_string())
                         }
                     }
                 } else if !is_group {
                     match runtime.send_proactive_markdown(&chat_id, &reply_text_out).await {
-                        Ok(()) => true,
+                        Ok(()) => Ok(()),
                         Err(e) => {
                             eprintln!("[wecom] proactive send failed: {e}");
-                            false
+                            Err(e.to_string())
                         }
                     }
                 } else {
                     eprintln!("[wecom] cannot reply to group {chat_id}: no inbound req_id cached");
-                    false
+                    Err(format!(
+                        "cannot reply to group {chat_id}: no inbound req_id cached"
+                    ))
                 }
             })
             .await;

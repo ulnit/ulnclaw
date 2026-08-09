@@ -387,10 +387,10 @@ async fn handle_message(
         dispatcher
             .try_send_with_ledger("ntfy", &topic, &reply_text, || async {
                 match publish(runtime, &topic, &reply_text).await {
-                    Ok(_) => true,
+                    Ok(_) => Ok(()),
                     Err(e) => {
                         eprintln!("[ntfy] reply to {topic} failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

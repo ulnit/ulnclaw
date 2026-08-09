@@ -999,10 +999,10 @@ async fn dispatch_photon_event(
         dispatcher
             .try_send_with_ledger("photon", space_id, &reply_text, || async {
                 match send_message(runtime, space_id, &reply_text).await {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[photon] reply to {space_id} failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

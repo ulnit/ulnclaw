@@ -297,10 +297,10 @@ pub async fn handle_meeting_invited_event(
     dispatcher
         .try_send_with_ledger("feishu", &sender_id, &reply_text, || async {
             match api.send_text(&sender_id, &reply_text).await {
-                Ok(()) => true,
+                Ok(()) => Ok(()),
                 Err(e) => {
                     eprintln!("[feishu-meeting] reply to {sender_id} failed: {e}");
-                    false
+                    Err(e.to_string())
                 }
             }
         })

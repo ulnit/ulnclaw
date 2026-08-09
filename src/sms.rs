@@ -521,14 +521,16 @@ pub async fn sms_handle_webhook(
             .try_send_with_ledger("sms", &from, &reply_text, || async {
                 let client = reqwest::Client::new();
                 let formatted = strip_markdown(&reply_text);
-                let mut ok = true;
+                let mut result: Result<(), String> = Ok(());
                 for chunk in crate::messaging::chunk_text(&formatted, MAX_SMS_LENGTH) {
                     if let Err(e) = send_sms(&client, &resolved, &from, &chunk).await {
                         eprintln!("[sms] reply to {from} failed: {e}");
-                        ok = false;
+                        if result.is_ok() {
+                            result = Err(e.to_string());
+                        }
                     }
                 }
-                ok
+                result
             })
             .await;
     }

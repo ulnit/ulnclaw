@@ -452,10 +452,10 @@ async fn handle_event(runtime: &Arc<Runtime>, dispatcher: &Arc<Dispatcher>, enve
         dispatcher
             .try_send_with_ledger("homeassistant", "ha_events", &reply_text, || async {
                 match send_notification(runtime, &reply_text).await {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[homeassistant] notification failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

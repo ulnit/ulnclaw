@@ -664,10 +664,10 @@ pub async fn whatsapp_handle_webhook(
         dispatcher
             .try_send_with_ledger("whatsapp_cloud", &event.chat_id, &reply_text, || async {
                 match whatsapp_send(&client, cfg, &event.chat_id, &reply_text).await {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[whatsapp_cloud] reply failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })
@@ -3102,10 +3102,10 @@ pub async fn bluebubbles_handle_webhook(
             .try_send_with_ledger("bluebubbles", &event.chat_id, &reply_text, || async {
                 match bluebubbles_send_text(&client, cfg, cache, &event.chat_id, &reply_text).await
                 {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[bluebubbles] reply failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

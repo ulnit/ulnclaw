@@ -1061,10 +1061,10 @@ async fn handle_inbound(
             .try_send_with_ledger("signal", &inbound.chat_id, &reply_text, || async {
                 match signal_send_text(client, cfg, http_url, &inbound.chat_id, &reply_text).await
                 {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[signal] reply failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

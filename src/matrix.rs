@@ -777,10 +777,10 @@ async fn handle_room_event(
         dispatcher
             .try_send_with_ledger("matrix", room_id, &reply_text, || async {
                 match runtime.send_text(room_id, &reply_text).await {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[matrix] reply to {room_id} failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })
@@ -852,10 +852,10 @@ async fn handle_media_message(
         dispatcher
             .try_send_with_ledger("matrix", room_id, &reply_text, || async {
                 match runtime.send_text(room_id, &reply_text).await {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[matrix] reply to {room_id} failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

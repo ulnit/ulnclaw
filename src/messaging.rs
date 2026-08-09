@@ -1606,9 +1606,11 @@ impl Dispatcher {
     }
 
     /// P704: ledger-protected delivery for adapters whose send reports
-    /// success/failure — the obligation is marked `delivered` on true
+    /// success/failure — the obligation is marked `delivered` on `Ok`
     /// and `failed` (definitive rejection; retried on the next boot)
-    /// on false.
+    /// on `Err`. P707: the error text also feeds the dead-target
+    /// registry (whole-chat deaths short-circuit future sends) and a
+    /// successful send clears any stale dead flag for the target.
     pub async fn try_send_with_ledger<F, Fut>(
         &self,
         platform: &str,
@@ -1618,7 +1620,7 @@ impl Dispatcher {
     ) -> bool
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = bool>,
+        Fut: std::future::Future<Output = std::result::Result<(), String>>,
     {
         let session_key = format!("platform-{platform}-{chat_id}");
         let obligation = crate::delivery_ledger::record_obligation(
@@ -1632,15 +1634,22 @@ impl Dispatcher {
         if let Some(id) = &obligation {
             crate::delivery_ledger::mark_attempting(&self.store, id);
         }
-        let ok = send().await;
-        if let Some(id) = &obligation {
-            if ok {
-                crate::delivery_ledger::mark_delivered(&self.store, id);
-            } else {
-                crate::delivery_ledger::mark_failed(&self.store, id, "send reported failure");
+        let result = send().await;
+        match &result {
+            Ok(()) => {
+                if let Some(id) = &obligation {
+                    crate::delivery_ledger::mark_delivered(&self.store, id);
+                }
+                crate::dead_targets::revive(platform, chat_id);
+            }
+            Err(err) => {
+                if let Some(id) = &obligation {
+                    crate::delivery_ledger::mark_failed(&self.store, id, err);
+                }
+                crate::dead_targets::mark_dead_from_error(platform, chat_id, err);
             }
         }
-        ok
+        result.is_ok()
     }
 
     /// Test hook: current queue depth for a chat key.
@@ -7510,11 +7519,13 @@ mod tests {
         // and failed on a definitive send rejection.
         let dispatcher = test_dispatcher();
         let ok = dispatcher
-            .try_send_with_ledger("testplat", "chat-8", "good reply", || async { true })
+            .try_send_with_ledger("testplat", "chat-8", "good reply", || async { Ok(()) })
             .await;
         assert!(ok);
         let ok = dispatcher
-            .try_send_with_ledger("testplat", "chat-8", "bad reply", || async { false })
+            .try_send_with_ledger("testplat", "chat-8", "bad reply", || async {
+                Err("boom".to_string())
+            })
             .await;
         assert!(!ok);
         let rows = dispatcher.store.obligation_rows();

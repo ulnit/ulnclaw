@@ -126,6 +126,12 @@ pub fn mark_failed(store: &SqliteSessionStore, obligation_id: &str, error: &str)
     let _ = store.set_obligation_state(obligation_id, "failed", Some(error), now_secs());
 }
 
+/// Abandon an obligation with a reason (P707 dead-target skip path;
+/// hermes abandons rows it must never retry).
+fn mark_failed_abandoned(store: &SqliteSessionStore, obligation_id: &str, reason: &str) {
+    let _ = store.set_obligation_state(obligation_id, "abandoned", Some(reason), now_secs());
+}
+
 /// Startup recovery (hermes `sweep_recoverable` + redelivery loop):
 /// claim obligations orphaned by a dead gateway for platforms that
 /// have a live sender this boot, redeliver them (marker on ambiguous
@@ -144,6 +150,17 @@ pub async fn sweep_and_redeliver(store: &Arc<SqliteSessionStore>) -> usize {
     );
     let mut redelivered = 0usize;
     for (obligation, platform, chat_id, _thread_id, content, needs_marker, attempts) in claimed {
+        // P707: a target already proven permanently unreachable (dead
+        // chat / kicked bot) must not burn redelivery attempts on
+        // every boot — abandon the row; a successful send to the
+        // target later revives it (hermes dead-target registry).
+        if crate::dead_targets::is_dead(&platform, &chat_id) {
+            tracing::info!(
+                "[delivery_ledger] abandoning orphaned reply for known-dead target {platform}/{chat_id}"
+            );
+            mark_failed_abandoned(store, &obligation, "target marked dead");
+            continue;
+        }
         let Some(sender) = crate::messaging::platform_sender(&platform) else {
             continue;
         };

@@ -1116,10 +1116,10 @@ pub(crate) async fn handle_message_event(
     dispatcher
         .try_send_with_ledger("feishu", &chat_id, &reply_text, || async {
             match api.send_text(&chat_id, &reply_text).await {
-                Ok(()) => true,
+                Ok(()) => Ok(()),
                 Err(e) => {
                     eprintln!("[feishu] reply failed: {e}");
-                    false
+                    Err(e.to_string())
                 }
             }
         })
@@ -1225,10 +1225,10 @@ pub(crate) async fn handle_reaction_event(
     dispatcher
         .try_send_with_ledger("feishu", &chat_id, &reply_text, || async {
             match api.send_text(&chat_id, &reply_text).await {
-                Ok(()) => true,
+                Ok(()) => Ok(()),
                 Err(e) => {
                     eprintln!("[feishu] reaction reply failed: {e}");
-                    false
+                    Err(e.to_string())
                 }
             }
         })
@@ -1674,10 +1674,10 @@ pub(crate) async fn handle_card_action(
         dispatcher
             .try_send_with_ledger("feishu", &chat_id, &reply_text, || async {
                 match api.send_text(&chat_id, &reply_text).await {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[feishu] card action reply failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })

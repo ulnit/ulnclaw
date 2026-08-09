@@ -557,14 +557,16 @@ async fn handle_bridge_message(
         // P705: ledger-protected reply delivery (all chunks).
         dispatcher
             .try_send_with_ledger("whatsapp", &chat_id, &reply_text, || async {
-                let mut ok = true;
+                let mut result: Result<(), String> = Ok(());
                 for chunk in crate::messaging::chunk_text(&reply_text, MAX_MESSAGE_LENGTH) {
                     if let Err(e) = send_text(runtime, &chat_id, &chunk).await {
                         eprintln!("[whatsapp] reply to {chat_id} failed: {e}");
-                        ok = false;
+                        if result.is_ok() {
+                            result = Err(e.to_string());
+                        }
                     }
                 }
-                ok
+                result
             })
             .await;
     }

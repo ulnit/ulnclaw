@@ -1033,7 +1033,8 @@ async fn handle_bot_message(
         // fallback).
         let sent = dispatcher
             .try_send_with_ledger("dingtalk", &chat_id, &reply_text, || async {
-                let mut sent = false;
+                let mut result: Result<(), String> =
+                    Err("no delivery path attempted".to_string());
                 if !runtime.cfg.card_template_id.is_empty() {
                     match runtime
                         .send_ai_card(is_group, &conversation_id, &sender_staff_id, &reply_text)
@@ -1041,18 +1042,24 @@ async fn handle_bot_message(
                     {
                         Ok(track_id) => {
                             eprintln!("[dingtalk] AI card created+finalized: {track_id}");
-                            sent = true;
+                            result = Ok(());
                         }
-                        Err(e) => eprintln!("[dingtalk] AI card failed, falling back to webhook: {e}"),
+                        Err(e) => {
+                            eprintln!("[dingtalk] AI card failed, falling back to webhook: {e}");
+                            result = Err(e.to_string());
+                        }
                     }
                 }
-                if !sent {
+                if result.is_err() {
                     match runtime.send_markdown(&chat_id, &reply_text).await {
-                        Ok(()) => sent = true,
-                        Err(e) => eprintln!("[dingtalk] reply failed: {e}"),
+                        Ok(()) => result = Ok(()),
+                        Err(e) => {
+                            eprintln!("[dingtalk] reply failed: {e}");
+                            result = Err(e.to_string());
+                        }
                     }
                 }
-                sent
+                result
             })
             .await;
         if sent {

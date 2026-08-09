@@ -1304,10 +1304,10 @@ async fn handle_event(
         dispatcher
             .try_send_with_ledger("buzz", channel_id, &reply_text, || async {
                 match send_via_cli(cfg, channel_id, &reply_text).await {
-                    Ok(()) => true,
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[buzz] reply to {channel_id} failed: {e}");
-                        false
+                        Err(e.to_string())
                     }
                 }
             })
