@@ -1008,6 +1008,9 @@ pub struct UlncLawConfig {
     /// Gateway monitoring / OTLP health export (hermes `monitoring:`).
     #[serde(default)]
     pub monitoring: crate::monitoring::MonitoringConfig,
+    /// Gateway logging extras (hermes `logging.memory_monitor`).
+    #[serde(default)]
+    pub logging: LoggingConfig,
     /// Speech-to-text pipeline for voice messages (hermes `stt:`).
     #[serde(default)]
     pub stt: crate::stt::SttConfig,
@@ -1036,6 +1039,26 @@ pub struct UlncLawConfig {
     /// block: `wrap_response`, `chronos.*`).
     #[serde(default)]
     pub cron: CronConfig,
+}
+
+/// `[logging]` — gateway logging extras (hermes `logging.*`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoggingConfig {
+    /// Periodic `[MEMORY] rss=...` gateway logging (hermes
+    /// `logging.memory_monitor`, default on).
+    pub memory_monitor: bool,
+    /// Cadence for the memory monitor in seconds (hermes default 300).
+    pub memory_monitor_interval_secs: u64,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            memory_monitor: true,
+            memory_monitor_interval_secs: crate::memory_monitor::DEFAULT_INTERVAL_SECONDS,
+        }
+    }
 }
 
 /// `[cron]` — cron delivery settings (hermes `cron.*`).

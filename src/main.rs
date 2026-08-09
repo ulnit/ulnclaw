@@ -2552,6 +2552,12 @@ async fn gateway_cmd(
         gateway.port = port;
     }
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
+    // P698: restart-loop breaker — a stale pidfile (file present but the
+    // recorded process dead) means the previous instance died without a
+    // clean shutdown. Captured before the --replace kill so a deliberate
+    // takeover never counts as a crash boot (hermes restart_loop_guard).
+    let crash_boot = ulnclaw::gateway_pidfile::pidfile_path(&home).exists()
+        && ulnclaw::gateway_pidfile::running_gateway_pid(&home).is_none();
     // Single-instance guard (hermes `gateway run [--replace]` contract):
     // the pidfile carries pid + start token, so a recycled pid never
     // blocks a fresh start.
@@ -2569,6 +2575,14 @@ async fn gateway_cmd(
         }
     }
     let state = build_gateway_stack(config, &home, gateway.key.clone()).await?;
+    if crash_boot {
+        ulnclaw::restart_loop_guard::check_and_record(&home, None);
+    }
+    if config.logging.memory_monitor {
+        ulnclaw::memory_monitor::start(std::time::Duration::from_secs(
+            config.logging.memory_monitor_interval_secs,
+        ));
+    }
     // One kanban notification delivery loop per gateway process (the
     // kanban store is shared; multiplex profile stacks must not spawn
     // their own notifiers or deliveries would duplicate).
@@ -2672,6 +2686,12 @@ async fn gateway_cmd(
     .await;
     if pidfile_written {
         let _ = std::fs::remove_file(&pidfile);
+    }
+    ulnclaw::memory_monitor::stop();
+    if result.is_ok() {
+        // Clean shutdown: clear the crash-boot history so only genuine
+        // crashes accumulate in the breaker window (hermes clear()).
+        ulnclaw::restart_loop_guard::clear(&home);
     }
     result.map_err(|e| e.to_string())
 }
