@@ -2789,6 +2789,12 @@ async fn gateway_cmd(
     // so a later unclean-death report can classify OOM cycles.
     ulnclaw::lifecycle_ledger::start_heartbeat(home.clone());
 
+    // P712: systemd sd_notify watchdog (hermes systemd_notify): armed
+    // when `[gateway] systemd_watchdog_seconds` > 0 and systemd
+    // stamped WATCHDOG_USEC; READY=1 fires once the listener binds
+    // (inside serve_multiplex), STOPPING=1 on the way down.
+    ulnclaw::systemd_notify::arm_watchdog(gateway.systemd_watchdog_seconds);
+
     // Register this instance in the pidfile; a startup failure or a
     // clean shutdown removes it (best-effort — a stale file only
     // weakens the guard, and the liveness check self-heals it).
@@ -2804,6 +2810,7 @@ async fn gateway_cmd(
     if pidfile_written {
         let _ = std::fs::remove_file(&pidfile);
     }
+    ulnclaw::systemd_notify::stop_watchdog().await;
     ulnclaw::memory_monitor::stop();
     if result.is_ok() {
         // Clean shutdown: clear the crash-boot history so only genuine

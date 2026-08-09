@@ -8025,6 +8025,11 @@ pub async fn serve_multiplex(
         addr,
         if state.key.is_some() { "bearer token" } else { "none" }
     );
+    // P712: READY=1 + STATUS once the listener is bound (hermes
+    // `watchdog.ready` after a configured gateway is truly running).
+    crate::systemd_notify::notify_ready(&format!(
+        "ulnclaw gateway listening on http://{addr}"
+    ));
     // Raft bridge spawn (hermes `_spawn_bridge`) — the wake endpoint
     // rides this listener, so the bridge gets its URL from the bound
     // address.

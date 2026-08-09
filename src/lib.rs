@@ -212,6 +212,7 @@ pub mod stt;
 pub mod tts;
 pub mod teams;
 pub mod status;
+pub mod systemd_notify;
 pub mod think_scrubber;
 pub mod tips;
 pub mod title_generator;

@@ -876,6 +876,13 @@ pub struct GatewayConfig {
     /// prefixes so persisted transcripts stay clean regardless.
     #[serde(default)]
     pub message_timestamps: bool,
+    /// systemd watchdog interval in seconds (hermes
+    /// `gateway.systemd_watchdog_seconds`, 0 = disabled): arms the
+    /// sd_notify WATCHDOG=1 sampler + READY/STOPPING notifications
+    /// for `Type=notify` service units. The feed cadence itself
+    /// comes from systemd's `WATCHDOG_USEC` stamp.
+    #[serde(default)]
+    pub systemd_watchdog_seconds: u64,
     /// Cap on concurrently active chat sessions across all surfaces
     /// (hermes `max_concurrent_sessions`; 0/unset disables the cap).
     #[serde(default)]
@@ -899,6 +906,7 @@ impl Default for GatewayConfig {
             multiplex_profiles: false,
             profile_routes: Vec::new(),
             message_timestamps: false,
+            systemd_watchdog_seconds: 0,
             max_concurrent_sessions: None,
         }
     }
