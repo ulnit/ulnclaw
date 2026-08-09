@@ -49,6 +49,7 @@ fn task_json(store: &KanbanStore, task: &crate::kanban::Task) -> Value {
         "claim_expires": task.claim_expires,
         "last_heartbeat_at": task.last_heartbeat_at,
         "skills": task.skills,
+        "reasoning_effort": task.reasoning_effort,
         "max_runtime_seconds": task.max_runtime_seconds,
         "idempotency_key": task.idempotency_key,
         "parents": parents,
@@ -533,6 +534,49 @@ pub async fn unblock_task(Path(id): Path<String>) -> Response {
         Ok(task) => Json(json!({"object": "ulnclaw.kanban.task", "task": task_json(&store, &task)})).into_response(),
         Err(e) => super::bad_request(&e.to_string(), None),
     }
+}
+
+#[derive(Deserialize, Default)]
+pub struct SetReasoningBody {
+    /// Reasoning effort level (none|minimal|low|medium|high|xhigh|
+    /// max|ultra); null / empty clears the pin so the worker falls
+    /// back to its profile's own `agent.reasoning_effort`.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+}
+
+/// `POST /api/kanban/tasks/:id/set-reasoning` — pin (or clear) the
+/// per-task reasoning effort (hermes `reasoning_effort`). Takes
+/// effect on the next dispatch, so it is settable on a running task.
+pub async fn set_reasoning(Path(id): Path<String>, Json(body): Json<SetReasoningBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let effort = body
+        .reasoning_effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let task = match store.set_reasoning_effort(&id, effort) {
+        Ok(t) => t,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("reasoning_effort must be one of") || msg.contains("archived task") {
+                return super::bad_request(&msg, None);
+            }
+            return super::server_error(&msg);
+        }
+    };
+    Json(json!({
+        "object": "ulnclaw.kanban.task",
+        "task": task_json(&store, &task),
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]

@@ -54,6 +54,10 @@ export class KanbanWidget {
         <form method="dialog">
           <h2 id="kanban-detail-title"></h2>
           <div id="kanban-detail-meta" class="kanban-detail-meta"></div>
+          <div class="kanban-detail-reasoning">
+            <label for="kanban-detail-reasoning" data-i18n="kanban.reasoningLabel">Reasoning effort</label>
+            <select id="kanban-detail-reasoning"></select>
+          </div>
           <pre id="kanban-detail-body" class="kanban-detail-body"></pre>
           <div id="kanban-detail-attachments" class="kanban-detail-attachments"></div>
           <div id="kanban-detail-comments" class="kanban-comments"></div>
@@ -268,6 +272,13 @@ export class KanbanWidget {
       assignee.textContent = task.assignee;
       meta.appendChild(assignee);
     }
+    if (task.reasoning_effort) {
+      const reasoning = document.createElement("span");
+      reasoning.className = "kanban-chip";
+      reasoning.title = t.kanban.reasoningLabel;
+      reasoning.textContent = `\u26A1 ${task.reasoning_effort}`;
+      meta.appendChild(reasoning);
+    }
     if (task.children.length > 0) {
       const sub = document.createElement("span");
       sub.className = "kanban-chip";
@@ -369,6 +380,27 @@ export class KanbanWidget {
     if (task.parents.length > 0) metaParts.push(`${t.kanban.metaParents}: ${task.parents.join(", ")}`);
     if (task.children.length > 0) metaParts.push(`${t.kanban.metaChildren}: ${task.children.join(", ")}`);
     metaEl.textContent = metaParts.join(" · ");
+
+    // P636: per-task reasoning-effort pin (hermes reasoning_effort);
+    // "" = inherit the worker profile's own agent.reasoning_effort.
+    const reasoningSelect = this.root.querySelector(
+      "#kanban-detail-reasoning",
+    ) as HTMLSelectElement;
+    reasoningSelect.innerHTML = "";
+    const levels = ["", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+    for (const level of levels) {
+      const option = document.createElement("option");
+      option.value = level;
+      option.textContent = level === "" ? t.kanban.reasoningInherit : level;
+      reasoningSelect.appendChild(option);
+    }
+    reasoningSelect.value = task.reasoning_effort || "";
+    reasoningSelect.onchange = () => {
+      const c = this.client();
+      if (!c) return;
+      const value = reasoningSelect.value === "" ? null : reasoningSelect.value;
+      void c.kanbanSetReasoning(task.id, value).then(() => void this.refresh());
+    };
 
     const attachEl = this.root.querySelector("#kanban-detail-attachments") as HTMLElement;
     if (detail.attachments.length > 0) {

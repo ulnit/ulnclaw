@@ -107,6 +107,7 @@ export interface Translations {
     attachmentsTitle: string;
     dispatch: string; dispatchResult: string; dispatchFailed: string; newTask: string; newTaskPrompt: string;
     filterPlaceholder: string; filterNoMatch: string;
+    reasoningLabel: string; reasoningInherit: string;
   };
   projects: {
     addFolder: string; archive: string; restore: string; bindBoard: string;
@@ -495,6 +496,7 @@ const en: Translations = {
     attachmentsTitle: "Attachments",
     dispatch: "Dispatch", newTask: "New task", newTaskPrompt: "Task title:", dispatchResult: "Dispatched: {spawned} spawned · {promoted} promoted · {reclaimed} reclaimed", dispatchFailed: "Dispatch failed: {error}",
     filterPlaceholder: "Filter tasks…", filterNoMatch: "No tasks match the filter.",
+    reasoningLabel: "Reasoning effort", reasoningInherit: "inherit profile",
   },
   projects: {
     addFolder: "Add folder", archive: "Archive", restore: "Restore",
@@ -1040,6 +1042,7 @@ const zh: Translations = {
     attachmentsTitle: "附件",
     dispatch: "派发", newTask: "新建任务", newTaskPrompt: "任务标题：", dispatchResult: "派发完成：生成 {spawned} · 提升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派发失败:{error}",
     filterPlaceholder: "筛选任务…", filterNoMatch: "没有匹配筛选条件的任务。",
+    reasoningLabel: "推理强度", reasoningInherit: "跟随配置",
   },
   projects: {
     addFolder: "添加文件夹", archive: "归档", restore: "恢复",
@@ -1585,6 +1588,7 @@ const zhHant: Translations = {
     attachmentsTitle: "附件",
     dispatch: "派發", newTask: "新建工作", newTaskPrompt: "工作標題：", dispatchResult: "派發完成：產生 {spawned} · 晉升 {promoted} · 回收 {reclaimed}", dispatchFailed: "派發失敗:{error}",
     filterPlaceholder: "篩選任務…", filterNoMatch: "沒有匹配篩選條件的任務。",
+    reasoningLabel: "推理強度", reasoningInherit: "跟隨設定檔",
   },
   projects: {
     addFolder: "新增資料夾", archive: "封存", restore: "還原",
@@ -2130,6 +2134,7 @@ const ja: Translations = {
     attachmentsTitle: "添付",
     dispatch: "ディスパッチ", newTask: "新規タスク", newTaskPrompt: "タスクのタイトル：", dispatchResult: "ディスパッチ完了: 起動 {spawned} · 昇格 {promoted} · 回収 {reclaimed}", dispatchFailed: "ディスパッチに失敗しました: {error}",
     filterPlaceholder: "タスクを絞り込み…", filterNoMatch: "条件に一致するタスクがありません。",
+    reasoningLabel: "推論の深さ", reasoningInherit: "プロファイルに従う",
   },
   projects: {
     addFolder: "フォルダを追加", archive: "アーカイブ", restore: "復元",
@@ -2675,6 +2680,7 @@ const ar: Translations = {
     attachmentsTitle: "المرفقات",
     dispatch: "توزيع", newTask: "مهمة جديدة", newTaskPrompt: "عنوان المهمة:", dispatchResult: "تم التوزيع: {spawned} انطلاق · {promoted} ترقية · {reclaimed} استرداد", dispatchFailed: "فشل التوزيع: {error}",
     filterPlaceholder: "تصفية المهام…", filterNoMatch: "لا توجد مهام تطابق التصفية.",
+    reasoningLabel: "جهد الاستدلال", reasoningInherit: "وراثة الملف الشخصي",
   },
   projects: {
     addFolder: "إضافة مجلد", archive: "أرشفة", restore: "استعادة",

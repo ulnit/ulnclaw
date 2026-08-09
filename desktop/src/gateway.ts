@@ -227,6 +227,7 @@ export interface KanbanTask {
   started_at: number | null;
   completed_at: number | null;
   result: string | null;
+  reasoning_effort: string | null;
   parents: string[];
   children: string[];
 }
@@ -3612,6 +3613,15 @@ export class GatewayClient {
       body: JSON.stringify({ body, author: "desktop" }),
     });
     return Boolean(value?.ok);
+  }
+
+  /** P636: pin (or clear, effort=null) the per-task reasoning effort. */
+  async kanbanSetReasoning(id: string, effort: string | null): Promise<KanbanTask | null> {
+    const value = await this.kanbanJson(`/api/kanban/tasks/${encodeURIComponent(id)}/set-reasoning`, {
+      method: "POST",
+      body: JSON.stringify({ reasoning_effort: effort }),
+    });
+    return (value?.task || null) as KanbanTask | null;
   }
 
   // ---- Projects registry (shared with the `ulnclaw project` CLI) ----
