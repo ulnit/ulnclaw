@@ -80,6 +80,11 @@ export class DoctorWidget {
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
+        <div id="phrases-preview" class="monitoring-row">
+          <button id="phrases-preview-status" class="ghost mcp-add-btn" data-i18n="phrasesPanel.previewStatus">Preview status</button>
+          <button id="phrases-preview-generic" class="ghost mcp-add-btn" data-i18n="phrasesPanel.previewGeneric">Preview generic</button>
+          <span id="phrases-preview-out" class="monitoring-value"></span>
+        </div>
       </section>
       <section id="doctor-portal" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="portalPanel.title">Portal auth</h3>
@@ -2443,6 +2448,28 @@ export class DoctorWidget {
           platform,
           `${catalog.status_count} ${t.phrasesPanel.statusWord} \u00b7 ${catalog.generic_count} ${t.phrasesPanel.genericWord}`,
         );
+      }
+      // P743: live preview — sample the rotation pool the status line
+      // would actually emit, per kind.
+      const statusBtn = this.root.querySelector("#phrases-preview-status") as HTMLButtonElement;
+      const genericBtn = this.root.querySelector("#phrases-preview-generic") as HTMLButtonElement;
+      const previewOut = this.root.querySelector("#phrases-preview-out") as HTMLElement;
+      if (!statusBtn.dataset.wired) {
+        const runPreview = async (kind: "status" | "generic"): Promise<void> => {
+          previewOut.textContent = "";
+          try {
+            const preview = await client.statusPhrasesPreview({ kind, count: 8 });
+            previewOut.innerHTML =
+              preview.phrases.length > 0
+                ? `${escapeHtmlDoctor(preview.phrases.join(" \u00b7 "))} <span class="models-view-badge ok">${preview.total}</span>`
+                : escapeHtmlDoctor(t.phrasesPanel.previewEmpty);
+          } catch (err) {
+            previewOut.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        statusBtn.onclick = () => void runPreview("status");
+        genericBtn.onclick = () => void runPreview("generic");
+        statusBtn.dataset.wired = "1";
       }
       section.hidden = false;
     } catch {

@@ -5903,6 +5903,63 @@ async fn status_phrases_api(State(_state): State<Arc<GatewayState>>) -> Json<Val
     Json(result)
 }
 
+/// `GET /api/status-phrases/preview` — P743: a live sample of the
+/// phrases the status line would actually rotate through, for operators
+/// tuning phrase files. Query: `platform` (optional; default global),
+/// `kind` (`status`|`generic`, default status), `count` (default 5,
+/// capped at 20). The sample window rotates with the clock so repeated
+/// fetches walk the catalog.
+async fn status_phrases_preview_api(
+    State(_state): State<Arc<GatewayState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let platform: Option<String> = params
+        .get("platform")
+        .map(|v| v.trim().to_string())
+        .filter(|p| !p.is_empty());
+    let kind = params.get("kind").cloned().unwrap_or_else(|| "status".to_string());
+    let count = params
+        .get("count")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(5)
+        .clamp(1, 20);
+    let result = tokio::task::spawn_blocking(move || {
+        let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let home = crate::config::ulnclaw_home();
+        let catalog = crate::status_phrases::resolve_catalog(
+            &config.display,
+            platform.as_deref(),
+            &home,
+        );
+        let source = if kind == "generic" {
+            &catalog.generic
+        } else {
+            &catalog.status
+        };
+        let phrases: Vec<String> = if source.is_empty() {
+            Vec::new()
+        } else {
+            let start = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as usize)
+                .unwrap_or(0)
+                % source.len();
+            (0..count.min(source.len()))
+                .map(|i| source[(start + i) % source.len()].clone())
+                .collect()
+        };
+        json!({
+            "platform": platform,
+            "kind": kind.as_str(),
+            "total": source.len(),
+            "phrases": phrases,
+        })
+    })
+    .await
+    .unwrap_or_else(|_| json!({ "error": "phrase preview panicked" }));
+    Json(result)
+}
+
 /// `GET /api/display` — P730 ops surface over the P721 per-platform
 /// display resolver: every configured platform's resolved display
 /// settings (platform override → global → tier default), so operators
@@ -7524,6 +7581,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/lifecycle", get(lifecycle_api))
         .route("/api/display", get(display_settings_api).put(update_display_api))
         .route("/api/status-phrases", get(status_phrases_api))
+        .route("/api/status-phrases/preview", get(status_phrases_preview_api))
         .route("/api/terminal", get(terminal_info_api).put(update_terminal_api))
         .route("/api/cgroup", get(cgroup_info_api))
         .route("/api/hooks", get(hooks_info_api))
@@ -26295,6 +26353,46 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert_eq!(body["removed"], true, "{body}");
         let written = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
         assert!(!written.contains("tool_preview_length"), "{written}");
+
+        match prev_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_status_phrases_preview_shape() {
+        // P743: preview samples the resolved catalog; platform + kind
+        // params steer the resolution, count is capped.
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        // `mode: replace` isolates the file's phrases from the built-in
+        // catalog (default is append), keeping the sample deterministic.
+        std::fs::write(
+            temp.path().join("status_phrases.yaml"),
+            "mode: replace\nstatus:\n- alpha line\n- beta line\n- gamma line\ngeneric:\n- gen one\n- gen two\n",
+        )
+        .unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+
+        let app = router(test_state());
+        let (status, _) = get_json(app.clone(), "/api/status-phrases/preview", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, body) = get_json(app.clone(), "/api/status-phrases/preview", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["total"], 3, "{body}");
+        let phrases = body["phrases"].as_array().unwrap();
+        assert_eq!(phrases.len(), 3, "{body}");
+        assert!(phrases.iter().any(|v| v == "alpha line"), "{body}");
+        let (_, body) = get_json(
+            app.clone(),
+            "/api/status-phrases/preview?kind=generic&count=1",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(body["total"], 2, "{body}");
+        assert_eq!(body["phrases"].as_array().unwrap().len(), 1, "{body}");
 
         match prev_home {
             Some(v) => std::env::set_var("ULNCLAW_HOME", v),

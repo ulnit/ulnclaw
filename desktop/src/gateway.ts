@@ -628,6 +628,14 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/status-phrases/preview` — P743 live rotation sample. */
+export interface StatusPhrasesPreviewPayload {
+  platform: string | null;
+  kind: string;
+  total: number;
+  phrases: string[];
+}
+
 /** `GET /api/portal` — P742 read-only portal-auth snapshot. */
 export interface PortalStatusPayload {
   logged_in: boolean;
@@ -2576,6 +2584,22 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`status-phrases HTTP ${response.status}`);
     return (await response.json()) as StatusPhrasesPayload;
+  }
+
+  /** GET /api/status-phrases/preview — P743 live rotation sample. */
+  async statusPhrasesPreview(
+    params: { platform?: string; kind?: "status" | "generic"; count?: number } = {},
+  ): Promise<StatusPhrasesPreviewPayload> {
+    const query = new URLSearchParams();
+    if (params.platform) query.set("platform", params.platform);
+    if (params.kind) query.set("kind", params.kind);
+    if (params.count !== undefined) query.set("count", String(params.count));
+    const suffix = query.toString() !== "" ? `?${query.toString()}` : "";
+    const response = await fetch(this.endpoint(`/api/status-phrases/preview${suffix}`), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`status-phrases preview HTTP ${response.status}`);
+    return (await response.json()) as StatusPhrasesPreviewPayload;
   }
 
   /** GET /api/portal — P742 read-only portal-auth snapshot. */
