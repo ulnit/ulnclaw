@@ -234,6 +234,17 @@ export class DoctorWidget {
           <span id="x-search-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-video-gen-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="videoGenPanel.title">Video generation</h3>
+        <div id="video-gen-rows"></div>
+        <div id="video-gen-editor" class="monitoring-row" hidden>
+          <select id="video-gen-key" class="ghost"></select>
+          <input id="video-gen-value" class="ghost" />
+          <button id="video-gen-apply" class="ghost mcp-add-btn" data-i18n="videoGenPanel.apply">Apply</button>
+          <button id="video-gen-clear" class="ghost mcp-add-btn" data-i18n="videoGenPanel.clear">Clear</button>
+          <span id="video-gen-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -497,6 +508,7 @@ export class DoctorWidget {
     this.loadVoiceSettings().catch(() => undefined);
     this.loadKanbanSettings().catch(() => undefined);
     this.loadXSearchSettings().catch(() => undefined);
+    this.loadVideoGenSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2580,6 +2592,80 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadVideoGenSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-video-gen-settings") as HTMLElement;
+    const rows = this.root.querySelector("#video-gen-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.videoGenSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      addRow(
+        t.videoGenPanel.provider,
+        payload.provider !== null ? escapeHtmlDoctor(payload.provider) : escapeHtmlDoctor(auto),
+      );
+      addRow(
+        t.videoGenPanel.model,
+        payload.model !== null ? escapeHtmlDoctor(payload.model) : escapeHtmlDoctor(auto),
+      );
+      addRow(
+        t.videoGenPanel.falModel,
+        payload.fal_model !== null ? escapeHtmlDoctor(payload.fal_model) : escapeHtmlDoctor(auto),
+      );
+      // P759: video-gen editor — pick a key, type the value, Apply
+      // persists through PUT /api/video-gen-settings, Clear restores
+      // auto-select; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#video-gen-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#video-gen-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#video-gen-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#video-gen-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#video-gen-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#video-gen-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["provider", "model", "fal_model"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateVideoGenSetting(keySel.value, value);
+            await this.loadVideoGenSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueInput.value.trim());
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

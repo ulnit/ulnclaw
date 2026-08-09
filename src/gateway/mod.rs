@@ -6022,6 +6022,91 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/video-gen-settings` — P759: video-generation backend
+/// selection for the shell: the active provider, default model and
+/// the FAL model-family override (all null = auto-select).
+async fn video_gen_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let video_gen =
+        crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+            .map(|c| c.video_gen)
+            .unwrap_or_default();
+    Json(json!({
+        "provider": video_gen.provider,
+        "model": video_gen.model,
+        "fal_model": video_gen.fal.model,
+    }))
+}
+
+/// `PUT /api/video-gen-settings` — P759: persist video-generation
+/// backend selection from the shell. Body: `{"key": "provider"|
+/// "model"|"fal_model", "value": "..."|null}` — null or empty string
+/// removes the key (back to auto-select). Applies to new video_gen
+/// tool calls.
+async fn update_video_gen_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["provider", "model", "fal_model"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown video_gen key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let dotted = match key.as_str() {
+        "fal_model" => "video_gen.fal.model".to_string(),
+        other => format!("video_gen.{other}"),
+    };
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let text = v.as_str().map(str::trim).unwrap_or("");
+            if text.is_empty() {
+                // Empty string is the shell's "back to auto" spelling —
+                // treat it like null.
+                raw = None;
+            } else {
+                raw = Some(text.to_string());
+            }
+        }
+    }
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/x-search-settings` — P758: x_search server-tool knobs
 /// for the shell: the Responses-API model, optional reasoning effort,
 /// request timeout (30s floor) and transient-failure retries.
@@ -9018,6 +9103,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/voice-settings", get(voice_settings_api).put(update_voice_settings_api))
         .route("/api/kanban-settings", get(kanban_settings_api).put(update_kanban_settings_api))
         .route("/api/x-search-settings", get(x_search_settings_api).put(update_x_search_settings_api))
+        .route("/api/video-gen-settings", get(video_gen_settings_api).put(update_video_gen_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -20360,6 +20446,82 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/x-search-settings", Some("sekret")).await;
         assert_eq!(body["reasoning_effort"], "", "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_gen_settings_editor() {
+        // P759: GET /api/video-gen-settings surfaces backend selection;
+        // PUT persists it (empty string = back to auto).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: everything auto (null).
+        let (status, body) = get_json(app.clone(), "/api/video-gen-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["provider"], Value::Null, "{body}");
+        assert_eq!(body["model"], Value::Null, "{body}");
+        assert_eq!(body["fal_model"], Value::Null, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("provider", json!("fal")),
+            ("model", json!("veo3.1")),
+            ("fal_model", json!("pixverse-v6")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/video-gen-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/video-gen-settings", Some("sekret")).await;
+        assert_eq!(body["provider"], "fal", "{body}");
+        assert_eq!(body["model"], "veo3.1", "{body}");
+        assert_eq!(body["fal_model"], "pixverse-v6", "{body}");
+
+        // Empty string clears back to auto.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/video-gen-settings", Some("sekret"),
+            json!({ "key": "provider", "value": "" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/video-gen-settings", Some("sekret")).await;
+        assert_eq!(body["provider"], Value::Null, "{body}");
+
+        // Validation: unknown key.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/video-gen-settings", Some("sekret"),
+            json!({ "key": "yolo", "value": "x" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override too.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/video-gen-settings", Some("sekret"),
+            json!({ "key": "fal_model", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/video-gen-settings", Some("sekret")).await;
+        assert_eq!(body["fal_model"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

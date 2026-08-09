@@ -628,6 +628,13 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/video-gen-settings` — P759 video-generation backend selection. */
+export interface VideoGenSettingsPayload {
+  provider: string | null;
+  model: string | null;
+  fal_model: string | null;
+}
+
 /** `GET /api/x-search-settings` — P758 x_search server-tool knobs. */
 export interface XSearchSettingsPayload {
   model: string;
@@ -4114,6 +4121,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/video-gen-settings — P759 backend selection. */
+  async videoGenSettings(): Promise<VideoGenSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/video-gen-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`video-gen-settings HTTP ${response.status}`);
+    return (await response.json()) as VideoGenSettingsPayload;
+  }
+
+  /** P759: PUT /api/video-gen-settings — persist backend selection;
+   * null or empty string restores auto-select. */
+  async updateVideoGenSetting(
+    key: string,
+    value: string | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/video-gen-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `video-gen-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/x-search-settings — P758 x_search knobs. */
