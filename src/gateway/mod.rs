@@ -411,6 +411,9 @@ pub struct GatewayState {
         Arc<std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<String>>>>,
     /// P680: sessions with an active queue-drain task.
     pub queue_draining: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// P683: per-session image paths staged by `/image` for the next
+    /// turn (hermes composer attach parity).
+    pub pending_images: Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>>,
     /// P679: exit hook invoked once the restart drain completes
     /// (default: `std::process::exit` with the service-restart code;
     /// tests replace it with a recorder).
@@ -448,6 +451,7 @@ impl GatewayState {
             restart_exit: Arc::new(|code| std::process::exit(code)),
             queued_prompts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             queue_draining: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            pending_images: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }))
     }
 }
@@ -8673,7 +8677,7 @@ async fn chat_completions(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let history_arg = if history.is_empty() { None } else { Some(history) };
     if request.stream {
-        return stream_agent_response(state, prompt, history_arg, session_id);
+        return stream_agent_response(state, prompt, history_arg, session_id, Vec::new());
     }
     let override_model = session_id
         .as_deref()
@@ -8755,11 +8759,48 @@ struct SseState {
 /// Emits a role chunk, then `delta.content` chunks as the model produces
 /// tokens, `hermes.tool.progress` events for tool lifecycle, and a final
 /// chunk with `finish_reason` + usage followed by `[DONE]`.
+/// P683: load local image files for a chat turn (hermes `/image`
+/// parity): existence + 10 MiB cap, mime from the extension, bytes
+/// ride as base64 data URLs (agent P226 multimodal injection).
+fn load_chat_images(
+    paths: &[String],
+) -> std::result::Result<Vec<crate::provider::MessageImage>, String> {
+    use base64::Engine as _;
+    const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+    let mut images = Vec::new();
+    for raw in paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = std::path::Path::new(trimmed);
+        let metadata = std::fs::metadata(path).map_err(|e| format!("image {trimmed}: {e}"))?;
+        if !metadata.is_file() {
+            return Err(format!("image {trimmed}: not a file"));
+        }
+        if metadata.len() > MAX_IMAGE_BYTES {
+            return Err(format!("image {trimmed}: exceeds the 10 MiB cap"));
+        }
+        let mime = crate::media_cache::mime_for_ext(path);
+        if !mime.starts_with("image/") {
+            return Err(format!("image {trimmed}: unsupported type {mime}"));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("image {trimmed}: {e}"))?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        images.push(crate::provider::MessageImage {
+            url: format!("data:{mime};base64,{encoded}"),
+            media_type: Some(mime),
+        });
+    }
+    Ok(images)
+}
+
 fn stream_agent_response(
     state: Arc<GatewayState>,
     prompt: String,
     history: Option<Vec<Message>>,
     session_id: Option<String>,
+    images: Vec<crate::provider::MessageImage>,
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<crate::agent::StreamEvent>();
     let emitter: Arc<dyn Fn(crate::agent::StreamEvent) + Send + Sync> =
@@ -8777,7 +8818,12 @@ fn stream_agent_response(
         async move {
             await_with_model_override(
                 override_model,
-                runner.run_with_session(&prompt, history, run_session_id.as_deref()),
+                runner.run_with_session_images(
+                    &prompt,
+                    images,
+                    history,
+                    run_session_id.as_deref(),
+                ),
             )
             .await
         },
@@ -10700,6 +10746,11 @@ async fn upload_media(
 #[derive(Deserialize)]
 struct SessionChatRequest {
     message: String,
+    /// P683: local image paths attached to this turn (hermes /image
+    /// parity) — loaded, capped, and injected natively into the model
+    /// call.
+    #[serde(default)]
+    images: Option<Vec<String>>,
 }
 
 /// Slash handling for the session chat endpoints (hermes desktop slash
@@ -10748,6 +10799,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
   /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
   /background <prompt>  run a prompt in a background tracked run
+  /image <path>      attach a local image to your next prompt
   /approvals [manual|smart|off]  show or persist the dangerous-command approval mode
   /debug [no-redact]   write a redacted debug bundle under <home>/debug-bundles
   /queue [clear|<prompt>]  queue a prompt for the next turn (no interrupt)
@@ -11425,6 +11477,47 @@ async fn resolve_gateway_slash(
             } else {
                 "no running run found for this session.".to_string()
             }))
+        }
+        "/image" => {
+            // P683 (hermes /image parity): stage a local image for the
+            // session's next turn; it rides natively in the model call.
+            if rest.is_empty() {
+                let staged = state
+                    .pending_images
+                    .lock()
+                    .unwrap()
+                    .get(session_id)
+                    .cloned()
+                    .unwrap_or_default();
+                return Some(GatewaySlash::Direct(if staged.is_empty() {
+                    "usage: /image <path> — attach a local image to your next prompt".to_string()
+                } else {
+                    format!("{} image(s) staged for your next prompt: {}", staged.len(), staged.join(", "))
+                }));
+            }
+            let path = std::path::Path::new(rest.trim());
+            match std::fs::metadata(path) {
+                Ok(meta) if meta.is_file() => {}
+                Ok(_) => {
+                    return Some(GatewaySlash::Direct(format!("{rest}: not a file")))
+                }
+                Err(e) => return Some(GatewaySlash::Direct(format!("{rest}: {e}"))),
+            }
+            let mime = crate::media_cache::mime_for_ext(path);
+            if !mime.starts_with("image/") {
+                return Some(GatewaySlash::Direct(format!(
+                    "{rest}: unsupported type {mime} (images only)"
+                )));
+            }
+            let count = {
+                let mut pending = state.pending_images.lock().unwrap();
+                let slot = pending.entry(session_id.to_string()).or_default();
+                slot.push(rest.trim().to_string());
+                slot.len()
+            };
+            Some(GatewaySlash::Direct(format!(
+                "attached {rest} to your next prompt ({count} staged)"
+            )))
         }
         "/approvals" => {
             // P681 (hermes /approvals parity): show or persist the
@@ -12571,6 +12664,14 @@ async fn session_chat(
         .filter(|m| m.role != Role::System)
         .collect::<Vec<_>>();
     let history_arg = if history.is_empty() { None } else { Some(history) };
+    // P683: request-attached images plus anything `/image` staged for
+    // this session ride natively in the model call.
+    let mut image_paths = request.images.clone().unwrap_or_default();
+    image_paths.extend(state.pending_images.lock().unwrap().remove(&id).unwrap_or_default());
+    let images = match load_chat_images(&image_paths) {
+        Ok(images) => images,
+        Err(e) => return bad_request(&e, None),
+    };
     let override_model = session_model_override(&state, &id);
     state
         .metrics
@@ -12578,7 +12679,7 @@ async fn session_chat(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let outcome = await_with_model_override(
         override_model,
-        state.agent.run_with_session(&message, history_arg, Some(&id)),
+        state.agent.run_with_session_images(&message, images, history_arg, Some(&id)),
     )
     .await;
     match outcome {
@@ -12629,7 +12730,14 @@ async fn session_chat_stream(
         .filter(|m| m.role != Role::System)
         .collect::<Vec<_>>();
     let history_arg = if history.is_empty() { None } else { Some(history) };
-    stream_agent_response(state, message, history_arg, Some(id))
+    // P683: request-attached images plus `/image` staged paths.
+    let mut image_paths = request.images.clone().unwrap_or_default();
+    image_paths.extend(state.pending_images.lock().unwrap().remove(&id).unwrap_or_default());
+    let images = match load_chat_images(&image_paths) {
+        Ok(images) => images,
+        Err(e) => return bad_request(&e, None),
+    };
+    stream_agent_response(state, message, history_arg, Some(id), images)
 }
 
 /// `PATCH /api/sessions/:id` — update client-safe session metadata
@@ -16416,6 +16524,97 @@ mod tests {
             Some(GatewaySlash::Direct(text)) => assert!(text.contains("usage:"), "{text}"),
             _ => panic!("expected usage reply"),
         }
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_image_slash_and_loading() {
+        // P683: /image stages a local image for the next turn;
+        // load_chat_images validates and builds data URLs; the session
+        // chat endpoint refuses bad paths before any agent work.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        // 1x1 PNG magic bytes.
+        let png_path = dir.path().join("pixel.png");
+        std::fs::write(
+            &png_path,
+            [
+                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+                0x49, 0x48, 0x44, 0x52,
+            ],
+        )
+        .unwrap();
+        let png_str = png_path.to_string_lossy().to_string();
+
+        // Direct loader: data URL with the right media type.
+        let images = load_chat_images(&[png_str.clone()]).unwrap();
+        assert_eq!(images.len(), 1);
+        assert!(images[0].url.starts_with("data:image/png;base64,"), "{}", &images[0].url[..40]);
+        assert_eq!(images[0].media_type.as_deref(), Some("image/png"));
+        assert!(load_chat_images(&["/definitely/missing.png".to_string()]).is_err());
+        assert!(load_chat_images(&["not-an-image.txt".to_string()]).is_err());
+
+        let state = test_state();
+
+        // Usage with nothing staged.
+        match resolve_gateway_slash(&state, "sess-i", "/image").await {
+            Some(GatewaySlash::Direct(text)) => assert!(text.contains("usage:"), "{text}"),
+            _ => panic!("expected usage reply"),
+        }
+
+        // Stage the png.
+        match resolve_gateway_slash(&state, "sess-i", &format!("/image {png_str}")).await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("attached"), "{text}");
+                assert!(text.contains("1 staged"), "{text}");
+            }
+            _ => panic!("expected attach reply"),
+        }
+        assert_eq!(
+            state.pending_images.lock().unwrap().get("sess-i").map(Vec::len),
+            Some(1)
+        );
+
+        // Listing shows the staged path.
+        match resolve_gateway_slash(&state, "sess-i", "/image").await {
+            Some(GatewaySlash::Direct(text)) => assert!(text.contains("pixel.png"), "{text}"),
+            _ => panic!("expected list reply"),
+        }
+
+        // Non-image files are refused.
+        let txt_path = dir.path().join("notes.txt");
+        std::fs::write(&txt_path, "hello").unwrap();
+        match resolve_gateway_slash(
+            &state,
+            "sess-i",
+            &format!("/image {}", txt_path.to_string_lossy()),
+        )
+        .await
+        {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("unsupported type"), "{text}")
+            }
+            _ => panic!("expected refusal"),
+        }
+
+        // Session chat with a bad image path 400s before agent work.
+        let app = router(state.clone());
+        let (status, body) = send_json(
+            app.clone(),
+            "POST",
+            "/api/sessions/sess-i/chat",
+            Some("sekret"),
+            json!({"message": "look", "images": ["/definitely/missing.png"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

@@ -1469,7 +1469,11 @@ async function sendTurn(): Promise<void> {
       return;
     }
   }
-  // Attachments ride as hermes-style path references appended to the turn.
+  // P683: image attachments ride natively in the model call; other
+  // media keep the hermes-style path-reference note.
+  const imagePaths = state.pendingUploads
+    .filter((upload) => upload.mime.startsWith("image/"))
+    .map((upload) => upload.path);
   const message = (text + attachmentNote()).trim();
   state.pendingUploads = [];
   renderAttachChips();
@@ -1589,6 +1593,7 @@ async function sendTurn(): Promise<void> {
         }
         maybeScrollToBottom();
       },
+      imagePaths,
     );
     bubble.classList.remove("streaming");
     await refreshSessions();
@@ -2298,6 +2303,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/steer", t.slash.steer],
     ["/approvals", t.slash.approvals],
     ["/debug", t.slash.debug],
+    ["/image", t.slash.image],
   ];
 }
 
@@ -2635,13 +2641,16 @@ async function saveFsPreview(): Promise<void> {
 
 /// hermes attachment_note text-fallback format.
 function attachmentNote(): string {
-  if (state.pendingUploads.length === 0) return "";
+  // P683: image attachments ride natively in the model call; the note
+  // only carries non-image media.
+  const rest = state.pendingUploads.filter((upload) => !upload.mime.startsWith("image/"));
+  if (rest.length === 0) return "";
   const lines = ["", "", "[Attached media]"];
-  for (const upload of state.pendingUploads) {
+  for (const upload of rest) {
     lines.push(`- ${upload.path} (${upload.mime}, ${upload.bytes} bytes)`);
   }
   lines.push(
-    "Inspect images with vision_analyze, video with video_analyze, documents with read_file.",
+    "Inspect video with video_analyze, documents with read_file.",
   );
   return lines.join("\n");
 }

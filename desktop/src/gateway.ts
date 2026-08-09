@@ -1572,15 +1572,16 @@ export class GatewayClient {
     onDelta: (chunk: string) => void,
     onToolProgress?: (tool: string, status: string) => void,
     onToolCard?: (event: ToolCardEvent) => void,
+    images?: string[],
   ): Promise<string> {
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/chat/stream`), {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(images && images.length > 0 ? { message, images } : { message }),
     });
     if (!response.ok || !response.body) {
       // Fall back to the non-streaming endpoint.
-      return this.chat(sessionId, message);
+      return this.chat(sessionId, message, images);
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -1650,11 +1651,11 @@ export class GatewayClient {
     return full;
   }
 
-  async chat(sessionId: string, message: string): Promise<string> {
+  async chat(sessionId: string, message: string, images?: string[]): Promise<string> {
     const response = await fetch(this.endpoint(`/api/sessions/${sessionId}/chat`), {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(images && images.length > 0 ? { message, images } : { message }),
     });
     if (!response.ok) throw new Error(`chat: HTTP ${response.status}`);
     const value = await response.json();
