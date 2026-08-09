@@ -6022,6 +6022,82 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/tool-output-settings` — P753: tool-output truncation
+/// limits for the shell: terminal stdout/stderr byte cap, file-read
+/// line cap and per-line length cap (resolved values — zeros are
+/// coerced to defaults, hermes `_coerce_positive_int`).
+async fn tool_output_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let resolved =
+        crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+            .map(|c| c.tool_output.resolved())
+            .unwrap_or_default();
+    Json(json!({
+        "max_bytes": resolved.max_bytes,
+        "max_lines": resolved.max_lines,
+        "max_line_length": resolved.max_line_length,
+    }))
+}
+
+/// `PUT /api/tool-output-settings` — P753: persist tool-output
+/// truncation limits from the shell. Body: `{"key": "max_bytes"|
+/// "max_lines"|"max_line_length", "value": ...|null}` — null removes
+/// the key (falls back to the default). Values must be positive
+/// integers. Applies to new runs.
+async fn update_tool_output_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["max_bytes", "max_lines", "max_line_length"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown tool_output key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    if let Some(v) = value {
+        if !v.is_null() && !v.as_u64().map(|n| n >= 1).unwrap_or(false) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("tool_output key '{key}' must be a positive integer") })),
+            );
+        }
+    }
+    let dotted = format!("tool_output.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => crate::config_cmd::set_config_value(&dotted, &v.to_string(), true).map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/security-settings` — P752: security posture knobs for
 /// the shell: the SSRF private-URL allowance and the tirith pre-exec
 /// scanner settings (enabled, binary path, timeout, fail-open). Env
@@ -8435,6 +8511,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model-catalog", get(model_catalog_api).put(update_model_catalog_api))
         .route("/api/checkpoints/settings", get(checkpoint_settings_api).put(update_checkpoint_settings_api))
         .route("/api/security-settings", get(security_settings_api).put(update_security_settings_api))
+        .route("/api/tool-output-settings", get(tool_output_settings_api).put(update_tool_output_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -19318,6 +19395,77 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/security-settings", Some("sekret")).await;
         assert_eq!(body["tirith_timeout"], 5, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_output_settings_editor() {
+        // P753: GET /api/tool-output-settings surfaces the resolved
+        // truncation limits; PUT persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: 100k bytes, 2000 lines, 2000 chars per line.
+        let (status, body) = get_json(app.clone(), "/api/tool-output-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["max_bytes"], 100_000, "{body}");
+        assert_eq!(body["max_lines"], 2000, "{body}");
+        assert_eq!(body["max_line_length"], 2000, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("max_bytes", json!(250_000)),
+            ("max_lines", json!(5000)),
+            ("max_line_length", json!(4000)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/tool-output-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/tool-output-settings", Some("sekret")).await;
+        assert_eq!(body["max_bytes"], 250_000, "{body}");
+        assert_eq!(body["max_lines"], 5000, "{body}");
+        assert_eq!(body["max_line_length"], 4000, "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/tool-output-settings", Some("sekret"),
+            json!({ "key": "max_bytes", "value": 0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/tool-output-settings", Some("sekret"),
+            json!({ "key": "max_lines", "value": "all" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/tool-output-settings", Some("sekret"),
+            json!({ "key": "max_bytes", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/tool-output-settings", Some("sekret")).await;
+        assert_eq!(body["max_bytes"], 100_000, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

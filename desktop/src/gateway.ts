@@ -628,6 +628,13 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/tool-output-settings` — P753 tool-output truncation limits. */
+export interface ToolOutputSettingsPayload {
+  max_bytes: number;
+  max_lines: number;
+  max_line_length: number;
+}
+
 /** `GET /api/security-settings` — P752 security posture knobs. */
 export interface SecuritySettingsPayload {
   allow_private_urls: boolean;
@@ -4065,6 +4072,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/tool-output-settings — P753 truncation limits. */
+  async toolOutputSettings(): Promise<ToolOutputSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/tool-output-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`tool-output-settings HTTP ${response.status}`);
+    return (await response.json()) as ToolOutputSettingsPayload;
+  }
+
+  /** P753: PUT /api/tool-output-settings — persist a truncation limit;
+   * null removes the override. */
+  async updateToolOutputSetting(
+    key: string,
+    value: number | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/tool-output-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `tool-output-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/security-settings — P752 security posture knobs. */

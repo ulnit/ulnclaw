@@ -358,6 +358,7 @@ export interface Translations {
   modelCatalogPanel: { title: string; excluded: string; canonical: string; custom: string; apply: string; clear: string; };
   checkpointSettingsPanel: { title: string; enabled: string; maxSnapshots: string; totalSize: string; fileSize: string; retention: string; pruneCadence: string; apply: string; clear: string; };
   securitySettingsPanel: { title: string; privateUrls: string; tirithEnabled: string; tirithPath: string; tirithTimeout: string; tirithFailOpen: string; apply: string; clear: string; };
+  toolOutputPanel: { title: string; maxBytes: string; maxLines: string; maxLineLength: string; apply: string; clear: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -876,6 +877,7 @@ const en: Translations = {
   modelCatalogPanel: { title: "Model catalog", excluded: "Excluded providers", canonical: "Canonical providers", custom: "Custom providers", apply: "Apply", clear: "Clear" },
   checkpointSettingsPanel: { title: "Checkpoint settings", enabled: "Enabled", maxSnapshots: "Snapshots per project", totalSize: "Store size ceiling", fileSize: "File skip size", retention: "Retention", pruneCadence: "Auto-prune cadence", apply: "Apply", clear: "Clear" },
   securitySettingsPanel: { title: "Security settings", privateUrls: "Private URL fetches", tirithEnabled: "Tirith scanner", tirithPath: "Tirith binary", tirithTimeout: "Scan timeout", tirithFailOpen: "Fail open", apply: "Apply", clear: "Clear" },
+  toolOutputPanel: { title: "Tool output limits", maxBytes: "Terminal byte cap", maxLines: "File line cap", maxLineLength: "Per-line length cap", apply: "Apply", clear: "Clear" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1471,6 +1473,7 @@ const zh: Translations = {
   modelCatalogPanel: { title: "模型目录", excluded: "排除的提供商", canonical: "内置提供商数", custom: "自定义提供商", apply: "应用", clear: "清除" },
   checkpointSettingsPanel: { title: "检查点设置", enabled: "启用", maxSnapshots: "每项目快照数", totalSize: "存储总量上限", fileSize: "单文件跳过阈值", retention: "保留期", pruneCadence: "自动清理周期", apply: "应用", clear: "清除" },
   securitySettingsPanel: { title: "安全设置", privateUrls: "内网地址抓取", tirithEnabled: "Tirith 扫描器", tirithPath: "Tirith 二进制", tirithTimeout: "扫描超时", tirithFailOpen: "失败放行", apply: "应用", clear: "清除" },
+  toolOutputPanel: { title: "工具输出限额", maxBytes: "终端字节上限", maxLines: "文件行数上限", maxLineLength: "单行长度上限", apply: "应用", clear: "清除" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2066,6 +2069,7 @@ const zhHant: Translations = {
   modelCatalogPanel: { title: "模型目錄", excluded: "排除的供應商", canonical: "內建供應商數", custom: "自訂供應商", apply: "套用", clear: "清除" },
   checkpointSettingsPanel: { title: "檢查點設定", enabled: "啟用", maxSnapshots: "每專案快照數", totalSize: "儲存總量上限", fileSize: "單檔跳過閾值", retention: "保留期", pruneCadence: "自動清理週期", apply: "套用", clear: "清除" },
   securitySettingsPanel: { title: "安全設定", privateUrls: "內方位址抓取", tirithEnabled: "Tirith 掃描器", tirithPath: "Tirith 二進位", tirithTimeout: "掃描逾時", tirithFailOpen: "失敗放行", apply: "套用", clear: "清除" },
+  toolOutputPanel: { title: "工具輸出限額", maxBytes: "終端位元組上限", maxLines: "檔案行數上限", maxLineLength: "單行長度上限", apply: "套用", clear: "清除" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2661,6 +2665,7 @@ const ja: Translations = {
   modelCatalogPanel: { title: "モデルカタログ", excluded: "除外プロバイダー", canonical: "正規プロバイダー数", custom: "カスタムプロバイダー", apply: "適用", clear: "クリア" },
   checkpointSettingsPanel: { title: "チェックポイント設定", enabled: "有効", maxSnapshots: "プロジェクトあたりスナップショット数", totalSize: "ストア総容量上限", fileSize: "ファイルスキップ閾値", retention: "保持期間", pruneCadence: "自動プルーニング周期", apply: "適用", clear: "クリア" },
   securitySettingsPanel: { title: "セキュリティ設定", privateUrls: "プライベート URL 取得", tirithEnabled: "Tirith スキャナー", tirithPath: "Tirith バイナリ", tirithTimeout: "スキャンタイムアウト", tirithFailOpen: "フェールオープン", apply: "適用", clear: "クリア" },
+  toolOutputPanel: { title: "ツール出力上限", maxBytes: "端末バイト上限", maxLines: "ファイル行数上限", maxLineLength: "1行あたり長さ上限", apply: "適用", clear: "クリア" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3256,6 +3261,7 @@ const ar: Translations = {
   modelCatalogPanel: { title: "فهرس النماذج", excluded: "الموفرون المستبعدون", canonical: "عدد الموفرين القياسيين", custom: "الموفرون المخصصون", apply: "تطبيق", clear: "مسح" },
   checkpointSettingsPanel: { title: "إعدادات نقاط الحفظ", enabled: "مفعل", maxSnapshots: "لقطات لكل مشروع", totalSize: "سقف حجم المخزن", fileSize: "حد تخطي الملفات", retention: "فترة الاحتفاظ", pruneCadence: "دورة التنظيف التلقائي", apply: "تطبيق", clear: "مسح" },
   securitySettingsPanel: { title: "إعدادات الأمان", privateUrls: "جلب العناوين الخاصة", tirithEnabled: "ماسح Tirith", tirithPath: "ملف Tirith", tirithTimeout: "مهلة الفحص", tirithFailOpen: "السماح عند الفشل", apply: "تطبيق", clear: "مسح" },
+  toolOutputPanel: { title: "حدود مخرجات الأدوات", maxBytes: "حد بايت الطرفية", maxLines: "حد أسطر الملف", maxLineLength: "حد طول السطر", apply: "تطبيق", clear: "مسح" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

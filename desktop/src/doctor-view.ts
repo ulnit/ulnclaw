@@ -165,6 +165,17 @@ export class DoctorWidget {
           <span id="security-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-tool-output-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="toolOutputPanel.title">Tool output limits</h3>
+        <div id="tool-output-rows"></div>
+        <div id="tool-output-editor" class="monitoring-row" hidden>
+          <select id="tool-output-key" class="ghost"></select>
+          <input id="tool-output-value" class="ghost" />
+          <button id="tool-output-apply" class="ghost mcp-add-btn" data-i18n="toolOutputPanel.apply">Apply</button>
+          <button id="tool-output-clear" class="ghost mcp-add-btn" data-i18n="toolOutputPanel.clear">Clear</button>
+          <span id="tool-output-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -422,6 +433,7 @@ export class DoctorWidget {
     this.loadModelCatalog().catch(() => undefined);
     this.loadCheckpointSettings().catch(() => undefined);
     this.loadSecuritySettings().catch(() => undefined);
+    this.loadToolOutputSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2505,6 +2517,77 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadToolOutputSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-tool-output-settings") as HTMLElement;
+    const rows = this.root.querySelector("#tool-output-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.toolOutputSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      addRow(t.toolOutputPanel.maxBytes, String(payload.max_bytes));
+      addRow(t.toolOutputPanel.maxLines, String(payload.max_lines));
+      addRow(t.toolOutputPanel.maxLineLength, String(payload.max_line_length));
+      // P753: tool-output limits editor — pick a key, type the value,
+      // Apply persists through PUT /api/tool-output-settings, Clear
+      // removes the override; the panel re-renders from disk state.
+      const editor = this.root.querySelector("#tool-output-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#tool-output-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#tool-output-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#tool-output-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#tool-output-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#tool-output-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["max_bytes", "max_lines", "max_line_length"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: number | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateToolOutputSetting(keySel.value, value);
+            await this.loadToolOutputSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+            statusEl.textContent = t.delegationPanel.invalidNumber;
+            return;
+          }
+          void applyEdit(Number(raw));
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;
