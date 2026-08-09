@@ -284,6 +284,7 @@ dialog menu button.danger { background: var(--bad); border-color: var(--bad); co
   background: rgba(128,128,128,0.2);
 }
 .kanban-chip.assignee { background: rgba(74,170,120,0.25); }
+.kanban-chip.diagnostic { background: rgba(220,120,60,0.30); }
 .kanban-card-actions { display: flex; gap: 6px; }
 .kanban-card-actions button {
   font-size: 0.75em; padding: 2px 8px; border-radius: 6px;
@@ -1567,6 +1568,19 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 /* P659: task run-history rows in the detail dialog */
 .kanban-runs { margin-top: 8px; max-height: 160px; overflow-y: auto; }
 .kanban-runs .kanban-event { flex-wrap: wrap; }
+.kanban-diagnostics { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.kanban-diagnostic {
+  border: 1px solid rgba(128,128,128,0.3); border-left-width: 3px;
+  border-radius: 6px; padding: 6px 10px; font-size: 0.85em;
+}
+.kanban-diagnostic.severity-warning { border-left-color: #d9a441; }
+.kanban-diagnostic.severity-error { border-left-color: #d97742; }
+.kanban-diagnostic.severity-critical { border-left-color: #d94242; }
+.kanban-diagnostic-head { font-weight: 600; }
+.kanban-diagnostic-detail { opacity: 0.8; margin-top: 2px; }
+.kanban-diagnostic-action { display: flex; gap: 8px; align-items: center; margin-top: 3px; }
+.kanban-diagnostic-action.suggested span { font-weight: 600; }
+.kanban-diagnostic-action code { font-size: 0.9em; opacity: 0.8; }
 .kanban-event-note { width: 100%; opacity: 0.75; overflow-wrap: anywhere; }
 #kanban-detail-title-edit { width: 100%; font-size: 1.1em; margin-bottom: 6px; }
 #kanban-detail-body-edit { width: 100%; min-height: 6em; resize: vertical; font: inherit; white-space: pre-wrap; }

@@ -2,7 +2,7 @@
 // (same kanban.db the CLI `ulnclaw kanban` and the agent kanban_* tools
 // use) as a four-column card wall with quick actions.
 
-import type { FsEntry, GatewayClient, KanbanBoard, KanbanBoardStats, KanbanTask, KanbanTaskRun } from "./gateway";
+import type { FsEntry, GatewayClient, KanbanBoard, KanbanBoardStats, KanbanDiagnostic, KanbanTask, KanbanTaskRun } from "./gateway";
 import { fmt, t } from "./i18n";
 
 function escapeHtmlKanban(text: string): string {
@@ -32,6 +32,8 @@ export class KanbanWidget {
   private filterText = "";
   /** P639: whether the detail dialog is in title/body edit mode. */
   private editMode = false;
+  /** P678: active distress signals per task id (board scan result). */
+  private diagnosticsByTask = new Map<string, KanbanDiagnostic[]>();
 
   constructor(
     private root: HTMLElement,
@@ -62,6 +64,7 @@ export class KanbanWidget {
           <h2 id="kanban-detail-title"></h2>
           <input id="kanban-detail-title-edit" type="text" style="display: none" />
           <div id="kanban-detail-meta" class="kanban-detail-meta"></div>
+          <div id="kanban-detail-diagnostics" class="kanban-diagnostics"></div>
           <div class="kanban-detail-reasoning">
             <label for="kanban-detail-reasoning" data-i18n="kanban.reasoningLabel">Reasoning effort</label>
             <select id="kanban-detail-reasoning"></select>
@@ -484,13 +487,15 @@ export class KanbanWidget {
   async refresh(): Promise<void> {
     const client = this.client();
     if (!client) return;
-    const [boards, tasks, stats] = await Promise.all([
+    const [boards, tasks, stats, flagged] = await Promise.all([
       client.kanbanBoards(),
       client.kanbanTasks(),
       client.kanbanBoardStats(),
+      client.kanbanBoardDiagnostics(),
     ]);
     this.boards = boards || [];
     this.tasks = tasks || [];
+    this.diagnosticsByTask = new Map((flagged || []).map((row) => [row.id, row.diagnostics]));
     this.renderBoards();
     this.renderColumns();
     this.renderStats(stats);
@@ -666,6 +671,14 @@ export class KanbanWidget {
     idChip.className = "kanban-chip";
     idChip.textContent = task.id.replace(/^t_/, "").slice(0, 6);
     meta.appendChild(idChip);
+    const flagged = this.diagnosticsByTask.get(task.id);
+    if (flagged && flagged.length > 0) {
+      const warn = document.createElement("span");
+      warn.className = "kanban-chip diagnostic";
+      warn.title = flagged.map((d) => d.title).join("; ");
+      warn.textContent = `⚠ ${flagged.length}`;
+      meta.appendChild(warn);
+    }
     if (task.assignee) {
       const assignee = document.createElement("span");
       assignee.className = "kanban-chip assignee";
@@ -890,6 +903,49 @@ export class KanbanWidget {
     if (task.parents.length > 0) metaParts.push(`${t.kanban.metaParents}: ${task.parents.join(", ")}`);
     if (task.children.length > 0) metaParts.push(`${t.kanban.metaChildren}: ${task.children.join(", ")}`);
     metaEl.textContent = metaParts.join(" · ");
+
+    // P678: distress signals (hermes kanban diagnostics parity) —
+    // severity-colored cards with suggested recovery actions.
+    const diagEl = this.root.querySelector("#kanban-detail-diagnostics") as HTMLElement;
+    diagEl.innerHTML = "";
+    {
+      const diagnostics = await client.kanbanTaskDiagnostics(detail.task.id);
+      if (diagnostics.length > 0) {
+        const heading = document.createElement("h3");
+        heading.className = "config-section";
+        heading.textContent = t.kanban.diagnosticsTitle;
+        diagEl.appendChild(heading);
+        for (const diagnostic of diagnostics) {
+          const row = document.createElement("div");
+          row.className = `kanban-diagnostic severity-${diagnostic.severity}`;
+          const head = document.createElement("div");
+          head.className = "kanban-diagnostic-head";
+          head.textContent = `[${diagnostic.severity}] ${diagnostic.title}`;
+          row.appendChild(head);
+          if (diagnostic.detail) {
+            const detailLine = document.createElement("div");
+            detailLine.className = "kanban-diagnostic-detail";
+            detailLine.textContent = diagnostic.detail;
+            row.appendChild(detailLine);
+          }
+          for (const action of diagnostic.actions) {
+            const actionEl = document.createElement("div");
+            actionEl.className =
+              "kanban-diagnostic-action" + (action.suggested ? " suggested" : "");
+            const label = document.createElement("span");
+            label.textContent = (action.suggested ? "→ " : "") + action.label;
+            actionEl.appendChild(label);
+            if (action.hint) {
+              const hint = document.createElement("code");
+              hint.textContent = action.hint;
+              actionEl.appendChild(hint);
+            }
+            row.appendChild(actionEl);
+          }
+          diagEl.appendChild(row);
+        }
+      }
+    }
 
     // P636: per-task reasoning-effort pin (hermes reasoning_effort);
     // "" = inherit the worker profile's own agent.reasoning_effort.

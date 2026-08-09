@@ -1235,3 +1235,68 @@ pub async fn claim_task(Path(id): Path<String>) -> Response {
         Err(e) => super::bad_request(&e.to_string(), None),
     }
 }
+
+/// `GET /api/kanban/tasks/:id/diagnostics` — structured distress
+/// signals for one task (hermes `kanban diagnostics <id>` parity,
+/// P678).
+pub async fn task_diagnostics(Path(id): Path<String>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let id = match resolve(&store, &id) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let task = match store.get_task(&id) {
+        Ok(Some(task)) => task,
+        Ok(None) => return super::not_found(&format!("task {id} not found")),
+        Err(e) => return super::server_error(&e.to_string()),
+    };
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let diagnostics = crate::kanban_diagnostics::compute_task_diagnostics(&store, &config, &task);
+    Json(json!({
+        "object": "ulnclaw.kanban.task.diagnostics",
+        "task_id": id,
+        "diagnostics": diagnostics,
+    }))
+    .into_response()
+}
+
+/// `GET /api/kanban/diagnostics` — board-wide distress-signal scan:
+/// every open task with at least one active diagnostic (hermes
+/// board-load diagnostics, P678).
+pub async fn board_diagnostics() -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let tasks = match store.list_tasks(None, None, None, None, 500) {
+        Ok(tasks) => tasks,
+        Err(e) => return super::server_error(&e.to_string()),
+    };
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let mut rows: Vec<Value> = Vec::new();
+    for task in tasks {
+        if task.status == "done" || task.status == "archived" {
+            continue;
+        }
+        let diagnostics =
+            crate::kanban_diagnostics::compute_task_diagnostics(&store, &config, &task);
+        if diagnostics.is_empty() {
+            continue;
+        }
+        rows.push(json!({
+            "id": task.id,
+            "title": task.title,
+            "status": task.status,
+            "diagnostics": diagnostics,
+        }));
+    }
+    Json(json!({
+        "object": "ulnclaw.kanban.board.diagnostics",
+        "flagged": rows.len(),
+        "tasks": rows,
+    }))
+    .into_response()
+}

@@ -360,6 +360,31 @@ export interface KanbanTaskRun {
   error: string | null;
 }
 
+/** P678: one recovery action attached to a kanban diagnostic. */
+export interface KanbanDiagnosticAction {
+  kind: string;
+  label: string;
+  hint: string;
+  suggested: boolean;
+}
+
+/** P678: one active distress signal on a kanban task. */
+export interface KanbanDiagnostic {
+  kind: string;
+  severity: string;
+  title: string;
+  detail: string;
+  actions: KanbanDiagnosticAction[];
+}
+
+/** P678: one flagged task in the board-wide diagnostics scan. */
+export interface KanbanBoardDiagnosticsRow {
+  id: string;
+  title: string;
+  status: string;
+  diagnostics: KanbanDiagnostic[];
+}
+
 /** P655: one fillable slot on an automation blueprint. */
 export interface JobBlueprintField {
   name: string;
@@ -4030,6 +4055,35 @@ export class GatewayClient {
       if (!response.ok) return [];
       const value = await response.json();
       return (value.runs || []) as KanbanTaskRun[];
+    } catch {
+      return [];
+    }
+  }
+
+  /** P678: board-wide diagnostics scan — flagged open tasks. */
+  async kanbanBoardDiagnostics(): Promise<KanbanBoardDiagnosticsRow[]> {
+    try {
+      const response = await fetch(this.endpoint("/api/kanban/diagnostics"), {
+        headers: this.headers(),
+      });
+      if (!response.ok) return [];
+      const value = await response.json();
+      return (value.tasks || []) as KanbanBoardDiagnosticsRow[];
+    } catch {
+      return [];
+    }
+  }
+
+  /** P678: diagnostics for a single task. */
+  async kanbanTaskDiagnostics(id: string): Promise<KanbanDiagnostic[]> {
+    try {
+      const response = await fetch(
+        this.endpoint(`/api/kanban/tasks/${encodeURIComponent(id)}/diagnostics`),
+        { headers: this.headers() },
+      );
+      if (!response.ok) return [];
+      const value = await response.json();
+      return (value.diagnostics || []) as KanbanDiagnostic[];
     } catch {
       return [];
     }
