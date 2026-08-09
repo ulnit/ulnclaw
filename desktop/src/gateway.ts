@@ -865,6 +865,14 @@ export interface ModelInfoPayload {
   capabilities: { vision: boolean; reasoning: boolean; tools: boolean } | null;
 }
 
+/** P626: Priority Processing state (GET /api/fast). */
+export interface FastState {
+  supported: boolean;
+  mode: "fast" | "normal" | string;
+  persisted: string;
+  model: string;
+}
+
 /** P624: live context-window breakdown (GET /api/sessions/:id/context;
  * hermes ContextBreakdown shape). */
 export interface ContextCategory {
@@ -3311,6 +3319,25 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`recap HTTP ${response.status}`);
     const value = await response.json();
     return typeof value.recap === "string" ? value.recap : "";
+  }
+
+  /** P626: GET /api/fast — Priority Processing state. */
+  async fastGet(): Promise<FastState> {
+    const response = await fetch(this.endpoint(`/api/fast`), { headers: this.headers() });
+    if (!response.ok) throw new Error(`fast HTTP ${response.status}`);
+    return (await response.json()) as FastState;
+  }
+
+  /** P626: PUT /api/fast — toggle Priority Processing for the gateway
+   * process; persist=true also writes agent.service_tier. */
+  async fastSet(mode: "fast" | "normal", persist = false): Promise<{ ok: boolean; mode: string }> {
+    const response = await fetch(this.endpoint(`/api/fast`), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ mode, persist }),
+    });
+    if (!response.ok) throw new Error(`fast set HTTP ${response.status}`);
+    return (await response.json()) as { ok: boolean; mode: string };
   }
 
   /** P624: GET /api/sessions/:id/context — live context-window

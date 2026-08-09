@@ -93,6 +93,10 @@ const state = {
   reasoningEffort: null as string | null,
   /** P624: last fetched context breakdown for the header popup. */
   contextBreakdown: null as ContextBreakdown | null,
+  /** P626: Priority Processing chip state. */
+  fastMode: "normal" as string,
+  fastSupported: false,
+  fastLoaded: false,
   reasoningLevels: [] as string[],
   reasoningLoaded: false,
   /** P620: active personality name + configured personas. */
@@ -209,6 +213,8 @@ const el = {
   contextMeterFill: document.getElementById("context-meter-fill")!,
   contextMeterText: document.getElementById("context-meter-text")!,
   contextPop: document.getElementById("context-pop")!,
+  fastBadge: document.getElementById("fast-badge")!,
+  fastPop: document.getElementById("fast-pop")!,
   dayJump: document.getElementById("day-jump") as HTMLSelectElement,
   chatActions: document.getElementById("chat-header-actions")!,
   chatRename: document.getElementById("chat-rename") as HTMLButtonElement,
@@ -1546,6 +1552,76 @@ async function loadReasoningState(): Promise<void> {
   }
 }
 
+/** P626: Priority Processing chip (hermes /fast desktop parity) —
+ * hidden unless the gateway reports the model supports it. */
+function refreshFastBadge(): void {
+  if (!state.fastSupported) {
+    el.fastBadge.hidden = true;
+    return;
+  }
+  const fast = state.fastMode === "fast";
+  el.fastBadge.textContent = fast
+    ? `\u{1F680} ${t.chrome.fastOn}`
+    : `\u{1F680} ${t.chrome.fastOff}`;
+  el.fastBadge.title = t.chrome.fastTitle;
+  el.fastBadge.classList.toggle("pinned", fast);
+  el.fastBadge.hidden = false;
+}
+
+async function loadFastState(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const payload = await state.client.fastGet();
+    state.fastSupported = payload.supported;
+    state.fastMode = payload.mode;
+    refreshFastBadge();
+  } catch {
+    // Gateway without /api/fast (or unreachable): keep chip hidden.
+  }
+}
+
+function toggleFastPop(): void {
+  if (!el.fastPop.hidden) {
+    el.fastPop.hidden = true;
+    return;
+  }
+  const items: Array<{ mode: "fast" | "normal"; label: string }> = [
+    { mode: "fast", label: `\u{1F680} ${t.chrome.fastOn}` },
+    { mode: "normal", label: `\u{1F680} ${t.chrome.fastOff}` },
+  ];
+  el.fastPop.innerHTML = items
+    .map((item) => {
+      const active = item.mode === state.fastMode;
+      return `<div class="slash-item${active ? " selected" : ""}" data-mode="${item.mode}">${escapeHtmlInfo(item.label)}</div>`;
+    })
+    .join("");
+  const rect = el.fastBadge.getBoundingClientRect();
+  el.fastPop.style.position = "fixed";
+  el.fastPop.style.left = `${rect.left}px`;
+  el.fastPop.style.top = `${rect.bottom + 6}px`;
+  el.fastPop.style.right = "auto";
+  el.fastPop.style.bottom = "auto";
+  el.fastPop.style.minWidth = "140px";
+  el.fastPop.hidden = false;
+}
+
+async function applyFastPick(mode: "fast" | "normal"): Promise<void> {
+  el.fastPop.hidden = true;
+  if (!state.client) return;
+  try {
+    const payload = await state.client.fastSet(mode);
+    state.fastMode = payload.mode;
+    refreshFastBadge();
+    notifySuccess(
+      payload.mode === "fast"
+        ? `\u{1F680} ${t.chrome.fastOn}`
+        : `\u{1F680} ${t.chrome.fastOff}`,
+    );
+  } catch (error) {
+    notifyError(String(error));
+  }
+}
+
 function toggleReasoningPop(): void {
   if (!el.reasoningPop.hidden) {
     el.reasoningPop.hidden = true;
@@ -1836,6 +1912,11 @@ async function pollHealth(): Promise<void> {
     if (!state.personalityLoaded) {
       state.personalityLoaded = true;
       void loadPersonalityState();
+    }
+    // P626: one-shot Priority Processing chip load.
+    if (!state.fastLoaded) {
+      state.fastLoaded = true;
+      void loadFastState();
     }
     // P365: enrich the dot tooltip with the detailed open probe.
     const detailed = await state.client.healthDetailed();
@@ -3435,6 +3516,22 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
   el.contextMeter.addEventListener("click", (event) => {
     event.stopPropagation();
     toggleContextPop();
+  });
+  el.fastBadge.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleFastPop();
+  });
+  el.fastPop.addEventListener("click", (event) => {
+    const item = (event.target as HTMLElement).closest(".slash-item") as HTMLElement | null;
+    if (!item) return;
+    const mode = item.dataset.mode;
+    if (mode === "fast" || mode === "normal") void applyFastPick(mode);
+  });
+  document.addEventListener("click", (event) => {
+    if (el.fastPop.hidden) return;
+    const target = event.target as Node;
+    if (el.fastPop.contains(target) || el.fastBadge.contains(target)) return;
+    el.fastPop.hidden = true;
   });
   document.addEventListener("click", (event) => {
     if (el.contextPop.hidden) return;
