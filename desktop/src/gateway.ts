@@ -609,6 +609,22 @@ export interface ChannelsStatusPayload {
 }
 
 /** GET /api/stall-watch payload (P716). */
+/** `GET /api/drain` — P728 drain-marker contract ops surface. */
+export interface DrainStatusPayload {
+  requested: boolean;
+  draining: boolean;
+  suppress_notification: boolean;
+  epoch: string;
+  marker: {
+    action?: string;
+    requested_at?: string;
+    principal?: string;
+    epoch?: string;
+    suppress_notification?: boolean;
+  } | null;
+  stale: boolean;
+}
+
 export interface StallWatchPayload {
   timeout_seconds: number;
   watcher_enabled: boolean;
@@ -2448,6 +2464,42 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`dead-targets HTTP ${response.status}`);
     return (await response.json()) as DeadTargetsPayload;
+  }
+
+  /** GET /api/drain — P728 drain-marker status. */
+  async drainStatus(): Promise<DrainStatusPayload> {
+    const response = await fetch(this.endpoint("/api/drain"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`drain HTTP ${response.status}`);
+    return (await response.json()) as DrainStatusPayload;
+  }
+
+  /** POST /api/drain — begin drain (write the marker). */
+  async beginDrain(
+    principal: string,
+    suppressNotification: boolean,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const response = await fetch(this.endpoint("/api/drain"), {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({
+        principal,
+        suppress_notification: suppressNotification,
+      }),
+    });
+    if (!response.ok) throw new Error(`drain begin HTTP ${response.status}`);
+    return (await response.json()) as { ok: boolean; error?: string };
+  }
+
+  /** DELETE /api/drain — cancel drain (remove the marker). */
+  async cancelDrain(): Promise<{ ok: boolean; existed: boolean }> {
+    const response = await fetch(this.endpoint("/api/drain"), {
+      method: "DELETE",
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`drain cancel HTTP ${response.status}`);
+    return (await response.json()) as { ok: boolean; existed: boolean };
   }
 
   /** GET /api/stall-watch — P716 parked inbound + activity stamps. */

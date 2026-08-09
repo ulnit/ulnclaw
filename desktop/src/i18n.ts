@@ -341,6 +341,7 @@ export interface Translations {
   deliveryLedger: { title: string; outstanding: string; byState: string; empty: string; attempts: string; };
   deadTargets: { title: string; count: string; empty: string; };
   stallWatch: { title: string; timeout: string; disabled: string; pending: string; empty: string; stalled: string; };
+  drainPanel: { title: string; begin: string; cancel: string; drainRequested: string; draining: string; principal: string; requestedAt: string; suppress: string; epoch: string; stale: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -842,6 +843,7 @@ const en: Translations = {
   deliveryLedger: { title: "Delivery ledger", outstanding: "Outstanding", byState: "By state", empty: "(none)", attempts: "{n} attempt(s)" },
   deadTargets: { title: "Dead targets", count: "Registered", empty: "(none — all targets reachable)" },
   stallWatch: { title: "Stall watch", timeout: "Stall timeout", disabled: "watcher disabled", pending: "Parked inbound", empty: "(none — no parked messages)", stalled: "STALLED" },
+  drainPanel: { title: "Drain control", begin: "Begin drain", cancel: "Cancel drain", drainRequested: "Drain requested", draining: "Drain flag", principal: "Principal", requestedAt: "Requested at", suppress: "Suppress shutdown notice", epoch: "Epoch", stale: "STALE (prior instantiation)" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1420,6 +1422,7 @@ const zh: Translations = {
   deliveryLedger: { title: "投递台账", outstanding: "待投递", byState: "按状态", empty: "（无）", attempts: "{n} 次尝试" },
   deadTargets: { title: "死亡目标", count: "已登记", empty: "（无——所有目标均可达）" },
   stallWatch: { title: "停顿监视", timeout: "停顿超时", disabled: "看门狗已禁用", pending: "排队入站", empty: "（无——没有排队的消息）", stalled: "已停顿" },
+  drainPanel: { title: "排空控制", begin: "开始排空", cancel: "取消排空", drainRequested: "排空请求", draining: "排空标志", principal: "发起者", requestedAt: "请求时间", suppress: "静默关机通知", epoch: "实例纪元", stale: "陈旧（来自上一实例）" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -1998,6 +2001,7 @@ const zhHant: Translations = {
   deliveryLedger: { title: "投遞台账", outstanding: "待投遞", byState: "按狀態", empty: "（無）", attempts: "{n} 次嘗試" },
   deadTargets: { title: "死亡目標", count: "已登記", empty: "（無——所有目標均可達）" },
   stallWatch: { title: "停頓監視", timeout: "停頓逾時", disabled: "看門狗已停用", pending: "排隊入站", empty: "（無——沒有排隊的訊息）", stalled: "已停頓" },
+  drainPanel: { title: "排空控制", begin: "開始排空", cancel: "取消排空", drainRequested: "排空請求", draining: "排空標誌", principal: "發起者", requestedAt: "請求時間", suppress: "靜默關機通知", epoch: "實例紀元", stale: "陳舊（來自上一實例）" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2576,6 +2580,7 @@ const ja: Translations = {
   deliveryLedger: { title: "配信レッジャー", outstanding: "未配信", byState: "状態別", empty: "（なし）", attempts: "{n} 回試行" },
   deadTargets: { title: "配信不能ターゲット", count: "登録数", empty: "（なし——全ターゲット到達可能）" },
   stallWatch: { title: "ストール監視", timeout: "ストールタイムアウト", disabled: "ウォッチドッグ無効", pending: "滞留受信", empty: "（なし——滞留メッセージなし）", stalled: "ストール" },
+  drainPanel: { title: "ドレイン制御", begin: "ドレイン開始", cancel: "ドレイン取消", drainRequested: "ドレイン要求", draining: "ドレインフラグ", principal: "実行者", requestedAt: "要求時刻", suppress: "シャットダウン通知を抑制", epoch: "インスタンスエポック", stale: "失効（前回のインスタンス）" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3154,6 +3159,7 @@ const ar: Translations = {
   deliveryLedger: { title: "سجل التسليم", outstanding: "معلقة", byState: "حسب الحالة", empty: "(لا شيء)", attempts: "{n} محاولة" },
   deadTargets: { title: "الأهداف الميتة", count: "مسجلة", empty: "(لا شيء — جميع الأهداف قابلة للوصول)" },
   stallWatch: { title: "مراقبة التوقف", timeout: "مهلة التوقف", disabled: "المراقب معطل", pending: "رسائل منتظرة", empty: "(لا شيء — لا رسائل منتظرة)", stalled: "متوقف" },
+  drainPanel: { title: "التحكم في التفريغ", begin: "بدء التفريغ", cancel: "إلغاء التفريغ", drainRequested: "طلب التفريغ", draining: "علامة التفريغ", principal: "مصدر الطلب", requestedAt: "وقت الطلب", suppress: "كتم إشعار الإيقاف", epoch: "حقبة التشغيل", stale: "قديم (من تشغيل سابق)" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

@@ -191,6 +191,11 @@ pub fn read_drain_request(home: Option<&Path>) -> Option<Value> {
 /// marker, or a corrupt/contentless body). Only a marker whose epoch
 /// is present AND differs from the current instantiation epoch is
 /// considered stale.
+/// Public staleness probe for ops surfaces (P728 `/api/drain`).
+pub fn marker_is_stale(body: &Value) -> bool {
+    marker_epoch_is_stale(body)
+}
+
 fn marker_epoch_is_stale(body: &Value) -> bool {
     let current = current_instantiation_epoch();
     if current.is_empty() {

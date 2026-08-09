@@ -5552,6 +5552,51 @@ async fn dead_targets_api() -> Json<Value> {
     Json(json!({ "targets": targets, "count": count }))
 }
 
+/// `GET /api/drain` — P728 ops surface over the P725 drain-marker
+/// contract: marker presence/payload, instantiation epoch, staleness,
+/// and whether the gateway drain flag is currently set.
+async fn drain_status_api(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let marker = crate::drain_control::read_drain_request(None);
+    let stale = marker
+        .as_ref()
+        .map(crate::drain_control::marker_is_stale)
+        .unwrap_or(false);
+    Json(json!({
+        "requested": crate::drain_control::drain_requested(None),
+        "draining": state.restart.load(std::sync::atomic::Ordering::SeqCst),
+        "suppress_notification": crate::drain_control::drain_notification_suppressed(None),
+        "epoch": crate::drain_control::current_instantiation_epoch(),
+        "marker": marker,
+        "stale": stale,
+    }))
+}
+
+/// `POST /api/drain` — begin-drain: write the marker so the gateway
+/// watcher flips the drain flag (dashboard → gateway half of the P725
+/// contract). Body: optional `principal` + `suppress_notification`.
+async fn drain_begin_api(Json(body): Json<Value>) -> Json<Value> {
+    let principal = body
+        .get("principal")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or("dashboard");
+    let suppress = body
+        .get("suppress_notification")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match crate::drain_control::write_drain_request(principal, suppress, None) {
+        Ok(payload) => Json(json!({ "ok": true, "payload": payload })),
+        Err(err) => Json(json!({ "ok": false, "error": err })),
+    }
+}
+
+/// `DELETE /api/drain` — cancel-drain: remove the marker so the
+/// watcher reverts the drain flag.
+async fn drain_cancel_api() -> Json<Value> {
+    let existed = crate::drain_control::clear_drain_request(None);
+    Json(json!({ "ok": true, "existed": existed }))
+}
+
 /// `GET /api/stall-watch` — P716 ops surface over the P714 session
 /// stall machinery: parked inbound sessions joined with their shared
 /// activity stamps, plus the resolved watchdog timeout. Stalled rows
@@ -6994,6 +7039,12 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/delivery-ledger", get(delivery_ledger_api))
         .route("/api/dead-targets", get(dead_targets_api))
         .route("/api/stall-watch", get(stall_watch_api))
+        .route(
+            "/api/drain",
+            get(drain_status_api)
+                .post(drain_begin_api)
+                .delete(drain_cancel_api),
+        )
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -25509,6 +25560,81 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(body["obligations"].is_array(), "{body}");
         assert!(body["counts"].is_object(), "{body}");
         assert_eq!(body["outstanding"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_drain_endpoint_lifecycle() {
+        // P728: begin/cancel drain round-trip through the ops surface
+        // (marker lives under ULNCLAW_HOME — isolate it).
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/drain", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["requested"], false, "{body}");
+        assert_eq!(body["draining"], false, "{body}");
+        assert!(body["marker"].is_null(), "{body}");
+
+        // Begin drain via POST.
+        let app = router(test_state());
+        let request = axum::http::Request::builder()
+            .uri("/api/drain")
+            .method("POST")
+            .header("authorization", "Bearer sekret")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"principal": "doctor-panel", "suppress_notification": true}"#,
+            ))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["ok"], true, "{body}");
+        assert_eq!(body["payload"]["principal"], "doctor-panel", "{body}");
+
+        // Status now reflects the active marker.
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/drain", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["requested"], true, "{body}");
+        assert_eq!(body["suppress_notification"], true, "{body}");
+        assert_eq!(body["stale"], false, "{body}");
+        assert_eq!(body["marker"]["principal"], "doctor-panel", "{body}");
+
+        // Cancel drain via DELETE.
+        let app = router(test_state());
+        let request = axum::http::Request::builder()
+            .uri("/api/drain")
+            .method("DELETE")
+            .header("authorization", "Bearer sekret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["existed"], true, "{body}");
+
+        let app = router(test_state());
+        let (_, body) = get_json(app, "/api/drain", Some("sekret")).await;
+        assert_eq!(body["requested"], false, "{body}");
+
+        match prev {
+            Some(home) => std::env::set_var("ULNCLAW_HOME", home),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]

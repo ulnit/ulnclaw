@@ -77,6 +77,13 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="stallWatch.title">Stall watch</h3>
         <div id="stall-watch-rows"></div>
       </section>
+      <section id="doctor-drain" class="doctor-monitoring" hidden>
+        <h3 class="config-section"><span data-i18n="drainPanel.title">Drain control</span>
+          <button id="drain-begin" class="ghost mcp-add-btn" data-i18n="drainPanel.begin">Begin drain</button>
+          <button id="drain-cancel" class="ghost mcp-add-btn" data-i18n="drainPanel.cancel">Cancel drain</button>
+        </h3>
+        <div id="drain-rows"></div>
+      </section>
       <section id="doctor-browser" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
         <div id="browser-rows"></div>
@@ -263,6 +270,7 @@ export class DoctorWidget {
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
+    this.loadDrain().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2335,6 +2343,82 @@ export class DoctorWidget {
         }
       }
       section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadDrain(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-drain") as HTMLElement;
+    const rows = this.root.querySelector("#drain-rows") as HTMLElement;
+    const beginBtn = this.root.querySelector("#drain-begin") as HTMLButtonElement;
+    const cancelBtn = this.root.querySelector("#drain-cancel") as HTMLButtonElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    const render = async (): Promise<void> => {
+      const payload = await client.drainStatus();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.drainPanel.drainRequested,
+        payload.requested
+          ? `<span class="models-view-badge warn">${escapeHtmlDoctor(on)}</span>`
+          : escapeHtmlDoctor(off),
+      );
+      addRow(
+        t.drainPanel.draining,
+        payload.draining
+          ? `<span class="models-view-badge warn">${escapeHtmlDoctor(on)}</span>`
+          : escapeHtmlDoctor(off),
+      );
+      if (payload.requested) {
+        addRow(t.drainPanel.principal, escapeHtmlDoctor(payload.marker?.principal ?? "?"));
+        addRow(
+          t.drainPanel.requestedAt,
+          escapeHtmlDoctor(payload.marker?.requested_at ?? "?"),
+        );
+        addRow(t.drainPanel.suppress, payload.suppress_notification ? on : off);
+      }
+      if (payload.stale) {
+        addRow(
+          t.drainPanel.epoch,
+          `<span class="models-view-badge warn">${escapeHtmlDoctor(t.drainPanel.stale)}</span>`,
+        );
+      }
+      beginBtn.disabled = payload.requested;
+      cancelBtn.disabled = !payload.requested;
+      section.hidden = false;
+    };
+    beginBtn.onclick = () => {
+      client
+        .beginDrain("desktop-doctor", false)
+        .then(() => render())
+        .catch(() => undefined);
+    };
+    cancelBtn.onclick = () => {
+      client
+        .cancelDrain()
+        .then(() => render())
+        .catch(() => undefined);
+    };
+    try {
+      await render();
     } catch {
       section.hidden = true;
     }
