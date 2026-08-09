@@ -10607,6 +10607,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /blueprint [name] [slot=val…]  automation blueprints: catalog, guided setup, or direct create
   /cron [list|show|pause|resume|run|remove|status]  manage scheduled jobs
   /suggestions [accept N|dismiss N|catalog|clear]  review suggested automations
+  /background <prompt>  run a prompt in a background tracked run
   /approve [once|session|always] [run-id]  approve a pending dangerous command
   /deny [run-id]     deny a pending dangerous command
   /init [notes]      generate or update AGENTS.md from a project scan
@@ -11728,6 +11729,52 @@ async fn resolve_gateway_slash(
                     .trim_end()
                     .to_string(),
             ))
+        }
+        "/background" => {
+            // Hermes /background parity (P676): run the prompt in a
+            // background tracked run with its own session; the chat is
+            // immediately free for other work. Track it with /runs.
+            let message = rest.trim().to_string();
+            if message.is_empty() {
+                return Some(GatewaySlash::Direct(
+                    "usage: /background <prompt>".to_string(),
+                ));
+            }
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let background_session = state
+                .store
+                .create_session("gateway-run", Some(&state.model_name), None)
+                .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+            crate::desktop_bridge::publish(
+                "",
+                "session.created",
+                &json!({"session_id": background_session, "source": "gateway-run"}),
+            );
+            let run = RunState {
+                run_id: run_id.clone(),
+                status: "running".to_string(),
+                session_id: Some(background_session.clone()),
+                message: message.clone(),
+                created_at: now_secs(),
+                finished_at: None,
+                result: None,
+                error: None,
+                iterations: None,
+                stop_requested: false,
+                approval: None,
+                job_id: None,
+            };
+            state.runs.lock().await.insert(run_id.clone(), run);
+            spawn_tracked_run(
+                state.clone(),
+                run_id.clone(),
+                background_session.clone(),
+                message,
+                false,
+            );
+            Some(GatewaySlash::Direct(format!(
+                "started background run {run_id} in session {background_session} — track it with /runs"
+            )))
         }
         "/approve" => {
             // Hermes /approve parity (P675): resolve a pending
@@ -15750,6 +15797,49 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("manual|smart|off"));
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_slash_background_starts_tracked_run() {
+        // P676: /background <prompt> spawns a tracked run in a fresh
+        // session and reports the ids.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = test_state();
+
+        // Usage line without a prompt.
+        match resolve_gateway_slash(&state, "sess-1", "/background").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.contains("usage:"), "{text}")
+            }
+            _ => panic!("expected usage reply"),
+        }
+
+        match resolve_gateway_slash(&state, "sess-1", "/background summarize the logs").await {
+            Some(GatewaySlash::Direct(text)) => {
+                assert!(text.starts_with("started background run "), "{text}");
+                assert!(text.contains("/runs"), "{text}");
+                let run_id = text
+                    .trim_start_matches("started background run ")
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+                    .to_string();
+                let runs = state.runs.lock().await;
+                let run = runs.get(&run_id).expect("run registered");
+                assert_eq!(run.message, "summarize the logs");
+                assert_ne!(run.session_id.as_deref(), Some("sess-1"));
+            }
+            _ => panic!("expected background reply"),
+        }
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
