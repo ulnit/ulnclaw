@@ -127,6 +127,7 @@ pub mod delivery_ledger;
 pub mod display_config;
 pub mod status_phrases;
 pub mod shutdown_watchdog;
+pub mod shutdown_flush;
 pub mod shutdown_forensics;
 pub mod doctor;
 pub mod dump;

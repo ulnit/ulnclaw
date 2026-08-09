@@ -317,7 +317,7 @@ pub struct SlackConfig {
 
 /// A downloaded attachment cached in `<home>/media-cache/` (hermes media
 /// pipeline input).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MediaAttachment {
     pub path: std::path::PathBuf,
     pub mime: String,
@@ -326,7 +326,7 @@ pub struct MediaAttachment {
 }
 
 /// Normalized incoming message (hermes `MessageEvent`, core fields).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MessageEvent {
     pub platform: String,
     pub chat_id: String,
@@ -832,6 +832,33 @@ pub struct PendingInboundRow {
     pub platform: String,
     pub chat_id: String,
     pub queued_at: f64,
+}
+
+/// P735: process-wide registry of live dispatchers so the gateway
+/// shutdown path can flush every parked queue (hermes shutdown_flush).
+/// Weak refs: test-created dispatchers drop out automatically.
+fn dispatcher_registry() -> &'static std::sync::Mutex<Vec<std::sync::Weak<Dispatcher>>> {
+    static REGISTRY: std::sync::OnceLock<std::sync::Mutex<Vec<std::sync::Weak<Dispatcher>>>> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// P735: drain every live dispatcher's parked queue, returning the
+/// events with their session keys (hermes `_pending_messages` snapshot
+/// before shutdown clear).
+pub async fn take_all_parked() -> Vec<(String, MessageEvent)> {
+    let weaks: Vec<std::sync::Weak<Dispatcher>> = {
+        let mut registry = dispatcher_registry().lock().unwrap();
+        registry.retain(|w| w.upgrade().is_some());
+        registry.clone()
+    };
+    let mut all = Vec::new();
+    for weak in weaks {
+        if let Some(dispatcher) = weak.upgrade() {
+            all.extend(dispatcher.take_parked().await);
+        }
+    }
+    all
 }
 
 fn pending_inbound_directory() -> &'static std::sync::Mutex<HashMap<String, PendingInboundRow>> {
@@ -1572,7 +1599,7 @@ pub fn messaging_clarify_fn() -> crate::tools::context::ClarifyFn {
 impl Dispatcher {
     pub fn new(agent: Arc<Agent>, store: Arc<SqliteSessionStore>) -> Arc<Self> {
         install_activity_callbacks(&agent);
-        Arc::new(Self {
+        let dispatcher = Arc::new(Self {
             agent,
             store,
             busy: Arc::new(Mutex::new(HashMap::new())),
@@ -1582,7 +1609,13 @@ impl Dispatcher {
                 crate::turn_lease::DEFAULT_MAX_LEASES,
             )),
             turn_generation: std::sync::atomic::AtomicU64::new(0),
-        })
+        });
+        // P735: expose to the shutdown-flush sweep.
+        dispatcher_registry()
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&dispatcher));
+        dispatcher
     }
 
     /// P709: build the default dispatcher with an inbound
@@ -1595,7 +1628,7 @@ impl Dispatcher {
         hub: Arc<ProfileRoutingHub>,
     ) -> Arc<Self> {
         install_activity_callbacks(&agent);
-        Arc::new(Self {
+        let dispatcher = Arc::new(Self {
             agent,
             store,
             busy: Arc::new(Mutex::new(HashMap::new())),
@@ -1605,7 +1638,29 @@ impl Dispatcher {
                 crate::turn_lease::DEFAULT_MAX_LEASES,
             )),
             turn_generation: std::sync::atomic::AtomicU64::new(0),
-        })
+        });
+        // P735: expose to the shutdown-flush sweep.
+        dispatcher_registry()
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&dispatcher));
+        dispatcher
+    }
+
+    /// P735: drain this dispatcher's parked queues (the busy-policy
+    /// FIFOs), unregistering their pending-inbound rows. Called by the
+    /// gateway shutdown sweep so no parked follow-up is lost (hermes
+    /// shutdown_flush `_pending_messages` parity).
+    pub async fn take_parked(&self) -> Vec<(String, MessageEvent)> {
+        let mut taken = Vec::new();
+        let mut queued = self.queued.lock().await;
+        for (key, queue) in queued.drain() {
+            for event in queue {
+                taken.push((key.clone(), event));
+            }
+            unregister_pending_inbound(&key);
+        }
+        taken
     }
 
     fn session_key(event: &MessageEvent) -> String {
@@ -2729,6 +2784,26 @@ pub async fn run_messaging(
         Some(hub) => Dispatcher::new_with_routing(agent, store, hub),
         None => Dispatcher::new(agent, store),
     };
+    // P735: shutdown-flush recovery (hermes `recover_pending_to_db`):
+    // parked follow-ups flushed by the previous process exit are
+    // re-dispatched through the normal path (profile routing included),
+    // so a restart never loses queued user messages.
+    let recovered = crate::shutdown_flush::recover_parked_events(&crate::config::ulnclaw_home());
+    if !recovered.is_empty() {
+        let recovery_dispatcher = dispatcher.clone();
+        tokio::spawn(async move {
+            for (session_key, event) in recovered {
+                tracing::info!(
+                    "[shutdown_flush] re-dispatching parked message for {session_key}"
+                );
+                if let Err(e) = recovery_dispatcher.handle_event(event).await {
+                    tracing::warn!(
+                        "[shutdown_flush] recovery dispatch failed for {session_key}: {e}"
+                    );
+                }
+            }
+        });
+    }
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let msg = &config.messaging;
     let pairing: Option<Arc<crate::pairing::PairingStore>> = if msg.pairing {

@@ -8521,6 +8521,17 @@ pub async fn serve_multiplex(
     if let Some(handle) = raft_bridge {
         crate::raft::stop_bridge(handle).await;
     }
+    // P735: shutdown flush (hermes shutdown_flush, issue #72680) —
+    // parked busy-policy follow-ups that never got their turn are
+    // serialised to <home>/pending_messages/ so the next boot
+    // re-dispatches them instead of losing user messages. Runs last,
+    // after every task that could still be draining a queue.
+    if let Ok(home) = crate::config::ensure_home() {
+        let parked = crate::messaging::take_all_parked().await;
+        if !parked.is_empty() {
+            crate::shutdown_flush::flush_parked_to_file(&home, &parked, "shutdown");
+        }
+    }
     serve_result
 }
 
