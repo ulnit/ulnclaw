@@ -77,6 +77,10 @@ export class DoctorWidget {
         <h3 class="config-section" data-i18n="stallWatch.title">Stall watch</h3>
         <div id="stall-watch-rows"></div>
       </section>
+      <section id="doctor-phrases" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
+        <div id="phrases-rows"></div>
+      </section>
       <section id="doctor-display" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="displayPanel.title">Display settings</h3>
         <div id="display-rows"></div>
@@ -281,6 +285,7 @@ export class DoctorWidget {
     this.loadDrain().catch(() => undefined);
     this.loadLifecycle().catch(() => undefined);
     this.loadDisplay().catch(() => undefined);
+    this.loadPhrases().catch(() => undefined);
     this.loadBrowser().catch(() => undefined);
     this.loadMcp().catch(() => undefined);
     this.wireMcpAdd();
@@ -2351,6 +2356,58 @@ export class DoctorWidget {
             `${badge}${escapeHtmlDoctor(idle)}${detail}`,
           );
         }
+      }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadPhrases(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-phrases") as HTMLElement;
+    const rows = this.root.querySelector("#phrases-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.statusPhrases();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.phrasesPanel.catalog,
+        `${payload.status_count} ${t.phrasesPanel.statusWord} \u00b7 ${payload.generic_count} ${t.phrasesPanel.genericWord}`,
+      );
+      addRow(
+        t.phrasesPanel.sample,
+        escapeHtmlDoctor(payload.status_sample.slice(0, 3).join(", ")),
+      );
+      addRow(
+        t.phrasesPanel.conventional,
+        payload.conventional_files.length > 0
+          ? escapeHtmlDoctor(payload.conventional_files.map((f) => f.path).join(", "))
+          : escapeHtmlDoctor(off),
+      );
+      addRow(t.phrasesPanel.configSection, payload.has_config_section ? on : off);
+      for (const [platform, catalog] of Object.entries(payload.platforms)) {
+        addRow(
+          platform,
+          `${catalog.status_count} ${t.phrasesPanel.statusWord} \u00b7 ${catalog.generic_count} ${t.phrasesPanel.genericWord}`,
+        );
       }
       section.hidden = false;
     } catch {

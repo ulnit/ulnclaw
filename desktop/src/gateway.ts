@@ -609,6 +609,25 @@ export interface ChannelsStatusPayload {
 }
 
 /** GET /api/stall-watch payload (P716). */
+/** `GET /api/status-phrases` — P731 resolved status-phrase catalogs. */
+export interface StatusPhrasesPayload {
+  status_count: number;
+  generic_count: number;
+  status_sample: string[];
+  generic_sample: string[];
+  conventional_files: { path: string; dir: boolean }[];
+  has_config_section: boolean;
+  platforms: Record<
+    string,
+    {
+      status_count: number;
+      generic_count: number;
+      status_sample: string[];
+      generic_sample: string[];
+    }
+  >;
+}
+
 /** `GET /api/display` — P730 resolved per-platform display settings. */
 export interface DisplayPlatformRow {
   platform: string;
@@ -2497,6 +2516,15 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`dead-targets HTTP ${response.status}`);
     return (await response.json()) as DeadTargetsPayload;
+  }
+
+  /** GET /api/status-phrases — P731 resolved phrase catalogs. */
+  async statusPhrases(): Promise<StatusPhrasesPayload> {
+    const response = await fetch(this.endpoint("/api/status-phrases"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`status-phrases HTTP ${response.status}`);
+    return (await response.json()) as StatusPhrasesPayload;
   }
 
   /** GET /api/display — P730 resolved per-platform display settings. */

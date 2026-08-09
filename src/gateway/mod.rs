@@ -5552,6 +5552,73 @@ async fn dead_targets_api() -> Json<Value> {
     Json(json!({ "targets": targets, "count": count }))
 }
 
+/// `GET /api/status-phrases` — P731 ops surface over the P722
+/// status-phrase catalogs: the resolved global catalog (built-ins +
+/// conventional profile files + `[display.status_phrases]`), which
+/// conventional files are present, and any per-platform catalogs.
+async fn status_phrases_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let result = tokio::task::spawn_blocking(|| {
+        let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let home = crate::config::ulnclaw_home();
+        let catalog = crate::status_phrases::resolve_catalog(&config.display, None, &home);
+
+        let conventional: Vec<Value> = ["status_phrases.yaml", "status_phrases"]
+            .iter()
+            .filter_map(|name| {
+                let path = home.join(name);
+                if path.exists() {
+                    Some(json!({ "path": name, "dir": path.is_dir() }))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let sample = |list: &[String]| -> Vec<String> {
+            list.iter().take(5).cloned().collect()
+        };
+
+        let mut platforms = serde_json::Map::new();
+        let mut keys: Vec<String> = config.display.platforms.keys().cloned().collect();
+        keys.sort();
+        for key in keys {
+            let Some(override_cfg) = config.display.platforms.get(&key) else {
+                continue;
+            };
+            if override_cfg.status_phrases.is_none()
+                && override_cfg.generic_status_phrases.is_none()
+            {
+                continue;
+            }
+            let resolved =
+                crate::status_phrases::resolve_catalog(&config.display, Some(&key), &home);
+            platforms.insert(
+                key,
+                json!({
+                    "status_count": resolved.status.len(),
+                    "generic_count": resolved.generic.len(),
+                    "status_sample": sample(&resolved.status),
+                    "generic_sample": sample(&resolved.generic),
+                }),
+            );
+        }
+
+        json!({
+            "status_count": catalog.status.len(),
+            "generic_count": catalog.generic.len(),
+            "status_sample": sample(&catalog.status),
+            "generic_sample": sample(&catalog.generic),
+            "conventional_files": conventional,
+            "has_config_section": config.display.status_phrases.is_some()
+                || config.display.generic_status_phrases.is_some(),
+            "platforms": Value::Object(platforms),
+        })
+    })
+    .await
+    .unwrap_or_else(|_| json!({ "error": "phrase resolution panicked" }));
+    Json(result)
+}
+
 /// `GET /api/display` — P730 ops surface over the P721 per-platform
 /// display resolver: every configured platform's resolved display
 /// settings (platform override → global → tier default), so operators
@@ -7172,6 +7239,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         )
         .route("/api/lifecycle", get(lifecycle_api))
         .route("/api/display", get(display_settings_api))
+        .route("/api/status-phrases", get(status_phrases_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
         .route("/api/messaging/platforms/:id", put(messaging_platform_update))
         .route("/api/messaging/platforms/:id/test", post(messaging_platform_test))
@@ -25687,6 +25755,48 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         assert!(body["obligations"].is_array(), "{body}");
         assert!(body["counts"].is_object(), "{body}");
         assert_eq!(body["outstanding"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_status_phrases_endpoint_shape() {
+        // P731: resolved phrase catalogs — built-ins plus conventional
+        // file + per-platform section visibility.
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("status_phrases.yaml"),
+            "status:\n- bespoke status line\n",
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("config.toml"),
+            "[display.platforms.telegram.status_phrases]\nstatus = [\"tg only line\"]\n",
+        )
+        .unwrap();
+        let prev = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+
+        let app = router(test_state());
+        let (status, body) = get_json(app, "/api/status-phrases", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        // Built-in 30 + conventional 1.
+        assert_eq!(body["status_count"], 31, "{body}");
+        assert_eq!(body["generic_count"], 20, "{body}");
+        assert_eq!(body["conventional_files"][0]["path"], "status_phrases.yaml", "{body}");
+        assert_eq!(body["has_config_section"], false, "{body}");
+        let telegram = &body["platforms"]["telegram"];
+        // Per-platform catalog: 30 built-ins + conventional + 1 section line.
+        assert_eq!(telegram["status_count"], 32, "{telegram}");
+        assert!(
+            telegram["status_sample"].to_string().contains("bespoke")
+                || telegram["status_count"] == 32,
+            "{telegram}"
+        );
+
+        match prev {
+            Some(home) => std::env::set_var("ULNCLAW_HOME", home),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]
