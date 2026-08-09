@@ -88,6 +88,8 @@ export interface Translations {
     whenNow: string;
   };
   tools: { running: string; done: string; thinking: string; arguments: string; result: string; fallbackName: string };
+  /** P624: context-window breakdown popup in the chat header. */
+  contextUsage: { title: string; noData: string; freeSpace: string; window: string };
   slash: { help: string; skills: string; tools: string; recap: string; title: string; retitle: string; usage: string; kanban: string; newSession: string; clear: string; clearConfirm: string; insights: string; compress: string; skillFallback: string; resume: string; doctor: string; runs: string; projects: string; config: string; webhooks: string; models: string; plugins: string; archive: string; unarchive: string; exportSession: string; forkSession: string; search: string; open: string; openNotFound: string; status: string; context: string; whoami: string; version: string; commands: string; profile: string; model: string; reasoning: string; memory: string; sessions: string; stop: string; retry: string; undo: string; verbose: string; yolo: string; personality: string; goal: string; subgoal: string; reloadMcp: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
     failureTitle: string; retry: string; openSettings: string; dismiss: string };
@@ -455,6 +457,7 @@ const en: Translations = {
     whenNow: "now", dayToday: "Today", tokensTitle: "Total tokens: {tokens}", unreadTitle: "Unread sessions: {count}", filterPlaceholder: "Filter sessions…", filterNoMatch: "No sessions match the filter", dayJumpTitle: "Jump to date", showAll: "Show all {count} sessions", showLess: "Show fewer", groupYesterday: "Yesterday", groupWeek: "Past 7 days", groupOlder: "Older", sortByActivity: "Sorted by recent activity — click to sort by title", sortByTitle: "Sorted by title — click to sort by recent activity", showArchived: "Show archived sessions", hideArchived: "Hide archived sessions", pinnedGroup: "Pinned",
   },
   tools: { running: "running…", done: "done", thinking: "thinking", arguments: "arguments", result: "result", fallbackName: "tool" },
+  contextUsage: { title: "Context usage", noData: "No context data yet — send a message first", freeSpace: "Free space", window: "Context window" },
   slash: {
     help: "gateway slash commands", skills: "list skills", tools: "list enabled tools",
     recap: "recap this session", title: "show or set the session title", retitle: "regenerate this session's title via the LLM",
@@ -999,6 +1002,7 @@ const zh: Translations = {
     whenNow: "刚刚", dayToday: "今天", tokensTitle: "总 token 数：{tokens}", unreadTitle: "未读会话：{count}", filterPlaceholder: "筛选会话…", filterNoMatch: "没有匹配过滤的会话", dayJumpTitle: "跳转到日期", showAll: "显示全部 {count} 个会话", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "按最近活动排序——点击改为按标题排序", sortByTitle: "按标题排序——点击改为按最近活动排序", showArchived: "显示已归档会话", hideArchived: "隐藏已归档会话", pinnedGroup: "已置顶",
   },
   tools: { running: "运行中…", done: "完成", thinking: "思考中", arguments: "参数", result: "结果", fallbackName: "工具" },
+  contextUsage: { title: "上下文占用", noData: "暂无上下文数据 —— 请先发送一条消息", freeSpace: "剩余空间", window: "上下文窗口" },
   slash: {
     help: "网关斜杠命令", skills: "列出技能", tools: "列出已启用工具",
     recap: "回顾本会话", title: "查看或设置会话标题", retitle: "经 LLM 重新生成本会话标题",
@@ -1543,6 +1547,7 @@ const zhHant: Translations = {
     whenNow: "剛剛", dayToday: "今天", tokensTitle: "總 token 數：{tokens}", unreadTitle: "未讀工作階段：{count}", filterPlaceholder: "篩選工作階段…", filterNoMatch: "沒有符合篩選的工作階段", dayJumpTitle: "跳轉到日期", showAll: "顯示全部 {count} 個工作階段", showLess: "收起", groupYesterday: "昨天", groupWeek: "近 7 天", groupOlder: "更早", sortByActivity: "依最近活動排序——點選改為依標題排序", sortByTitle: "依標題排序——點選改為依最近活動排序", showArchived: "顯示已歸檔工作階段", hideArchived: "隱藏已歸檔工作階段", pinnedGroup: "已置頂",
   },
   tools: { running: "執行中…", done: "完成", thinking: "思考中", arguments: "參數", result: "結果", fallbackName: "工具" },
+  contextUsage: { title: "上下文佔用", noData: "尚無上下文資料 —— 請先傳送一則訊息", freeSpace: "剩餘空間", window: "上下文視窗" },
   slash: {
     help: "閘道斜線命令", skills: "列出技能", tools: "列出已啟用工具",
     recap: "回顧本工作階段", title: "檢視或設定工作階段標題", retitle: "經 LLM 重新產生本工作階段標題",
@@ -2087,6 +2092,7 @@ const ja: Translations = {
     whenNow: "たった今", dayToday: "今日", tokensTitle: "総トークン数：{tokens}", unreadTitle: "未読セッション：{count}", filterPlaceholder: "セッションを絞り込み…", filterNoMatch: "フィルターに一致するセッションはありません", dayJumpTitle: "日付へジャンプ", showAll: "{count} 件のセッションをすべて表示", showLess: "折りたたむ", groupYesterday: "昨日", groupWeek: "過去 7 日間", groupOlder: "それ以前", sortByActivity: "最近のアクティビティ順 — クリックでタイトル順に", sortByTitle: "タイトル順 — クリックでアクティビティ順に", showArchived: "アーカイブ済みセッションを表示", hideArchived: "アーカイブ済みセッションを非表示", pinnedGroup: "ピン留め",
   },
   tools: { running: "実行中…", done: "完了", thinking: "思考中", arguments: "引数", result: "結果", fallbackName: "ツール" },
+  contextUsage: { title: "コンテキスト使用量", noData: "コンテキストデータがありません — まずメッセージを送ってください", freeSpace: "空き領域", window: "コンテキストウィンドウ" },
   slash: {
     help: "ゲートウェイのスラッシュコマンド", skills: "スキル一覧", tools: "有効なツール一覧",
     recap: "このセッションの要約", title: "セッションタイトルを表示/設定", retitle: "LLM でこのセッションのタイトルを再生成",
@@ -2631,6 +2637,7 @@ const ar: Translations = {
     whenNow: "الآن", dayToday: "اليوم", tokensTitle: "إجمالي الرموز: {tokens}", unreadTitle: "جلسات غير مقروءة: {count}", filterPlaceholder: "تصفية الجلسات…", filterNoMatch: "لا توجد جلسات مطابقة للتصفية", dayJumpTitle: "الانتقال إلى التاريخ", showAll: "عرض كل الجلسات ({count})", showLess: "عرض أقل", groupYesterday: "أمس", groupWeek: "آخر 7 أيام", groupOlder: "أقدم", sortByActivity: "مرتبة حسب آخر نشاط — انقر للفرز حسب العنوان", sortByTitle: "مرتبة حسب العنوان — انقر للفرز حسب آخر نشاط", showArchived: "إظهار الجلسات المؤرشفة", hideArchived: "إخفاء الجلسات المؤرشفة", pinnedGroup: "مثبتة",
   },
   tools: { running: "قيد التشغيل…", done: "تم", thinking: "يفكر", arguments: "المعاملات", result: "النتيجة", fallbackName: "أداة" },
+  contextUsage: { title: "استخدام السياق", noData: "لا توجد بيانات سياق بعد — أرسل رسالة أولاً", freeSpace: "مساحة فارغة", window: "نافذة السياق" },
   slash: {
     help: "أوامر البوابة المائلة", skills: "قائمة المهارات", tools: "قائمة الأدوات المفعّلة",
     recap: "تلخيص هذه الجلسة", title: "عرض عنوان الجلسة أو تعيينه", retitle: "إعادة توليد عنوان هذه الجلسة عبر LLM",

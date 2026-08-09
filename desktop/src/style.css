@@ -1801,7 +1801,8 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 #chat.drag-over { outline: 2px dashed var(--accent, #4a9eff); outline-offset: -6px; }
 
 /* P359: chat-header context usage meter. */
-#context-meter { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font-size: 11px; opacity: 0.85; }
+#context-meter { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font-size: 11px; opacity: 0.85; cursor: pointer; }
+#context-meter:hover { opacity: 1; }
 /* P375: chat-header day jump (scrolls to a transcript day divider). */
 #day-jump {
   margin-left: 10px; font-size: 11px; color: var(--dim); background: var(--panel-2);
@@ -1815,6 +1816,13 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 #context-meter-bar { width: 64px; height: 6px; border-radius: 3px; background: var(--border, rgba(128,128,128,0.25)); overflow: hidden; display: inline-block; }
 #context-meter-fill { display: block; height: 100%; width: 0%; background: var(--accent, #4a9eff); border-radius: 3px; transition: width 0.4s ease; }
 #context-meter.hot #context-meter-fill { background: #d33; }
+/* P624: context breakdown popup */
+.ctx-pop-title { font-weight: 600; font-size: 12px; padding: 6px 10px 4px; }
+.ctx-stack { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin: 4px 10px 8px; background: var(--border, rgba(128,128,128,0.25)); }
+.ctx-stack span { display: block; height: 100%; }
+.ctx-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--border, rgba(128,128,128,0.4)); }
+.ctx-window { padding: 6px 10px; font-size: 11px; opacity: 0.75; border-top: 1px solid var(--border, rgba(128,128,128,0.2)); margin-top: 4px; }
+#context-pop .notify-history-row { padding: 3px 10px; font-size: 12px; }
 
 /* P360: clickable chat title opens the session info popover. */
 #chat-title { cursor: pointer; }

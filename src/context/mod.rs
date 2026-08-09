@@ -3,6 +3,7 @@
 //! Inspired by Hermes Agent's prompt_builder.py and context_compressor.py.
 //! Handles system prompt assembly and context window optimization.
 
+pub mod breakdown;
 pub mod compressor;
 pub use compressor::ContextCompressor;
 

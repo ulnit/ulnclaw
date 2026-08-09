@@ -473,16 +473,18 @@ impl Agent {
 
     /// Build the effective system prompt: configured prompt + memory
     /// injection (hermes injects MEMORY.md/USER.md into every turn).
-    fn effective_system_prompt(&self) -> Option<String> {
+    /// The system prompt split into its four tiers (P624 refactor so the
+    /// context breakdown can attribute each piece — hermes
+    /// `build_system_prompt_parts`). Returns (base, memory, env, volatile).
+    fn prompt_tiers(&self) -> (String, String, String, String) {
         let base = self
             .config
             .system_prompt
             .clone()
             .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string());
-        let mut parts = vec![base];
-        if let Some(memory) = crate::tools::builtin::memory::load_memory_for_prompt(&self.context.home) {
-            parts.push(format!("## Persistent memory\n{}", memory));
-        }
+        let memory = crate::tools::builtin::memory::load_memory_for_prompt(&self.context.home)
+            .map(|memory| format!("## Persistent memory\n{}", memory))
+            .unwrap_or_default();
         let mut env_section = format!(
             "## Environment\n- cwd: {}\n- home: {}",
             self.context.cwd().display(),
@@ -496,18 +498,61 @@ impl Agent {
                 env_section.push_str(&format!("\n- {}", line));
             }
         }
-        parts.push(env_section);
         // Volatile timestamp block (hermes system_prompt.py): date-only so
         // the prompt stays byte-stable for the whole day (prefix-cache
         // stability, hermes PR #20451), rendered in the user's configured
         // timezone (hermes_time).
-        let mut stamp = crate::hermes_time::conversation_started_line(
+        let mut volatile = crate::hermes_time::conversation_started_line(
             self.context.config.timezone.as_deref(),
         );
-        stamp.push_str(&format!("\nModel: {}", self.effective_model()));
-        stamp.push_str(&format!("\nProvider: {}", self.provider.name()));
-        parts.push(stamp);
+        volatile.push_str(&format!("\nModel: {}", self.effective_model()));
+        volatile.push_str(&format!("\nProvider: {}", self.provider.name()));
+        (base, memory, env_section, volatile)
+    }
+
+    fn effective_system_prompt(&self) -> Option<String> {
+        let (base, memory, env_section, volatile) = self.prompt_tiers();
+        let parts: Vec<String> = [base, memory, env_section, volatile]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect();
         Some(parts.join("\n\n"))
+    }
+
+    /// P624: live pieces for the context-window breakdown (hermes
+    /// `compute_session_context_breakdown` inputs): the non-memory system
+    /// prompt tiers, the memory block, and builtin vs `mcp__*` tool-schema
+    /// JSON read from the live registry.
+    pub async fn context_breakdown_parts(&self) -> crate::context::breakdown::BreakdownParts {
+        let (base, memory_block, env_section, volatile) = self.prompt_tiers();
+        let system_prompt = [base, env_section, volatile]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let (builtin_tools_json, mcp_tools_json) = {
+            let registry = self.tools.lock().await;
+            let mut builtin = Vec::new();
+            let mut mcp = Vec::new();
+            for definition in registry.definitions() {
+                if definition.name.starts_with("mcp__") {
+                    mcp.push(definition);
+                } else {
+                    builtin.push(definition);
+                }
+            }
+            (
+                serde_json::to_string(&builtin).unwrap_or_default(),
+                serde_json::to_string(&mcp).unwrap_or_default(),
+            )
+        };
+        crate::context::breakdown::BreakdownParts {
+            system_prompt,
+            memory_block,
+            builtin_tools_json,
+            mcp_tools_json,
+            model: self.effective_model(),
+        }
     }
 
     /// Run the agent with a user message

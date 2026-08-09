@@ -865,6 +865,23 @@ export interface ModelInfoPayload {
   capabilities: { vision: boolean; reasoning: boolean; tools: boolean } | null;
 }
 
+/** P624: live context-window breakdown (GET /api/sessions/:id/context;
+ * hermes ContextBreakdown shape). */
+export interface ContextCategory {
+  id: string;
+  label: string;
+  tokens: number;
+}
+
+export interface ContextBreakdown {
+  categories: ContextCategory[];
+  context_max: number;
+  context_percent: number;
+  context_used: number;
+  estimated_total: number;
+  model: string;
+}
+
 /** Dashboard theme row from GET /api/dashboard/themes (P331). */
 export interface DashboardTheme {
   name: string;
@@ -3294,6 +3311,17 @@ export class GatewayClient {
     if (!response.ok) throw new Error(`recap HTTP ${response.status}`);
     const value = await response.json();
     return typeof value.recap === "string" ? value.recap : "";
+  }
+
+  /** P624: GET /api/sessions/:id/context — live context-window
+   * breakdown (hermes session.context_breakdown parity). */
+  async sessionContextBreakdown(sessionId: string): Promise<ContextBreakdown> {
+    const response = await fetch(
+      this.endpoint(`/api/sessions/${encodeURIComponent(sessionId)}/context`),
+      { headers: this.headers() },
+    );
+    if (!response.ok) throw new Error(`context breakdown HTTP ${response.status}`);
+    return (await response.json()) as ContextBreakdown;
   }
 
   /** GET /api/sessions/:id/export — download the transcript as

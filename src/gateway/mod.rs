@@ -25,6 +25,7 @@
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|claim`
 //!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
+//!   - `GET  /api/sessions/:id/context` — live context-window breakdown
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
 //!     `POST /v1/runs/:id/stop`
 //!   - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/{id}`,
@@ -6313,6 +6314,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/sessions/:id/chat/stream", post(session_chat_stream))
         .route("/api/sessions/:id/model", post(lock_session_model))
         .route("/api/sessions/:id/recap", get(session_recap))
+        .route("/api/sessions/:id/context", get(session_context_breakdown))
         .route("/api/sessions/:id/retitle", post(retitle_session))
         .route("/api/uploads", post(upload_media))
         .route("/api/audio/transcribe", post(audio_transcribe))
@@ -9154,6 +9156,31 @@ async fn session_messages(
     }
 }
 
+/// `GET /api/sessions/:id/context` — live context-window breakdown for
+/// one session (P624; hermes `session.context_breakdown` RPC parity):
+/// category-attributed token estimate against the agent's budget. The
+/// desktop context meter + popup render over this payload.
+async fn session_context_breakdown(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+) -> Response {
+    if state.store.get_session_row(&id).ok().flatten().is_none() {
+        return not_found("session not found");
+    }
+    let history: Vec<Message> = state
+        .store
+        .load_messages(&id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.role != Role::System)
+        .collect();
+    let conversation_tokens = crate::context::ContextCompressor::estimate_tokens(&history);
+    let parts = state.agent.context_breakdown_parts().await;
+    let budget = state.agent.context_budget_tokens();
+    let payload = crate::context::breakdown::compute(&parts, conversation_tokens, budget);
+    Json(serde_json::to_value(&payload).unwrap_or_else(|_| json!({}))).into_response()
+}
+
 /// Query parameters for `GET /api/sessions/:id/export`.
 #[derive(Debug, Deserialize)]
 struct ExportQuery {
@@ -10406,6 +10433,9 @@ async fn resolve_gateway_slash(
             Some(GatewaySlash::Direct(lines.join("\n")))
         }
         "/context" => {
+            // Hermes /context parity (P624): glyph grid + per-category
+            // table + window summary; `/context all` appends per-toolset
+            // and per-skill costs via the prompt-size attribution.
             let history: Vec<Message> = state
                 .store
                 .load_messages(session_id)
@@ -10413,13 +10443,82 @@ async fn resolve_gateway_slash(
                 .into_iter()
                 .filter(|m| m.role != Role::System)
                 .collect();
-            let used = crate::context::ContextCompressor::estimate_tokens(&history);
+            let conversation_tokens = crate::context::ContextCompressor::estimate_tokens(&history);
+            let parts = state.agent.context_breakdown_parts().await;
             let budget = state.agent.context_budget_tokens();
-            let pct = if budget > 0 { used * 100 / budget } else { 0 };
-            Some(GatewaySlash::Direct(format!(
-                "~{used} of {budget} context tokens in use ({pct}%) across {} message(s); /compress summarizes older turns",
-                history.len()
-            )))
+            let payload =
+                crate::context::breakdown::compute(&parts, conversation_tokens, budget);
+            let mut lines = crate::context::breakdown::render_breakdown_lines(&payload, true);
+            if rest.eq_ignore_ascii_case("all") {
+                let config = state.agent.context().config.clone();
+                let details = tokio::task::spawn_blocking(move || {
+                    let home = crate::config::ulnclaw_home();
+                    let mut registry = crate::tools::ToolRegistry::new();
+                    crate::tools::builtin::register_builtin_tools(&mut registry);
+                    crate::toolsets::apply_toolset_policy(
+                        &mut registry,
+                        &config.enabled_toolsets,
+                        &config.disabled_toolsets,
+                    );
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    crate::prompt_size::compute_prompt_breakdown(&config, &home, &cwd, &registry)
+                })
+                .await
+                .ok();
+                if let Some(data) = details {
+                    const DETAILS_TABLE_LIMIT: usize = 15;
+                    if !data.toolsets.is_empty() {
+                        lines.push(String::new());
+                        lines.push("Toolsets by schema cost (largest first)".to_string());
+                        for group in data.toolsets.iter().take(DETAILS_TABLE_LIMIT) {
+                            lines.push(format!(
+                                "  {:<24} {:>3} tools {:>8} tokens",
+                                group.toolset,
+                                group.tools,
+                                (group.json_bytes + 3) / 4
+                            ));
+                        }
+                        if data.toolsets.len() > DETAILS_TABLE_LIMIT {
+                            lines.push(format!(
+                                "  \u{2026} and {} more",
+                                data.toolsets.len() - DETAILS_TABLE_LIMIT
+                            ));
+                        }
+                    }
+                    if !data.skills.is_empty() {
+                        lines.push(String::new());
+                        lines.push(
+                            "Skills by cost (SKILL.md = cost when loaded)".to_string(),
+                        );
+                        for skill in data.skills.iter().take(DETAILS_TABLE_LIMIT) {
+                            let mut name = skill.name.clone();
+                            if name.chars().count() > 28 {
+                                let clipped: String = name.chars().take(27).collect();
+                                name = format!("{clipped}\u{2026}");
+                            }
+                            lines.push(format!(
+                                "  {:<28} SKILL.md {:>8} tokens",
+                                name,
+                                (skill.skill_md_bytes + 3) / 4
+                            ));
+                        }
+                        if data.skills.len() > DETAILS_TABLE_LIMIT {
+                            lines.push(format!(
+                                "  \u{2026} and {} more",
+                                data.skills.len() - DETAILS_TABLE_LIMIT
+                            ));
+                        }
+                    }
+                }
+            } else {
+                lines.push(String::new());
+                lines.push(
+                    "Use /context all for per-skill and per-toolset costs; /compress summarizes older turns."
+                        .to_string(),
+                );
+            }
+            Some(GatewaySlash::Direct(lines.join("\n")))
         }
         "/whoami" => {
             let context = state.agent.context();
@@ -14070,9 +14169,12 @@ mod tests {
         assert!(text.contains("model: fake-stream (fake)"), "{text}");
         assert!(text.contains("gateway uptime:"), "{text}");
 
+        // P624: /context renders the hermes-style breakdown view.
         let reply = post_chat(app.clone(), &sid, "/context").await;
         let text = reply["response"].as_str().unwrap();
-        assert!(text.contains("context tokens in use"), "{text}");
+        assert!(text.contains("Estimated usage by category"), "{text}");
+        assert!(text.contains("Conversation"), "{text}");
+        assert!(text.contains("/context all"), "{text}");
 
         let reply = post_chat(app.clone(), &sid, "/whoami").await;
         let text = reply["response"].as_str().unwrap();
@@ -14108,6 +14210,67 @@ mod tests {
         // Bad /model usage explains itself.
         let reply = post_chat(app.clone(), &sid, "/model onlyone").await;
         assert_eq!(reply["response"], "usage: /model <provider> <model>");
+    }
+
+    #[tokio::test]
+    async fn test_session_context_breakdown_endpoint() {
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("ctx-breakdown", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        // Seed one exchange so the conversation category is nonzero.
+        let reply = post_chat(app.clone(), &sid, "hello there").await;
+        assert_eq!(reply["response"], "Hello");
+
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("/api/sessions/{sid}/context"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["context_max"].as_u64().unwrap() > 0, "{body}");
+        assert!(body["estimated_total"].as_u64().unwrap() > 0, "{body}");
+        assert_eq!(
+            body["context_used"].as_u64().unwrap(),
+            body["estimated_total"].as_u64().unwrap()
+        );
+        let percent = body["context_percent"].as_u64().unwrap();
+        assert!(percent <= 100, "{body}");
+        let categories = body["categories"].as_array().expect("categories");
+        let ids: Vec<&str> = categories
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&"system_prompt"), "{ids:?}");
+        assert!(ids.contains(&"tool_definitions"), "{ids:?}");
+        assert!(ids.contains(&"conversation"), "{ids:?}");
+        // Declaration order mirrors hermes (system before tools, tools
+        // before conversation).
+        assert!(ids.iter().position(|i| *i == "system_prompt") < ids.iter().position(|i| *i == "conversation"));
+
+        // Unknown session → 404.
+        let (status, _) = get_json(app, "/api/sessions/nope/context", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_context_all_details() {
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("ctx-all", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/context all").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("Toolsets by schema cost"), "{text}");
+        // No hint line in the expanded view.
+        assert!(!text.contains("Use /context all"), "{text}");
     }
 
     #[tokio::test]

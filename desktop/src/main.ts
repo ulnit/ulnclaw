@@ -3,7 +3,7 @@
 // everything else is plain HTTP (gateway.ts).
 
 import { GatewayClient, loadSettings, saveSettings } from "./gateway";
-import type { DashboardTheme, FsEntry, GatewaySettings, Project, RetitleSkillsReport, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
+import type { ContextBreakdown, DashboardTheme, FsEntry, GatewaySettings, Project, RetitleSkillsReport, SessionRow, SkillRow, ToolCardEvent } from "./gateway";
 import type { KanbanBoard } from "./gateway";
 import { KanbanWidget } from "./kanban";
 import { ProjectsWidget } from "./projects";
@@ -91,6 +91,8 @@ const state = {
   composerDraft: "",
   /** P615: gateway's persisted reasoning-effort pin (null = endpoint default). */
   reasoningEffort: null as string | null,
+  /** P624: last fetched context breakdown for the header popup. */
+  contextBreakdown: null as ContextBreakdown | null,
   reasoningLevels: [] as string[],
   reasoningLoaded: false,
   /** P620: active personality name + configured personas. */
@@ -206,6 +208,7 @@ const el = {
   contextMeter: document.getElementById("context-meter")!,
   contextMeterFill: document.getElementById("context-meter-fill")!,
   contextMeterText: document.getElementById("context-meter-text")!,
+  contextPop: document.getElementById("context-pop")!,
   dayJump: document.getElementById("day-jump") as HTMLSelectElement,
   chatActions: document.getElementById("chat-header-actions")!,
   chatRename: document.getElementById("chat-rename") as HTMLButtonElement,
@@ -2833,7 +2836,9 @@ async function start(): Promise<void> {
       persistDrafts();
     }
     state.current = null;
+    state.contextBreakdown = null;
     el.contextMeter.hidden = true;
+    el.contextPop.hidden = true;
     el.dayJump.hidden = true;
     el.chatActions.hidden = true;
     el.chatTitle.textContent = t.session.newTitle;
@@ -3427,6 +3432,16 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     event.stopPropagation();
     togglePersonalityPop();
   });
+  el.contextMeter.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleContextPop();
+  });
+  document.addEventListener("click", (event) => {
+    if (el.contextPop.hidden) return;
+    const target = event.target as Node;
+    if (el.contextPop.contains(target) || el.contextMeter.contains(target)) return;
+    el.contextPop.hidden = true;
+  });
   el.personalityPop.addEventListener("click", (event) => {
     const item = (event.target as HTMLElement).closest(".slash-item") as HTMLElement | null;
     if (!item) return;
@@ -3839,33 +3854,101 @@ function formatTokens(count: number): string {
   return String(count);
 }
 
-/** P359: chat-header context meter — the current session's total
- * tokens against the gateway model's effective context window. */
+/** P359/P624: chat-header context meter — live context-window usage
+ * from the gateway's breakdown endpoint (hermes context_percent; the
+ * old meter showed cumulative throughput tokens, which grow forever and
+ * are not context size). */
 async function updateContextMeter(): Promise<void> {
   if (!state.client || !state.current) {
     el.contextMeter.hidden = true;
+    state.contextBreakdown = null;
     return;
   }
   try {
-    const [usage, info] = await Promise.all([
-      state.client.usage(100),
-      state.client.modelInfo(),
-    ]);
-    const row = usage.sessions.find((session) => session.id === state.current!.id);
-    const windowSize = info.context?.effective || 0;
-    if (!row || windowSize <= 0) {
+    const breakdown = await state.client.sessionContextBreakdown(state.current.id);
+    state.contextBreakdown = breakdown;
+    if (breakdown.context_max <= 0) {
       el.contextMeter.hidden = true;
       return;
     }
-    const pct = Math.min(100, Math.round((row.total_tokens / windowSize) * 100));
+    const pct = breakdown.context_percent;
     el.contextMeterFill.style.width = `${pct}%`;
     el.contextMeterText.textContent = `${pct}%`;
-    el.contextMeter.title = `${formatTokens(row.total_tokens)} / ${formatTokens(windowSize)} tokens`;
+    el.contextMeter.title = `${formatTokens(breakdown.context_used)} / ${formatTokens(breakdown.context_max)} tokens`;
     el.contextMeter.classList.toggle("hot", pct >= 80);
     el.contextMeter.hidden = false;
   } catch {
     el.contextMeter.hidden = true;
   }
+}
+
+/** P624: category colors for the context popup's stacked bar (hermes
+ * --context-usage-* variables). */
+const CONTEXT_CATEGORY_COLORS: Record<string, string> = {
+  system_prompt: "#7c6cd8",
+  tool_definitions: "#4a9eff",
+  mcp: "#38b2a3",
+  memory: "#d88a3a",
+  conversation: "#58b85c",
+};
+
+function renderContextPop(): void {
+  const breakdown = state.contextBreakdown;
+  if (!breakdown || breakdown.context_max <= 0) {
+    el.contextPop.innerHTML = `<div class="slash-item">${escapeHtmlInfo(t.contextUsage.noData)}</div>`;
+    return;
+  }
+  const total = breakdown.context_max;
+  const segments = breakdown.categories
+    .map((category) => {
+      const width = Math.max(0.5, (category.tokens / total) * 100);
+      const color = CONTEXT_CATEGORY_COLORS[category.id] ?? "var(--accent, #4a9eff)";
+      return `<span style="width:${width.toFixed(2)}%;background:${color}" title="${escapeHtmlInfo(category.label)}"></span>`;
+    })
+    .join("");
+  const rows = breakdown.categories
+    .map((category) => {
+      const pct = ((category.tokens / total) * 100).toFixed(1);
+      const color = CONTEXT_CATEGORY_COLORS[category.id] ?? "var(--accent, #4a9eff)";
+      return `<div class="notify-history-row"><span><span class="ctx-dot" style="background:${color}"></span>${escapeHtmlInfo(category.label)}</span><span>${formatTokens(category.tokens)} \u00B7 ${pct}%</span></div>`;
+    })
+    .join("");
+  const free = Math.max(0, total - breakdown.estimated_total);
+  const freePct = ((free / total) * 100).toFixed(1);
+  el.contextPop.innerHTML = [
+    `<div class="ctx-pop-title">${escapeHtmlInfo(t.contextUsage.title)}</div>`,
+    `<div class="ctx-stack">${segments}</div>`,
+    rows,
+    `<div class="notify-history-row"><span><span class="ctx-dot"></span>${escapeHtmlInfo(t.contextUsage.freeSpace)}</span><span>${formatTokens(free)} \u00B7 ${freePct}%</span></div>`,
+    `<div class="ctx-window">${escapeHtmlInfo(t.contextUsage.window)}: ${formatTokens(breakdown.context_used)} / ${formatTokens(total)} (${breakdown.context_percent}%)</div>`,
+  ].join("");
+}
+
+async function refreshContextPop(): Promise<void> {
+  if (!state.client || !state.current) return;
+  try {
+    state.contextBreakdown = await state.client.sessionContextBreakdown(state.current.id);
+    if (!el.contextPop.hidden) renderContextPop();
+  } catch {
+    // Keep the last snapshot visible on transient errors.
+  }
+}
+
+function toggleContextPop(): void {
+  if (!el.contextPop.hidden) {
+    el.contextPop.hidden = true;
+    return;
+  }
+  renderContextPop();
+  const rect = el.contextMeter.getBoundingClientRect();
+  el.contextPop.style.position = "fixed";
+  el.contextPop.style.left = `${Math.max(8, rect.right - 300)}px`;
+  el.contextPop.style.top = `${rect.bottom + 6}px`;
+  el.contextPop.style.right = "auto";
+  el.contextPop.style.bottom = "auto";
+  el.contextPop.style.minWidth = "280px";
+  el.contextPop.hidden = false;
+  void refreshContextPop();
 }
 
 // ---------------------------------------------------------------------------
