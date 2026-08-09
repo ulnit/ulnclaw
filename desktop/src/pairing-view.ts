@@ -4,7 +4,7 @@
 // approved grants with revoke, lockout badges and a clear-pending
 // action.
 
-import type { GatewayClient, PairingPlatform } from "./gateway";
+import type { GatewayClient, MessagingPlatform, PairingPlatform } from "./gateway";
 import { t } from "./i18n";
 
 function escapeHtml(text: string): string {
@@ -31,6 +31,10 @@ export class PairingViewWidget {
       </header>
       <div id="pairing-view-status" class="config-status" hidden></div>
       <div id="pairing-view-body"></div>
+      <section id="pairing-platforms" hidden>
+        <h3 class="config-section" data-i18n="pairingView.platformsTitle">Messaging platforms</h3>
+        <div id="pairing-platforms-rows"></div>
+      </section>
     `;
     this.root.querySelector("#pairing-view-refresh")!.addEventListener("click", () => {
       this.refresh().catch(() => undefined);
@@ -65,6 +69,7 @@ export class PairingViewWidget {
       const platforms = await client.pairingStatus();
       this.render(platforms);
       this.status("");
+      this.loadPlatforms().catch(() => undefined);
     } catch (error) {
       this.status(
         t.pairingView.loadFailed.replace(
@@ -74,6 +79,107 @@ export class PairingViewWidget {
         true,
       );
     }
+  }
+
+  /** P650: messaging-platform cards (hermes messaging page parity):
+   * posture badge, enable/disable toggle, probe test, env chips, docs. */
+  private async loadPlatforms(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#pairing-platforms") as HTMLElement;
+    const rows = this.root.querySelector("#pairing-platforms-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    let platforms: MessagingPlatform[];
+    try {
+      platforms = await client.messagingPlatforms();
+    } catch {
+      section.hidden = true;
+      return;
+    }
+    const v = t.pairingView;
+    rows.innerHTML = "";
+    const enabledFirst = [...platforms].sort(
+      (a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name),
+    );
+    for (const platform of enabledFirst) {
+      const row = document.createElement("div");
+      row.className = "monitoring-row pairing-platform-row";
+
+      const label = document.createElement("span");
+      label.className = "monitoring-label";
+      const badge = document.createElement("span");
+      badge.className = `models-view-badge ${platform.state === "connected" ? "ok" : platform.enabled ? "warn" : ""}`;
+      badge.textContent = platform.state;
+      const name = document.createElement("strong");
+      name.textContent = platform.name;
+      label.append(badge, document.createTextNode(" "), name);
+      label.title = platform.description;
+
+      const value = document.createElement("span");
+      value.className = "monitoring-value pairing-platform-value";
+
+      const missingEnv = platform.env_vars.filter((envVar) => envVar.required && !envVar.is_set);
+      const note = document.createElement("span");
+      note.className = "jobs-counts";
+      note.textContent = platform.configured
+        ? ""
+        : `${t.channelsPanel.stateNotConfigured}${missingEnv.length ? ` · ${missingEnv.map((envVar) => envVar.key).join(", ")}` : ""}`;
+      value.appendChild(note);
+
+      const toggle = document.createElement("button");
+      toggle.className = "ghost";
+      toggle.textContent = platform.enabled ? v.disableAction : v.enableAction;
+      toggle.onclick = async () => {
+        toggle.disabled = true;
+        try {
+          await client.messagingPlatformUpdate(platform.id, { enabled: !platform.enabled });
+          await this.loadPlatforms();
+        } catch (error) {
+          this.status(
+            v.platformsFailed.replace(
+              "{error}",
+              error instanceof Error ? error.message : String(error),
+            ),
+            true,
+          );
+          toggle.disabled = false;
+        }
+      };
+      value.appendChild(toggle);
+
+      if (platform.enabled) {
+        const test = document.createElement("button");
+        test.className = "ghost";
+        test.textContent = t.channelsPanel.test;
+        test.onclick = async () => {
+          test.disabled = true;
+          try {
+            const result = await client.messagingPlatformTest(platform.id);
+            note.textContent = result.message;
+          } catch (error) {
+            note.textContent = error instanceof Error ? error.message : String(error);
+          } finally {
+            test.disabled = false;
+          }
+        };
+        value.appendChild(test);
+      }
+
+      if (platform.docs_url) {
+        const docs = document.createElement("a");
+        docs.href = platform.docs_url;
+        docs.target = "_blank";
+        docs.rel = "noopener";
+        docs.textContent = v.docsWord;
+        value.appendChild(docs);
+      }
+
+      row.append(label, value);
+      rows.appendChild(row);
+    }
+    section.hidden = false;
   }
 
   private render(platforms: PairingPlatform[]): void {

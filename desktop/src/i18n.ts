@@ -228,6 +228,7 @@ export interface Translations {
     pendingTitle: string; approvedTitle: string; age: string; approve: string; revoke: string;
     emptyPlatform: string; approvedNote: string; approveFailed: string; revokedNote: string;
     revokeFailed: string; clearedNote: string;
+    platformsTitle: string; enableAction: string; disableAction: string; docsWord: string; platformsFailed: string;
   };
   profilesView: {
     count: string; empty: string; new: string; loadFailed: string; restartNote: string;
@@ -664,6 +665,7 @@ const en: Translations = {
     emptyPlatform: "No pending or approved pairings.", approvedNote: "Approved {code}.",
     approveFailed: "Approve failed: {error}", revokedNote: "Revoked {user}.",
     revokeFailed: "Revoke failed: {error}", clearedNote: "Cleared {count} pending code(s).",
+    platformsTitle: "Messaging platforms", enableAction: "Enable", disableAction: "Disable", docsWord: "docs", platformsFailed: "Platform update failed: {error}",
   },
   profilesView: {
     count: "{count} profile(s)", empty: "No profiles yet — create one to override the model or toolsets for specific workflows.",
@@ -1218,6 +1220,7 @@ const zh: Translations = {
     emptyPlatform: "无待批或已批准的配对。", approvedNote: "已批准 {code}。",
     approveFailed: "批准失败:{error}", revokedNote: "已吊销 {user}。",
     revokeFailed: "吊销失败:{error}", clearedNote: "已清除 {count} 个待批配对码。",
+    platformsTitle: "消息平台", enableAction: "启用", disableAction: "停用", docsWord: "文档", platformsFailed: "平台更新失败：{error}",
   },
   profilesView: {
     count: "{count} 个配置档案", empty: "暂无配置档案——创建一个，为特定工作流覆盖模型或工具集。",
@@ -1772,6 +1775,7 @@ const zhHant: Translations = {
     emptyPlatform: "無待批或已核准的配對。", approvedNote: "已核准 {code}。",
     approveFailed: "核准失敗:{error}", revokedNote: "已撤銷 {user}。",
     revokeFailed: "撤銷失敗:{error}", clearedNote: "已清除 {count} 個待批配對碼。",
+    platformsTitle: "訊息平台", enableAction: "啟用", disableAction: "停用", docsWord: "文件", platformsFailed: "平台更新失敗：{error}",
   },
   profilesView: {
     count: "{count} 個配置檔", empty: "尚無配置檔——建立一個，為特定工作流覆蓋模型或工具集。",
@@ -2326,6 +2330,7 @@ const ja: Translations = {
     emptyPlatform: "保留中・承認済みのペアリングはありません。", approvedNote: "{code} を承認しました。",
     approveFailed: "承認に失敗しました: {error}", revokedNote: "{user} を取り消しました。",
     revokeFailed: "取り消しに失敗しました: {error}", clearedNote: "{count} 件の保留コードをクリアしました。",
+    platformsTitle: "メッセージングプラットフォーム", enableAction: "有効化", disableAction: "無効化", docsWord: "ドキュメント", platformsFailed: "プラットフォーム更新に失敗しました: {error}",
   },
   profilesView: {
     count: "{count} 件のプロファイル", empty: "プロファイルはまだありません — 作成すると、特定のワークフロー用にモデルやツールセットを上書きできます。",
@@ -2880,6 +2885,7 @@ const ar: Translations = {
     emptyPlatform: "لا توجد اقترانات معلقة أو معتمدة.", approvedNote: "تم اعتماد {code}.",
     approveFailed: "فشل الاعتماد: {error}", revokedNote: "تم إلغاء {user}.",
     revokeFailed: "فشل الإلغاء: {error}", clearedNote: "تم مسح {count} رمز اقتران معلق.",
+    platformsTitle: "منصات المراسلة", enableAction: "تفعيل", disableAction: "تعطيل", docsWord: "التوثيق", platformsFailed: "فشل تحديث المنصة: {error}",
   },
   profilesView: {
     count: "{count} ملف تعريف", empty: "لا توجد ملفات تعريف بعد — أنشئ واحدًا لتجاوز النموذج أو مجموعات الأدوات لسير عمل معين.",
