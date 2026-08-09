@@ -102,7 +102,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw skills list
 ./ulnclaw skills blueprints    # schedulable skills (skills schedule <name>)
 ./ulnclaw skills scan <name>   # security scan before trusting a skill (--json, --source, --force)
-./ulnclaw cron list          # cron jobs (cron run <id> executes one immediately)
+./ulnclaw cron list          # cron jobs (create/show/pause/resume/run + blueprints catalog — P661)
 ./ulnclaw suggestions        # suggested automations (accept/dismiss/catalog/clear)
 ./ulnclaw moa list           # MoA presets (run: ./ulnclaw moa run "<prompt>")
 ./ulnclaw models providers   # models.dev catalog (list/info/refresh)
@@ -416,7 +416,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 ./ulnclaw skills list
 ./ulnclaw skills blueprints    # 可排程技能（skills schedule <name>）
 ./ulnclaw skills scan <name>   # 信任技能前的安全扫描（--json、--source、--force）
-./ulnclaw cron list          # cron jobs (cron run <id> executes one immediately)
+./ulnclaw cron list          # cron jobs (create/show/pause/resume/run + blueprints catalog — P661)
 ./ulnclaw suggestions        # suggested automations (accept/dismiss/catalog/clear)
 ./ulnclaw moa list           # MoA 预设（运行：./ulnclaw moa run "<prompt>"）
 ./ulnclaw models providers   # models.dev 目录（list/info/refresh）

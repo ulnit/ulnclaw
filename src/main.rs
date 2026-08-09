@@ -2107,6 +2107,37 @@ enum CronAction {
     Resume { id: String },
     /// Run a job once, immediately (unattended: cron approval mode applies)
     Run { id: String },
+    /// Create a cron job (hermes `cron create`)
+    Create {
+        /// Job name
+        #[arg(long)]
+        name: String,
+        /// Schedule: cron expression, `@every 30m`, or `@at <unix-ts>`
+        #[arg(long)]
+        schedule: String,
+        /// Prompt the agent runs each fire
+        #[arg(long)]
+        prompt: String,
+        /// Delivery target: origin/local/platform/platform:chat[:thread]/all
+        #[arg(long)]
+        deliver: Option<String>,
+        /// Skills to load, comma-separated
+        #[arg(long)]
+        skills: Option<String>,
+        /// Runs remaining (omit = forever)
+        #[arg(long)]
+        repeat: Option<i64>,
+    },
+    /// Show one job in full (hermes `cron show`)
+    Show { id: String },
+    /// Automation blueprints: list the catalog, or fill + create one
+    /// inline (hermes `cron blueprints`)
+    Blueprints {
+        /// Blueprint name (omit to list the catalog)
+        name: Option<String>,
+        /// Inline slot values (slot=val …)
+        values: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -12287,6 +12318,108 @@ async fn cron_cmd(config: &UlncLawConfig, action: CronAction) -> Result<(), Stri
                     store.update(&job).ok();
                     return Err(e.to_string());
                 }
+            }
+        }
+        CronAction::Create { name, schedule, prompt, deliver, skills, repeat } => {
+            // P661: hermes `cron create` parity.
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return Err("name must not be empty".into());
+            }
+            let schedule = schedule.trim().to_string();
+            let parsed = ulnclaw::cron::parse_schedule(&schedule)
+                .map_err(|e| format!("invalid schedule '{}': {}", schedule, e))?;
+            if let Some(repeat) = repeat {
+                if repeat < 1 {
+                    return Err("repeat must be a positive integer".into());
+                }
+            }
+            let deliver = deliver.as_deref().map(|raw| {
+                ulnclaw::cron::delivery::normalize_deliver_value(Some(
+                    &serde_json::Value::String(raw.to_string()),
+                ))
+            });
+            let job = ulnclaw::cron::CronJob {
+                id: uuid::Uuid::new_v4().simple().to_string()[..12].to_string(),
+                name,
+                schedule,
+                prompt,
+                skills: skills
+                    .as_deref()
+                    .map(|raw| {
+                        raw.split(',')
+                            .map(str::trim)
+                            .filter(|skill| !skill.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                enabled: true,
+                repeat,
+                next_run: ulnclaw::cron::next_run(&parsed),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0),
+                last_run: None,
+                last_status: None,
+                deliver,
+                origin: None,
+                last_delivery_error: None,
+            };
+            let id = job.id.clone();
+            store.add(&job).map_err(|e| e.to_string())?;
+            println!("created cron job {id}");
+        }
+        CronAction::Show { id } => {
+            // P661: hermes `cron show` parity.
+            let Some(job) = store.get(&id).map_err(|e| e.to_string())? else {
+                return Err(format!("job '{}' not found", id));
+            };
+            println!("id:       {}", job.id);
+            println!("name:     {}", job.name);
+            println!("schedule: {}", job.schedule);
+            println!("enabled:  {}", job.enabled);
+            if let Some(repeat) = job.repeat {
+                println!("repeat:   {repeat} run(s) remaining");
+            }
+            if let Some(deliver) = &job.deliver {
+                println!("deliver:  {deliver}");
+            }
+            if !job.skills.is_empty() {
+                println!("skills:   {}", job.skills.join(", "));
+            }
+            if let Some(next) = job.next_run {
+                println!("next:     {next}");
+            }
+            if let Some(last) = job.last_run {
+                println!("last:     {last}");
+            }
+            if let Some(status) = &job.last_status {
+                println!("status:   {status}");
+            }
+            if let Some(err) = &job.last_delivery_error {
+                println!("deliver-error: {err}");
+            }
+            println!("prompt:");
+            println!("{}", job.prompt);
+        }
+        CronAction::Blueprints { name, values } => {
+            // P661: hermes `cron blueprints` parity — the catalog or a
+            // direct fill+create; guided setup lives in the REPL
+            // /blueprint command (it needs an agent turn).
+            let mut args = String::new();
+            if let Some(name) = name {
+                args.push_str(&name);
+                for value in values {
+                    args.push(' ');
+                    args.push_str(&value);
+                }
+            }
+            let result = ulnclaw::cron::blueprints::handle_blueprint_command(&args);
+            println!("{}", result.text);
+            if result.agent_seed.is_some() {
+                println!("(guided setup needs a chat — run /blueprint {args} in the REPL)");
             }
         }
     }

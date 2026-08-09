@@ -178,6 +178,39 @@ pub fn parse_schedule(raw: &str) -> Result<Schedule> {
         return Err(AgentError::config("empty schedule"));
     }
 
+    // Hermes-style @-aliases: `@every 30m`, `@at <unix-ts>`, and the
+    // classic cron macros (`@hourly`, `@daily`, `@weekly`, `@monthly`,
+    // `@yearly`/`@annually`).
+    if let Some(rest) = raw.strip_prefix('@') {
+        let rest = rest.trim();
+        if let Some(interval) = rest.strip_prefix("every") {
+            return parse_schedule(interval.trim());
+        }
+        if let Some(at) = rest.strip_prefix("at") {
+            let at = at.trim();
+            let ts: f64 = at
+                .parse()
+                .map_err(|_| AgentError::config(format!("bad @at timestamp '{}'", at)))?;
+            return Ok(Schedule::OneShot(ts));
+        }
+        let cron = match rest {
+            "hourly" => "0 * * * *",
+            "daily" | "midnight" => "0 0 * * *",
+            "weekly" => "0 0 * * 0",
+            "monthly" => "0 0 1 * *",
+            "yearly" | "annually" => "0 0 1 1 *",
+            other => {
+                return Err(AgentError::config(format!(
+                    "unknown @schedule '{}' (use @every 30m, @at <unix-ts>, or a cron expression)",
+                    other
+                )))
+            }
+        };
+        return CronExpr::parse(cron)
+            .map(Schedule::Cron)
+            .map_err(|e| AgentError::config(format!("schedule '{}': {}", raw, e)));
+    }
+
     // ISO timestamp one-shot (starts with YYYY-...).
     if raw.len() >= 10 && raw.as_bytes()[4] == b'-' && raw.chars().take(4).all(|c| c.is_ascii_digit()) {
         let naive = NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S")
@@ -544,6 +577,24 @@ mod tests {
         assert_eq!(parse_schedule("every 2h").unwrap(), Schedule::Interval(7200));
         assert_eq!(parse_schedule("1d").unwrap(), Schedule::Interval(86400));
         assert!(parse_schedule("5s").is_err()); // below minimum
+    }
+
+    #[test]
+    fn test_parse_at_aliases() {
+        // P661: hermes-style @every / @at / cron macros.
+        assert_eq!(parse_schedule("@every 30m").unwrap(), Schedule::Interval(1800));
+        assert_eq!(parse_schedule("@every 2h").unwrap(), Schedule::Interval(7200));
+        assert_eq!(parse_schedule("@at 1893456000").unwrap(), Schedule::OneShot(1893456000.0));
+        match parse_schedule("@daily").unwrap() {
+            Schedule::Cron(e) => {
+                assert_eq!(e.minutes, vec![0]);
+                assert_eq!(e.hours, vec![0]);
+            }
+            other => panic!("expected cron, got {:?}", other),
+        }
+        assert!(matches!(parse_schedule("@hourly").unwrap(), Schedule::Cron(_)));
+        assert!(parse_schedule("@fortnightly").is_err());
+        assert!(parse_schedule("@at not-a-number").is_err());
     }
 
     #[test]
