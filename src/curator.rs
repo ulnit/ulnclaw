@@ -206,6 +206,91 @@ pub fn set_paused(home: &Path, paused: bool) {
     }
 }
 
+const CURATOR_SLASH_USAGE: &str = "(o_o) usage: /curator [status|run [--dry-run]|pause|resume|pin <skill>|unpin <skill>|archive <skill>|restore <skill>|list-archived]\n";
+
+/// Shared `/curator` dispatch for REPL and gateway (P670 — hermes
+/// `/curator` parity): background skill-maintenance controls from the
+/// chat prompt. One formatted string back, no process spawn.
+pub fn run_slash(home: &Path, rest: &str) -> String {
+    let mut parts = rest.split_whitespace();
+    let sub = parts.next().unwrap_or("status");
+    match sub {
+        "status" => {
+            let mut out = String::new();
+            for (label, count) in status_summary(home) {
+                out.push_str(&format!("  {:<28} {}\n", label, count));
+            }
+            out.push_str(&format!(
+                "  {:<28} {}\n",
+                "paused",
+                if is_paused(home) { "yes" } else { "no" }
+            ));
+            out
+        }
+        "run" => {
+            let dry_run = parts.any(|token| token == "--dry-run" || token == "dry-run");
+            if is_paused(home) && !dry_run {
+                return "(._.) curator is paused — resume it first (/curator resume)\n".to_string();
+            }
+            let counts = apply_automatic_transitions(home, dry_run);
+            format!(
+                "curator: checked={} stale={} archived={} reactivated={}{}\n",
+                counts.checked,
+                counts.marked_stale,
+                counts.archived,
+                counts.reactivated,
+                if dry_run { " (dry-run)" } else { "" }
+            )
+        }
+        "pause" => {
+            set_paused(home, true);
+            "⏸ curator paused (auto-transition passes will not apply)\n".to_string()
+        }
+        "resume" => {
+            set_paused(home, false);
+            "▶ curator resumed\n".to_string()
+        }
+        "pin" | "unpin" => {
+            let Some(skill) = parts.next() else {
+                return format!("(o_o) usage: /curator {sub} <skill>\n");
+            };
+            crate::skill_usage::set_pinned(home, skill, sub == "pin");
+            if sub == "pin" {
+                format!("📌 pinned '{skill}' (bypasses auto-transitions)\n")
+            } else {
+                format!("unpinned '{skill}'\n")
+            }
+        }
+        "archive" | "restore" => {
+            let Some(skill) = parts.next() else {
+                return format!("(o_o) usage: /curator {sub} <skill>\n");
+            };
+            let (ok, message) = if sub == "archive" {
+                crate::skill_usage::archive_skill(home, skill)
+            } else {
+                crate::skill_usage::restore_skill(home, skill)
+            };
+            if ok {
+                format!("✓ {message}\n")
+            } else {
+                format!("(._.) {message}\n")
+            }
+        }
+        "list-archived" | "archived" => {
+            let names = crate::skill_usage::list_archived_skill_names(home);
+            if names.is_empty() {
+                return "(o_o) no archived skills.\n".to_string();
+            }
+            let mut out = format!("{} archived skill(s) — /curator restore <name> to recover:\n", names.len());
+            for name in names {
+                out.push_str(&format!("  {name}\n"));
+            }
+            out
+        }
+        _ => CURATOR_SLASH_USAGE.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,5 +515,47 @@ mod tests {
             vec!["demo".to_string()]
         );
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn curator_slash_status_pause_pin_archive_flow() {
+        // P670: /curator slash end-to-end over a temp home.
+        let home = temp_home();
+        make_skill(&home, "demo-skill");
+
+        // Default = status: summary rows + paused flag.
+        let out = run_slash(&home, "");
+        assert!(out.contains("paused"), "{out}");
+
+        // Pause blocks a real run but not a dry-run.
+        let out = run_slash(&home, "pause");
+        assert!(out.contains("paused"), "{out}");
+        assert!(is_paused(&home));
+        let out = run_slash(&home, "run");
+        assert!(out.contains("resume it first"), "{out}");
+        let out = run_slash(&home, "run --dry-run");
+        assert!(out.contains("dry-run"), "{out}");
+        let out = run_slash(&home, "resume");
+        assert!(out.contains("resumed"), "{out}");
+
+        // Pin → archive refuses; unpin → archive + list + restore.
+        let out = run_slash(&home, "pin demo-skill");
+        assert!(out.contains("pinned"), "{out}");
+        let out = run_slash(&home, "archive demo-skill");
+        assert!(out.contains("pinned"), "{out}");
+        let out = run_slash(&home, "unpin demo-skill");
+        assert!(out.contains("unpinned"), "{out}");
+        let out = run_slash(&home, "archive demo-skill");
+        assert!(out.contains("archived to"), "{out}");
+        let out = run_slash(&home, "list-archived");
+        assert!(out.contains("demo-skill"), "{out}");
+        let out = run_slash(&home, "restore demo-skill");
+        assert!(out.contains("restored"), "{out}");
+        let out = run_slash(&home, "list-archived");
+        assert!(out.contains("no archived skills"), "{out}");
+
+        // Usage fallback.
+        let out = run_slash(&home, "bogus");
+        assert!(out.contains("usage:"), "{out}");
     }
 }
