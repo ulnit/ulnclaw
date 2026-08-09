@@ -92,6 +92,13 @@ export class DoctorWidget {
       <section id="doctor-terminal" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="terminalPanel.title">Terminal</h3>
         <div id="terminal-rows"></div>
+        <div id="terminal-editor" class="monitoring-row" hidden>
+          <select id="terminal-edit-key" class="ghost"></select>
+          <input id="terminal-edit-value" class="ghost" />
+          <button id="terminal-edit-apply" class="ghost mcp-add-btn" data-i18n="terminalPanel.apply">Apply</button>
+          <button id="terminal-edit-clear" class="ghost mcp-add-btn" data-i18n="terminalPanel.clear">Clear</button>
+          <span id="terminal-edit-status" class="monitoring-value"></span>
+        </div>
       </section>
       <section id="doctor-display" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="displayPanel.title">Display settings</h3>
@@ -2584,6 +2591,55 @@ export class DoctorWidget {
         payload.env_passthrough_count > 0 ? String(payload.env_passthrough_count) : off,
       );
       addRow(t.terminalPanel.sessionCwd, escapeHtmlDoctor(payload.session_cwd));
+      // P739: terminal settings editor — pick a key, type the value,
+      // Apply persists through PUT /api/terminal, Clear removes the
+      // override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#terminal-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#terminal-edit-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#terminal-edit-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#terminal-edit-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#terminal-edit-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#terminal-edit-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = [
+          "backend",
+          "cwd",
+          "container",
+          "image",
+          "ssh_host",
+          "ssh_user",
+          "ssh_port",
+          "ssh_identity",
+          "timeout",
+          "foreground_max_timeout",
+          "docker_mount_cwd_to_workspace",
+        ];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | number | boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateTerminal(keySel.value, value);
+            await this.loadTerminal();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number | boolean =
+            raw === "true" ? true : raw === "false" ? false : /^-?\d+$/.test(raw) ? Number(raw) : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

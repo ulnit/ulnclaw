@@ -2586,6 +2586,23 @@ export class GatewayClient {
     return (await response.json()) as CgroupInfoPayload;
   }
 
+  /** PUT /api/terminal — P739 persist a terminal setting (null removes). */
+  async updateTerminal(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/terminal"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `terminal PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; removed: boolean };
+  }
+
   /** GET /api/terminal — P732 resolved terminal backend config. */
   async terminalInfo(): Promise<TerminalInfoPayload> {
     const response = await fetch(this.endpoint("/api/terminal"), {

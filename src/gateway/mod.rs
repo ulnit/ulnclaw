@@ -5718,6 +5718,105 @@ async fn update_display_api(
     }
 }
 
+/// `PUT /api/terminal` — P739: persist terminal backend settings from
+/// the shell. Body: `{"key": "backend"|"cwd"|"container"|...,
+/// "value": ...|null}` — null removes the key (falls back to the
+/// default). Backend values are validated against local/docker/ssh.
+async fn update_terminal_api(
+    State(_state): State<Arc<GatewayState>>,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "backend",
+        "cwd",
+        "container",
+        "image",
+        "ssh_host",
+        "ssh_user",
+        "ssh_port",
+        "ssh_identity",
+        "timeout",
+        "foreground_max_timeout",
+        "docker_mount_cwd_to_workspace",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown terminal key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    // Type validation before touching the config file.
+    if let Some(v) = value {
+        if !v.is_null() {
+            let ok = match key.as_str() {
+                "backend" => matches!(
+                    v.as_str(),
+                    Some("local") | Some("docker") | Some("ssh")
+                ),
+                "cwd" | "container" | "image" | "ssh_host" | "ssh_user" | "ssh_identity" => {
+                    v.is_string()
+                }
+                "ssh_port" | "timeout" | "foreground_max_timeout" => {
+                    v.is_u64() || v.is_i64()
+                }
+                "docker_mount_cwd_to_workspace" => v.is_boolean(),
+                _ => false,
+            };
+            if !ok {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("invalid value for terminal key '{key}'") })),
+                );
+            }
+        }
+    }
+    let dotted = format!("terminal.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => {
+            let raw = match v {
+                Value::Bool(b) => b.to_string(),
+                Value::Number(n) => n.to_string(),
+                Value::String(t) => t.clone(),
+                other => other.to_string(),
+            };
+            crate::config_cmd::set_config_value(&dotted, &raw, true).map(|_| ())
+        }
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/status-phrases` — P731 ops surface over the P722
 /// status-phrase catalogs: the resolved global catalog (built-ins +
 /// conventional profile files + `[display.status_phrases]`), which
@@ -7406,7 +7505,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/lifecycle", get(lifecycle_api))
         .route("/api/display", get(display_settings_api).put(update_display_api))
         .route("/api/status-phrases", get(status_phrases_api))
-        .route("/api/terminal", get(terminal_info_api))
+        .route("/api/terminal", get(terminal_info_api).put(update_terminal_api))
         .route("/api/cgroup", get(cgroup_info_api))
         .route("/api/hooks", get(hooks_info_api))
         .route("/api/messaging/platforms", get(messaging_platforms))
@@ -26015,6 +26114,90 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
             // On Linux /proc/self/cgroup is always readable; the v2
             // entry presence is environment dependent.
             assert!(body["cgroup_path"].is_string() || body["cgroup_path"].is_null(), "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_terminal_put_persists_and_validates() {
+        // P739: the terminal editor surface persists backend settings,
+        // validates values, and removes keys with a null value.
+        let _env_guard = crate::models_dev::test_env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("config.toml"), "").unwrap();
+        let prev_home = std::env::var("ULNCLAW_HOME").ok();
+        let prev_env_backend = std::env::var("TERMINAL_ENV").ok();
+        std::env::set_var("ULNCLAW_HOME", temp.path());
+        std::env::remove_var("TERMINAL_ENV");
+
+        let app = router(test_state());
+        // Backend value validation.
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/terminal",
+            r#"{"key": "backend", "value": "carrier-pigeon"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        // Persist docker backend + image.
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/terminal",
+            r#"{"key": "backend", "value": "docker"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/terminal",
+            r#"{"key": "image", "value": "ubuntu:24.04"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/terminal",
+            r#"{"key": "timeout", "value": 300}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        // The GET surface reflects the edits (fresh disk load).
+        let (_, body) = get_json(app.clone(), "/api/terminal", Some("sekret")).await;
+        assert_eq!(body["backend"], "docker", "{body}");
+        assert_eq!(body["image"], "ubuntu:24.04", "{body}");
+        assert_eq!(body["timeout_secs"], 300, "{body}");
+        // Type mismatch rejected.
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/terminal",
+            r#"{"key": "timeout", "value": "soon"}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        // Removal.
+        let (status, body) = put_json(
+            app.clone(),
+            "/api/terminal",
+            r#"{"key": "image", "value": null}"#,
+            "sekret",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/terminal", Some("sekret")).await;
+        assert!(body["image"].is_null(), "{body}");
+
+        match prev_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+        match prev_env_backend {
+            Some(v) => std::env::set_var("TERMINAL_ENV", v),
+            None => std::env::remove_var("TERMINAL_ENV"),
         }
     }
 

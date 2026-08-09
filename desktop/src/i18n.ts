@@ -347,7 +347,7 @@ export interface Translations {
   phrasesPanel: { title: string; catalog: string; statusWord: string; genericWord: string; sample: string; conventional: string; configSection: string; };
   hooksPanel: { title: string; count: string; };
   cgroupPanel: { title: string; supported: string; path: string; pidCount: string; ownPid: string; reapOnExit: string; };
-  terminalPanel: { title: string; backend: string; envOverride: string; configuredCwd: string; placeholder: string; notSet: string; resolvedCwd: string; mountWorkspace: string; container: string; image: string; sshHost: string; timeouts: string; foregroundMax: string; envPassthrough: string; sessionCwd: string; };
+  terminalPanel: { title: string; backend: string; envOverride: string; configuredCwd: string; placeholder: string; notSet: string; resolvedCwd: string; mountWorkspace: string; container: string; image: string; sshHost: string; timeouts: string; foregroundMax: string; envPassthrough: string; sessionCwd: string; apply: string; clear: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -855,7 +855,7 @@ const en: Translations = {
   phrasesPanel: { title: "Status phrases", catalog: "Resolved catalog", statusWord: "status", genericWord: "generic", sample: "Sample", conventional: "Profile phrase files", configSection: "Config section" },
   hooksPanel: { title: "Event hooks", count: "Loaded hooks" },
   cgroupPanel: { title: "Cgroup reaper", supported: "Supported", path: "Cgroup path", pidCount: "PIDs in cgroup", ownPid: "incl. gateway", reapOnExit: "Reap orphans on exit" },
-  terminalPanel: { title: "Terminal", backend: "Backend", envOverride: "env override", configuredCwd: "Configured cwd", placeholder: "placeholder", notSet: "not set", resolvedCwd: "Resolved messaging cwd", mountWorkspace: "Docker cwd mount", container: "Container", image: "Image", sshHost: "SSH host", timeouts: "Timeouts", foregroundMax: "fg max", envPassthrough: "Env passthrough vars", sessionCwd: "Session cwd" },
+  terminalPanel: { title: "Terminal", backend: "Backend", envOverride: "env override", configuredCwd: "Configured cwd", placeholder: "placeholder", notSet: "not set", resolvedCwd: "Resolved messaging cwd", mountWorkspace: "Docker cwd mount", container: "Container", image: "Image", sshHost: "SSH host", timeouts: "Timeouts", foregroundMax: "fg max", envPassthrough: "Env passthrough vars", sessionCwd: "Session cwd", apply: "Apply", clear: "Clear" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1440,7 +1440,7 @@ const zh: Translations = {
   phrasesPanel: { title: "状态短语", catalog: "解析后目录", statusWord: "条状态", genericWord: "条通用", sample: "样例", conventional: "profile 短语文件", configSection: "配置小节" },
   hooksPanel: { title: "事件钩子", count: "已加载钩子" },
   cgroupPanel: { title: "Cgroup 回收器", supported: "支持", path: "Cgroup 路径", pidCount: "cgroup 内进程数", ownPid: "含网关自身", reapOnExit: "退出时回收孤儿进程" },
-  terminalPanel: { title: "终端", backend: "后端", envOverride: "环境变量覆盖", configuredCwd: "配置的工作目录", placeholder: "占位符", notSet: "未设置", resolvedCwd: "解析后的消息目录", mountWorkspace: "Docker cwd 挂载", container: "容器", image: "镜像", sshHost: "SSH 主机", timeouts: "超时", foregroundMax: "前台上限", envPassthrough: "环境变量透传数", sessionCwd: "会话工作目录" },
+  terminalPanel: { title: "终端", backend: "后端", envOverride: "环境变量覆盖", configuredCwd: "配置的工作目录", placeholder: "占位符", notSet: "未设置", resolvedCwd: "解析后的消息目录", mountWorkspace: "Docker cwd 挂载", container: "容器", image: "镜像", sshHost: "SSH 主机", timeouts: "超时", foregroundMax: "前台上限", envPassthrough: "环境变量透传数", sessionCwd: "会话工作目录", apply: "应用", clear: "清除" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2025,7 +2025,7 @@ const zhHant: Translations = {
   phrasesPanel: { title: "狀態短語", catalog: "解析後目錄", statusWord: "條狀態", genericWord: "條通用", sample: "範例", conventional: "profile 短語檔案", configSection: "配置小節" },
   hooksPanel: { title: "事件掛鉤", count: "已載入掛鉤" },
   cgroupPanel: { title: "Cgroup 回收器", supported: "支援", path: "Cgroup 路徑", pidCount: "cgroup 內程序數", ownPid: "含閘道自身", reapOnExit: "結束時回收孤兒程序" },
-  terminalPanel: { title: "終端", backend: "後端", envOverride: "環境變數覆蓋", configuredCwd: "配置的工作目錄", placeholder: "佔位符", notSet: "未設定", resolvedCwd: "解析後的消息目錄", mountWorkspace: "Docker cwd 掛載", container: "容器", image: "映像", sshHost: "SSH 主機", timeouts: "逾時", foregroundMax: "前台上限", envPassthrough: "環境變數透傳數", sessionCwd: "工作階段目錄" },
+  terminalPanel: { title: "終端", backend: "後端", envOverride: "環境變數覆蓋", configuredCwd: "配置的工作目錄", placeholder: "佔位符", notSet: "未設定", resolvedCwd: "解析後的消息目錄", mountWorkspace: "Docker cwd 掛載", container: "容器", image: "映像", sshHost: "SSH 主機", timeouts: "逾時", foregroundMax: "前台上限", envPassthrough: "環境變數透傳數", sessionCwd: "工作階段目錄", apply: "套用", clear: "清除" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2610,7 +2610,7 @@ const ja: Translations = {
   phrasesPanel: { title: "ステータスフレーズ", catalog: "解決済みカタログ", statusWord: "ステータス", genericWord: "汎用", sample: "サンプル", conventional: "プロファイルフレーズファイル", configSection: "設定セクション" },
   hooksPanel: { title: "イベントフック", count: "読み込み済みフック" },
   cgroupPanel: { title: "Cgroup リーパー", supported: "対応", path: "Cgroup パス", pidCount: "cgroup 内 PID 数", ownPid: "ゲートウェイ含む", reapOnExit: "終了時に孤立プロセスを回収" },
-  terminalPanel: { title: "ターミナル", backend: "バックエンド", envOverride: "環境変数オーバーライド", configuredCwd: "設定された cwd", placeholder: "プレースホルダ", notSet: "未設定", resolvedCwd: "解決済みメッセージング cwd", mountWorkspace: "Docker cwd マウント", container: "コンテナ", image: "イメージ", sshHost: "SSH ホスト", timeouts: "タイムアウト", foregroundMax: "前台最大", envPassthrough: "環境変数パススルー数", sessionCwd: "セッション cwd" },
+  terminalPanel: { title: "ターミナル", backend: "バックエンド", envOverride: "環境変数オーバーライド", configuredCwd: "設定された cwd", placeholder: "プレースホルダ", notSet: "未設定", resolvedCwd: "解決済みメッセージング cwd", mountWorkspace: "Docker cwd マウント", container: "コンテナ", image: "イメージ", sshHost: "SSH ホスト", timeouts: "タイムアウト", foregroundMax: "前台最大", envPassthrough: "環境変数パススルー数", sessionCwd: "セッション cwd", apply: "適用", clear: "クリア" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3195,7 +3195,7 @@ const ar: Translations = {
   phrasesPanel: { title: "عبارات الحالة", catalog: "الفهرس المحلول", statusWord: "حالة", genericWord: "عامة", sample: "عينة", conventional: "ملفات العبارات", configSection: "قسم الإعداد" },
   hooksPanel: { title: "خطافات الأحداث", count: "الخطافات المحملة" },
   cgroupPanel: { title: "منظف cgroup", supported: "مدعوم", path: "مسار cgroup", pidCount: "عدد العمليات في cgroup", ownPid: "بما فيها البوابة", reapOnExit: "تنظيف العمليات اليتيمة عند الخروج" },
-  terminalPanel: { title: "الطرفية", backend: "الخلفية", envOverride: "تجاوز بيئي", configuredCwd: "مسار العمل المكون", placeholder: "عنصر نائب", notSet: "غير معين", resolvedCwd: "مسار المراسلة المحلول", mountWorkspace: "تحميل cwd في Docker", container: "الحاوية", image: "الصورة", sshHost: "مضيف SSH", timeouts: "المهلات", foregroundMax: "الحد الأقصى الأمامي", envPassthrough: "متغيرات التمرير البيئي", sessionCwd: "مسار الجلسة" },
+  terminalPanel: { title: "الطرفية", backend: "الخلفية", envOverride: "تجاوز بيئي", configuredCwd: "مسار العمل المكون", placeholder: "عنصر نائب", notSet: "غير معين", resolvedCwd: "مسار المراسلة المحلول", mountWorkspace: "تحميل cwd في Docker", container: "الحاوية", image: "الصورة", sshHost: "مضيف SSH", timeouts: "المهلات", foregroundMax: "الحد الأقصى الأمامي", envPassthrough: "متغيرات التمرير البيئي", sessionCwd: "مسار الجلسة", apply: "تطبيق", clear: "مسح" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",
