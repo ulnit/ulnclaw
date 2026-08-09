@@ -362,6 +362,7 @@ export interface Translations {
   loggingPanel: { title: string; memoryMonitor: string; interval: string; apply: string; clear: string; };
   cronSettingsPanel: { title: string; wrapResponse: string; mirrorDelivery: string; apply: string; clear: string; };
   voicePanel: { title: string; sttEnabled: string; sttEcho: string; sttProvider: string; sttLanguage: string; ttsProvider: string; ttsEdgeVoice: string; apply: string; clear: string; };
+  kanbanSettingsPanel: { title: string; dispatch: string; interval: string; maxSpawn: string; worktrees: string; autoPromote: string; autoDecompose: string; staleTimeout: string; apply: string; clear: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -884,6 +885,7 @@ const en: Translations = {
   loggingPanel: { title: "Logging", memoryMonitor: "Memory monitor", interval: "Monitor cadence", apply: "Apply", clear: "Clear" },
   cronSettingsPanel: { title: "Cron delivery", wrapResponse: "Wrap deliveries", mirrorDelivery: "Mirror to session", apply: "Apply", clear: "Clear" },
   voicePanel: { title: "Voice pipeline", sttEnabled: "Speech-to-text", sttEcho: "Echo transcripts", sttProvider: "STT provider", sttLanguage: "STT language", ttsProvider: "TTS provider", ttsEdgeVoice: "Edge voice", apply: "Apply", clear: "Clear" },
+  kanbanSettingsPanel: { title: "Kanban dispatcher", dispatch: "In-gateway dispatch", interval: "Tick cadence", maxSpawn: "Worker cap", worktrees: "Worktree workspaces", autoPromote: "Auto-promote children", autoDecompose: "Auto-decompose", staleTimeout: "Stale timeout", apply: "Apply", clear: "Clear" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1483,6 +1485,7 @@ const zh: Translations = {
   loggingPanel: { title: "日志", memoryMonitor: "内存监控", interval: "监控周期", apply: "应用", clear: "清除" },
   cronSettingsPanel: { title: "定时投递", wrapResponse: "投递包装", mirrorDelivery: "镜像到会话", apply: "应用", clear: "清除" },
   voicePanel: { title: "语音管线", sttEnabled: "语音转文字", sttEcho: "回显转写", sttProvider: "STT 提供商", sttLanguage: "STT 语言", ttsProvider: "TTS 提供商", ttsEdgeVoice: "Edge 音色", apply: "应用", clear: "清除" },
+  kanbanSettingsPanel: { title: "看板调度器", dispatch: "网关内调度", interval: "心跳周期", maxSpawn: "工作者上限", worktrees: "worktree 工作区", autoPromote: "自动晋升子任务", autoDecompose: "自动分解", staleTimeout: "停滞超时", apply: "应用", clear: "清除" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2082,6 +2085,7 @@ const zhHant: Translations = {
   loggingPanel: { title: "記錄", memoryMonitor: "記憶體監控", interval: "監控週期", apply: "套用", clear: "清除" },
   cronSettingsPanel: { title: "排程投遞", wrapResponse: "投遞包裝", mirrorDelivery: "鏡像到工作階段", apply: "套用", clear: "清除" },
   voicePanel: { title: "語音管線", sttEnabled: "語音轉文字", sttEcho: "回顯轉寫", sttProvider: "STT 供應商", sttLanguage: "STT 語言", ttsProvider: "TTS 供應商", ttsEdgeVoice: "Edge 音色", apply: "套用", clear: "清除" },
+  kanbanSettingsPanel: { title: "看板排程器", dispatch: "閘道內排程", interval: "心跳週期", maxSpawn: "工作者上限", worktrees: "worktree 工作區", autoPromote: "自動晉升子任務", autoDecompose: "自動分解", staleTimeout: "停滯逾時", apply: "套用", clear: "清除" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2681,6 +2685,7 @@ const ja: Translations = {
   loggingPanel: { title: "ログ", memoryMonitor: "メモリモニター", interval: "モニター周期", apply: "適用", clear: "クリア" },
   cronSettingsPanel: { title: "cron 配信", wrapResponse: "配信をラップ", mirrorDelivery: "セッションへミラー", apply: "適用", clear: "クリア" },
   voicePanel: { title: "音声パイプライン", sttEnabled: "音声認識", sttEcho: "文字起こしエコー", sttProvider: "STT プロバイダー", sttLanguage: "STT 言語", ttsProvider: "TTS プロバイダー", ttsEdgeVoice: "Edge ボイス", apply: "適用", clear: "クリア" },
+  kanbanSettingsPanel: { title: "カンバンディスパッチャー", dispatch: "ゲートウェイ内ディスパッチ", interval: "ティック周期", maxSpawn: "ワーカー上限", worktrees: "ワークツリーワークスペース", autoPromote: "子タスク自動昇格", autoDecompose: "自動分解", staleTimeout: "ストールタイムアウト", apply: "適用", clear: "クリア" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3280,6 +3285,7 @@ const ar: Translations = {
   loggingPanel: { title: "السجلات", memoryMonitor: "مراقب الذاكرة", interval: "دورة المراقبة", apply: "تطبيق", clear: "مسح" },
   cronSettingsPanel: { title: "تسليم المهام", wrapResponse: "تغليف التسليم", mirrorDelivery: "عكس إلى الجلسة", apply: "تطبيق", clear: "مسح" },
   voicePanel: { title: "خط الصوت", sttEnabled: "تحويل الصوت إلى نص", sttEcho: "صد النصوص", sttProvider: "موفر STT", sttLanguage: "لغة STT", ttsProvider: "موفر TTS", ttsEdgeVoice: "صوت Edge", apply: "تطبيق", clear: "مسح" },
+  kanbanSettingsPanel: { title: "موزع كانبان", dispatch: "التوزيع داخل البوابة", interval: "دورة النبض", maxSpawn: "حد العمال", worktrees: "مساحات worktree", autoPromote: "ترقية تلقائية للأبناء", autoDecompose: "تفكيك تلقائي", staleTimeout: "مهلة الجمود", apply: "تطبيق", clear: "مسح" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

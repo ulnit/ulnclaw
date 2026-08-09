@@ -212,6 +212,17 @@ export class DoctorWidget {
           <span id="voice-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-kanban-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="kanbanSettingsPanel.title">Kanban dispatcher</h3>
+        <div id="kanban-settings-rows"></div>
+        <div id="kanban-settings-editor" class="monitoring-row" hidden>
+          <select id="kanban-settings-key" class="ghost"></select>
+          <input id="kanban-settings-value" class="ghost" />
+          <button id="kanban-settings-apply" class="ghost mcp-add-btn" data-i18n="kanbanSettingsPanel.apply">Apply</button>
+          <button id="kanban-settings-clear" class="ghost mcp-add-btn" data-i18n="kanbanSettingsPanel.clear">Clear</button>
+          <span id="kanban-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -473,6 +484,7 @@ export class DoctorWidget {
     this.loadLoggingSettings().catch(() => undefined);
     this.loadCronSettings().catch(() => undefined);
     this.loadVoiceSettings().catch(() => undefined);
+    this.loadKanbanSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2556,6 +2568,95 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadKanbanSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-kanban-settings") as HTMLElement;
+    const rows = this.root.querySelector("#kanban-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.kanbanSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(t.kanbanSettingsPanel.dispatch, payload.dispatch_in_gateway ? on : off);
+      addRow(t.kanbanSettingsPanel.interval, `${payload.dispatch_interval_secs}s`);
+      addRow(t.kanbanSettingsPanel.maxSpawn, String(payload.max_spawn));
+      addRow(t.kanbanSettingsPanel.worktrees, payload.worktrees ? on : off);
+      addRow(t.kanbanSettingsPanel.autoPromote, payload.auto_promote_children ? on : off);
+      addRow(
+        t.kanbanSettingsPanel.autoDecompose,
+        payload.auto_decompose
+          ? `${on} \u00b7 ${payload.auto_decompose_per_tick}/tick`
+          : off,
+      );
+      addRow(t.kanbanSettingsPanel.staleTimeout, `${payload.stale_timeout_seconds}s`);
+      // P757: kanban dispatcher editor — pick a key, type the value,
+      // Apply persists through PUT /api/kanban-settings, Clear removes
+      // the override; the panel re-renders from disk state afterwards.
+      const editor = this.root.querySelector("#kanban-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#kanban-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#kanban-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#kanban-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#kanban-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#kanban-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = [
+          "dispatch_in_gateway",
+          "dispatch_interval_secs",
+          "max_spawn",
+          "worktrees",
+          "auto_promote_children",
+          "auto_decompose",
+          "auto_decompose_per_tick",
+          "stale_timeout_seconds",
+        ];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | number | boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateKanbanSetting(keySel.value, value);
+            await this.loadKanbanSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number | boolean =
+            raw === "true" ? true : raw === "false" ? false : /^\d+$/.test(raw) ? Number(raw) : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

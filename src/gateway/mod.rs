@@ -6022,6 +6022,114 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/kanban-settings` — P757: kanban dispatcher knobs for
+/// the shell: in-gateway dispatch switch and cadence, worker
+/// concurrency cap, worktree workspaces, child auto-promotion and the
+/// auto-decompose safety toggle with its per-tick fan-out cap, plus
+/// the stale-task timeout.
+async fn kanban_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let kanban = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .map(|c| c.kanban)
+        .unwrap_or_default();
+    Json(json!({
+        "dispatch_in_gateway": kanban.dispatch_in_gateway,
+        "dispatch_interval_secs": kanban.dispatch_interval_secs,
+        "max_spawn": kanban.max_spawn,
+        "worktrees": kanban.worktrees,
+        "auto_promote_children": kanban.auto_promote_children,
+        "auto_decompose": kanban.auto_decompose,
+        "auto_decompose_per_tick": kanban.auto_decompose_per_tick,
+        "stale_timeout_seconds": kanban.stale_timeout_seconds,
+    }))
+}
+
+/// `PUT /api/kanban-settings` — P757: persist kanban dispatcher knobs
+/// from the shell. Body: `{"key": "dispatch_in_gateway"|
+/// "dispatch_interval_secs"|"max_spawn"|"worktrees"|
+/// "auto_promote_children"|"auto_decompose"|"auto_decompose_per_tick"|
+/// "stale_timeout_seconds", "value": ...|null}` — null removes the key
+/// (falls back to the default). Booleans and positive integers are
+/// type-checked. The dispatcher re-reads most knobs every tick, so
+/// flips apply without a gateway restart.
+async fn update_kanban_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "dispatch_in_gateway",
+        "dispatch_interval_secs",
+        "max_spawn",
+        "worktrees",
+        "auto_promote_children",
+        "auto_decompose",
+        "auto_decompose_per_tick",
+        "stale_timeout_seconds",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown kanban key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    if let Some(v) = value {
+        if !v.is_null() {
+            let ok = match key.as_str() {
+                "dispatch_in_gateway" | "worktrees" | "auto_promote_children"
+                | "auto_decompose" => v.is_boolean(),
+                _ => v.as_u64().map(|n| n >= 1).unwrap_or(false),
+            };
+            if !ok {
+                let expected = if matches!(
+                    key.as_str(),
+                    "dispatch_in_gateway" | "worktrees" | "auto_promote_children" | "auto_decompose"
+                ) {
+                    "a boolean"
+                } else {
+                    "a positive integer"
+                };
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("kanban key '{key}' must be {expected}") })),
+                );
+            }
+        }
+    }
+    let dotted = format!("kanban.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => crate::config_cmd::set_config_value(&dotted, &v.to_string(), true).map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/voice-settings` — P756: voice pipeline knobs for the
 /// shell: the STT master switch, transcript echo, active STT provider
 /// and language hint, plus the TTS provider and edge voice.
@@ -8786,6 +8894,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/logging-settings", get(logging_settings_api).put(update_logging_settings_api))
         .route("/api/cron-settings", get(cron_settings_api).put(update_cron_settings_api))
         .route("/api/voice-settings", get(voice_settings_api).put(update_voice_settings_api))
+        .route("/api/kanban-settings", get(kanban_settings_api).put(update_kanban_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -19959,6 +20068,95 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/voice-settings", Some("sekret")).await;
         assert_eq!(body["tts_provider"], "openai", "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kanban_settings_editor() {
+        // P757: GET /api/kanban-settings surfaces dispatcher knobs; PUT
+        // persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: in-gateway dispatch every 60s, 2 workers, worktrees
+        // on, promote/decompose on (3 per tick), stale after 4h.
+        let (status, body) = get_json(app.clone(), "/api/kanban-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["dispatch_in_gateway"], true, "{body}");
+        assert_eq!(body["dispatch_interval_secs"], 60, "{body}");
+        assert_eq!(body["max_spawn"], 2, "{body}");
+        assert_eq!(body["worktrees"], true, "{body}");
+        assert_eq!(body["auto_promote_children"], true, "{body}");
+        assert_eq!(body["auto_decompose"], true, "{body}");
+        assert_eq!(body["auto_decompose_per_tick"], 3, "{body}");
+        assert_eq!(body["stale_timeout_seconds"], 14400, "{body}");
+
+        // Persist a spread of knobs.
+        for (key, value) in [
+            ("dispatch_interval_secs", json!(30)),
+            ("max_spawn", json!(4)),
+            ("worktrees", json!(false)),
+            ("auto_decompose", json!(false)),
+            ("auto_decompose_per_tick", json!(5)),
+            ("stale_timeout_seconds", json!(7200)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/kanban-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/kanban-settings", Some("sekret")).await;
+        assert_eq!(body["dispatch_interval_secs"], 30, "{body}");
+        assert_eq!(body["max_spawn"], 4, "{body}");
+        assert_eq!(body["worktrees"], false, "{body}");
+        assert_eq!(body["auto_decompose"], false, "{body}");
+        assert_eq!(body["auto_decompose_per_tick"], 5, "{body}");
+        assert_eq!(body["stale_timeout_seconds"], 7200, "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/kanban-settings", Some("sekret"),
+            json!({ "key": "max_spawn", "value": 0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/kanban-settings", Some("sekret"),
+            json!({ "key": "worktrees", "value": "yes" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/kanban-settings", Some("sekret"),
+            json!({ "key": "yolo", "value": 1 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/kanban-settings", Some("sekret"),
+            json!({ "key": "max_spawn", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/kanban-settings", Some("sekret")).await;
+        assert_eq!(body["max_spawn"], 2, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

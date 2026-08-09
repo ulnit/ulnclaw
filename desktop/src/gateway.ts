@@ -628,6 +628,18 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/kanban-settings` — P757 kanban dispatcher knobs. */
+export interface KanbanSettingsPayload {
+  dispatch_in_gateway: boolean;
+  dispatch_interval_secs: number;
+  max_spawn: number;
+  worktrees: boolean;
+  auto_promote_children: boolean;
+  auto_decompose: boolean;
+  auto_decompose_per_tick: number;
+  stale_timeout_seconds: number;
+}
+
 /** `GET /api/voice-settings` — P756 voice pipeline knobs. */
 export interface VoiceSettingsPayload {
   stt_enabled: boolean;
@@ -4094,6 +4106,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/kanban-settings — P757 kanban dispatcher knobs. */
+  async kanbanSettings(): Promise<KanbanSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/kanban-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`kanban-settings HTTP ${response.status}`);
+    return (await response.json()) as KanbanSettingsPayload;
+  }
+
+  /** P757: PUT /api/kanban-settings — persist a dispatcher knob; null
+   * removes the override. */
+  async updateKanbanSetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/kanban-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `kanban-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/voice-settings — P756 voice pipeline knobs. */
