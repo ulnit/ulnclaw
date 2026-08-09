@@ -10066,6 +10066,7 @@ const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /runs            list the tracked runs (newest first)
   /goal [text|status|show|pause|resume|clear]  standing goal (Ralph loop) control
   /subgoal [text|remove N|clear]  extra criteria on the active goal
+  /reload-mcp [confirm]  rebuild the MCP tool surface (confirm when gated)
   /skills          list skills (invoke one: /<skill-name> [instruction])
   /tools           list enabled tools
   /recap           recap this session
@@ -10947,6 +10948,37 @@ async fn resolve_gateway_slash(
                     Ok(text) => Some(GatewaySlash::Direct(format!("added subgoal: {text}"))),
                     Err(e) => Some(GatewaySlash::Direct(format!("/subgoal: {e}"))),
                 },
+            }
+        }
+        "/reload-mcp" => {
+            // Gateway twin of the CLI /reload-mcp (hermes parity).
+            // There is no interactive prompt over HTTP, so the
+            // approvals.mcp_reload_confirm gate becomes a confirm
+            // round-trip: warn first, reload on `/reload-mcp confirm`.
+            let confirm_required = state
+                .agent
+                .context()
+                .config
+                .approvals
+                .mcp_reload_confirm;
+            let confirmed = matches!(
+                rest.trim().to_ascii_lowercase().as_str(),
+                "confirm" | "yes"
+            );
+            if confirm_required && !confirmed {
+                return Some(GatewaySlash::Direct(
+                    "\u{26A0}\u{FE0F} /reload-mcp rebuilds the MCP tool surface and invalidates                      the provider prompt cache (the next message re-sends full input tokens).                      Send `/reload-mcp confirm` to proceed."
+                        .to_string(),
+                ));
+            }
+            match crate::config::UlncLawConfig::load(None) {
+                Ok(fresh_config) => {
+                    let report = state.agent.reload_mcp(&fresh_config).await;
+                    Some(GatewaySlash::Direct(crate::mcp::format_reload_report(
+                        &report,
+                    )))
+                }
+                Err(e) => Some(GatewaySlash::Direct(format!("config load failed: {e}"))),
             }
         }
         _ => {
@@ -14513,6 +14545,26 @@ mod tests {
             reply["response"],
             "No active goal. Set one with /goal <text>."
         );
+    }
+
+    #[tokio::test]
+    async fn test_session_chat_slash_reload_mcp_confirm_flow() {
+        // P623: the confirm gate warns first; `confirm` runs the reload.
+        let state = streaming_state();
+        let sid = state
+            .store
+            .create_session("slash-reload-mcp", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/reload-mcp").await;
+        let text = reply["response"].as_str().unwrap();
+        assert!(text.contains("/reload-mcp confirm"), "{text}");
+
+        let reply = post_chat(app.clone(), &sid, "/reload-mcp confirm").await;
+        let text = reply["response"].as_str().unwrap();
+        // No servers configured in the test home: the report says so.
+        assert!(text.contains("No MCP servers connected."), "{text}");
     }
 
     #[tokio::test]

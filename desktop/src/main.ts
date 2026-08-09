@@ -1974,6 +1974,7 @@ function gatewaySlashCommands(): [string, string][] {
     ["/personality", t.slash.personality],
     ["/goal", t.slash.goal],
     ["/subgoal", t.slash.subgoal],
+    ["/reload-mcp", t.slash.reloadMcp],
   ];
 }
 
