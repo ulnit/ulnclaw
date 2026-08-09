@@ -44,6 +44,8 @@ export class KanbanWidget {
       <header id="kanban-header">
         <select id="kanban-board" title="Switch board" data-i18n-title="kanban.switchBoard"></select>
         <button id="kanban-board-new" class="ghost" title="New board" data-i18n-title="kanban.newBoardAction">+</button>
+        <button id="kanban-board-rename" class="ghost" title="Rename board" data-i18n-title="kanban.renameBoardAction">\u270E</button>
+        <button id="kanban-board-remove" class="ghost" title="Remove board" data-i18n-title="kanban.removeBoardAction">\uD83D\uDDD1</button>
         <span id="kanban-counts" class="kanban-counts"></span>
         <span id="kanban-dispatch-status" class="config-note"></span>
         <span class="spacer"></span>
@@ -150,6 +152,37 @@ export class KanbanWidget {
           this.board = slug.trim();
           void this.refresh();
         });
+      });
+    };
+    // P653: rename / remove the currently selected board.
+    (this.root.querySelector("#kanban-board-rename") as HTMLButtonElement).onclick = () => {
+      const client = this.client();
+      const select = this.root.querySelector("#kanban-board") as HTMLSelectElement;
+      const slug = select.value;
+      if (!client || !slug) return;
+      const name = window.prompt(t.kanban.renameBoardPrompt);
+      if (!name || !name.trim()) return;
+      void client.kanbanRenameBoard(slug, name.trim()).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "rename failed");
+          return;
+        }
+        void this.refresh();
+      });
+    };
+    (this.root.querySelector("#kanban-board-remove") as HTMLButtonElement).onclick = () => {
+      const client = this.client();
+      const select = this.root.querySelector("#kanban-board") as HTMLSelectElement;
+      const slug = select.value;
+      if (!client || !slug) return;
+      if (!window.confirm(t.kanban.removeBoardConfirm.replace("{board}", slug))) return;
+      void client.kanbanRemoveBoard(slug).then((result) => {
+        if (!result.ok) {
+          window.alert(result.error || "remove failed");
+          return;
+        }
+        this.board = "";
+        void this.refresh();
       });
     };
     (this.root.querySelector("#kanban-refresh") as HTMLButtonElement).onclick = () =>

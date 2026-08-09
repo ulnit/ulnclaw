@@ -3645,6 +3645,41 @@ export class GatewayClient {
     return Boolean(value?.ok);
   }
 
+  /** P653: rename a board's display name. */
+  async kanbanRenameBoard(slug: string, name: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/boards/${encodeURIComponent(slug)}/rename`), {
+        headers: { ...this.headers(), "content-type": "application/json" },
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /** P653: remove a board (default board and active tasks refuse). */
+  async kanbanRemoveBoard(slug: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const response = await fetch(this.endpoint(`/api/kanban/boards/${encodeURIComponent(slug)}`), {
+        headers: this.headers(),
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        return { ok: false, error: payload?.error?.message || `HTTP ${response.status}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
   /** P652: create a board (slug required; name + workdir optional). */
   async kanbanCreateBoard(
     slug: string,

@@ -134,6 +134,50 @@ pub struct ListTasksQuery {
     pub limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+pub struct RenameBoardBody {
+    pub name: String,
+}
+
+/// `POST /api/kanban/boards/:slug/rename` — set a board's display
+/// name (hermes `boards rename`).
+pub async fn rename_board(Path(slug): Path<String>, Json(body): Json<RenameBoardBody>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    match store.rename_board(&slug, &body.name) {
+        Ok(()) => Json(json!({ "ok": true, "slug": slug, "name": body.name.trim() })).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                return super::not_found(&msg);
+            }
+            super::bad_request(&msg, None)
+        }
+    }
+}
+
+/// `DELETE /api/kanban/boards/:slug` — remove a board (hermes
+/// `boards rm`): the default board is protected and boards with
+/// non-archived tasks refuse removal.
+pub async fn remove_board(Path(slug): Path<String>) -> Response {
+    let store = match store() {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    match store.remove_board(&slug) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                return super::not_found(&msg);
+            }
+            super::bad_request(&msg, None)
+        }
+    }
+}
+
 /// `GET /api/kanban/tasks` — tasks on a board (default: current board).
 pub async fn list_tasks(Query(query): Query<ListTasksQuery>) -> Response {
     let store = match store() {

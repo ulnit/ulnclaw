@@ -21,6 +21,7 @@
 //!   - `GET/POST /api/projects` (+ `/active`, `/repos`, `/scan`,
 //!     `/:id`, `/:id/folders`, `/:id/primary`, `/:id/archive|restore`),
 //!   - `GET/POST /api/kanban/boards`, `POST /api/kanban/boards/:slug/switch`,
+//!     `POST /api/kanban/boards/:slug/rename`, `DELETE /api/kanban/boards/:slug`,
 //!     `GET/POST /api/kanban/tasks`, `GET /api/kanban/tasks/:id`,
 //!     `POST /api/kanban/tasks/:id/complete|block|unblock|comment|link|unlink|claim`,
 //!     `POST /api/kanban/tasks/:id/set-reasoning`,
@@ -6710,6 +6711,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/projects/:id/restore", post(projects::restore_project))
         .route("/api/kanban/boards", get(kanban::list_boards).post(kanban::create_board))
         .route("/api/kanban/boards/:slug/switch", post(kanban::switch_board))
+        .route("/api/kanban/boards/:slug/rename", post(kanban::rename_board))
+        .route("/api/kanban/boards/:slug", delete(kanban::remove_board))
         .route("/api/kanban/tasks", get(kanban::list_tasks).post(kanban::create_task))
         .route("/api/kanban/dispatch", post(kanban::dispatch))
         .route("/api/kanban/tasks/:id", get(kanban::get_task).delete(kanban::delete_task))
@@ -15357,6 +15360,105 @@ mod tests {
         assert!(body["config"]["capture_after_mode"].is_string(), "{body}");
         // Shallow call never carries a health payload.
         assert!(body.get("health").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn test_kanban_board_rename_remove_endpoints() {
+        // P653: POST .../rename + DELETE /api/kanban/boards/:slug
+        // (hermes boards rename / rm with safety guards).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = streaming_state();
+        let app = router(state.clone());
+
+        // Create a scratch board and rename it.
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/boards", None,
+            json!({"slug": "temp-board", "name": "Temp"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/temp-board/rename", None,
+            json!({"name": "Renamed"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["name"], "Renamed", "{body}");
+
+        // Blank name -> 400; unknown slug -> 404.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/temp-board/rename", None,
+            json!({"name": "   "}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/nope/rename", None,
+            json!({"name": "x"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Default board is protected.
+        let (status, body) = send_json(
+            app.clone(), "DELETE", "/api/kanban/boards/default", None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("default board"), "{body}");
+
+        // A board with an active task refuses removal until archived.
+        let (status, _) = send_json(
+            app.clone(), "POST", "/api/kanban/boards/temp-board/switch", None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = send_json(
+            app.clone(), "POST", "/api/kanban/tasks", None,
+            json!({"title": "blocker"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let task_id = body["task"]["id"].as_str().unwrap().to_string();
+        let (status, body) = send_json(
+            app.clone(), "DELETE", "/api/kanban/boards/temp-board", None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("active task"), "{body}");
+        let (status, _) = send_json(
+            app.clone(), "POST", &format!("/api/kanban/tasks/{task_id}/archive"), None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = send_json(
+            app.clone(), "DELETE", "/api/kanban/boards/temp-board", None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true, "{body}");
+
+        // Removing it again 404s.
+        let (status, _) = send_json(
+            app.clone(), "DELETE", "/api/kanban/boards/temp-board", None, json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]
