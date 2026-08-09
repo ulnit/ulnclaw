@@ -269,6 +269,12 @@ pub struct AgentSettings {
     /// workers pin it per task via the `reasoning_effort` column.
     #[serde(default)]
     pub reasoning_effort: String,
+    /// Priority Processing pin (hermes `agent.service_tier`): "fast"
+    /// sends `service_tier=priority` on every OpenAI-compatible request;
+    /// "normal" or empty keeps the endpoint default. The gateway `/fast`
+    /// slash command and `PUT /api/fast` write this key.
+    #[serde(default)]
+    pub service_tier: String,
     /// System-prompt override (hermes `agent.system_prompt`): replaces
     /// the built-in system prompt when non-empty. The `/personality`
     /// slash command writes the active personality's resolved prompt
@@ -384,6 +390,7 @@ impl Default for AgentSettings {
             verbose: false,
             environment_probe: true,
             reasoning_effort: String::new(),
+            service_tier: String::new(),
             system_prompt: String::new(),
             personality: String::new(),
             personalities: HashMap::new(),

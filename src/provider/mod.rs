@@ -243,6 +243,23 @@ pub trait Provider: Send + Sync {
         false
     }
 
+    /// P625: whether this provider accepts a service-tier override
+    /// (hermes Priority Processing / `/fast`). Default: unsupported.
+    fn supports_service_tier(&self) -> bool {
+        false
+    }
+
+    /// P625: set or clear the runtime service-tier override. `Some(tier)`
+    /// (e.g. "priority") applies to every subsequent request; `None`
+    /// returns to the provider's configured default. Default: no-op.
+    fn set_service_tier(&self, _tier: Option<String>) {}
+
+    /// P625: the service tier in effect right now (override wins over the
+    /// build-time pin). `None` = the endpoint's own default.
+    fn active_service_tier(&self) -> Option<String> {
+        None
+    }
+
     /// Get the model name
     fn model(&self) -> &str;
 

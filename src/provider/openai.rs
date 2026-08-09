@@ -12,6 +12,7 @@ use crate::error::{AgentError, Result};
 use crate::tools::ToolDefinition;
 use async_trait::async_trait;
 use reqwest::Client;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -29,11 +30,31 @@ pub struct OpenAiProvider {
     /// request (hermes `--reasoning` / `agent.reasoning_effort`);
     /// None = the endpoint's own default.
     reasoning_effort: Option<String>,
+    /// Pinned service tier sent as `service_tier` on every request
+    /// (hermes Priority Processing / `agent.service_tier`); None = the
+    /// endpoint's own default.
+    service_tier: Option<String>,
+    /// P625: runtime override set by `/fast` / `PUT /api/fast`;
+    /// `None` outer = use `service_tier`, `Some(inner)` = force inner.
+    service_tier_override: Arc<std::sync::Mutex<Option<Option<String>>>>,
 }
 
 impl OpenAiProvider {
     pub fn builder() -> OpenAiProviderBuilder {
         OpenAiProviderBuilder::default()
+    }
+
+    /// P625: the service tier in effect — runtime override (set by
+    /// `/fast` / `PUT /api/fast`) wins over the build-time pin.
+    fn current_service_tier(&self) -> Option<String> {
+        let guard = self
+            .service_tier_override
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match guard.as_ref() {
+            Some(override_tier) => override_tier.clone(),
+            None => self.service_tier.clone(),
+        }
     }
 
     /// Build the full API URL
@@ -122,6 +143,7 @@ pub struct OpenAiProviderBuilder {
     temperature: Option<f32>,
     max_retries: usize,
     reasoning_effort: Option<String>,
+    service_tier: Option<String>,
 }
 
 impl Default for OpenAiProviderBuilder {
@@ -135,6 +157,7 @@ impl Default for OpenAiProviderBuilder {
             temperature: None,
             max_retries: 2,
             reasoning_effort: None,
+            service_tier: None,
         }
     }
 }
@@ -185,6 +208,13 @@ impl OpenAiProviderBuilder {
         self
     }
 
+    /// Pin the service tier (e.g. "priority") sent on every request;
+    /// None keeps the endpoint default (hermes `agent.service_tier`).
+    pub fn service_tier(mut self, tier: &str) -> Self {
+        self.service_tier = Some(tier.to_string());
+        self
+    }
+
     pub fn build(self) -> Result<OpenAiProvider> {
         let endpoint = self
             .endpoint
@@ -209,6 +239,8 @@ impl OpenAiProviderBuilder {
             temperature: self.temperature,
             max_retries: self.max_retries,
             reasoning_effort: self.reasoning_effort,
+            service_tier: self.service_tier,
+            service_tier_override: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 }
@@ -227,6 +259,8 @@ struct ApiRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<Vec<String>>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -476,6 +510,22 @@ fn tool_def_to_api(tool: &ToolDefinition) -> ApiTool {
 
 #[async_trait]
 impl Provider for OpenAiProvider {
+    fn supports_service_tier(&self) -> bool {
+        true
+    }
+
+    fn set_service_tier(&self, tier: Option<String>) {
+        let mut guard = self
+            .service_tier_override
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Some(tier);
+    }
+
+    fn active_service_tier(&self) -> Option<String> {
+        self.current_service_tier()
+    }
+
     async fn chat_completion(&self, request: ProviderRequest) -> Result<ProviderResponse> {
         let url = self.api_url();
         debug!("OpenAI API call to: {}", url);
@@ -498,6 +548,7 @@ impl Provider for OpenAiProvider {
             max_tokens: request.max_tokens.or(self.max_tokens),
             temperature: request.temperature.or(self.temperature),
             reasoning_effort: self.reasoning_effort.clone(),
+            service_tier: self.active_service_tier(),
             stop: request.stop,
             stream: false,
             stream_options: None,
@@ -567,6 +618,7 @@ impl Provider for OpenAiProvider {
             max_tokens: request.max_tokens.or(self.max_tokens),
             temperature: request.temperature.or(self.temperature),
             reasoning_effort: self.reasoning_effort.clone(),
+            service_tier: self.active_service_tier(),
             stop: request.stop,
             stream: true,
             stream_options: Some(serde_json::json!({"include_usage": true})),
@@ -1025,5 +1077,58 @@ mod streaming_tests {
             user[0].content,
             Some(serde_json::Value::String("hi".to_string()))
         );
+    }
+
+    #[test]
+    fn test_service_tier_builder_override_and_serialization() {
+        use crate::provider::Provider;
+
+        let provider = OpenAiProvider::builder()
+            .endpoint("http://127.0.0.1:9")
+            .model("gpt-5")
+            .service_tier("priority")
+            .build()
+            .expect("provider builds");
+        assert!(provider.supports_service_tier());
+        // Build-time pin is active until overridden.
+        assert_eq!(provider.active_service_tier(), Some("priority".to_string()));
+        // Override to normal (None = endpoint default).
+        provider.set_service_tier(None);
+        assert_eq!(provider.active_service_tier(), None);
+        // Override to a different tier.
+        provider.set_service_tier(Some("flex".to_string()));
+        assert_eq!(provider.active_service_tier(), Some("flex".to_string()));
+
+        // The request payload carries service_tier when set…
+        let request = ApiRequest {
+            model: "gpt-5".to_string(),
+            messages: vec![],
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            reasoning_effort: None,
+            service_tier: Some("priority".to_string()),
+            stop: None,
+            stream: false,
+            stream_options: None,
+        };
+        let value = serde_json::to_value(&request).expect("serializes");
+        assert_eq!(value["service_tier"], "priority");
+
+        // …and omits it when None.
+        let request = ApiRequest {
+            model: "gpt-5".to_string(),
+            messages: vec![],
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            reasoning_effort: None,
+            service_tier: None,
+            stop: None,
+            stream: false,
+            stream_options: None,
+        };
+        let value = serde_json::to_value(&request).expect("serializes");
+        assert!(value.get("service_tier").is_none());
     }
 }

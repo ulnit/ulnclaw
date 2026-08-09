@@ -50,6 +50,12 @@ struct Cli {
     /// only; kanban workers pin it per task.
     #[arg(long, global = true, value_name = "LEVEL")]
     reasoning: Option<String>,
+    /// Priority Processing for this invocation (hermes --fast toggle):
+    /// `--fast` sends service_tier=priority on OpenAI-compatible
+    /// requests. Overrides agent.service_tier from config.toml for this
+    /// run only.
+    #[arg(long, global = true)]
+    fast: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -2166,6 +2172,12 @@ fn load_config(cli: &Cli) -> UlncLawConfig {
             }
         }
     }
+    // CLI --fast wins over config (hermes Priority Processing toggle):
+    // only meaningful for OpenAI-flagship models; other providers ignore
+    // the pin.
+    if cli.fast {
+        config.agent.service_tier = "fast".to_string();
+    }
     // Resolve the active theme once per process (hermes init_skin_from_config).
     ulnclaw::skin::init_skin_from_config(&config);
     config
@@ -2222,6 +2234,11 @@ fn build_provider(
     let effort = config.agent.reasoning_effort.trim();
     if !effort.is_empty() {
         builder = builder.reasoning_effort(effort);
+    }
+    // Priority Processing pin (hermes agent.service_tier): "fast" maps
+    // to service_tier=priority; anything else keeps the endpoint default.
+    if config.agent.service_tier.trim().eq_ignore_ascii_case("fast") {
+        builder = builder.service_tier("priority");
     }
     let provider = builder.build().map_err(|e| e.to_string())?;
     Ok(Arc::new(provider))

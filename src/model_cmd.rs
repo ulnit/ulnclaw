@@ -17,6 +17,27 @@ const MAX_MODEL_ROWS: usize = 40;
 
 /// models.dev catalog id for a ulnclaw provider slug (testable wrapper
 /// around `models_dev::provider_to_models_dev`).
+/// OpenAI flagship prefixes eligible for Priority Processing (hermes
+/// `_OPENAI_FAST_MODE_PREFIXES`).
+const OPENAI_FAST_MODE_PREFIXES: &[&str] = &["gpt-", "o1", "o3", "o4"];
+
+/// Whether the `/fast` toggle should be offered for this model (hermes
+/// `model_supports_fast_mode`): OpenAI-flagship chat models only. The
+/// Codex series is excluded (its Responses API path does not accept
+/// `service_tier`), and vendor prefixes like `openai/gpt-5` are
+/// stripped before matching.
+pub fn model_supports_fast_mode(model_id: &str) -> bool {
+    let raw = model_id.trim().to_ascii_lowercase();
+    let base = raw.rsplit('/').next().unwrap_or(&raw);
+    let base = base.split(':').next().unwrap_or(base);
+    if base.is_empty() || base.contains("codex") {
+        return false;
+    }
+    OPENAI_FAST_MODE_PREFIXES
+        .iter()
+        .any(|prefix| base.starts_with(prefix))
+}
+
 pub fn models_dev_id_for(provider: &str) -> Option<&'static str> {
     md::provider_to_models_dev(provider)
 }
@@ -242,5 +263,23 @@ mod tests {
         }
         let err = run_model_picker(false).unwrap_err();
         assert!(err.contains("interactive TTY"), "{err}");
+    }
+
+    #[test]
+    fn fast_mode_gate_matches_openai_flagships() {
+        assert!(model_supports_fast_mode("gpt-5"));
+        assert!(model_supports_fast_mode("gpt-4.1-mini"));
+        assert!(model_supports_fast_mode("o3"));
+        assert!(model_supports_fast_mode("o4-mini"));
+        // Vendor prefixes and case are normalized.
+        assert!(model_supports_fast_mode("openai/gpt-5"));
+        assert!(model_supports_fast_mode("OpenAI/GPT-5"));
+        // Codex series routes a different API path.
+        assert!(!model_supports_fast_mode("codex-mini-latest"));
+        assert!(!model_supports_fast_mode("gpt-5-codex"));
+        // Non-OpenAI families are not eligible.
+        assert!(!model_supports_fast_mode("claude-opus-4-6"));
+        assert!(!model_supports_fast_mode("llama3"));
+        assert!(!model_supports_fast_mode(""));
     }
 }

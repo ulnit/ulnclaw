@@ -26,6 +26,7 @@
 //!     — kanban board API shared with the CLI + agent tools
 //!   - `GET  /api/sessions/:id/recap` — instant local activity recap
 //!   - `GET  /api/sessions/:id/context` — live context-window breakdown
+//!   - `GET/PUT /api/fast` — Priority Processing (service_tier) toggle
 //!   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`,
 //!     `POST /v1/runs/:id/stop`
 //!   - `GET/POST /api/jobs`, `GET/PATCH/DELETE /api/jobs/{id}`,
@@ -1467,6 +1468,38 @@ fn persist_reasoning_effort(
     Ok(normalized)
 }
 
+/// Persist `agent.service_tier` in config.toml ("fast" or "normal";
+/// hermes `/fast --global`). Shared by the `/fast` slash command and
+/// `PUT /api/fast` (P625). Returns the normalized value written.
+fn persist_service_tier(mode: &str) -> std::result::Result<String, String> {
+    let normalized = match mode.trim().to_ascii_lowercase().as_str() {
+        "fast" | "on" | "priority" => "fast".to_string(),
+        "normal" | "off" | "default" | "" => "normal".to_string(),
+        other => {
+            return Err(format!(
+                "service tier must be fast or normal, got: {other}"
+            ))
+        }
+    };
+    let path = crate::config_cmd::config_path();
+    let mut doc = crate::config_cmd::load_toml(&path)?;
+    let Some(root) = doc.as_table_mut() else {
+        return Err("config root is not a table".to_string());
+    };
+    let agent_entry = root
+        .entry("agent".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let Some(agent_table) = agent_entry.as_table_mut() else {
+        return Err("config [agent] is not a table".to_string());
+    };
+    agent_table.insert(
+        "service_tier".to_string(),
+        toml::Value::String(normalized.clone()),
+    );
+    crate::config_cmd::save_toml(&path, &doc)?;
+    Ok(normalized)
+}
+
 /// Activate (or clear) a personality: resolves the named personality's
 /// prompt into `agent.system_prompt` and records the name in
 /// `agent.personality` (both removed on clear). Shared by the
@@ -1617,6 +1650,76 @@ async fn reasoning_set(Json(body): Json<Value>) -> Response {
         Err(e) if e.contains("reasoning_effort must be one of") => bad_request(&e, None),
         Err(e) => server_error(&e),
     }
+}
+
+/// `GET /api/fast` — Priority Processing state (P625; hermes /fast
+/// status parity): whether the model supports it, the active mode for
+/// this gateway process, and the persisted config pin.
+async fn fast_get(State(state): State<Arc<GatewayState>>) -> Json<Value> {
+    let provider = state.agent.provider();
+    let supported = provider.supports_service_tier()
+        && crate::model_cmd::model_supports_fast_mode(&state.model_name);
+    let active = provider.active_service_tier();
+    let mode = if active.as_deref() == Some("priority") {
+        "fast"
+    } else {
+        "normal"
+    };
+    let persisted = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .map(|c| c.agent.service_tier)
+        .unwrap_or_default();
+    Json(json!({
+        "supported": supported,
+        "mode": mode,
+        "persisted": persisted,
+        "model": state.model_name,
+    }))
+}
+
+/// `PUT /api/fast` — toggle Priority Processing for this gateway process
+/// (`{"mode": "fast"|"normal"}`); `"persist": true` additionally writes
+/// `agent.service_tier` to config.toml (hermes `/fast --global`).
+async fn fast_set(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let raw = body["mode"].as_str().map(str::trim).unwrap_or("");
+    let tier: Option<String> = match raw.to_ascii_lowercase().as_str() {
+        "fast" | "on" | "priority" => Some("priority".to_string()),
+        "normal" | "off" | "default" => None,
+        "" => return bad_request("mode must be fast or normal", None),
+        other => {
+            return bad_request(
+                &format!("mode must be fast or normal, got: {other}"),
+                None,
+            )
+        }
+    };
+    let provider = state.agent.provider();
+    let supported = provider.supports_service_tier()
+        && crate::model_cmd::model_supports_fast_mode(&state.model_name);
+    if !supported {
+        return bad_request(
+            "fast mode is not supported for this model/provider (OpenAI gpt-/o-series on OpenAI-compatible endpoints only)",
+            None,
+        );
+    }
+    provider.set_service_tier(tier.clone());
+    let mode = if tier.is_some() { "fast" } else { "normal" };
+    let mut persisted_note = "this gateway process only";
+    if body["persist"].as_bool().unwrap_or(false) {
+        match persist_service_tier(mode) {
+            Ok(_) => persisted_note = "saved to agent.service_tier",
+            Err(e) => return server_error(&e),
+        }
+    }
+    Json(json!({
+        "ok": true,
+        "supported": true,
+        "mode": mode,
+        "note": format!("applies to {persisted_note}"),
+    }))
+    .into_response()
 }
 
 /// `POST /api/gateway/restart` — spawn a detached `ulnclaw gateway
@@ -6161,6 +6264,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/model/moa", get(model_moa_get).put(model_moa_put))
         .route("/api/model/recommended-default", get(model_recommended_default))
         .route("/api/reasoning", get(reasoning_get).put(reasoning_set))
+        .route("/api/fast", get(fast_get).put(fast_set))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -10076,12 +10180,13 @@ enum GatewaySlash {
 const GATEWAY_SLASH_HELP: &str = "Gateway slash commands:
   /help            this list (/commands is an alias)
   /status          session + agent status
-  /context         context-window usage for this session
+  /context [all]   context-window breakdown (grid + categories; all = per-toolset/skill costs)
   /whoami          process identity (claimer id, home, provider, model)
   /version         ulnclaw version
   /profile         list configured profiles
   /model [P M]     show the model, or persist provider+model
   /reasoning [L]   show or persist the reasoning effort (none|minimal|low|medium|high|xhigh|max|ultra, or clear)
+  /fast [on|off] [--global]  Priority Processing toggle (service_tier=priority)
   /memory          memory store status (files, entries, sizes)
   /sessions [N]    list the N most recent sessions (default 10)
   /stop            request a stop for this session's running run
@@ -10631,6 +10736,66 @@ async fn resolve_gateway_slash(
                 None => "reasoning effort cleared \u{2014} the endpoint default applies to new runs"
                     .to_string(),
             }))
+        }
+        "/fast" => {
+            // Hermes /fast parity (Priority Processing toggle). The
+            // gateway process is shared by all sessions, so the switch
+            // applies process-wide (same adaptation as /profile);
+            // --global persists agent.service_tier to config.toml.
+            let provider = state.agent.provider();
+            let supported = provider.supports_service_tier()
+                && crate::model_cmd::model_supports_fast_mode(&state.model_name);
+            let lower = rest.trim().to_ascii_lowercase();
+            let persist = lower.contains("--global");
+            let choice = lower.replace("--global", "");
+            let choice = choice.trim();
+            let active = provider.active_service_tier();
+            if choice.is_empty() || choice == "status" {
+                let mode = if active.as_deref() == Some("priority") {
+                    "fast"
+                } else {
+                    "normal"
+                };
+                return Some(GatewaySlash::Direct(format!(
+                    "priority processing: {mode}\nsupported: {}\nusage: /fast on|off [--global]",
+                    if supported { "yes" } else { "no (OpenAI gpt-/o-series on OpenAI-compatible endpoints only)" }
+                )));
+            }
+            if !supported {
+                return Some(GatewaySlash::Direct(
+                    "fast mode is not supported for this model/provider (OpenAI gpt-/o-series on OpenAI-compatible endpoints only)"
+                        .to_string(),
+                ));
+            }
+            let tier: Option<String> = match choice {
+                "fast" | "on" => Some("priority".to_string()),
+                "normal" | "off" => None,
+                other => {
+                    return Some(GatewaySlash::Direct(format!(
+                        "unknown argument: {other} (expected on|off [--global])"
+                    )))
+                }
+            };
+            provider.set_service_tier(tier.clone());
+            let label = if tier.is_some() {
+                "fast (service_tier=priority)"
+            } else {
+                "normal"
+            };
+            if persist {
+                match persist_service_tier(if tier.is_some() { "fast" } else { "normal" }) {
+                    Ok(_) => Some(GatewaySlash::Direct(format!(
+                        "priority processing: {label} \u{2014} saved to agent.service_tier"
+                    ))),
+                    Err(e) => Some(GatewaySlash::Direct(format!(
+                        "priority processing: {label} (this process only; persist failed: {e})"
+                    ))),
+                }
+            } else {
+                Some(GatewaySlash::Direct(format!(
+                    "priority processing: {label} for this gateway process; add --global to persist it"
+                )))
+            }
         }
         "/memory" => {
             let home = state.agent.context().home.clone();
@@ -14271,6 +14436,132 @@ mod tests {
         assert!(text.contains("Toolsets by schema cost"), "{text}");
         // No hint line in the expanded view.
         assert!(!text.contains("Use /context all"), "{text}");
+    }
+
+    /// P625: gateway state wired to a real OpenAI provider (no network
+    /// calls — only the service-tier plumbing is exercised).
+    fn fast_state() -> Arc<GatewayState> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let provider = crate::provider::openai::OpenAiProvider::builder()
+            .endpoint("http://127.0.0.1:9")
+            .model("gpt-5")
+            .name("openai")
+            .build()
+            .expect("provider builds");
+        let agent = Agent::new(Arc::new(provider), ToolRegistry::new()).with_store(store);
+        GatewayState::new(
+            Arc::new(agent),
+            "gpt-5".into(),
+            "openai".into(),
+            None,
+            ApprovalRouter::new(),
+        )
+        .expect("state builds")
+    }
+
+    #[tokio::test]
+    async fn test_fast_endpoint_and_slash_supported_model() {
+        let state = fast_state();
+        let sid = state
+            .store
+            .create_session("fast-test", Some("gpt-5"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        // Status before any toggle.
+        let (status, body) = get_json(app.clone(), "/api/fast", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["supported"], true, "{body}");
+        assert_eq!(body["mode"], "normal", "{body}");
+
+        // HTTP twin: switch on, then off.
+        let (status, body) =
+            send_json(app.clone(), "PUT", "/api/fast", None, json!({"mode": "fast"})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "fast", "{body}");
+        let (_, body) = get_json(app.clone(), "/api/fast", None).await;
+        assert_eq!(body["mode"], "fast", "{body}");
+
+        // Slash status reflects the process-wide override.
+        let reply = post_chat(app.clone(), &sid, "/fast").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("priority processing: fast"));
+
+        let reply = post_chat(app.clone(), &sid, "/fast off").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("priority processing: normal"));
+        let (_, body) = get_json(app.clone(), "/api/fast", None).await;
+        assert_eq!(body["mode"], "normal", "{body}");
+
+        // Invalid mode → 400 with the error envelope.
+        let (status, body) =
+            send_json(app.clone(), "PUT", "/api/fast", None, json!({"mode": "warp"})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fast or normal"));
+    }
+
+    #[tokio::test]
+    async fn test_fast_rejected_for_unsupported_model() {
+        let state = streaming_state(); // fake provider, "fake-stream" model
+        let sid = state
+            .store
+            .create_session("fast-no", Some("fake-stream"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let (status, body) = get_json(app.clone(), "/api/fast", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["supported"], false, "{body}");
+
+        let (status, _) =
+            send_json(app.clone(), "PUT", "/api/fast", None, json!({"mode": "fast"})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let reply = post_chat(app.clone(), &sid, "/fast on").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("not supported"));
+    }
+
+    #[tokio::test]
+    async fn test_fast_slash_global_persists_config() {
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let state = fast_state();
+        let sid = state
+            .store
+            .create_session("fast-persist", Some("gpt-5"), None)
+            .expect("session created");
+        let app = router(state.clone());
+
+        let reply = post_chat(app.clone(), &sid, "/fast on --global").await;
+        assert!(reply["response"]
+            .as_str()
+            .unwrap()
+            .contains("saved to agent.service_tier"));
+        let config_text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(config_text.contains("service_tier = \"fast\""), "{config_text}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 
     #[tokio::test]
