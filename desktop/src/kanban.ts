@@ -422,6 +422,13 @@ export class KanbanWidget {
       model.textContent = `\uD83E\uDDE0 ${task.model}`;
       meta.appendChild(model);
     }
+    if (task.skills && task.skills.length > 0) {
+      const skills = document.createElement("span");
+      skills.className = "kanban-chip";
+      skills.title = `${t.kanban.skillsWord}: ${task.skills.join(", ")}`;
+      skills.textContent = `\uD83C\uDFAF ${task.skills.length}`;
+      meta.appendChild(skills);
+    }
     if (task.children.length > 0) {
       const sub = document.createElement("span");
       sub.className = "kanban-chip";
@@ -552,6 +559,9 @@ export class KanbanWidget {
       `${t.kanban.metaPriority}: P${task.priority}`,
       `${t.kanban.metaCreated}: ${fmtWhen(task.created_at)}`,
     ];
+    if (task.skills && task.skills.length > 0) {
+      metaParts.push(`${t.kanban.skillsWord}: ${task.skills.join(", ")}`);
+    }
     if (task.created_by) metaParts.push(`${t.kanban.metaCreatedBy}: ${task.created_by}`);
     if (task.started_at) metaParts.push(`${t.kanban.metaStarted}: ${fmtWhen(task.started_at)}`);
     if (task.completed_at) metaParts.push(`${t.kanban.metaCompleted}: ${fmtWhen(task.completed_at)}`);

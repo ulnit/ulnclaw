@@ -230,6 +230,7 @@ export interface KanbanTask {
   completed_at: number | null;
   result: string | null;
   reasoning_effort: string | null;
+  skills: string[] | null;
   parents: string[];
   children: string[];
 }

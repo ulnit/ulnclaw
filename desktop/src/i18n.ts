@@ -114,6 +114,7 @@ export interface Translations {
     attachAction: string; attachPrompt: string; removeAttachmentTitle: string;
     scheduleAction: string; schedulePrompt: string; reassignAction: string; reassignPrompt: string;
     linksLabel: string; linkAction: string; linkPrompt: string; unlinkTitle: string;
+    skillsWord: string;
   };
   projects: {
     addFolder: string; archive: string; restore: string; bindBoard: string;
@@ -509,7 +510,7 @@ const en: Translations = {
     reasoningLabel: "Reasoning effort", reasoningInherit: "inherit profile",
     modelLabel: "Model", modelInherit: "inherit profile", providerOptional: "provider (optional)", applyAction: "Apply",
     eventsTitle: "Activity", editAction: "Edit", saveAction: "Save",
-    archiveAction: "Archive", deleteAction: "Delete", archiveConfirm: "Archive this task? It leaves the active board; children unblock.", deleteConfirm: "Permanently delete this archived task and all its comments, events and attachments?", attachAction: "Attach", attachPrompt: "File path or URL to attach:", removeAttachmentTitle: "Remove attachment", scheduleAction: "Schedule", schedulePrompt: "Why is it scheduled? (optional)", reassignAction: "Reassign", reassignPrompt: "New assignee (leave empty to unassign):", linksLabel: "Dependencies", linkAction: "Link parent\u2026", linkPrompt: "Parent task id (or prefix) to link:", unlinkTitle: "Unlink parent", 
+    archiveAction: "Archive", deleteAction: "Delete", archiveConfirm: "Archive this task? It leaves the active board; children unblock.", deleteConfirm: "Permanently delete this archived task and all its comments, events and attachments?", attachAction: "Attach", attachPrompt: "File path or URL to attach:", removeAttachmentTitle: "Remove attachment", scheduleAction: "Schedule", schedulePrompt: "Why is it scheduled? (optional)", reassignAction: "Reassign", reassignPrompt: "New assignee (leave empty to unassign):", linksLabel: "Dependencies", linkAction: "Link parent\u2026", linkPrompt: "Parent task id (or prefix) to link:", unlinkTitle: "Unlink parent", skillsWord: "Skills", 
   },
   projects: {
     addFolder: "Add folder", archive: "Archive", restore: "Restore",
@@ -1062,7 +1063,7 @@ const zh: Translations = {
     reasoningLabel: "推理强度", reasoningInherit: "跟随配置",
     modelLabel: "模型", modelInherit: "跟随配置", providerOptional: "provider（可选）", applyAction: "应用",
     eventsTitle: "活动记录", editAction: "编辑", saveAction: "保存",
-    archiveAction: "归档", deleteAction: "删除", archiveConfirm: "归档该任务？它将离开活动看板，其子任务随之解除阻塞。", deleteConfirm: "永久删除该已归档任务及其全部评论、事件与附件？", attachAction: "附加", attachPrompt: "要附加的文件路径或 URL：", removeAttachmentTitle: "移除附件", scheduleAction: "排期", schedulePrompt: "为何排期？（可选）", reassignAction: "改派", reassignPrompt: "新负责人（留空则取消指派）：", linksLabel: "依赖", linkAction: "关联父任务…", linkPrompt: "要关联的父任务 ID（或前缀）：", unlinkTitle: "取消关联父任务", 
+    archiveAction: "归档", deleteAction: "删除", archiveConfirm: "归档该任务？它将离开活动看板，其子任务随之解除阻塞。", deleteConfirm: "永久删除该已归档任务及其全部评论、事件与附件？", attachAction: "附加", attachPrompt: "要附加的文件路径或 URL：", removeAttachmentTitle: "移除附件", scheduleAction: "排期", schedulePrompt: "为何排期？（可选）", reassignAction: "改派", reassignPrompt: "新负责人（留空则取消指派）：", linksLabel: "依赖", linkAction: "关联父任务…", linkPrompt: "要关联的父任务 ID（或前缀）：", unlinkTitle: "取消关联父任务", skillsWord: "技能", 
   },
   projects: {
     addFolder: "添加文件夹", archive: "归档", restore: "恢复",
@@ -1615,7 +1616,7 @@ const zhHant: Translations = {
     reasoningLabel: "推理強度", reasoningInherit: "跟隨設定檔",
     modelLabel: "模型", modelInherit: "跟隨設定檔", providerOptional: "provider（選填）", applyAction: "套用",
     eventsTitle: "活動記錄", editAction: "編輯", saveAction: "儲存",
-    archiveAction: "歸檔", deleteAction: "刪除", archiveConfirm: "歸檔該工作？它將離開活動看板，其子工作隨之解除阻塞。", deleteConfirm: "永久刪除該已歸檔工作及其全部留言、事件與附件？", attachAction: "附加", attachPrompt: "要附加的檔案路徑或 URL：", removeAttachmentTitle: "移除附件", scheduleAction: "排程", schedulePrompt: "為何排程？（選填）", reassignAction: "改派", reassignPrompt: "新負責人（留空則取消指派）：", linksLabel: "相依性", linkAction: "關聯父工作…", linkPrompt: "要關聯的父工作 ID（或前綴）：", unlinkTitle: "取消關聯父工作", 
+    archiveAction: "歸檔", deleteAction: "刪除", archiveConfirm: "歸檔該工作？它將離開活動看板，其子工作隨之解除阻塞。", deleteConfirm: "永久刪除該已歸檔工作及其全部留言、事件與附件？", attachAction: "附加", attachPrompt: "要附加的檔案路徑或 URL：", removeAttachmentTitle: "移除附件", scheduleAction: "排程", schedulePrompt: "為何排程？（選填）", reassignAction: "改派", reassignPrompt: "新負責人（留空則取消指派）：", linksLabel: "相依性", linkAction: "關聯父工作…", linkPrompt: "要關聯的父工作 ID（或前綴）：", unlinkTitle: "取消關聯父工作", skillsWord: "技能", 
   },
   projects: {
     addFolder: "新增資料夾", archive: "封存", restore: "還原",
@@ -2168,7 +2169,7 @@ const ja: Translations = {
     reasoningLabel: "推論の深さ", reasoningInherit: "プロファイルに従う",
     modelLabel: "モデル", modelInherit: "プロファイルに従う", providerOptional: "プロバイダー（任意）", applyAction: "適用",
     eventsTitle: "アクティビティ", editAction: "編集", saveAction: "保存",
-    archiveAction: "アーカイブ", deleteAction: "削除", archiveConfirm: "このタスクをアーカイブしますか？アクティブなボードから外れ、子タスクのブロックは解除されます。", deleteConfirm: "このアーカイブ済みタスクとそのコメント・イベント・添付をすべて完全に削除しますか？", attachAction: "添付", attachPrompt: "添付するファイルパスまたは URL：", removeAttachmentTitle: "添付を削除", scheduleAction: "予定化", schedulePrompt: "予定にする理由は？（任意）", reassignAction: "再割り当て", reassignPrompt: "新しい担当者（空欄で割り当て解除）：", linksLabel: "依存関係", linkAction: "親をリンク…", linkPrompt: "リンクする親タスク ID（またはプレフィックス）：", unlinkTitle: "親リンクを解除", 
+    archiveAction: "アーカイブ", deleteAction: "削除", archiveConfirm: "このタスクをアーカイブしますか？アクティブなボードから外れ、子タスクのブロックは解除されます。", deleteConfirm: "このアーカイブ済みタスクとそのコメント・イベント・添付をすべて完全に削除しますか？", attachAction: "添付", attachPrompt: "添付するファイルパスまたは URL：", removeAttachmentTitle: "添付を削除", scheduleAction: "予定化", schedulePrompt: "予定にする理由は？（任意）", reassignAction: "再割り当て", reassignPrompt: "新しい担当者（空欄で割り当て解除）：", linksLabel: "依存関係", linkAction: "親をリンク…", linkPrompt: "リンクする親タスク ID（またはプレフィックス）：", unlinkTitle: "親リンクを解除", skillsWord: "スキル", 
   },
   projects: {
     addFolder: "フォルダを追加", archive: "アーカイブ", restore: "復元",
@@ -2721,7 +2722,7 @@ const ar: Translations = {
     reasoningLabel: "جهد الاستدلال", reasoningInherit: "وراثة الملف الشخصي",
     modelLabel: "النموذج", modelInherit: "وراثة الملف الشخصي", providerOptional: "المزود (اختياري)", applyAction: "تطبيق",
     eventsTitle: "النشاط", editAction: "تعديل", saveAction: "حفظ",
-    archiveAction: "أرشفة", deleteAction: "حذف", archiveConfirm: "أرشفة هذه المهمة؟ ستغادر اللوحة النشطة ويُرفع الحجب عن مهامها الفرعية.", deleteConfirm: "حذف هذه المهمة المؤرشفة نهائيًا مع كل تعليقاتها وأحداثها ومرفقاتها؟", attachAction: "إرفاق", attachPrompt: "مسار الملف أو الرابط للإرفاق:", removeAttachmentTitle: "إزالة المرفق", scheduleAction: "جدولة", schedulePrompt: "لماذا هي مجدولة؟ (اختياري)", reassignAction: "إعادة إسناد", reassignPrompt: "المسند إليه الجديد (اتركه فارغًا لإلغاء الإسناد):", linksLabel: "التبعيات", linkAction: "ربط مهمة أم…", linkPrompt: "معرّف المهمة الأم (أو بادئته) للربط:", unlinkTitle: "فك ربط المهمة الأم", 
+    archiveAction: "أرشفة", deleteAction: "حذف", archiveConfirm: "أرشفة هذه المهمة؟ ستغادر اللوحة النشطة ويُرفع الحجب عن مهامها الفرعية.", deleteConfirm: "حذف هذه المهمة المؤرشفة نهائيًا مع كل تعليقاتها وأحداثها ومرفقاتها؟", attachAction: "إرفاق", attachPrompt: "مسار الملف أو الرابط للإرفاق:", removeAttachmentTitle: "إزالة المرفق", scheduleAction: "جدولة", schedulePrompt: "لماذا هي مجدولة؟ (اختياري)", reassignAction: "إعادة إسناد", reassignPrompt: "المسند إليه الجديد (اتركه فارغًا لإلغاء الإسناد):", linksLabel: "التبعيات", linkAction: "ربط مهمة أم…", linkPrompt: "معرّف المهمة الأم (أو بادئته) للربط:", unlinkTitle: "فك ربط المهمة الأم", skillsWord: "المهارات", 
   },
   projects: {
     addFolder: "إضافة مجلد", archive: "أرشفة", restore: "استعادة",
