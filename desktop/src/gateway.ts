@@ -628,6 +628,16 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/checkpoints/settings` — P751 checkpoint store knobs. */
+export interface CheckpointSettingsPayload {
+  enabled: boolean;
+  max_snapshots: number;
+  max_total_size_mb: number;
+  max_file_size_mb: number;
+  retention_days: number;
+  auto_prune_hours: number;
+}
+
 /** `GET /api/model-catalog` — P750 picker catalog knobs. */
 export interface ModelCatalogPayload {
   excluded_providers: string[];
@@ -4043,6 +4053,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/checkpoints/settings — P751 checkpoint store knobs. */
+  async checkpointSettings(): Promise<CheckpointSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/checkpoints/settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`checkpoint-settings HTTP ${response.status}`);
+    return (await response.json()) as CheckpointSettingsPayload;
+  }
+
+  /** P751: PUT /api/checkpoints/settings — persist a checkpoint knob;
+   * null removes the override. */
+  async updateCheckpointSetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/checkpoints/settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `checkpoint-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/model-catalog — P750 picker catalog knobs. */

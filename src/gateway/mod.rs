@@ -6022,6 +6022,101 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/checkpoints/settings` — P751: checkpoint store knobs for
+/// the shell: master switch, per-project snapshot cap, total store
+/// size ceiling, per-file skip size, retention window and auto-prune
+/// cadence.
+async fn checkpoint_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let checkpoints =
+        crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+            .map(|c| c.checkpoints)
+            .unwrap_or_default();
+    Json(json!({
+        "enabled": checkpoints.enabled,
+        "max_snapshots": checkpoints.max_snapshots,
+        "max_total_size_mb": checkpoints.max_total_size_mb,
+        "max_file_size_mb": checkpoints.max_file_size_mb,
+        "retention_days": checkpoints.retention_days,
+        "auto_prune_hours": checkpoints.auto_prune_hours,
+    }))
+}
+
+/// `PUT /api/checkpoints/settings` — P751: persist checkpoint store
+/// knobs from the shell. Body: `{"key": "enabled"|"max_snapshots"|
+/// "max_total_size_mb"|"max_file_size_mb"|"retention_days"|
+/// "auto_prune_hours", "value": ...|null}` — null removes the key
+/// (falls back to the default). Numeric knobs must be positive
+/// integers. Applies to new checkpoint operations.
+async fn update_checkpoint_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "enabled",
+        "max_snapshots",
+        "max_total_size_mb",
+        "max_file_size_mb",
+        "retention_days",
+        "auto_prune_hours",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown checkpoints key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    if let Some(v) = value {
+        if !v.is_null() {
+            let ok = if key == "enabled" {
+                v.is_boolean()
+            } else {
+                v.as_u64().map(|n| n >= 1).unwrap_or(false)
+            };
+            if !ok {
+                let expected = if key == "enabled" { "a boolean" } else { "a positive integer" };
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("checkpoints key '{key}' must be {expected}") })),
+                );
+            }
+        }
+    }
+    let dotted = format!("checkpoints.{key}");
+    let result = match value {
+        None | Some(Value::Null) => crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        Some(v) => crate::config_cmd::set_config_value(&dotted, &v.to_string(), true).map(|_| ()),
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": matches!(value, None | Some(Value::Null)),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/model-catalog` — P750: picker catalog knobs for the
 /// shell: the excluded provider slugs plus the canonical and custom
 /// (`[providers.*]`) provider inventories so operators can see what
@@ -8228,6 +8323,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/web-settings", get(web_settings_api).put(update_web_settings_api))
         .route("/api/delegation-settings", get(delegation_settings_api).put(update_delegation_settings_api))
         .route("/api/model-catalog", get(model_catalog_api).put(update_model_catalog_api))
+        .route("/api/checkpoints/settings", get(checkpoint_settings_api).put(update_checkpoint_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -18940,6 +19036,93 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/model-catalog", Some("sekret")).await;
         assert_eq!(body["excluded_providers"], json!([]), "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_settings_editor() {
+        // P751: GET /api/checkpoints/settings surfaces the store knobs;
+        // PUT persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: opt-in off, 20 snapshots, 500 MB store, 10 MB file
+        // skip, 7-day retention, daily prune.
+        let (status, body) = get_json(app.clone(), "/api/checkpoints/settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], false, "{body}");
+        assert_eq!(body["max_snapshots"], 20, "{body}");
+        assert_eq!(body["max_total_size_mb"], 500, "{body}");
+        assert_eq!(body["max_file_size_mb"], 10, "{body}");
+        assert_eq!(body["retention_days"], 7, "{body}");
+        assert_eq!(body["auto_prune_hours"], 24, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("enabled", json!(true)),
+            ("max_snapshots", json!(50)),
+            ("max_total_size_mb", json!(1024)),
+            ("max_file_size_mb", json!(25)),
+            ("retention_days", json!(30)),
+            ("auto_prune_hours", json!(6)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/checkpoints/settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/checkpoints/settings", Some("sekret")).await;
+        assert_eq!(body["enabled"], true, "{body}");
+        assert_eq!(body["max_snapshots"], 50, "{body}");
+        assert_eq!(body["max_total_size_mb"], 1024, "{body}");
+        assert_eq!(body["max_file_size_mb"], 25, "{body}");
+        assert_eq!(body["retention_days"], 30, "{body}");
+        assert_eq!(body["auto_prune_hours"], 6, "{body}");
+
+        // Validation.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/checkpoints/settings", Some("sekret"),
+            json!({ "key": "enabled", "value": "yes" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/checkpoints/settings", Some("sekret"),
+            json!({ "key": "max_snapshots", "value": 0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/checkpoints/settings", Some("sekret"),
+            json!({ "key": "yolo", "value": 1 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null removes the override and restores the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/checkpoints/settings", Some("sekret"),
+            json!({ "key": "enabled", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/checkpoints/settings", Some("sekret")).await;
+        assert_eq!(body["enabled"], false, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
