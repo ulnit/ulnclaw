@@ -245,6 +245,8 @@ const el = {
   settingNotifySystem: document.getElementById("setting-notify-system") as HTMLInputElement,
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
+  settingPersonalityRow: document.getElementById("setting-personality-row") as HTMLLabelElement,
+  settingPersonality: document.getElementById("setting-personality") as HTMLSelectElement,
   settingsOnboarding: document.getElementById("settings-onboarding") as HTMLButtonElement,
   settingsShortcuts: document.getElementById("settings-shortcuts") as HTMLButtonElement,
   shortcutsDialog: document.getElementById("shortcuts-dialog") as HTMLDialogElement,
@@ -1531,6 +1533,54 @@ let gatewayModel = "";
 /// default, else the gateway model; clicking opens the model picker.
 /** P383: composer placeholder carries the active session's model so
  * the user always knows which model they are talking to. */
+/** P634: fill the settings-dialog personality picker from
+ * GET /api/personalities; hides the row when nothing is configured. */
+async function fillPersonalityPicker(): Promise<void> {
+  if (!state.client) return;
+  try {
+    const payload = await state.client.personalitiesGet();
+    const list = payload.personalities ?? [];
+    if (list.length === 0) {
+      el.settingPersonalityRow.hidden = true;
+      return;
+    }
+    el.settingPersonality.innerHTML = "";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = t.chrome.personalityDefault;
+    el.settingPersonality.appendChild(def);
+    for (const persona of list) {
+      const option = document.createElement("option");
+      option.value = persona.name;
+      option.textContent = persona.name;
+      option.title = persona.preview;
+      el.settingPersonality.appendChild(option);
+    }
+    el.settingPersonality.value = state.personalityActive ?? "";
+    if (el.settingPersonality.value !== (state.personalityActive ?? "")) {
+      el.settingPersonality.value = "";
+    }
+    el.settingPersonalityRow.hidden = false;
+  } catch {
+    el.settingPersonalityRow.hidden = true;
+  }
+}
+
+/** P634: apply the settings-dialog personality pick (PUT /api/personality)
+ * and sync the header chip. */
+async function applySettingsPersonality(): Promise<void> {
+  if (!state.client || el.settingPersonalityRow.hidden) return;
+  const pick = el.settingPersonality.value;
+  if (pick === (state.personalityActive ?? "")) return;
+  try {
+    const payload = await state.client.personalitySet(pick === "" ? null : pick);
+    state.personalityActive = payload.active;
+    refreshPersonalityBadge();
+  } catch (error) {
+    notifyError(String(error));
+  }
+}
+
 function refreshComposerPlaceholder(): void {
   const base = t.chrome.inputPlaceholder;
   const model = state.current?.model;
@@ -3165,6 +3215,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     // P435: OS-level settle notifications toggle.
     el.settingNotifySystem.checked = state.settings.notifySystem;
     el.settings.showModal();
+    // P634: personalities surface — fill the picker from the gateway and
+    // hide the row when no personas are configured.
+    void fillPersonalityPicker();
   };
   el.notifyBell.onclick = () => openNotifyHistory();
   // P360 + P543: a click opens the session-info popover; a double-click
@@ -3219,6 +3272,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     state.settings = next;
     state.client = new GatewayClient(next);
     startDesktopEvents();
+    // P634: persist the personality pick alongside the other settings.
+    void applySettingsPersonality();
     void pollHealth();
     void refreshSessions();
     renderUnreadBadge();

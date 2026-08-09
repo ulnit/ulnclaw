@@ -66,7 +66,7 @@ export interface Translations {
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
     manageProcess: string; reopenLast: string; charWarn: string; charLimit: string; charLimitExceeded: string; notifySystem: string; replayOnboarding: string; cancel: string; save: string; delete: string;
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
-    settingsTheme: string; settingsFont: string;
+    settingsTheme: string; settingsFont: string; settingsPersonality: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string; statusTokens: string; statusCtx: string; statusKanban: string;
     scrollBottom: string; dotAuthOn: string; dotAuthOff: string; dotRuns: string; dotLatency: string; tabApprovals: string; healthRestored: string; healthLost: string;
     shortcuts: string; shortcutsTitle: string; shortcutsClose: string;
@@ -423,7 +423,7 @@ const en: Translations = {
     notifySystem: "System notification when a run finishes",
     delete: "Delete",
     replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save", restartGateway: "Restart gateway", restartDone: "Gateway restarted.", restartFailed: "Gateway restart timed out.", restartUnavailable: "The gateway is not managed here — restart it where it runs.",
-    settingsTheme: "Theme", settingsFont: "Font",
+    settingsTheme: "Theme", settingsFont: "Font", settingsPersonality: "Personality",
     statusUp: "up {duration}", statusSessions: "{count} sessions", statusRuns: "{count} runs", statusPlugins: "{count} plugins", statusTokens: "{tokens} tok · {calls} tool calls", statusCtx: "ctx {pct}%", statusKanban: "kanban {todo} todo · {doing} doing · {blocked} blocked",
     scrollBottom: "Scroll to bottom", dotAuthOn: "auth required", dotAuthOff: "open access", dotRuns: "{count} runs", dotLatency: "{ms} ms probe",
     tabApprovals: "{count} waiting for approval",
@@ -968,7 +968,7 @@ const zh: Translations = {
     notifySystem: "运行结束时弹出系统通知",
     delete: "删除",
     replayOnboarding: "重放引导", cancel: "取消", save: "保存", restartGateway: "重启网关", restartDone: "网关已重启。", restartFailed: "网关重启超时。", restartUnavailable: "此环境不管理网关——请在网关运行处重启。",
-    settingsTheme: "主题", settingsFont: "字体",
+    settingsTheme: "主题", settingsFont: "字体", settingsPersonality: "人格",
     statusUp: "运行 {duration}", statusSessions: "{count} 会话", statusRuns: "{count} 运行", statusPlugins: "{count} 插件", statusTokens: "{tokens} tok · {calls} 次工具调用", statusCtx: "上下文 {pct}%", statusKanban: "看板 {todo} 待办 · {doing} 进行 · {blocked} 受阻",
     scrollBottom: "滚动到底部", dotAuthOn: "需鉴权", dotAuthOff: "开放访问", dotRuns: "{count} 运行", dotLatency: "探针延迟 {ms} 毫秒",
     tabApprovals: "{count} 个等待审批",
@@ -1513,7 +1513,7 @@ const zhHant: Translations = {
     notifySystem: "執行結束時彈出系統通知",
     delete: "刪除",
     replayOnboarding: "重播引導", cancel: "取消", save: "儲存", restartGateway: "重啟閘道", restartDone: "閘道已重啟。", restartFailed: "閘道重啟逾時。", restartUnavailable: "此環境不管理閘道——請在閘道執行處重啟。",
-    settingsTheme: "主題", settingsFont: "字型",
+    settingsTheme: "主題", settingsFont: "字型", settingsPersonality: "人格",
     statusUp: "執行 {duration}", statusSessions: "{count} 工作階段", statusRuns: "{count} 執行", statusPlugins: "{count} 外掛", statusTokens: "{tokens} tok · {calls} 次工具呼叫", statusCtx: "上下文 {pct}%", statusKanban: "看板 {todo} 待辦 · {doing} 進行 · {blocked} 受阻",
     scrollBottom: "捲動到底部", dotAuthOn: "需鑑權", dotAuthOff: "開放存取", dotRuns: "{count} 執行", dotLatency: "探針延遲 {ms} 毫秒",
     tabApprovals: "{count} 個等待審批",
@@ -2058,7 +2058,7 @@ const ja: Translations = {
     notifySystem: "実行終了時にシステム通知を表示",
     delete: "削除",
     replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存", restartGateway: "ゲートウェイを再起動", restartDone: "ゲートウェイを再起動しました。", restartFailed: "ゲートウェイの再起動がタイムアウトしました。", restartUnavailable: "この環境はゲートウェイを管理していません — 実行場所で再起動してください。",
-    settingsTheme: "テーマ", settingsFont: "フォント",
+    settingsTheme: "テーマ", settingsFont: "フォント", settingsPersonality: "パーソナリティ",
     statusUp: "稼働 {duration}", statusSessions: "{count} セッション", statusRuns: "{count} 実行", statusPlugins: "{count} プラグイン", statusTokens: "{tokens} tok · {calls} ツール呼び出し", statusCtx: "コンテキスト {pct}%", statusKanban: "カンバン {todo} 未着手 · {doing} 進行中 · {blocked} ブロック",
     scrollBottom: "一番下へスクロール", dotAuthOn: "認証必須", dotAuthOff: "オープンアクセス", dotRuns: "{count} 実行", dotLatency: "プローブ遅延 {ms} ms",
     tabApprovals: "{count} 件が承認待ち",
@@ -2603,7 +2603,7 @@ const ar: Translations = {
     notifySystem: "إشعار النظام عند انتهاء التشغيل",
     delete: "حذف",
     replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ", restartGateway: "إعادة تشغيل البوابة", restartDone: "تمت إعادة تشغيل البوابة.", restartFailed: "انتهت مهلة إعادة تشغيل البوابة.", restartUnavailable: "البوابة غير مُدارة هنا — أعد تشغيلها حيث تعمل.",
-    settingsTheme: "السمة", settingsFont: "الخط",
+    settingsTheme: "السمة", settingsFont: "الخط", settingsPersonality: "الشخصية",
     statusUp: "يعمل منذ {duration}", statusSessions: "{count} جلسة", statusRuns: "{count} تشغيل", statusPlugins: "{count} إضافة", statusTokens: "{tokens} رمز · {calls} استدعاء أداة", statusCtx: "السياق {pct}%", statusKanban: "كانبان {todo} منتظرة · {doing} قيد التنفيذ · {blocked} محظورة",
     scrollBottom: "التمرير إلى الأسفل", dotAuthOn: "المصادقة مطلوبة", dotAuthOff: "وصول مفتوح", dotRuns: "{count} تشغيل", dotLatency: "زمن الاستجابة {ms} مث",
     tabApprovals: "{count} بانتظار الموافقة",
