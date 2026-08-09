@@ -2100,10 +2100,28 @@ Use `/resume` with no                      arguments to see available sessions."
         let mut histories = chat_histories().lock().await;
         let history = histories.entry(key.to_string()).or_default();
         if history.is_empty() {
-            if let Ok(messages) = self.store.load_messages(&session_id) {
+            if let Ok(messages) = self.store.load_messages_with_timestamps(&session_id) {
+                // P711: with `[gateway] message_timestamps` on, each
+                // replayed user turn is rendered with exactly one
+                // timestamp prefix from its stored send time (hermes
+                // inject_timestamps replay path).
+                let render_ts = self.agent.context().config.gateway.message_timestamps;
                 *history = messages
                     .into_iter()
-                    .filter(|m| m.role != Role::System)
+                    .filter(|(_, message)| message.role != Role::System)
+                    .map(|(ts, mut message)| {
+                        if render_ts && matches!(message.role, Role::User) {
+                            if let Some(content) = message.content.as_deref() {
+                                message.content = Some(
+                                    crate::message_timestamps::render_user_content_with_timestamp(
+                                        content,
+                                        Some(ts),
+                                    ),
+                                );
+                            }
+                        }
+                        message
+                    })
                     .collect();
             }
         }
@@ -2137,11 +2155,32 @@ Use `/resume` with no                      arguments to see available sessions."
                     .collect();
             }
         }
+        // P711: strip any stale gateway timestamp prefixes from the
+        // inbound text unconditionally — the persisted transcript
+        // stays clean regardless of the render toggle (hermes run.py
+        // inbound path runs the strip before any toggle check).
+        user_text =
+            crate::message_timestamps::strip_leading_message_timestamps(&user_text).0;
         let mut prompt = if event.sender_name.is_empty() {
             user_text
         } else {
             format!("{}: {}", event.sender_name, user_text)
         };
+        // P711: message timestamps (hermes message_timestamps) — the
+        // inbound text was already stripped of stale prefixes above
+        // (persisted transcripts stay clean regardless of the toggle);
+        // with `[gateway] message_timestamps = true` the model context
+        // gets exactly one rendered prefix for temporal awareness.
+        if config.gateway.message_timestamps {
+            let now_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
+            prompt = crate::message_timestamps::render_user_content_with_timestamp(
+                &prompt,
+                Some(now_epoch),
+            );
+        }
         // Cached attachments: images are injected natively into the user
         // turn as multimodal content (P226, hermes media-injection
         // parity); every other medium stays a path reference the agent

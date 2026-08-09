@@ -869,6 +869,13 @@ pub struct GatewayConfig {
     /// `_profile_name_for_source` gating).
     #[serde(default)]
     pub profile_routes: Vec<crate::profile_routing::ProfileRouteSpec>,
+    /// Render one `[Tue 2026-04-28 13:40:53 CST]`-style timestamp
+    /// prefix per user message in the LLM context for temporal
+    /// awareness (hermes `gateway.message_timestamps.enabled`,
+    /// default OFF). Inbound text is ALWAYS stripped of stale
+    /// prefixes so persisted transcripts stay clean regardless.
+    #[serde(default)]
+    pub message_timestamps: bool,
     /// Cap on concurrently active chat sessions across all surfaces
     /// (hermes `max_concurrent_sessions`; 0/unset disables the cap).
     #[serde(default)]
@@ -891,6 +898,7 @@ impl Default for GatewayConfig {
             key: None,
             multiplex_profiles: false,
             profile_routes: Vec::new(),
+            message_timestamps: false,
             max_concurrent_sessions: None,
         }
     }

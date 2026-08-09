@@ -156,6 +156,7 @@ pub mod media_cache;
 pub mod memory_monitor;
 pub mod messaging;
 pub mod mirror;
+pub mod message_timestamps;
 pub mod profile_routing;
 pub mod turn_lease;
 pub mod oauth;
