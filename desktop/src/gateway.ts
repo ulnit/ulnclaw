@@ -628,6 +628,19 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/providers-settings` — P771 custom provider entries. */
+export interface CustomProviderEntry {
+  base_url: string | null;
+  api_key_configured: boolean;
+  key_env: string | null;
+  model: string | null;
+  mode: string | null;
+}
+export interface ProvidersSettingsPayload {
+  providers: Record<string, CustomProviderEntry>;
+  valid_modes: string[];
+}
+
 /** `GET /api/auxiliary-settings` — P770 per-task auxiliary overrides. */
 export interface AuxiliaryTaskEntry {
   provider: string | null;
@@ -4213,6 +4226,49 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/providers-settings — P771 custom provider entries. */
+  async providersSettings(): Promise<ProvidersSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/providers-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`providers-settings HTTP ${response.status}`);
+    return (await response.json()) as ProvidersSettingsPayload;
+  }
+
+  /** P771: PUT /api/providers-settings — persist a custom provider
+   * knob; null or empty string removes it. The API key is not
+   * editable. */
+  async updateProvidersSetting(
+    provider: string,
+    key: string,
+    value: string | null,
+  ): Promise<{ ok: boolean; provider: string; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/providers-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ provider, key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        providers?: string[];
+        valid_modes?: string[];
+      };
+      const suffix = body.providers?.length
+        ? ` (providers: ${body.providers.join(", ")})`
+        : body.valid_modes?.length
+          ? ` (modes: ${body.valid_modes.join(", ")})`
+          : "";
+      throw new Error(`${body.error ?? `providers-settings PUT HTTP ${response.status}`}${suffix}`);
+    }
+    return (await response.json()) as {
+      ok: boolean;
+      provider: string;
+      key: string;
+      removed: boolean;
+    };
   }
 
   /** GET /api/auxiliary-settings — P770 per-task overrides. */

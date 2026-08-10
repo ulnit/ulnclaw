@@ -345,6 +345,18 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-providers-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="providersPanel.title">Custom providers</h3>
+        <div id="providers-rows"></div>
+        <div id="providers-editor" class="monitoring-row" hidden>
+          <select id="providers-slug" class="ghost"></select>
+          <select id="providers-key" class="ghost"></select>
+          <input id="providers-value" class="ghost" />
+          <button id="providers-apply" class="ghost mcp-add-btn" data-i18n="providersPanel.apply">Apply</button>
+          <button id="providers-clear" class="ghost mcp-add-btn" data-i18n="providersPanel.clear">Clear</button>
+          <span id="providers-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-auxiliary-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="auxiliaryPanel.title">Auxiliary tasks</h3>
         <div id="auxiliary-rows"></div>
@@ -624,6 +636,7 @@ export class DoctorWidget {
     this.loadMonitoringSettings().catch(() => undefined);
     this.loadProxySettings().catch(() => undefined);
     this.loadAuxiliarySettings().catch(() => undefined);
+    this.loadProvidersSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2731,6 +2744,92 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadProvidersSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-providers-settings") as HTMLElement;
+    const rows = this.root.querySelector("#providers-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.providersSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const slugs = Object.keys(payload.providers).sort();
+      if (slugs.length === 0) {
+        addRow(t.providersPanel.none, escapeHtmlDoctor(auto));
+      }
+      for (const slug of slugs) {
+        const entry = payload.providers[slug];
+        const parts: string[] = [];
+        if (entry.base_url !== null) parts.push(escapeHtmlDoctor(entry.base_url));
+        if (entry.model !== null) parts.push(escapeHtmlDoctor(entry.model));
+        if (entry.mode !== null) parts.push(escapeHtmlDoctor(entry.mode));
+        if (entry.api_key_configured) parts.push(escapeHtmlDoctor(t.auxiliaryPanel.keySet));
+        if (entry.key_env !== null) parts.push(escapeHtmlDoctor(entry.key_env));
+        addRow(slug, parts.length > 0 ? parts.join(" · ") : escapeHtmlDoctor(auto));
+      }
+      // P771: custom provider editor — pick the slug and the knob,
+      // type the value (mode takes openai|anthropic), Apply persists
+      // through PUT /api/providers-settings, Clear removes the
+      // override. The literal API key stays out of the shell.
+      const editor = this.root.querySelector("#providers-editor") as HTMLElement;
+      const slugSel = this.root.querySelector("#providers-slug") as HTMLSelectElement;
+      const keySel = this.root.querySelector("#providers-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#providers-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#providers-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#providers-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#providers-status") as HTMLElement;
+      if (!slugSel.dataset.wired) {
+        slugSel.innerHTML = "";
+        for (const slug of slugs) {
+          const option = document.createElement("option");
+          option.value = slug;
+          option.textContent = slug;
+          slugSel.appendChild(option);
+        }
+        const keys = ["base_url", "key_env", "model", "mode"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateProvidersSetting(slugSel.value, keySel.value, value);
+            await this.loadProvidersSettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueInput.value.trim());
+        clearBtn.onclick = () => void applyEdit(null);
+        slugSel.dataset.wired = "1";
+      }
+      editor.hidden = slugs.length === 0;
       section.hidden = false;
     } catch {
       section.hidden = true;

@@ -6023,6 +6023,141 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/providers-settings` — P771: user-defined `[providers.*]`
+/// entries for the shell: for each custom slug the base URL, default
+/// model, wire dialect and key env name, with the literal API key
+/// surfaced only as a configured-flag (never echoed — it is a
+/// secret), plus the valid dialect list.
+async fn providers_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let mut slugs: Vec<&String> = config.providers.keys().collect();
+    slugs.sort();
+    let mut providers = Value::Object(serde_json::Map::new());
+    for slug in slugs {
+        let entry = &config.providers[slug];
+        providers[slug] = json!({
+            "base_url": entry.base_url,
+            "api_key_configured": entry
+                .api_key
+                .as_deref()
+                .map(|k| !k.trim().is_empty())
+                .unwrap_or(false),
+            "key_env": entry.key_env,
+            "model": entry.model,
+            "mode": entry.mode,
+        });
+    }
+    Json(json!({
+        "providers": providers,
+        "valid_modes": ["openai", "anthropic"],
+    }))
+}
+
+/// `PUT /api/providers-settings` — P771: persist a custom provider
+/// knob from the shell. Body: `{"provider": "<slug>", "key":
+/// "base_url"|"key_env"|"model"|"mode", "value": ...|null}` — null
+/// or empty string removes the key. The slug must already exist in
+/// `[providers.*]` (provider lifecycle stays with the model command);
+/// `mode` must be openai|anthropic. The literal API key is
+/// deliberately not editable here: it is a secret. Applies the next
+/// time the picker inventory or the provider runtime resolves.
+async fn update_providers_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["base_url", "key_env", "model", "mode"];
+    const VALID_MODES: &[&str] = &["openai", "anthropic"];
+    let provider = match body.get("provider").and_then(Value::as_str) {
+        Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'provider'" })),
+            )
+        }
+    };
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    if !config.providers.contains_key(&provider) {
+        let mut slugs: Vec<String> = config.providers.keys().cloned().collect();
+        slugs.sort();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("unknown provider '{provider}'"),
+                "providers": slugs,
+            })),
+        );
+    }
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown providers key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let text = v.as_str().map(str::trim).unwrap_or_default();
+            if !text.is_empty() {
+                if key == "mode" {
+                    let lowered = text.to_lowercase();
+                    if !VALID_MODES.contains(&lowered.as_str()) {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "error": format!("providers.{provider}.mode '{text}' is not a known dialect"),
+                                "valid_modes": VALID_MODES,
+                            })),
+                        );
+                    }
+                    raw = Some(lowered);
+                } else {
+                    raw = Some(text.to_string());
+                }
+            }
+        }
+    }
+    let dotted = format!("providers.{provider}.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "provider": provider,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/auxiliary-settings` — P770: per-task auxiliary runtime
 /// overrides for the shell: for each canonical task slot (vision,
 /// compression, approval, title_generation) the provider/model/base
@@ -10159,6 +10294,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/monitoring-settings", get(monitoring_settings_api).put(update_monitoring_settings_api))
         .route("/api/proxy-settings", get(proxy_settings_api).put(update_proxy_settings_api))
         .route("/api/auxiliary-settings", get(auxiliary_settings_api).put(update_auxiliary_settings_api))
+        .route("/api/providers-settings", get(providers_settings_api).put(update_providers_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -22232,6 +22368,93 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/auxiliary-settings", Some("sekret")).await;
         assert_eq!(body["config"]["title_generation"]["language"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_providers_settings_editor() {
+        // P771: GET /api/providers-settings surfaces custom provider
+        // entries with a key configured-flag; PUT persists per knob.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[providers.mycloud]\nbase_url = \"https://my.cloud/v1\"\napi_key = \"sk-secret\"\nmodel = \"mc-1\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Fixture provider surfaces; the secret never leaks.
+        let (status, body) = get_json(app.clone(), "/api/providers-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["providers"]["mycloud"]["base_url"], "https://my.cloud/v1", "{body}");
+        assert_eq!(body["providers"]["mycloud"]["model"], "mc-1", "{body}");
+        assert_eq!(body["providers"]["mycloud"]["api_key_configured"], true, "{body}");
+        assert_eq!(body["valid_modes"], json!(["openai", "anthropic"]), "{body}");
+        assert!(!body.to_string().contains("sk-secret"), "{body}");
+
+        // Persist each editable knob.
+        for (key, value) in [
+            ("model", json!("mc-2")),
+            ("mode", json!("anthropic")),
+            ("key_env", json!("MYCLOUD_KEY")),
+            ("base_url", json!("https://other.cloud/v1")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/providers-settings",
+                Some("sekret"),
+                json!({ "provider": "mycloud", "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/providers-settings", Some("sekret")).await;
+        assert_eq!(body["providers"]["mycloud"]["model"], "mc-2", "{body}");
+        assert_eq!(body["providers"]["mycloud"]["mode"], "anthropic", "{body}");
+        assert_eq!(body["providers"]["mycloud"]["key_env"], "MYCLOUD_KEY", "{body}");
+        assert_eq!(body["providers"]["mycloud"]["base_url"], "https://other.cloud/v1", "{body}");
+
+        // Validation: unknown provider, unknown dialect, api_key refused.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/providers-settings", Some("sekret"),
+            json!({ "provider": "ghost", "key": "model", "value": "x" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["providers"], json!(["mycloud"]), "{body}");
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/providers-settings", Some("sekret"),
+            json!({ "provider": "mycloud", "key": "mode", "value": "carrier-pigeon" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["valid_modes"], json!(["openai", "anthropic"]), "{body}");
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/providers-settings", Some("sekret"),
+            json!({ "provider": "mycloud", "key": "api_key", "value": "sk-other" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Empty string clears a knob.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/providers-settings", Some("sekret"),
+            json!({ "provider": "mycloud", "key": "mode", "value": "" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/providers-settings", Some("sekret")).await;
+        assert_eq!(body["providers"]["mycloud"]["mode"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
