@@ -205,6 +205,10 @@ async function listenMenuEvents(): Promise<void> {
     await listen("ulnclaw://gateway-log", () => {
       void openGatewayLog();
     });
+    // P800: tray Check for Updates item runs the gateway update check.
+    await listen("ulnclaw://update-check", () => {
+      void runUpdateCheck();
+    });
     // P796: whenever the shell surfaces the window (tray show,
     // second-instance handoff, quit-guard surface), refocus the composer.
     await listen("ulnclaw://window-shown", () => {

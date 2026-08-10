@@ -774,6 +774,14 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         None::<&str>,
     )?;
+    // P800: the gateway's git-behind update check, surfaced from the tray.
+    let check_updates = MenuItem::with_id(
+        app,
+        "check_updates",
+        "Check for Updates",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
@@ -783,6 +791,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &restart_gateway,
             &open_dashboard,
             &gateway_log,
+            &check_updates,
             &quit,
         ],
     )?;
@@ -816,6 +825,11 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "gateway_log" => {
                 show_main_window(app);
                 let _ = app.emit("ulnclaw://gateway-log", ());
+            }
+            // P800: the webview runs the gateway update check (toast).
+            "check_updates" => {
+                show_main_window(app);
+                let _ = app.emit("ulnclaw://update-check", ());
             }
             // P783: route through the quit guard.
             "quit" => request_quit(app),
