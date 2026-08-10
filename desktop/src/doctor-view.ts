@@ -345,6 +345,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-timezone-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="timezonePanel.title">Timezone</h3>
+        <div id="timezone-rows"></div>
+        <div id="timezone-editor" class="monitoring-row" hidden>
+          <select id="timezone-key" class="ghost"></select>
+          <input id="timezone-value" class="ghost" placeholder="Asia/Shanghai" />
+          <button id="timezone-apply" class="ghost mcp-add-btn" data-i18n="timezonePanel.apply">Apply</button>
+          <button id="timezone-clear" class="ghost mcp-add-btn" data-i18n="timezonePanel.clear">Clear</button>
+          <span id="timezone-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-dashboard-theme" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="dashboardThemePanel.title">Dashboard theme & font</h3>
         <div id="dashboard-theme-rows"></div>
@@ -575,6 +586,7 @@ export class DoctorWidget {
     this.loadPetsSettings().catch(() => undefined);
     this.loadBrowserSettings().catch(() => undefined);
     this.loadDashboardTheme().catch(() => undefined);
+    this.loadTimezoneSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2682,6 +2694,84 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadTimezoneSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-timezone-settings") as HTMLElement;
+    const rows = this.root.querySelector("#timezone-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.timezoneSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.timezonePanel.configured,
+        payload.timezone !== null ? escapeHtmlDoctor(payload.timezone) : escapeHtmlDoctor(auto),
+      );
+      addRow(t.timezonePanel.envOverride, payload.env_override ? on : off);
+      addRow(
+        t.timezonePanel.effective,
+        payload.effective !== null ? escapeHtmlDoctor(payload.effective) : escapeHtmlDoctor(auto),
+      );
+      if (payload.effective !== null) {
+        const cls = payload.valid ? "ok" : "warn";
+        addRow(
+          t.timezonePanel.valid,
+          `<span class="models-view-badge ${cls}">${escapeHtmlDoctor(payload.valid ? on : off)}</span>`,
+        );
+      }
+      // P767: timezone editor — type an IANA zone name, Apply persists
+      // through PUT /api/timezone-settings (validated server-side),
+      // Clear returns to server-local time.
+      const editor = this.root.querySelector("#timezone-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#timezone-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#timezone-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#timezone-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#timezone-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#timezone-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        keySel.innerHTML = "";
+        const option = document.createElement("option");
+        option.value = "timezone";
+        option.textContent = "timezone";
+        keySel.appendChild(option);
+        const applyEdit = async (value: string | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateTimezoneSetting(keySel.value, value);
+            await this.loadTimezoneSettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueInput.value.trim());
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

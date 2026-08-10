@@ -628,6 +628,14 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/timezone-settings` — P767 agent wall-clock timezone. */
+export interface TimezoneSettingsPayload {
+  timezone: string | null;
+  env_override: boolean;
+  effective: string | null;
+  valid: boolean;
+}
+
 /** `GET /api/browser-settings` — P763 browser tool endpoint knobs. */
 export interface BrowserSettingsPayload {
   cdp_url: string | null;
@@ -4167,6 +4175,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/timezone-settings — P767 IANA timezone knob. */
+  async timezoneSettings(): Promise<TimezoneSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/timezone-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`timezone-settings HTTP ${response.status}`);
+    return (await response.json()) as TimezoneSettingsPayload;
+  }
+
+  /** P767: PUT /api/timezone-settings — persist the timezone; null or
+   * empty string returns to server-local time. */
+  async updateTimezoneSetting(
+    key: string,
+    value: string | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/timezone-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `timezone-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/browser-settings — P763 CDP/cloud knobs. */

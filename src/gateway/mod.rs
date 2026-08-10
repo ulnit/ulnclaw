@@ -6023,6 +6023,103 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/timezone-settings` — P767: the agent wall-clock timezone
+/// knob for the shell: the configured IANA name from config.toml
+/// (null when unset), the `ULNCLAW_TIMEZONE`/`HERMES_TIMEZONE`
+/// env-override flag, the effective name after env resolution and
+/// whether it parses as a known IANA zone.
+async fn timezone_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let env_set = |name: &str| {
+        std::env::var(name)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    };
+    let effective = crate::hermes_time::resolve_timezone_name(config.timezone.as_deref());
+    let valid = effective
+        .as_deref()
+        .map(|name| name.parse::<chrono_tz::Tz>().is_ok())
+        .unwrap_or(false);
+    Json(json!({
+        "timezone": config.timezone,
+        "env_override": env_set("ULNCLAW_TIMEZONE") || env_set("HERMES_TIMEZONE"),
+        "effective": effective,
+        "valid": valid,
+    }))
+}
+
+/// `PUT /api/timezone-settings` — P767: persist the agent timezone
+/// from the shell. Body: `{"key": "timezone", "value": "Area/City"|
+/// null}` — null or empty string removes the key (server-local time).
+/// Values must parse as IANA zone names. Clears the resolved-timezone
+/// cache so the next turn picks the new zone up.
+async fn update_timezone_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["timezone"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown timezone key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let text = v.as_str().map(str::trim).unwrap_or_default();
+            if !text.is_empty() {
+                if text.parse::<chrono_tz::Tz>().is_err() {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!("timezone '{text}' is not a known IANA zone name") })),
+                    );
+                }
+                raw = Some(text.to_string());
+            }
+        }
+    }
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value("timezone")
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value("timezone", raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => {
+            crate::hermes_time::reset_cache();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "key": key,
+                    "removed": removing,
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/browser-settings` — P763: browser tool endpoint knobs
 /// for the shell: the persistent CDP URL (`ws://`/`http(s)://`/`auto`,
 /// null when unset), the cloud provider override (`browser-use`/
@@ -9598,6 +9695,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/discord-settings", get(discord_settings_api).put(update_discord_settings_api))
         .route("/api/pets-settings", get(pets_settings_api).put(update_pets_settings_api))
         .route("/api/browser-settings", get(browser_settings_api).put(update_browser_settings_api))
+        .route("/api/timezone-settings", get(timezone_settings_api).put(update_timezone_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -21340,6 +21438,66 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/browser-settings", Some("sekret")).await;
         assert_eq!(body["cloud_provider"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_timezone_settings_editor() {
+        // P767: GET /api/timezone-settings surfaces the IANA knob +
+        // validity; PUT validates and persists, clearing the cache.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: unset, server-local, no override.
+        let (status, body) = get_json(app.clone(), "/api/timezone-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["timezone"], Value::Null, "{body}");
+        assert_eq!(body["effective"], Value::Null, "{body}");
+        assert_eq!(body["env_override"], false, "{body}");
+
+        // Persist a valid zone.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/timezone-settings",
+            Some("sekret"),
+            json!({ "key": "timezone", "value": "Asia/Shanghai" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/timezone-settings", Some("sekret")).await;
+        assert_eq!(body["timezone"], "Asia/Shanghai", "{body}");
+        assert_eq!(body["effective"], "Asia/Shanghai", "{body}");
+        assert_eq!(body["valid"], true, "{body}");
+
+        // Unknown zones are rejected.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/timezone-settings", Some("sekret"),
+            json!({ "key": "timezone", "value": "Mars/Olympus_Mons" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+        // null removes the key back to server-local.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/timezone-settings", Some("sekret"),
+            json!({ "key": "timezone", "value": Value::Null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/timezone-settings", Some("sekret")).await;
+        assert_eq!(body["timezone"], Value::Null, "{body}");
+        assert_eq!(body["effective"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

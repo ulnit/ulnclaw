@@ -371,6 +371,7 @@ export interface Translations {
   petsPanel: { title: string; baseUrl: string; model: string; apiKey: string; envFallback: string; apply: string; clear: string; };
   browserSettingsPanel: { title: string; cdpUrl: string; cdpEnvOverride: string; cloudProvider: string; useGateway: string; validProviders: string; apply: string; clear: string; };
   dashboardThemePanel: { title: string; activeTheme: string; activeFont: string; themes: string; fontChoices: string; apply: string; clear: string; };
+  timezonePanel: { title: string; configured: string; envOverride: string; effective: string; valid: string; apply: string; clear: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -902,6 +903,7 @@ const en: Translations = {
   petsPanel: { title: "Pet images", baseUrl: "Images base URL", model: "Image model", apiKey: "API key configured", envFallback: "Env key fallback", apply: "Apply", clear: "Clear" },
   browserSettingsPanel: { title: "Browser tool settings", cdpUrl: "CDP endpoint", cdpEnvOverride: "CDP env override", cloudProvider: "Cloud provider", useGateway: "Prefer managed gateway", validProviders: "Valid providers", apply: "Apply", clear: "Clear" },
   dashboardThemePanel: { title: "Dashboard theme & font", activeTheme: "Active theme", activeFont: "Active font", themes: "Themes", fontChoices: "Font choices", apply: "Apply", clear: "Reset" },
+  timezonePanel: { title: "Timezone", configured: "Configured zone", envOverride: "Env override", effective: "Effective zone", valid: "Valid IANA zone", apply: "Apply", clear: "Clear" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1510,6 +1512,7 @@ const zh: Translations = {
   petsPanel: { title: "宠物图像", baseUrl: "图像服务地址", model: "图像模型", apiKey: "API 密钥已配置", envFallback: "环境变量密钥回退", apply: "应用", clear: "清除" },
   browserSettingsPanel: { title: "浏览器工具设置", cdpUrl: "CDP 端点", cdpEnvOverride: "CDP 环境变量覆盖", cloudProvider: "云浏览器后端", useGateway: "优先托管网关", validProviders: "可选后端", apply: "应用", clear: "清除" },
   dashboardThemePanel: { title: "仪表盘主题与字体", activeTheme: "当前主题", activeFont: "当前字体", themes: "主题目录", fontChoices: "可选字体", apply: "应用", clear: "重置" },
+  timezonePanel: { title: "时区", configured: "已配置时区", envOverride: "环境变量覆盖", effective: "生效时区", valid: "有效 IANA 时区", apply: "应用", clear: "清除" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2118,6 +2121,7 @@ const zhHant: Translations = {
   petsPanel: { title: "寵物圖像", baseUrl: "圖像服務位址", model: "圖像模型", apiKey: "API 金鑰已設定", envFallback: "環境變數金鑰回退", apply: "套用", clear: "清除" },
   browserSettingsPanel: { title: "瀏覽器工具設定", cdpUrl: "CDP 端點", cdpEnvOverride: "CDP 環境變數覆蓋", cloudProvider: "雲端瀏覽器後端", useGateway: "優先託管閘道", validProviders: "可選後端", apply: "套用", clear: "清除" },
   dashboardThemePanel: { title: "儀表板主題與字型", activeTheme: "目前主題", activeFont: "目前字型", themes: "主題目錄", fontChoices: "可選字型", apply: "套用", clear: "重置" },
+  timezonePanel: { title: "時區", configured: "已設定時區", envOverride: "環境變數覆蓋", effective: "生效時區", valid: "有效 IANA 時區", apply: "套用", clear: "清除" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2726,6 +2730,7 @@ const ja: Translations = {
   petsPanel: { title: "ペット画像", baseUrl: "画像エンドポイント", model: "画像モデル", apiKey: "API キー設定済み", envFallback: "環境変数キー代替", apply: "適用", clear: "クリア" },
   browserSettingsPanel: { title: "ブラウザツール設定", cdpUrl: "CDP エンドポイント", cdpEnvOverride: "CDP 環境変数オーバーライド", cloudProvider: "クラウドプロバイダー", useGateway: "管理ゲートウェイ優先", validProviders: "有効なプロバイダー", apply: "適用", clear: "クリア" },
   dashboardThemePanel: { title: "ダッシュボードのテーマとフォント", activeTheme: "現在のテーマ", activeFont: "現在のフォント", themes: "テーマ一覧", fontChoices: "フォント候補", apply: "適用", clear: "リセット" },
+  timezonePanel: { title: "タイムゾーン", configured: "設定済みゾーン", envOverride: "環境変数オーバーライド", effective: "有効なゾーン", valid: "有効な IANA ゾーン", apply: "適用", clear: "クリア" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3334,6 +3339,7 @@ const ar: Translations = {
   petsPanel: { title: "صور الحيوانات", baseUrl: "عنوان الصور", model: "نموذج الصور", apiKey: "مفتاح API مهيأ", envFallback: "مفتاح البيئة الاحتياطي", apply: "تطبيق", clear: "مسح" },
   browserSettingsPanel: { title: "إعدادات أداة المتصفح", cdpUrl: "نقطة CDP", cdpEnvOverride: "تجاوز بيئة CDP", cloudProvider: "مزود السحابة", useGateway: "تفضيل البوابة المُدارة", validProviders: "الموفرون الصالحون", apply: "تطبيق", clear: "مسح" },
   dashboardThemePanel: { title: "سمة لوحة التحكم والخط", activeTheme: "السمة النشطة", activeFont: "الخط النشط", themes: "السمات", fontChoices: "خيارات الخطوط", apply: "تطبيق", clear: "إعادة تعيين" },
+  timezonePanel: { title: "المنطقة الزمنية", configured: "المنطقة المُعدة", envOverride: "تجاوز البيئة", effective: "المنطقة الفعلية", valid: "منطقة IANA صالحة", apply: "تطبيق", clear: "مسح" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",
