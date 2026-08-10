@@ -2193,9 +2193,7 @@ async fn gateway_stop() -> Response {
         if let Ok(home) = crate::config::ensure_home() {
             crate::lifecycle_ledger::mark_exited(&home, Some(0), "api_stop");
         }
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        let _ = crate::process_ctl::terminate(pid);
     });
     Json(json!({ "ok": true, "note": "gateway shutting down" })).into_response()
 }
@@ -18542,7 +18540,6 @@ pub type DispatcherProviderFactory = std::sync::Arc<
 /// open for as long as this process dispatches; dropping it releases
 /// the lock.
 fn try_acquire_dispatcher_lock_at(path: &std::path::Path) -> Option<std::fs::File> {
-    use std::os::unix::io::AsRawFd;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok()?;
     }
@@ -18551,12 +18548,10 @@ fn try_acquire_dispatcher_lock_at(path: &std::path::Path) -> Option<std::fs::Fil
         .append(true)
         .open(path)
         .ok()?;
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc == 0 {
-        Some(file)
-    } else {
-        None
-    }
+    // Non-blocking exclusive lock (flock / LockFileEx); dropping
+    // the file releases it.
+    crate::process_ctl::try_lock_exclusive(&file).ok()?;
+    Some(file)
 }
 
 /// Start the embedded kanban dispatcher loop (hermes hosts the dispatcher

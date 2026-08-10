@@ -30,6 +30,7 @@ pub fn notify(message: &str) -> bool {
     notify_to(address, message)
 }
 
+#[cfg(unix)]
 fn notify_to(address: &str, message: &str) -> bool {
     use std::os::unix::net::UnixDatagram;
     // Abstract-namespace sockets start with '@' — map to a leading
@@ -55,6 +56,12 @@ fn notify_to(address: &str, message: &str) -> bool {
         // must not stall the gateway.
         Err(_) => false,
     }
+}
+
+/// No systemd notify socket on non-unix platforms.
+#[cfg(not(unix))]
+fn notify_to(_address: &str, _message: &str) -> bool {
+    false
 }
 
 /// systemd's configured watchdog interval (`WATCHDOG_USEC`), present

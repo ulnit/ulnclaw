@@ -223,9 +223,7 @@ pub fn spawn_bridge(cfg: &RaftConfig, endpoint: &str) -> Option<BridgeHandle> {
 pub async fn stop_bridge(mut handle: BridgeHandle) {
     let pid = handle.child.id().unwrap_or(0);
     if pid != 0 {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        let _ = crate::process_ctl::terminate(pid);
     }
     match tokio::time::timeout(Duration::from_secs(5), handle.child.wait()).await {
         Ok(status) => {

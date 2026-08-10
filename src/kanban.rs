@@ -603,6 +603,7 @@ pub fn spawn_worker(
     task: &Task,
     workdir: Option<&Path>,
 ) -> std::result::Result<Option<i64>, String> {
+    #[cfg(unix)]
     use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
     let log_dir = home.join("kanban").join("worker-logs");
@@ -654,6 +655,7 @@ pub fn spawn_worker(
         .stdout(std::process::Stdio::from(log_file))
         .stderr(std::process::Stdio::from(err_file));
     // New session: the worker survives the dispatcher's process group.
+    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
@@ -2067,7 +2069,7 @@ fn pid_alive(pid: i64) -> bool {
     if pid <= 0 {
         return false;
     }
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
+    crate::process_ctl::alive(pid as u32)
 }
 
 /// Arguments for [`KanbanStore::create_task`].
@@ -5878,9 +5880,7 @@ impl KanbanStore {
             let mut sigkill = false;
             if let Some(pid) = worker_pid {
                 if pid_alive(pid) {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
-                    }
+                    let _ = crate::process_ctl::terminate(pid as u32);
                     for _ in 0..10 {
                         if !pid_alive(pid) {
                             break;
@@ -5888,9 +5888,7 @@ impl KanbanStore {
                         std::thread::sleep(std::time::Duration::from_millis(500));
                     }
                     if pid_alive(pid) {
-                        unsafe {
-                            libc::kill(pid as i32, libc::SIGKILL);
-                        }
+                        let _ = crate::process_ctl::kill_hard(pid as u32);
                         sigkill = true;
                     }
                 }
@@ -6059,9 +6057,7 @@ impl KanbanStore {
             }
             if let Some(pid) = worker_pid {
                 if pid_alive(pid) {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
-                    }
+                    let _ = crate::process_ctl::terminate(pid as u32);
                     for _ in 0..10 {
                         if !pid_alive(pid) {
                             break;
@@ -6069,9 +6065,7 @@ impl KanbanStore {
                         std::thread::sleep(std::time::Duration::from_millis(500));
                     }
                     if pid_alive(pid) {
-                        unsafe {
-                            libc::kill(pid as i32, libc::SIGKILL);
-                        }
+                        let _ = crate::process_ctl::kill_hard(pid as u32);
                         std::thread::sleep(std::time::Duration::from_millis(200));
                         if pid_alive(pid) {
                             // Never release a claim while the worker is
@@ -6490,7 +6484,6 @@ impl KanbanStore {
     /// concurrently — the loser skips the tick and retries next
     /// interval. Dropping the returned handle releases the lock.
     pub fn try_acquire_dispatch_tick_lock(db_path: &Path) -> Option<std::fs::File> {
-        use std::os::unix::io::AsRawFd;
         let name = db_path.file_name()?.to_string_lossy().to_string();
         let lock_path = db_path.with_file_name(format!("{name}.dispatch.lock"));
         let file = std::fs::OpenOptions::new()
@@ -6498,13 +6491,10 @@ impl KanbanStore {
             .append(true)
             .open(&lock_path)
             .ok()?;
-        let acquired = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }
-            == 0;
-        if acquired {
-            Some(file)
-        } else {
-            None
-        }
+        // Non-blocking exclusive lock (flock / LockFileEx); dropping
+        // the file releases it.
+        crate::process_ctl::try_lock_exclusive(&file).ok()?;
+        Some(file)
     }
 
     /// Run one dispatcher tick (hermes `dispatch_once`, scoped port):

@@ -171,6 +171,7 @@ pub mod profile_routing;
 pub mod turn_lease;
 pub mod oauth;
 pub mod pairing;
+pub mod process_ctl;
 pub mod profiles_cmd;
 pub mod mcp_catalog;
 pub mod pets;

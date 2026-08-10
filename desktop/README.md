@@ -166,6 +166,20 @@ Notes:
   and the pidfile single-instance guard is disabled (no `/proc`).
 - The Bitwarden `bws` asset path under secrets is untested on Windows.
 
+### Pre-built installers (CI)
+
+Tag pushes run `.github/workflows/release.yml` (GitHub Actions) and
+attach self-contained installers to the release:
+
+- `ulnclaw_<ver>_x64-setup.exe` — Windows NSIS installer
+- `ulnclaw_<ver>_aarch64.dmg` — macOS (Apple Silicon)
+- `ulnclaw_<ver>_x64.dmg` — macOS (Intel)
+
+CI builds the core `ulnclaw` binary and ships it inside the bundle as
+a Tauri resource, so the installers need no separate Rust/CLI setup.
+The macOS dmg is unsigned — if Gatekeeper blocks the app, run
+`xattr -cr /Applications/ulnclaw.app`.
+
 ---
 
 ## 中文
@@ -305,3 +319,16 @@ npm run tauri build -- --bundles nsis
 - Windows 上退出应用时网关进程为尽力而为的停止（无 SIGTERM），
   单实例 pidfile 守卫不生效（无 `/proc`）。
 - secrets 的 Bitwarden `bws` 资产路径在 Windows 上未经测试。
+
+### 预构建安装包（CI）
+
+推送 tag 会触发 `.github/workflows/release.yml`（GitHub Actions），
+自动构建自包含安装包并附到 release：
+
+- `ulnclaw_<版本>_x64-setup.exe` —— Windows NSIS 安装包
+- `ulnclaw_<版本>_aarch64.dmg` —— macOS（Apple Silicon）
+- `ulnclaw_<版本>_x64.dmg` —— macOS（Intel）
+
+CI 会先构建核心 `ulnclaw` 二进制并作为 Tauri 资源打进安装包，
+因此安装包无需另行安装 Rust/CLI。macOS dmg 未签名——若被
+Gatekeeper 拦截，执行 `xattr -cr /Applications/ulnclaw.app` 即可。

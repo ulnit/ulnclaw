@@ -1,1 +1,3 @@
 /target
+# CI-staged core binary for the desktop bundle (P805)
+desktop/src-tauri/binaries/

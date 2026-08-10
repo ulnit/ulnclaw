@@ -165,13 +165,9 @@ pub fn pid_exists(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }
-    let rc = unsafe { libc::kill(pid, 0) };
-    if rc == 0 {
-        return true;
-    }
-    // EPERM means the process exists but is owned by someone else.
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    crate::process_ctl::alive(pid as u32)
 }
+
 
 /// Kernel start time (clock ticks since boot, field 22 of
 /// `/proc/<pid>/stat`) — the definitive identity for a PID.
@@ -258,9 +254,7 @@ pub fn kill_stale_bridge_by_pidfile(session_dir: &Path) {
     match read_bridge_pidfile(session_dir) {
         Some((pid, start)) => {
             if bridge_pid_is_ours(pid, session_dir, start) {
-                unsafe {
-                    libc::kill(pid, libc::SIGTERM);
-                }
+                let _ = crate::process_ctl::terminate(pid as u32);
                 eprintln!("[whatsapp] killed stale bridge pid {pid} from pidfile");
             } else if pid_exists(pid) {
                 eprintln!(
@@ -319,9 +313,7 @@ pub fn kill_port_process(port: u16) {
         }
     }
     for pid in pids {
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
-        }
+        let _ = crate::process_ctl::terminate(pid as u32);
         eprintln!("[whatsapp] terminated stale listener pid {pid} on port {port}");
     }
 }
@@ -547,9 +539,7 @@ pub fn adoption_blocker(health: &Value, script_path: &Path, read_receipts: bool)
 /// `_terminate_bridge_process`).
 pub async fn stop_bridge(mut bridge: BridgeProcess) {
     if bridge.pid > 0 {
-        unsafe {
-            libc::kill(bridge.pid, libc::SIGTERM);
-        }
+        let _ = crate::process_ctl::terminate(bridge.pid as u32);
     }
     match tokio::time::timeout(Duration::from_secs(5), bridge.child.wait()).await {
         Ok(status) => {

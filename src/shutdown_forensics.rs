@@ -21,7 +21,9 @@ pub fn signal_name(sig: i32) -> String {
     let name = match sig {
         libc::SIGTERM => "SIGTERM",
         libc::SIGINT => "SIGINT",
+        #[cfg(unix)]
         libc::SIGHUP => "SIGHUP",
+        #[cfg(unix)]
         libc::SIGQUIT => "SIGQUIT",
         #[cfg(not(windows))]
         libc::SIGUSR1 => "SIGUSR1",

@@ -64,11 +64,7 @@ pub fn is_alive(pid: u32) -> bool {
     if let Some(state) = process_state(pid) {
         return state != 'Z' && state != 'X' && state != 'x';
     }
-    let rc = unsafe { libc::kill(pid as i32, 0) };
-    if rc == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    crate::process_ctl::alive(pid)
 }
 
 /// Write the pidfile for the CURRENT process (best-effort caller
@@ -111,12 +107,11 @@ pub fn running_gateway_pid(home: &Path) -> Option<u32> {
 /// `gateway run --replace`): SIGTERM, poll until exit, escalate to
 /// SIGKILL after `term_timeout`.
 pub fn replace_running(pid: u32, term_timeout: Duration) -> Result<(), String> {
-    if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::ESRCH) {
+    if let Err(err) = crate::process_ctl::terminate(pid) {
+        if err.kind() == std::io::ErrorKind::NotFound {
             return Ok(()); // already gone
         }
-        return Err(format!("SIGTERM pid {pid}: {err}"));
+        return Err(format!("terminate pid {pid}: {err}"));
     }
     let deadline = std::time::Instant::now() + term_timeout;
     while std::time::Instant::now() < deadline {
@@ -125,7 +120,7 @@ pub fn replace_running(pid: u32, term_timeout: Duration) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    let _ = crate::process_ctl::kill_hard(pid);
     let kill_deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < kill_deadline {
         if !is_alive(pid) {

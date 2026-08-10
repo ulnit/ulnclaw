@@ -190,7 +190,22 @@ fn release_single_instance() {
 
 /// Locate the `ulnclaw` binary: PATH first, then common install spots.
 #[tauri::command]
-fn find_ulnclaw_binary() -> Option<String> {
+/// Installer-bundled core binary — CI installers ship `ulnclaw`
+/// alongside the shell as a Tauri resource (`binaries/ulnclaw[.exe]`).
+fn bundled_binary(app: &tauri::AppHandle) -> Option<String> {
+    let name = if cfg!(windows) { "ulnclaw.exe" } else { "ulnclaw" };
+    let dir = app.path().resource_dir().ok()?;
+    let candidate = dir.join("binaries").join(name);
+    candidate.is_file().then(|| candidate.display().to_string())
+}
+
+#[tauri::command]
+fn find_ulnclaw_binary(app: tauri::AppHandle) -> Option<String> {
+    // The installer's bundled copy wins so a self-contained install
+    // never depends on PATH.
+    if let Some(path) = bundled_binary(&app) {
+        return Some(path);
+    }
     let exe_name = if cfg!(windows) { "ulnclaw.exe" } else { "ulnclaw" };
     if let Ok(path_var) = std::env::var("PATH") {
         // split_paths handles the platform separator (':' vs ';').
@@ -219,7 +234,9 @@ fn find_ulnclaw_binary() -> Option<String> {
 /// falling back to 8642.
 #[tauri::command]
 fn default_gateway_port() -> u16 {
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from);
     if let Some(home) = home {
         if let Ok(text) = std::fs::read_to_string(home.join(".ulnclaw").join("config.toml")) {
             if let Ok(doc) = text.parse::<toml_min::Value>() {
@@ -239,10 +256,10 @@ fn default_gateway_port() -> u16 {
 /// P777: About info for the Help menu — shell version, detected
 /// `ulnclaw` binary and the gateway port the shell targets.
 #[tauri::command]
-fn desktop_about() -> serde_json::Value {
+fn desktop_about(app: tauri::AppHandle) -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "binary": find_ulnclaw_binary(),
+        "binary": find_ulnclaw_binary(app),
         "port": default_gateway_port(),
     })
 }
@@ -737,7 +754,7 @@ fn setup_app_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         "zoom_out" => adjust_zoom(handle, -1.0, false),
         "zoom_actual" => adjust_zoom(handle, 0.0, true),
         "about" => {
-            let _ = handle.emit("ulnclaw://about", desktop_about());
+            let _ = handle.emit("ulnclaw://about", desktop_about(handle.clone()));
         }
         // P783: route through the quit guard.
         "quit" => request_quit(handle),

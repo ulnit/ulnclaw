@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -143,19 +142,15 @@ impl FileLock {
             fs::create_dir_all(parent)?;
         }
         let file = OpenOptions::new().create(true).read(true).write(true).open(path)?;
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if rc != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        // flock on unix, LockFileEx on Windows (hermes `_FileLock`).
+        crate::process_ctl::lock_exclusive(&file)?;
         Ok(Self { file })
     }
 }
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-        }
+        let _ = crate::process_ctl::unlock(&self.file);
     }
 }
 
@@ -195,6 +190,7 @@ fn write_entries(path: &Path, entries: &[SessionEntry]) {
 /// Process start time (seconds since boot) from `/proc/<pid>/stat` — a
 /// stable per-incarnation value so a recycled PID cannot spoof liveness
 /// (hermes `_process_start_time` via psutil create_time).
+#[cfg(unix)]
 fn process_start_time(pid: u32) -> Option<f64> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // Field 2 (comm) may contain spaces/parens; find the last ')' first.
@@ -210,18 +206,18 @@ fn process_start_time(pid: u32) -> Option<f64> {
     Some(ticks / clk_tck)
 }
 
+/// No `/proc` on this platform — start times unavailable.
+#[cfg(not(unix))]
+fn process_start_time(_pid: u32) -> Option<f64> {
+    None
+}
+
 fn pid_alive(pid: u32, expected_start: Option<f64>) -> bool {
     if pid == 0 {
         return false;
     }
-    // signal 0 probes existence without delivering anything.
-    let rc = unsafe { libc::kill(pid as i32, 0) };
-    if rc != 0 {
-        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        if errno == libc::ESRCH {
-            return false;
-        }
-        // EPERM etc. → the process exists but is not ours.
+    if !crate::process_ctl::alive(pid) {
+        return false;
     }
     let Some(expected) = expected_start else { return true };
     let Some(current) = process_start_time(pid) else { return true };

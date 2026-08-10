@@ -210,9 +210,7 @@ pub fn stop_gateway_processes() -> Vec<u32> {
     let pids = find_gateway_processes();
     let mut stopped = Vec::new();
     for pid in pids {
-        // SAFETY: kill(pid, SIGTERM) on a pid discovered via /proc.
-        let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-        if result == 0 {
+        if crate::process_ctl::terminate(pid).is_ok() {
             stopped.push(pid);
         }
     }

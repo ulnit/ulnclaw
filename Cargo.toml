@@ -47,6 +47,7 @@ axum = "0.7"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tower = { version = "0.4", features = ["util"] }
 libc = "0.2"
+
 crossterm = "0.28"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
@@ -67,3 +68,6 @@ tokio-test = "0.4"
 [[bin]]
 name = "ulnclaw"
 path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.48", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
