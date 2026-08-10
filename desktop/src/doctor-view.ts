@@ -245,6 +245,17 @@ export class DoctorWidget {
           <span id="video-gen-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-discord-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="discordPanel.title">Discord tool</h3>
+        <div id="discord-rows"></div>
+        <div id="discord-editor" class="monitoring-row" hidden>
+          <select id="discord-key" class="ghost"></select>
+          <input id="discord-value" class="ghost" data-i18n-ph="discordPanel.placeholder" placeholder="fetch_messages, list_pins" />
+          <button id="discord-apply" class="ghost mcp-add-btn" data-i18n="discordPanel.apply">Apply</button>
+          <button id="discord-clear" class="ghost mcp-add-btn" data-i18n="discordPanel.clear">Clear</button>
+          <span id="discord-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-moa-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="moaPanel.title">Mixture of Agents</h3>
         <div id="moa-rows"></div>
@@ -521,6 +532,7 @@ export class DoctorWidget {
     this.loadXSearchSettings().catch(() => undefined);
     this.loadVideoGenSettings().catch(() => undefined);
     this.loadMoaSettings().catch(() => undefined);
+    this.loadDiscordSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2604,6 +2616,82 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadDiscordSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-discord-settings") as HTMLElement;
+    const rows = this.root.querySelector("#discord-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.discordSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      addRow(
+        t.discordPanel.serverActions,
+        payload.server_actions !== null
+          ? payload.server_actions.map(escapeHtmlDoctor).join(", ")
+          : escapeHtmlDoctor(`${auto} (${payload.known_actions.length})`),
+      );
+      addRow(
+        t.discordPanel.knownActions,
+        payload.known_actions.map(escapeHtmlDoctor).join(", "),
+      );
+      // P761: Discord allowlist editor — type comma-separated action
+      // names, Apply persists through PUT /api/discord-settings,
+      // Clear removes the allowlist; the panel re-renders from disk
+      // state afterwards.
+      const editor = this.root.querySelector("#discord-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#discord-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#discord-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#discord-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#discord-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#discord-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        keySel.innerHTML = "";
+        const option = document.createElement("option");
+        option.value = "server_actions";
+        option.textContent = "server_actions";
+        keySel.appendChild(option);
+        const applyEdit = async (value: string[] | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateDiscordSetting(keySel.value, value);
+            await this.loadDiscordSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const names = valueInput.value
+            .split(",")
+            .map((part) => part.trim())
+            .filter((part) => part.length > 0);
+          void applyEdit(names);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

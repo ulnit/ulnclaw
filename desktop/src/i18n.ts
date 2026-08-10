@@ -366,6 +366,7 @@ export interface Translations {
   xSearchPanel: { title: string; model: string; reasoning: string; timeout: string; retries: string; apply: string; clear: string; };
   videoGenPanel: { title: string; provider: string; model: string; falModel: string; apply: string; clear: string; };
   moaPanel: { title: string; defaultPreset: string; saveTraces: string; traceDir: string; privacyFilter: string; presets: string; apply: string; clear: string; };
+  discordPanel: { title: string; serverActions: string; knownActions: string; placeholder: string; apply: string; clear: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -892,6 +893,7 @@ const en: Translations = {
   xSearchPanel: { title: "X search", model: "Model", reasoning: "Reasoning effort", timeout: "Timeout", retries: "Retries", apply: "Apply", clear: "Clear" },
   videoGenPanel: { title: "Video generation", provider: "Backend", model: "Default model", falModel: "FAL model family", apply: "Apply", clear: "Clear" },
   moaPanel: { title: "Mixture of Agents", defaultPreset: "Default preset", saveTraces: "Save traces", traceDir: "Trace dir", privacyFilter: "Privacy filter", presets: "Presets", apply: "Apply", clear: "Clear" },
+  discordPanel: { title: "Discord tool", serverActions: "Action allowlist", knownActions: "Known actions", placeholder: "fetch_messages, list_pins", apply: "Apply", clear: "Clear" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1495,6 +1497,7 @@ const zh: Translations = {
   xSearchPanel: { title: "X 搜索", model: "模型", reasoning: "推理强度", timeout: "超时", retries: "重试次数", apply: "应用", clear: "清除" },
   videoGenPanel: { title: "视频生成", provider: "后端", model: "默认模型", falModel: "FAL 模型族", apply: "应用", clear: "清除" },
   moaPanel: { title: "混合智能体（MoA）", defaultPreset: "默认预设", saveTraces: "保存轨迹", traceDir: "轨迹目录", privacyFilter: "隐私过滤", presets: "预设", apply: "应用", clear: "清除" },
+  discordPanel: { title: "Discord 工具", serverActions: "动作白名单", knownActions: "已知动作", placeholder: "fetch_messages, list_pins", apply: "应用", clear: "清除" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2098,6 +2101,7 @@ const zhHant: Translations = {
   xSearchPanel: { title: "X 搜尋", model: "模型", reasoning: "推理強度", timeout: "逾時", retries: "重試次數", apply: "套用", clear: "清除" },
   videoGenPanel: { title: "影片生成", provider: "後端", model: "預設模型", falModel: "FAL 模型族", apply: "套用", clear: "清除" },
   moaPanel: { title: "混合智能體（MoA）", defaultPreset: "預設組合", saveTraces: "儲存追蹤", traceDir: "追蹤目錄", privacyFilter: "隱私過濾", presets: "組合清單", apply: "套用", clear: "清除" },
+  discordPanel: { title: "Discord 工具", serverActions: "動作白名單", knownActions: "已知動作", placeholder: "fetch_messages, list_pins", apply: "套用", clear: "清除" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2701,6 +2705,7 @@ const ja: Translations = {
   xSearchPanel: { title: "X 検索", model: "モデル", reasoning: "推論労力", timeout: "タイムアウト", retries: "リトライ回数", apply: "適用", clear: "クリア" },
   videoGenPanel: { title: "動画生成", provider: "バックエンド", model: "既定モデル", falModel: "FAL モデルファミリー", apply: "適用", clear: "クリア" },
   moaPanel: { title: "Mixture of Agents", defaultPreset: "既定プリセット", saveTraces: "トレース保存", traceDir: "トレースディレクトリ", privacyFilter: "プライバシーフィルター", presets: "プリセット", apply: "適用", clear: "クリア" },
+  discordPanel: { title: "Discord ツール", serverActions: "アクション許可リスト", knownActions: "既知アクション", placeholder: "fetch_messages, list_pins", apply: "適用", clear: "クリア" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3304,6 +3309,7 @@ const ar: Translations = {
   xSearchPanel: { title: "بحث X", model: "النموذج", reasoning: "جهد الاستدلال", timeout: "المهلة", retries: "إعادة المحاولات", apply: "تطبيق", clear: "مسح" },
   videoGenPanel: { title: "توليد الفيديو", provider: "الواجهة الخلفية", model: "النموذج الافتراضي", falModel: "عائلة نماذج FAL", apply: "تطبيق", clear: "مسح" },
   moaPanel: { title: "مزيج الوكلاء", defaultPreset: "الإعداد المسبق الافتراضي", saveTraces: "حفظ التتبعات", traceDir: "مجلد التتبع", privacyFilter: "مرشح الخصوصية", presets: "الإعدادات المسبقة", apply: "تطبيق", clear: "مسح" },
+  discordPanel: { title: "أداة Discord", serverActions: "قائمة الإجراءات المسموحة", knownActions: "الإجراءات المعروفة", placeholder: "fetch_messages, list_pins", apply: "تطبيق", clear: "مسح" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

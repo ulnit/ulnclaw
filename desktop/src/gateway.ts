@@ -628,6 +628,12 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/discord-settings` — P761 Discord tool action allowlist. */
+export interface DiscordSettingsPayload {
+  server_actions: string[] | null;
+  known_actions: string[];
+}
+
 /** `GET /api/moa-settings` — P760 Mixture-of-Agents shell knobs. */
 export interface MoaSettingsPayload {
   default_preset: string | null;
@@ -4130,6 +4136,39 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/discord-settings — P761 server_actions allowlist. */
+  async discordSettings(): Promise<DiscordSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/discord-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`discord-settings HTTP ${response.status}`);
+    return (await response.json()) as DiscordSettingsPayload;
+  }
+
+  /** P761: PUT /api/discord-settings — persist the action allowlist;
+   * null removes it (every intent-available action exposed). */
+  async updateDiscordSetting(
+    key: string,
+    value: string[] | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/discord-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        known_actions?: string[];
+      };
+      const suffix = body.known_actions?.length
+        ? ` (known: ${body.known_actions.join(", ")})`
+        : "";
+      throw new Error(`${body.error ?? `discord-settings PUT HTTP ${response.status}`}${suffix}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/moa-settings — P760 MoA knobs + preset names. */

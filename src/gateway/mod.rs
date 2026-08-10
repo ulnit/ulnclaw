@@ -6022,6 +6022,128 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/discord-settings` — P761: Discord tool knobs for the
+/// shell: the `server_actions` allowlist (comma string or list in
+/// config, normalised to a list here; null when unset — every
+/// intent-available action exposed) plus the known action names so
+/// operators can see what an allowlist may reference.
+async fn discord_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let server_actions: Option<Vec<String>> = config.discord.server_actions.map(|raw| match raw {
+        crate::config::StringOrList::Single(string) => string
+            .split(',')
+            .map(|part| part.trim().to_string())
+            .filter(|part| !part.is_empty())
+            .collect(),
+        crate::config::StringOrList::List(list) => list
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect(),
+    });
+    Json(json!({
+        "server_actions": server_actions,
+        "known_actions": crate::discord_tool::ALL_ACTIONS,
+    }))
+}
+
+/// `PUT /api/discord-settings` — P761: persist the Discord tool
+/// allowlist from the shell. Body: `{"key": "server_actions",
+/// "value": ["action", ...] | "a, b" | null}` — null (or an empty
+/// list/string) removes the key (every intent-available action is
+/// exposed). Entries must be known actions; the 400 reply lists them.
+/// The tool re-reads the allowlist on each call.
+async fn update_discord_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["server_actions"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown discord key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let names: Vec<String> = match v {
+                Value::Array(items) => items
+                    .iter()
+                    .map(|item| item.as_str().map(str::trim).unwrap_or_default().to_string())
+                    .collect(),
+                Value::String(string) => string
+                    .split(',')
+                    .map(|part| part.trim().to_string())
+                    .collect(),
+                _ => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "discord.server_actions must be an array of action names or a comma-separated string" })),
+                    )
+                }
+            };
+            let mut list: Vec<toml::Value> = Vec::new();
+            for name in names {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                if !crate::discord_tool::ALL_ACTIONS.contains(&name.as_str()) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "error": format!("discord.server_actions: unknown action '{name}'"),
+                            "known_actions": crate::discord_tool::ALL_ACTIONS,
+                        })),
+                    );
+                }
+                list.push(toml::Value::String(name));
+            }
+            if !list.is_empty() {
+                raw = Some(toml::Value::Array(list).to_string());
+            }
+        }
+    }
+    let dotted = format!("discord.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/moa-settings` — P760: Mixture-of-Agents knobs for the
 /// shell: the default preset, trace persistence and directory, the
 /// privacy filter, and the names of every configured preset so
@@ -9245,6 +9367,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/x-search-settings", get(x_search_settings_api).put(update_x_search_settings_api))
         .route("/api/video-gen-settings", get(video_gen_settings_api).put(update_video_gen_settings_api))
         .route("/api/moa-settings", get(moa_settings_api).put(update_moa_settings_api))
+        .route("/api/discord-settings", get(discord_settings_api).put(update_discord_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -20749,6 +20872,81 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/moa-settings", Some("sekret")).await;
         assert_eq!(body["privacy_filter"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_discord_settings_editor() {
+        // P761: GET /api/discord-settings surfaces the server_actions
+        // allowlist + known actions; PUT persists with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[discord]\nserver_actions = \"fetch_messages, list_pins\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Comma-string config normalises to a list; known actions
+        // surface for the editor.
+        let (status, body) = get_json(app.clone(), "/api/discord-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["server_actions"], json!(["fetch_messages", "list_pins"]), "{body}");
+        assert!(body["known_actions"].as_array().unwrap().len() > 10, "{body}");
+
+        // Persist an array of valid actions.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/discord-settings",
+            Some("sekret"),
+            json!({ "key": "server_actions", "value": ["list_guilds", "server_info"] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/discord-settings", Some("sekret")).await;
+        assert_eq!(body["server_actions"], json!(["list_guilds", "server_info"]), "{body}");
+
+        // Comma-separated strings are accepted too.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/discord-settings",
+            Some("sekret"),
+            json!({ "key": "server_actions", "value": "fetch_messages" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/discord-settings", Some("sekret")).await;
+        assert_eq!(body["server_actions"], json!(["fetch_messages"]), "{body}");
+
+        // Unknown actions are rejected with the known list.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/discord-settings", Some("sekret"),
+            json!({ "key": "server_actions", "value": ["nuke_guild"] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["known_actions"].as_array().is_some(), "{body}");
+
+        // null removes the allowlist (every action exposed again).
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/discord-settings", Some("sekret"),
+            json!({ "key": "server_actions", "value": Value::Null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/discord-settings", Some("sekret")).await;
+        assert_eq!(body["server_actions"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
