@@ -628,6 +628,13 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/sync-settings` — P774 skills-sync endpoint knobs. */
+export interface SyncSettingsPayload {
+  base_url: string;
+  device_name: string;
+  api_key_configured: boolean;
+}
+
 /** `GET /api/hooks-settings` — P773 hook runtime knobs. */
 export interface HooksSettingsPayload {
   auto_accept: boolean;
@@ -4236,6 +4243,34 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/sync-settings — P774 sync endpoint knobs. */
+  async syncSettings(): Promise<SyncSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/sync-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`sync-settings HTTP ${response.status}`);
+    return (await response.json()) as SyncSettingsPayload;
+  }
+
+  /** P774: PUT /api/sync-settings — persist a sync knob; null or empty
+   * string removes it (sync becomes inert). The API key is not
+   * editable. */
+  async updateSyncSetting(
+    key: string,
+    value: string | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/sync-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `sync-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/hooks-settings — P773 auto-accept + spill knobs. */

@@ -345,6 +345,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-sync-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="syncPanel.title">Skills sync settings</h3>
+        <div id="sync-settings-rows"></div>
+        <div id="sync-settings-editor" class="monitoring-row" hidden>
+          <select id="sync-settings-key" class="ghost"></select>
+          <input id="sync-settings-value" class="ghost" />
+          <button id="sync-settings-apply" class="ghost mcp-add-btn" data-i18n="syncPanel.apply">Apply</button>
+          <button id="sync-settings-clear" class="ghost mcp-add-btn" data-i18n="syncPanel.clear">Clear</button>
+          <span id="sync-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-hooks-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="hooksPanel.title">Hooks settings</h3>
         <div id="hooks-settings-rows"></div>
@@ -662,6 +673,7 @@ export class DoctorWidget {
     this.loadProvidersSettings().catch(() => undefined);
     this.loadProfiles().catch(() => undefined);
     this.loadHooksSettings().catch(() => undefined);
+    this.loadSyncSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2769,6 +2781,85 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadSyncSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-sync-settings") as HTMLElement;
+    const rows = this.root.querySelector("#sync-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.syncSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.syncSettingsPanel.baseUrl,
+        payload.base_url.length > 0
+          ? escapeHtmlDoctor(payload.base_url)
+          : escapeHtmlDoctor(t.syncSettingsPanel.inert),
+      );
+      addRow(
+        t.syncSettingsPanel.deviceName,
+        payload.device_name.length > 0
+          ? escapeHtmlDoctor(payload.device_name)
+          : escapeHtmlDoctor(auto),
+      );
+      addRow(t.syncSettingsPanel.apiKey, payload.api_key_configured ? on : off);
+      // P774: sync editor — base URL takes an https URL or a local
+      // directory path, device name any label; Apply persists through
+      // PUT /api/sync-settings, Clear makes sync inert again. The API
+      // key is secret material and stays out of the shell.
+      const editor = this.root.querySelector("#sync-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#sync-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#sync-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#sync-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#sync-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#sync-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["base_url", "device_name"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateSyncSetting(keySel.value, value);
+            await this.loadSyncSettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueInput.value.trim());
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

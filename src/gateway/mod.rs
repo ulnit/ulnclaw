@@ -6023,6 +6023,86 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/sync-settings` — P774: skills-sync endpoint knobs for
+/// the shell: the sync base URL (empty = inert), the device label
+/// attached to pushed manifests, and a configured-flag for the static
+/// API key (never echoed — it is a secret). Runtime device identity
+/// and gate state stay with `/api/sync/status`.
+async fn sync_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let sync = config.sync;
+    Json(json!({
+        "base_url": sync.base_url,
+        "device_name": sync.device_name,
+        "api_key_configured": !sync.api_key.trim().is_empty(),
+    }))
+}
+
+/// `PUT /api/sync-settings` — P774: persist skills-sync knobs from
+/// the shell. Keys: `base_url` (https URL or a local directory path)
+/// and `device_name`; null or empty string removes the key (sync
+/// stays/becomes inert for the URL). The static API key is
+/// deliberately not editable here: it is a secret. Applies to the
+/// next sync run.
+async fn update_sync_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["base_url", "device_name"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown sync key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let text = v.as_str().map(str::trim).unwrap_or_default();
+            if !text.is_empty() {
+                raw = Some(text.to_string());
+            }
+        }
+    }
+    let dotted = format!("sync.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/hooks-settings` — P773: hook runtime knobs for the shell:
 /// the auto-accept consent bypass and the oversized-output spill
 /// settings (enabled, max chars, preview head/tail, directory
@@ -10424,6 +10504,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/auxiliary-settings", get(auxiliary_settings_api).put(update_auxiliary_settings_api))
         .route("/api/providers-settings", get(providers_settings_api).put(update_providers_settings_api))
         .route("/api/hooks-settings", get(hooks_settings_api).put(update_hooks_settings_api))
+        .route("/api/sync-settings", get(sync_settings_api).put(update_sync_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -22666,6 +22747,74 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/hooks-settings", Some("sekret")).await;
         assert_eq!(body["spill_directory"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_settings_editor() {
+        // P774: GET /api/sync-settings surfaces the endpoint knobs with
+        // a key configured-flag; PUT persists URL/device name.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[sync]\napi_key = \"sk-secret\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Secret surfaces only as a flag; URL/device blank.
+        let (status, body) = get_json(app.clone(), "/api/sync-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["base_url"], "", "{body}");
+        assert_eq!(body["device_name"], "", "{body}");
+        assert_eq!(body["api_key_configured"], true, "{body}");
+        assert!(!body.to_string().contains("sk-secret"), "{body}");
+
+        // Persist URL + device name.
+        for (key, value) in [
+            ("base_url", json!("https://sync.example.com")),
+            ("device_name", json!("workstation")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/sync-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/sync-settings", Some("sekret")).await;
+        assert_eq!(body["base_url"], "https://sync.example.com", "{body}");
+        assert_eq!(body["device_name"], "workstation", "{body}");
+
+        // The API key is not editable through the shell.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/sync-settings", Some("sekret"),
+            json!({ "key": "api_key", "value": "sk-other" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Empty string clears back to inert.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/sync-settings", Some("sekret"),
+            json!({ "key": "base_url", "value": "" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/sync-settings", Some("sekret")).await;
+        assert_eq!(body["base_url"], "", "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
