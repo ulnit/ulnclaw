@@ -33,6 +33,11 @@ struct WindowState {
 /// Managed copy of the last normal geometry (updated on resize/move).
 struct WindowGeometry(Mutex<Option<WindowState>>);
 
+/// P783: quit guard — how many turns the webview reports in flight
+/// (0 = safe to exit) and the user's confirmed-quit latch.
+struct ActiveWork(Mutex<u32>);
+struct QuitConfirmed(Mutex<bool>);
+
 fn window_state_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -413,6 +418,45 @@ fn adjust_zoom(app: &tauri::AppHandle, delta: f64, reset: bool) {
     );
 }
 
+/// P783: quit unless a turn is in flight; otherwise surface the window
+/// and ask the page to confirm (it calls `desktop_confirm_quit`).
+fn request_quit(app: &tauri::AppHandle) {
+    let active = app
+        .try_state::<ActiveWork>()
+        .and_then(|work| work.0.lock().ok().map(|guard| *guard))
+        .unwrap_or(0);
+    let confirmed = app
+        .try_state::<QuitConfirmed>()
+        .and_then(|flag| flag.0.lock().ok().map(|guard| *guard))
+        .unwrap_or(false);
+    if active == 0 || confirmed {
+        app.exit(0);
+        return;
+    }
+    show_main_window(app);
+    let _ = app.emit(
+        "ulnclaw://quit-blocked",
+        serde_json::json!({ "count": active }),
+    );
+}
+
+/// P783: the webview reports how many turns are in flight (0 = idle).
+#[tauri::command]
+fn desktop_set_active_work(state: State<'_, ActiveWork>, count: u32) {
+    if let Ok(mut guard) = state.0.lock() {
+        *guard = count;
+    }
+}
+
+/// P783: the user confirmed quitting with work in flight — latch and exit.
+#[tauri::command]
+fn desktop_confirm_quit(app: tauri::AppHandle, confirmed: State<'_, QuitConfirmed>) {
+    if let Ok(mut guard) = confirmed.0.lock() {
+        *guard = true;
+    }
+    app.exit(0);
+}
+
 /// P780: the global quick-entry accelerator — hermes' default
 /// (`CommandOrControl+Shift+Space`), mapped per platform by the plugin.
 fn quick_entry_shortcut() -> Shortcut {
@@ -484,7 +528,8 @@ fn setup_app_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         "about" => {
             let _ = handle.emit("ulnclaw://about", desktop_about());
         }
-        "quit" => handle.exit(0),
+        // P783: route through the quit guard.
+        "quit" => request_quit(handle),
         _ => {}
     });
     Ok(())
@@ -526,7 +571,8 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "restart_gateway" => {
                 let _ = app.emit("ulnclaw://restart-gateway", ());
             }
-            "quit" => app.exit(0),
+            // P783: route through the quit guard.
+            "quit" => request_quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -556,6 +602,8 @@ pub fn run() {
         .manage(GatewayProcess(Mutex::new(None)))
         .manage(WindowGeometry(Mutex::new(None)))
         .manage(ZoomLevel(Mutex::new(0.0)))
+        .manage(ActiveWork(Mutex::new(0)))
+        .manage(QuitConfirmed(Mutex::new(false)))
         .plugin(
             // P780: global quick-entry shortcut — summon the window and
             // open the quick-entry overlay from anywhere.
@@ -674,7 +722,26 @@ pub fn run() {
                         }
                     }
                 }
-                tauri::WindowEvent::CloseRequested { .. } => {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // P783: block the close while a turn is in flight —
+                    // the page confirms, then desktop_confirm_quit exits.
+                    let active = window
+                        .try_state::<ActiveWork>()
+                        .and_then(|work| work.0.lock().ok().map(|guard| *guard))
+                        .unwrap_or(0);
+                    let confirmed = window
+                        .try_state::<QuitConfirmed>()
+                        .and_then(|flag| flag.0.lock().ok().map(|guard| *guard))
+                        .unwrap_or(false);
+                    if active > 0 && !confirmed {
+                        show_main_window(window.app_handle());
+                        let _ = window.emit(
+                            "ulnclaw://quit-blocked",
+                            serde_json::json!({ "count": active }),
+                        );
+                        api.prevent_close();
+                        return;
+                    }
                     let maximized = window.is_maximized().unwrap_or(false);
                     let fullscreen = window.is_fullscreen().unwrap_or(false);
                     // P782: fold the live zoom into the persisted state.
@@ -704,7 +771,9 @@ pub fn run() {
             stop_gateway,
             desktop_about,
             desktop_autostart_enabled,
-            desktop_autostart_set
+            desktop_autostart_set,
+            desktop_set_active_work,
+            desktop_confirm_quit
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");

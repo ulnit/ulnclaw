@@ -48,6 +48,8 @@ interface DesktopBridge {
   defaultPort(): Promise<number>;
   autostartEnabled(): Promise<boolean>;
   setAutostart(enabled: boolean): Promise<void>;
+  setActiveWork(count: number): Promise<void>;
+  confirmQuit(): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -60,10 +62,18 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       defaultPort: () => invoke<number>("default_gateway_port"),
       autostartEnabled: () => invoke<boolean>("desktop_autostart_enabled"),
       setAutostart: (enabled) => invoke<void>("desktop_autostart_set", { enabled }),
+      setActiveWork: (count) => invoke<void>("desktop_set_active_work", { count }),
+      confirmQuit: () => invoke<void>("desktop_confirm_quit"),
     };
   } catch {
     return null; // plain browser — no process management
   }
+}
+
+/** P783: tell the shell whether a turn is in flight so it can guard
+ * the window close / menu quit paths. */
+function reportActiveWork(): void {
+  state.bridge?.setActiveWork(state.busy ? 1 : 0).catch(() => undefined);
 }
 
 /** P540: native app-menu events (Tauri only) — File › New Session
@@ -99,6 +109,12 @@ async function listenMenuEvents(): Promise<void> {
         message: "",
         durationMs: 1600,
       });
+    });
+    // P783: quit guard — a turn is in flight; confirm before releasing.
+    await listen<{ count: number }>("ulnclaw://quit-blocked", () => {
+      if (window.confirm(t.desktopShell.quitGuard)) {
+        state.bridge?.confirmQuit().catch(() => undefined);
+      }
     });
     await listen("ulnclaw://menu-toggle-fullscreen", () => {
       if (document.fullscreenElement) {
@@ -1543,6 +1559,7 @@ async function sendTurn(): Promise<void> {
   }
   state.busy = true;
   updateBusyBadge();
+  reportActiveWork();
   el.send.disabled = true;
   // P390: thinking indicator while the turn streams.
   el.chatBusy.textContent = t.tools.thinking;
@@ -1656,6 +1673,7 @@ async function sendTurn(): Promise<void> {
   } finally {
     turnTimer.stop();
     state.busy = false;
+    reportActiveWork();
     el.send.disabled = false;
     flushBusyQueue();
     el.chatBusy.hidden = true;
