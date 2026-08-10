@@ -25,6 +25,9 @@ struct WindowState {
     /// P778: fullscreen state is restored alongside the geometry.
     #[serde(default)]
     fullscreen: bool,
+    /// P782: webview zoom level (1.2-base exponent, 0.0 = actual size).
+    #[serde(default)]
+    zoom_level: f64,
 }
 
 /// Managed copy of the last normal geometry (updated on resize/move).
@@ -364,6 +367,52 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// P782: webview zoom (hermes zoom parity). Levels are exponents of a
+/// 1.2 base — Chromium's native zoom step; 0.0 is actual size (100%).
+const ZOOM_BASE: f64 = 1.2;
+const ZOOM_MIN_LEVEL: f64 = -9.0;
+const ZOOM_MAX_LEVEL: f64 = 9.0;
+
+/// Managed live zoom level (persisted on close via the window state).
+struct ZoomLevel(Mutex<f64>);
+
+fn clamp_zoom_level(level: f64) -> f64 {
+    if !level.is_finite() {
+        return 0.0;
+    }
+    level.clamp(ZOOM_MIN_LEVEL, ZOOM_MAX_LEVEL)
+}
+
+fn zoom_percent(level: f64) -> i64 {
+    (ZOOM_BASE.powf(clamp_zoom_level(level)) * 100.0).round() as i64
+}
+
+/// P782: shift the zoom by whole levels (or reset to actual size),
+/// apply it to the webview, then tell the page the new percent so it
+/// can surface a brief HUD note.
+fn adjust_zoom(app: &tauri::AppHandle, delta: f64, reset: bool) {
+    let next = {
+        let zoom = app.state::<ZoomLevel>();
+        let Ok(mut guard) = zoom.0.lock() else {
+            return;
+        };
+        let next = if reset {
+            0.0
+        } else {
+            clamp_zoom_level(*guard + delta)
+        };
+        *guard = next;
+        next
+    };
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_zoom(ZOOM_BASE.powf(next));
+    }
+    let _ = app.emit(
+        "ulnclaw://zoom-changed",
+        serde_json::json!({ "percent": zoom_percent(next) }),
+    );
+}
+
 /// P780: the global quick-entry accelerator — hermes' default
 /// (`CommandOrControl+Shift+Space`), mapped per platform by the plugin.
 fn quick_entry_shortcut() -> Shortcut {
@@ -402,7 +451,16 @@ fn setup_app_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         Some("F11"),
     )?;
-    let view = Submenu::with_items(app, "View", true, &[&reload, &fullscreen])?;
+    // P782: Chromium-style zoom steps; Actual Size returns to 100%.
+    let zoom_in = MenuItem::with_id(app, "zoom_in", "Zoom In", true, Some("CmdOrCtrl+Equal"))?;
+    let zoom_out = MenuItem::with_id(app, "zoom_out", "Zoom Out", true, Some("CmdOrCtrl+Minus"))?;
+    let zoom_actual = MenuItem::with_id(app, "zoom_actual", "Actual Size", true, Some("CmdOrCtrl+0"))?;
+    let view = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[&reload, &fullscreen, &zoom_in, &zoom_out, &zoom_actual],
+    )?;
     // P777: Help › About emits the shell version/binary/port payload;
     // the webview renders it as a notification.
     let about = MenuItem::with_id(app, "about", "About ulnclaw", true, None::<&str>)?;
@@ -419,6 +477,10 @@ fn setup_app_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         "toggle_fullscreen" => {
             let _ = handle.emit("ulnclaw://menu-toggle-fullscreen", ());
         }
+        // P782: zoom steps funnel through one clamped level.
+        "zoom_in" => adjust_zoom(handle, 1.0, false),
+        "zoom_out" => adjust_zoom(handle, -1.0, false),
+        "zoom_actual" => adjust_zoom(handle, 0.0, true),
         "about" => {
             let _ = handle.emit("ulnclaw://about", desktop_about());
         }
@@ -493,6 +555,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(GatewayProcess(Mutex::new(None)))
         .manage(WindowGeometry(Mutex::new(None)))
+        .manage(ZoomLevel(Mutex::new(0.0)))
         .plugin(
             // P780: global quick-entry shortcut — summon the window and
             // open the quick-entry overlay from anywhere.
@@ -541,6 +604,14 @@ pub fn run() {
                     if saved.fullscreen {
                         let _ = window.set_fullscreen(true);
                     }
+                    // P782: restore the persisted zoom level.
+                    let zoom_level = clamp_zoom_level(saved.zoom_level);
+                    if let Some(zoom) = window.try_state::<ZoomLevel>() {
+                        if let Ok(mut guard) = zoom.0.lock() {
+                            *guard = zoom_level;
+                        }
+                    }
+                    let _ = window.set_zoom(ZOOM_BASE.powf(zoom_level));
                     if let Some(geometry) = window.try_state::<WindowGeometry>() {
                         if let Ok(mut guard) = geometry.0.lock() {
                             *guard = Some(WindowState {
@@ -587,6 +658,10 @@ pub fn run() {
                     };
                     if let Some(geometry) = window.try_state::<WindowGeometry>() {
                         if let Ok(mut guard) = geometry.0.lock() {
+                            let zoom_level = guard
+                                .as_ref()
+                                .map(|state| state.zoom_level)
+                                .unwrap_or(0.0);
                             *guard = Some(WindowState {
                                 width: size.width,
                                 height: size.height,
@@ -594,6 +669,7 @@ pub fn run() {
                                 y: position.y,
                                 maximized: false,
                                 fullscreen,
+                                zoom_level,
                             });
                         }
                     }
@@ -601,12 +677,18 @@ pub fn run() {
                 tauri::WindowEvent::CloseRequested { .. } => {
                     let maximized = window.is_maximized().unwrap_or(false);
                     let fullscreen = window.is_fullscreen().unwrap_or(false);
+                    // P782: fold the live zoom into the persisted state.
+                    let zoom_level = window
+                        .try_state::<ZoomLevel>()
+                        .and_then(|zoom| zoom.0.lock().ok().map(|guard| *guard))
+                        .unwrap_or(0.0);
                     if let Some(geometry) = window.try_state::<WindowGeometry>() {
                         if let Ok(guard) = geometry.0.lock() {
                             if let Some(normal) = guard.as_ref() {
                                 let mut saved = normal.clone();
                                 saved.maximized = maximized;
                                 saved.fullscreen = fullscreen;
+                                saved.zoom_level = zoom_level;
                                 persist_window_state(&saved);
                             }
                         }

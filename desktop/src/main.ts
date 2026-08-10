@@ -90,6 +90,16 @@ async function listenMenuEvents(): Promise<void> {
     await listen("ulnclaw://quick-entry", () => {
       state.quickEntry?.toggle();
     });
+    // P782: the shell owns zoom (View menu / CmdOrCtrl+=,-,0) — surface
+    // the new percent as a brief HUD note.
+    await listen<{ percent: number }>("ulnclaw://zoom-changed", (event) => {
+      notify({
+        kind: "info",
+        title: t.desktopShell.zoomChanged.replace("{percent}", String(event.payload.percent)),
+        message: "",
+        durationMs: 1600,
+      });
+    });
     await listen("ulnclaw://menu-toggle-fullscreen", () => {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => undefined);
