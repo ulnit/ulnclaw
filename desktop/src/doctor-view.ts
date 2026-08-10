@@ -245,6 +245,17 @@ export class DoctorWidget {
           <span id="video-gen-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-moa-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="moaPanel.title">Mixture of Agents</h3>
+        <div id="moa-rows"></div>
+        <div id="moa-editor" class="monitoring-row" hidden>
+          <select id="moa-key" class="ghost"></select>
+          <input id="moa-value" class="ghost" />
+          <button id="moa-apply" class="ghost mcp-add-btn" data-i18n="moaPanel.apply">Apply</button>
+          <button id="moa-clear" class="ghost mcp-add-btn" data-i18n="moaPanel.clear">Clear</button>
+          <span id="moa-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-phrases" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="phrasesPanel.title">Status phrases</h3>
         <div id="phrases-rows"></div>
@@ -509,6 +520,7 @@ export class DoctorWidget {
     this.loadKanbanSettings().catch(() => undefined);
     this.loadXSearchSettings().catch(() => undefined);
     this.loadVideoGenSettings().catch(() => undefined);
+    this.loadMoaSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2592,6 +2604,95 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadMoaSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-moa-settings") as HTMLElement;
+    const rows = this.root.querySelector("#moa-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.moaSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.moaPanel.defaultPreset,
+        payload.default_preset !== null ? escapeHtmlDoctor(payload.default_preset) : escapeHtmlDoctor(auto),
+      );
+      addRow(t.moaPanel.saveTraces, payload.save_traces ? on : off);
+      addRow(
+        t.moaPanel.traceDir,
+        payload.trace_dir !== null ? escapeHtmlDoctor(payload.trace_dir) : escapeHtmlDoctor(auto),
+      );
+      addRow(
+        t.moaPanel.privacyFilter,
+        payload.privacy_filter !== null ? escapeHtmlDoctor(payload.privacy_filter) : off,
+      );
+      addRow(
+        t.moaPanel.presets,
+        payload.preset_names.length > 0
+          ? payload.preset_names.map(escapeHtmlDoctor).join(", ")
+          : escapeHtmlDoctor(auto),
+      );
+      // P760: MoA editor — pick a key, type the value, Apply persists
+      // through PUT /api/moa-settings, Clear removes the override; the
+      // panel re-renders from disk state afterwards. save_traces takes
+      // true/false; privacy_filter accepts off|display|full.
+      const editor = this.root.querySelector("#moa-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#moa-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#moa-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#moa-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#moa-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#moa-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["default_preset", "save_traces", "trace_dir", "privacy_filter"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateMoaSetting(keySel.value, value);
+            await this.loadMoaSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | boolean =
+            raw === "true" ? true : raw === "false" ? false : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

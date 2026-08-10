@@ -6022,6 +6022,146 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/moa-settings` — P760: Mixture-of-Agents knobs for the
+/// shell: the default preset, trace persistence and directory, the
+/// privacy filter, and the names of every configured preset so
+/// operators can see what `default_preset` may reference.
+async fn moa_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let moa = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .map(|c| c.moa)
+        .unwrap_or_default();
+    let mut preset_names: Vec<String> = moa.presets.keys().cloned().collect();
+    preset_names.sort();
+    let privacy_filter = moa.privacy_filter.as_ref().map(|filter| match filter {
+        crate::config::MoaPrivacyFilter::Flag(flag) => flag.to_string(),
+        crate::config::MoaPrivacyFilter::Mode(mode) => mode.clone(),
+    });
+    Json(json!({
+        "default_preset": moa.default_preset,
+        "save_traces": moa.save_traces,
+        "trace_dir": moa.trace_dir,
+        "privacy_filter": privacy_filter,
+        "preset_names": preset_names,
+    }))
+}
+
+/// `PUT /api/moa-settings` — P760: persist MoA knobs from the shell.
+/// Body: `{"key": "default_preset"|"save_traces"|"trace_dir"|
+/// "privacy_filter", "value": ...|null}` — null (or empty string for
+/// the string knobs) removes the key. `default_preset` must name a
+/// configured preset; `privacy_filter` accepts off/display/full.
+/// Applies to new MoA runs.
+async fn update_moa_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["default_preset", "save_traces", "trace_dir", "privacy_filter"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown moa key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "save_traces" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "moa.save_traces must be a boolean" })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "default_preset" => {
+                    let text = v.as_str().map(str::trim).unwrap_or("");
+                    if text.is_empty() {
+                        raw = None;
+                    } else {
+                        let presets = crate::config::UlncLawConfig::load(Some(
+                            &crate::config_cmd::config_path(),
+                        ))
+                        .map(|c| c.moa.presets)
+                        .unwrap_or_default();
+                        if !presets.contains_key(text) {
+                            let mut names: Vec<String> = presets.keys().cloned().collect();
+                            names.sort();
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({
+                                    "error": format!("moa.default_preset '{text}' is not a configured preset"),
+                                    "preset_names": names,
+                                })),
+                            );
+                        }
+                        raw = Some(text.to_string());
+                    }
+                }
+                "trace_dir" => {
+                    let text = v.as_str().map(str::trim).unwrap_or("");
+                    if text.is_empty() {
+                        raw = None;
+                    } else {
+                        raw = Some(text.to_string());
+                    }
+                }
+                "privacy_filter" => {
+                    let text = v.as_str().map(str::trim).map(str::to_lowercase).unwrap_or_default();
+                    if text.is_empty() || text == "off" {
+                        raw = None;
+                    } else if matches!(text.as_str(), "display" | "full") {
+                        raw = Some(text);
+                    } else {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "moa.privacy_filter must be one of off|display|full" })),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let dotted = format!("moa.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/video-gen-settings` — P759: video-generation backend
 /// selection for the shell: the active provider, default model and
 /// the FAL model-family override (all null = auto-select).
@@ -9104,6 +9244,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban-settings", get(kanban_settings_api).put(update_kanban_settings_api))
         .route("/api/x-search-settings", get(x_search_settings_api).put(update_x_search_settings_api))
         .route("/api/video-gen-settings", get(video_gen_settings_api).put(update_video_gen_settings_api))
+        .route("/api/moa-settings", get(moa_settings_api).put(update_moa_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -20522,6 +20663,92 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/video-gen-settings", Some("sekret")).await;
         assert_eq!(body["fal_model"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_moa_settings_editor() {
+        // P760: GET /api/moa-settings surfaces the MoA knobs + preset
+        // names; PUT persists them with validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[moa.presets.council]\naggregator = { provider = \"openai\", model = \"gpt-x\" }\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: nothing pinned, traces off; preset names surface.
+        let (status, body) = get_json(app.clone(), "/api/moa-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["default_preset"], Value::Null, "{body}");
+        assert_eq!(body["save_traces"], false, "{body}");
+        assert_eq!(body["trace_dir"], Value::Null, "{body}");
+        assert_eq!(body["privacy_filter"], Value::Null, "{body}");
+        assert_eq!(body["preset_names"], json!(["council"]), "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("default_preset", json!("council")),
+            ("save_traces", json!(true)),
+            ("trace_dir", json!("moa-traces")),
+            ("privacy_filter", json!("display")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/moa-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/moa-settings", Some("sekret")).await;
+        assert_eq!(body["default_preset"], "council", "{body}");
+        assert_eq!(body["save_traces"], true, "{body}");
+        assert_eq!(body["trace_dir"], "moa-traces", "{body}");
+        assert_eq!(body["privacy_filter"], "display", "{body}");
+
+        // Validation: unknown preset, bad filter, wrong type.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/moa-settings", Some("sekret"),
+            json!({ "key": "default_preset", "value": "nope" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["preset_names"], json!(["council"]), "{body}");
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/moa-settings", Some("sekret"),
+            json!({ "key": "privacy_filter", "value": "some" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/moa-settings", Some("sekret"),
+            json!({ "key": "save_traces", "value": "yes" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // "off" clears the privacy filter back to unset.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/moa-settings", Some("sekret"),
+            json!({ "key": "privacy_filter", "value": "off" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/moa-settings", Some("sekret")).await;
+        assert_eq!(body["privacy_filter"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

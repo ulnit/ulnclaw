@@ -628,6 +628,15 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/moa-settings` — P760 Mixture-of-Agents shell knobs. */
+export interface MoaSettingsPayload {
+  default_preset: string | null;
+  save_traces: boolean;
+  trace_dir: string | null;
+  privacy_filter: string | null;
+  preset_names: string[];
+}
+
 /** `GET /api/video-gen-settings` — P759 video-generation backend selection. */
 export interface VideoGenSettingsPayload {
   provider: string | null;
@@ -4121,6 +4130,39 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/moa-settings — P760 MoA knobs + preset names. */
+  async moaSettings(): Promise<MoaSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/moa-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`moa-settings HTTP ${response.status}`);
+    return (await response.json()) as MoaSettingsPayload;
+  }
+
+  /** P760: PUT /api/moa-settings — persist a MoA knob; null (or empty
+   * string / "off" for privacy_filter) removes the override. */
+  async updateMoaSetting(
+    key: string,
+    value: string | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/moa-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        preset_names?: string[];
+      };
+      const suffix = body.preset_names?.length
+        ? ` (presets: ${body.preset_names.join(", ")})`
+        : "";
+      throw new Error(`${body.error ?? `moa-settings PUT HTTP ${response.status}`}${suffix}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/video-gen-settings — P759 backend selection. */
