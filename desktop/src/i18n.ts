@@ -347,6 +347,7 @@ export interface Translations {
   displayPanel: { title: string; noneEnabled: string; progress: string; preview: string; heartbeats: string; busyDetail: string; live: string; custom: string; global: string; apply: string; clear: string; };
   phrasesPanel: { title: string; catalog: string; statusWord: string; genericWord: string; sample: string; conventional: string; configSection: string; previewStatus: string; previewGeneric: string; previewEmpty: string; };
   hooksPanel: { title: string; count: string; };
+  hooksSettingsPanel: { title: string; autoAccept: string; spillEnabled: string; spillMaxChars: string; spillPreviewHead: string; spillPreviewTail: string; spillDirectory: string; apply: string; clear: string; };
   portalPanel: { title: string; status: string; loggedIn: string; expired: string; expires: string; unknown: string; scope: string; refreshToken: string; portalUrl: string; };
   cgroupPanel: { title: string; supported: string; path: string; pidCount: string; ownPid: string; reapOnExit: string; };
   terminalPanel: { title: string; backend: string; envOverride: string; configuredCwd: string; placeholder: string; notSet: string; resolvedCwd: string; mountWorkspace: string; container: string; image: string; sshHost: string; timeouts: string; foregroundMax: string; envPassthrough: string; sessionCwd: string; apply: string; clear: string; };
@@ -884,6 +885,7 @@ const en: Translations = {
   displayPanel: { title: "Display settings", global: "Global", apply: "Apply", clear: "Clear", noneEnabled: "(no channels enabled — showing tier defaults)", progress: "progress", preview: "preview", heartbeats: "heartbeats", busyDetail: "busy-detail", live: "live", custom: "custom" },
   phrasesPanel: { title: "Status phrases", catalog: "Resolved catalog", statusWord: "status", genericWord: "generic", sample: "Sample", conventional: "Profile phrase files", configSection: "Config section", previewStatus: "Preview status", previewGeneric: "Preview generic", previewEmpty: "No phrases configured" },
   hooksPanel: { title: "Event hooks", count: "Loaded hooks" },
+    hooksSettingsPanel: { title: "Hooks settings", autoAccept: "Auto-accept new hooks", spillEnabled: "Output spill", spillMaxChars: "Spill max chars", spillPreviewHead: "Preview head", spillPreviewTail: "Preview tail", spillDirectory: "Spill directory", apply: "Apply", clear: "Clear" },
   portalPanel: { title: "Portal auth", status: "Status", loggedIn: "logged in", expired: "expired", expires: "Expires", unknown: "unknown", scope: "Scope", refreshToken: "Refresh token", portalUrl: "Portal URL" },
   cgroupPanel: { title: "Cgroup reaper", supported: "Supported", path: "Cgroup path", pidCount: "PIDs in cgroup", ownPid: "incl. gateway", reapOnExit: "Reap orphans on exit" },
   terminalPanel: { title: "Terminal", backend: "Backend", envOverride: "env override", configuredCwd: "Configured cwd", placeholder: "placeholder", notSet: "not set", resolvedCwd: "Resolved messaging cwd", mountWorkspace: "Docker cwd mount", container: "Container", image: "Image", sshHost: "SSH host", timeouts: "Timeouts", foregroundMax: "fg max", envPassthrough: "Env passthrough vars", sessionCwd: "Session cwd", apply: "Apply", clear: "Clear" },
@@ -1498,6 +1500,7 @@ const zh: Translations = {
   displayPanel: { title: "显示设置", global: "全局", apply: "应用", clear: "清除", noneEnabled: "（未启用任何频道——展示层级默认值）", progress: "进度", preview: "预览", heartbeats: "心跳", busyDetail: "忙碌细节", live: "实时", custom: "自定义" },
   phrasesPanel: { title: "状态短语", catalog: "解析后目录", statusWord: "条状态", genericWord: "条通用", sample: "样例", conventional: "profile 短语文件", configSection: "配置小节", previewStatus: "预览状态短语", previewGeneric: "预览通用短语", previewEmpty: "未配置短语" },
   hooksPanel: { title: "事件钩子", count: "已加载钩子" },
+    hooksSettingsPanel: { title: "钩子设置", autoAccept: "自动接受新钩子", spillEnabled: "输出溢写", spillMaxChars: "溢写上限字符", spillPreviewHead: "预览头部", spillPreviewTail: "预览尾部", spillDirectory: "溢写目录", apply: "应用", clear: "清除" },
   portalPanel: { title: "门户认证", status: "状态", loggedIn: "已登录", expired: "已过期", expires: "到期时间", unknown: "未知", scope: "作用域", refreshToken: "刷新令牌", portalUrl: "门户地址" },
   cgroupPanel: { title: "Cgroup 回收器", supported: "支持", path: "Cgroup 路径", pidCount: "cgroup 内进程数", ownPid: "含网关自身", reapOnExit: "退出时回收孤儿进程" },
   terminalPanel: { title: "终端", backend: "后端", envOverride: "环境变量覆盖", configuredCwd: "配置的工作目录", placeholder: "占位符", notSet: "未设置", resolvedCwd: "解析后的消息目录", mountWorkspace: "Docker cwd 挂载", container: "容器", image: "镜像", sshHost: "SSH 主机", timeouts: "超时", foregroundMax: "前台上限", envPassthrough: "环境变量透传数", sessionCwd: "会话工作目录", apply: "应用", clear: "清除" },
@@ -2112,6 +2115,7 @@ const zhHant: Translations = {
   displayPanel: { title: "顯示設定", global: "全域", apply: "套用", clear: "清除", noneEnabled: "（未啟用任何頻道——展示層級預設值）", progress: "進度", preview: "預覽", heartbeats: "心跳", busyDetail: "忙碌細節", live: "即時", custom: "自訂" },
   phrasesPanel: { title: "狀態短語", catalog: "解析後目錄", statusWord: "條狀態", genericWord: "條通用", sample: "範例", conventional: "profile 短語檔案", configSection: "配置小節", previewStatus: "預覽狀態短語", previewGeneric: "預覽通用短語", previewEmpty: "未配置短語" },
   hooksPanel: { title: "事件掛鉤", count: "已載入掛鉤" },
+    hooksSettingsPanel: { title: "掛鉤設定", autoAccept: "自動接受新掛鉤", spillEnabled: "輸出溢寫", spillMaxChars: "溢寫上限字元", spillPreviewHead: "預覽開頭", spillPreviewTail: "預覽結尾", spillDirectory: "溢寫目錄", apply: "套用", clear: "清除" },
   portalPanel: { title: "門戶認證", status: "狀態", loggedIn: "已登入", expired: "已過期", expires: "到期時間", unknown: "未知", scope: "作用域", refreshToken: "重新整理權杖", portalUrl: "門戶位址" },
   cgroupPanel: { title: "Cgroup 回收器", supported: "支援", path: "Cgroup 路徑", pidCount: "cgroup 內程序數", ownPid: "含閘道自身", reapOnExit: "結束時回收孤兒程序" },
   terminalPanel: { title: "終端", backend: "後端", envOverride: "環境變數覆蓋", configuredCwd: "配置的工作目錄", placeholder: "佔位符", notSet: "未設定", resolvedCwd: "解析後的消息目錄", mountWorkspace: "Docker cwd 掛載", container: "容器", image: "映像", sshHost: "SSH 主機", timeouts: "逾時", foregroundMax: "前台上限", envPassthrough: "環境變數透傳數", sessionCwd: "工作階段目錄", apply: "套用", clear: "清除" },
@@ -2726,6 +2730,7 @@ const ja: Translations = {
   displayPanel: { title: "表示設定", global: "グローバル", apply: "適用", clear: "クリア", noneEnabled: "（チャネル未启用——階層デフォルトを表示）", progress: "進捗", preview: "プレビュー", heartbeats: "ハートビート", busyDetail: "詳細", live: "ライブ", custom: "カスタム" },
   phrasesPanel: { title: "ステータスフレーズ", catalog: "解決済みカタログ", statusWord: "ステータス", genericWord: "汎用", sample: "サンプル", conventional: "プロファイルフレーズファイル", configSection: "設定セクション", previewStatus: "ステータスをプレビュー", previewGeneric: "汎用をプレビュー", previewEmpty: "フレーズ未設定" },
   hooksPanel: { title: "イベントフック", count: "読み込み済みフック" },
+    hooksSettingsPanel: { title: "フック設定", autoAccept: "新規フックを自動承認", spillEnabled: "出力スピル", spillMaxChars: "スピル上限文字数", spillPreviewHead: "プレビュー先頭", spillPreviewTail: "プレビュー末尾", spillDirectory: "スピルディレクトリ", apply: "適用", clear: "クリア" },
   portalPanel: { title: "ポータル認証", status: "状態", loggedIn: "ログイン済み", expired: "期限切れ", expires: "有効期限", unknown: "不明", scope: "スコープ", refreshToken: "リフレッシュトークン", portalUrl: "ポータル URL" },
   cgroupPanel: { title: "Cgroup リーパー", supported: "対応", path: "Cgroup パス", pidCount: "cgroup 内 PID 数", ownPid: "ゲートウェイ含む", reapOnExit: "終了時に孤立プロセスを回収" },
   terminalPanel: { title: "ターミナル", backend: "バックエンド", envOverride: "環境変数オーバーライド", configuredCwd: "設定された cwd", placeholder: "プレースホルダ", notSet: "未設定", resolvedCwd: "解決済みメッセージング cwd", mountWorkspace: "Docker cwd マウント", container: "コンテナ", image: "イメージ", sshHost: "SSH ホスト", timeouts: "タイムアウト", foregroundMax: "前台最大", envPassthrough: "環境変数パススルー数", sessionCwd: "セッション cwd", apply: "適用", clear: "クリア" },
@@ -3340,6 +3345,7 @@ const ar: Translations = {
   displayPanel: { title: "إعدادات العرض", global: "عام", apply: "تطبيق", clear: "مسح", noneEnabled: "(لا قنوات مفعلة — عرض الافتراضيات)", progress: "التقدم", preview: "المعاينة", heartbeats: "النبض", busyDetail: "تفاصيل الانشغال", live: "مباشر", custom: "مخصص" },
   phrasesPanel: { title: "عبارات الحالة", catalog: "الفهرس المحلول", statusWord: "حالة", genericWord: "عامة", sample: "عينة", conventional: "ملفات العبارات", configSection: "قسم الإعداد", previewStatus: "معاينة الحالة", previewGeneric: "معاينة العامة", previewEmpty: "لا توجد عبارات مكونة" },
   hooksPanel: { title: "خطافات الأحداث", count: "الخطافات المحملة" },
+    hooksSettingsPanel: { title: "إعدادات الخطافات", autoAccept: "قبول تلقائي للخطافات الجديدة", spillEnabled: "تفريغ المخرجات", spillMaxChars: "حد الأحرف", spillPreviewHead: "رأس المعاينة", spillPreviewTail: "ذيل المعاينة", spillDirectory: "مجلد التفريغ", apply: "تطبيق", clear: "مسح" },
   portalPanel: { title: "مصادقة البوابة", status: "الحالة", loggedIn: "مسجل الدخول", expired: "منتهي", expires: "ينتهي في", unknown: "غير معروف", scope: "النطاق", refreshToken: "رمز التحديث", portalUrl: "عنوان البوابة" },
   cgroupPanel: { title: "منظف cgroup", supported: "مدعوم", path: "مسار cgroup", pidCount: "عدد العمليات في cgroup", ownPid: "بما فيها البوابة", reapOnExit: "تنظيف العمليات اليتيمة عند الخروج" },
   terminalPanel: { title: "الطرفية", backend: "الخلفية", envOverride: "تجاوز بيئي", configuredCwd: "مسار العمل المكون", placeholder: "عنصر نائب", notSet: "غير معين", resolvedCwd: "مسار المراسلة المحلول", mountWorkspace: "تحميل cwd في Docker", container: "الحاوية", image: "الصورة", sshHost: "مضيف SSH", timeouts: "المهلات", foregroundMax: "الحد الأقصى الأمامي", envPassthrough: "متغيرات التمرير البيئي", sessionCwd: "مسار الجلسة", apply: "تطبيق", clear: "مسح" },

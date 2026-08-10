@@ -628,6 +628,16 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/hooks-settings` — P773 hook runtime knobs. */
+export interface HooksSettingsPayload {
+  auto_accept: boolean;
+  spill_enabled: boolean;
+  spill_max_chars: number;
+  spill_preview_head: number;
+  spill_preview_tail: number;
+  spill_directory: string | null;
+}
+
 /** `GET /api/providers-settings` — P771 custom provider entries. */
 export interface CustomProviderEntry {
   base_url: string | null;
@@ -4226,6 +4236,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/hooks-settings — P773 auto-accept + spill knobs. */
+  async hooksSettings(): Promise<HooksSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/hooks-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`hooks-settings HTTP ${response.status}`);
+    return (await response.json()) as HooksSettingsPayload;
+  }
+
+  /** P773: PUT /api/hooks-settings — persist a hook knob; null removes
+   * the override (fall back to the built-in defaults). */
+  async updateHooksSetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/hooks-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `hooks-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/providers-settings — P771 custom provider entries. */

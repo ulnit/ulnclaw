@@ -345,6 +345,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-hooks-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="hooksPanel.title">Hooks settings</h3>
+        <div id="hooks-settings-rows"></div>
+        <div id="hooks-settings-editor" class="monitoring-row" hidden>
+          <select id="hooks-settings-key" class="ghost"></select>
+          <input id="hooks-settings-value" class="ghost" />
+          <button id="hooks-settings-apply" class="ghost mcp-add-btn" data-i18n="hooksPanel.apply">Apply</button>
+          <button id="hooks-settings-clear" class="ghost mcp-add-btn" data-i18n="hooksPanel.clear">Clear</button>
+          <span id="hooks-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-profiles" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="profilesPanel.title">Profiles</h3>
         <div id="profiles-rows"></div>
@@ -650,6 +661,7 @@ export class DoctorWidget {
     this.loadAuxiliarySettings().catch(() => undefined);
     this.loadProvidersSettings().catch(() => undefined);
     this.loadProfiles().catch(() => undefined);
+    this.loadHooksSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2757,6 +2769,102 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadHooksSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-hooks-settings") as HTMLElement;
+    const rows = this.root.querySelector("#hooks-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.hooksSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(t.hooksSettingsPanel.autoAccept, payload.auto_accept ? on : off);
+      addRow(t.hooksSettingsPanel.spillEnabled, payload.spill_enabled ? on : off);
+      addRow(t.hooksSettingsPanel.spillMaxChars, escapeHtmlDoctor(String(payload.spill_max_chars)));
+      addRow(t.hooksSettingsPanel.spillPreviewHead, escapeHtmlDoctor(String(payload.spill_preview_head)));
+      addRow(t.hooksSettingsPanel.spillPreviewTail, escapeHtmlDoctor(String(payload.spill_preview_tail)));
+      addRow(
+        t.hooksSettingsPanel.spillDirectory,
+        payload.spill_directory !== null
+          ? escapeHtmlDoctor(payload.spill_directory)
+          : escapeHtmlDoctor(auto),
+      );
+      // P773: hooks editor — booleans take true/false, spill sizes
+      // take positive integers; Apply persists through PUT
+      // /api/hooks-settings, Clear restores the built-in defaults.
+      const editor = this.root.querySelector("#hooks-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#hooks-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#hooks-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#hooks-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#hooks-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#hooks-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = [
+          "auto_accept",
+          "spill_enabled",
+          "spill_max_chars",
+          "spill_preview_head",
+          "spill_preview_tail",
+          "spill_directory",
+        ];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (
+          value: string | number | boolean | null,
+        ): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateHooksSetting(keySel.value, value);
+            await this.loadHooksSettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number | boolean =
+            raw === "true"
+              ? true
+              : raw === "false"
+                ? false
+                : /^\d+$/.test(raw)
+                  ? Number(raw)
+                  : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

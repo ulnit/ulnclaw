@@ -6023,6 +6023,134 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/hooks-settings` — P773: hook runtime knobs for the shell:
+/// the auto-accept consent bypass and the oversized-output spill
+/// settings (enabled, max chars, preview head/tail, directory
+/// override — null when the default `<home>/hook_outputs` applies).
+async fn hooks_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let hooks = config.hooks;
+    Json(json!({
+        "auto_accept": hooks.auto_accept,
+        "spill_enabled": hooks.output_spill.enabled,
+        "spill_max_chars": hooks.output_spill.max_chars,
+        "spill_preview_head": hooks.output_spill.preview_head,
+        "spill_preview_tail": hooks.output_spill.preview_tail,
+        "spill_directory": hooks.output_spill.directory,
+    }))
+}
+
+/// `PUT /api/hooks-settings` — P773: persist hook runtime knobs from
+/// the shell. Keys: `auto_accept` (bool), `spill_enabled` (bool),
+/// `spill_max_chars`/`spill_preview_head`/`spill_preview_tail`
+/// (positive integers), `spill_directory` (string). null removes the
+/// override (fall back to the built-in defaults). Applies to hooks
+/// fired after the change.
+async fn update_hooks_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "auto_accept",
+        "spill_enabled",
+        "spill_max_chars",
+        "spill_preview_head",
+        "spill_preview_tail",
+        "spill_directory",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown hooks key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let dotted = match key.as_str() {
+        "auto_accept" => "hooks.auto_accept".to_string(),
+        "spill_enabled" => "hooks.output_spill.enabled".to_string(),
+        "spill_max_chars" => "hooks.output_spill.max_chars".to_string(),
+        "spill_preview_head" => "hooks.output_spill.preview_head".to_string(),
+        "spill_preview_tail" => "hooks.output_spill.preview_tail".to_string(),
+        "spill_directory" => "hooks.output_spill.directory".to_string(),
+        _ => unreachable!("validated above"),
+    };
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "auto_accept" | "spill_enabled" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("hooks.{key} must be a boolean") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "spill_max_chars" | "spill_preview_head" | "spill_preview_tail" => {
+                    let number = match v.as_u64() {
+                        Some(n) => n,
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": format!("hooks.{key} must be a positive integer") })),
+                            )
+                        }
+                    };
+                    if number == 0 {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("hooks.{key} must be at least 1") })),
+                        );
+                    }
+                    raw = Some(number.to_string());
+                }
+                _ => {
+                    let text = v.as_str().map(str::trim).unwrap_or_default();
+                    if !text.is_empty() {
+                        raw = Some(text.to_string());
+                    }
+                }
+            }
+        }
+    }
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/providers-settings` — P771: user-defined `[providers.*]`
 /// entries for the shell: for each custom slug the base URL, default
 /// model, wire dialect and key env name, with the literal API key
@@ -10295,6 +10423,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/proxy-settings", get(proxy_settings_api).put(update_proxy_settings_api))
         .route("/api/auxiliary-settings", get(auxiliary_settings_api).put(update_auxiliary_settings_api))
         .route("/api/providers-settings", get(providers_settings_api).put(update_providers_settings_api))
+        .route("/api/hooks-settings", get(hooks_settings_api).put(update_hooks_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -22455,6 +22584,88 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/providers-settings", Some("sekret")).await;
         assert_eq!(body["providers"]["mycloud"]["mode"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hooks_settings_editor() {
+        // P773: GET /api/hooks-settings surfaces auto-accept + spill
+        // knobs; PUT persists with type/floor validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[hooks]\nauto_accept = true\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Fixture auto_accept surfaces; spill defaults resolve.
+        let (status, body) = get_json(app.clone(), "/api/hooks-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["auto_accept"], true, "{body}");
+        assert_eq!(body["spill_enabled"], true, "{body}");
+        assert!(body["spill_max_chars"].as_u64().unwrap() > 0, "{body}");
+        assert_eq!(body["spill_directory"], Value::Null, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("auto_accept", json!(false)),
+            ("spill_enabled", json!(false)),
+            ("spill_max_chars", json!(4096)),
+            ("spill_preview_head", json!(200)),
+            ("spill_preview_tail", json!(100)),
+            ("spill_directory", json!("spills")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/hooks-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/hooks-settings", Some("sekret")).await;
+        assert_eq!(body["auto_accept"], false, "{body}");
+        assert_eq!(body["spill_enabled"], false, "{body}");
+        assert_eq!(body["spill_max_chars"], 4096, "{body}");
+        assert_eq!(body["spill_preview_head"], 200, "{body}");
+        assert_eq!(body["spill_preview_tail"], 100, "{body}");
+        assert_eq!(body["spill_directory"], "spills", "{body}");
+
+        // Validation: wrong types, zero floors.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/hooks-settings", Some("sekret"),
+            json!({ "key": "auto_accept", "value": "yes" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/hooks-settings", Some("sekret"),
+            json!({ "key": "spill_max_chars", "value": 0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Empty string clears the directory override.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/hooks-settings", Some("sekret"),
+            json!({ "key": "spill_directory", "value": "" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/hooks-settings", Some("sekret")).await;
+        assert_eq!(body["spill_directory"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
