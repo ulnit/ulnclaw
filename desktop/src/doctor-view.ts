@@ -345,6 +345,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-toolsets-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="toolsetsPanel.title">Toolset gates</h3>
+        <div id="toolsets-rows"></div>
+        <div id="toolsets-editor" class="monitoring-row" hidden>
+          <select id="toolsets-key" class="ghost"></select>
+          <input id="toolsets-value" class="ghost" data-i18n-ph="toolsetsPanel.placeholder" placeholder="coding, browser" />
+          <button id="toolsets-apply" class="ghost mcp-add-btn" data-i18n="toolsetsPanel.apply">Apply</button>
+          <button id="toolsets-clear" class="ghost mcp-add-btn" data-i18n="toolsetsPanel.clear">Clear</button>
+          <span id="toolsets-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-oauth-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="oauthSettingsPanel.title">OAuth device flow settings</h3>
         <div id="oauth-settings-rows"></div>
@@ -686,6 +697,7 @@ export class DoctorWidget {
     this.loadHooksSettings().catch(() => undefined);
     this.loadSyncSettings().catch(() => undefined);
     this.loadOAuthSettings().catch(() => undefined);
+    this.loadToolsetsSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2793,6 +2805,92 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadToolsetsSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-toolsets-settings") as HTMLElement;
+    const rows = this.root.querySelector("#toolsets-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.toolsetsSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const all = t.toolsetsPanel.allWord;
+      const none = t.toolsetsPanel.noneWord;
+      addRow(
+        t.toolsetsPanel.enabled,
+        payload.enabled_toolsets.length > 0
+          ? payload.enabled_toolsets.map(escapeHtmlDoctor).join(", ")
+          : escapeHtmlDoctor(all),
+      );
+      addRow(
+        t.toolsetsPanel.disabled,
+        payload.disabled_toolsets.length > 0
+          ? payload.disabled_toolsets.map(escapeHtmlDoctor).join(", ")
+          : escapeHtmlDoctor(none),
+      );
+      addRow(
+        t.toolsetsPanel.available,
+        payload.available_toolsets.map(escapeHtmlDoctor).join(", "),
+      );
+      // P776: toolset gate editor — comma-separated registry names,
+      // Apply persists through PUT /api/toolsets-settings, Clear
+      // removes the gate. Applies on the next agent boot.
+      const editor = this.root.querySelector("#toolsets-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#toolsets-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#toolsets-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#toolsets-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#toolsets-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#toolsets-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["enabled_toolsets", "disabled_toolsets"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string[] | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateToolsetsSetting(keySel.value, value);
+            await this.loadToolsetsSettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const names = valueInput.value
+            .split(",")
+            .map((part) => part.trim())
+            .filter((part) => part.length > 0);
+          void applyEdit(names);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

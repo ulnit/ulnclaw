@@ -628,6 +628,13 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/toolsets-settings` — P776 global toolset gates. */
+export interface ToolsetsSettingsPayload {
+  enabled_toolsets: string[];
+  disabled_toolsets: string[];
+  available_toolsets: string[];
+}
+
 /** `GET /api/oauth-settings` — P775 device-flow OAuth knobs. */
 export interface OAuthSettingsPayload {
   device_authorization_url: string;
@@ -4253,6 +4260,39 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/toolsets-settings — P776 global gates. */
+  async toolsetsSettings(): Promise<ToolsetsSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/toolsets-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`toolsets-settings HTTP ${response.status}`);
+    return (await response.json()) as ToolsetsSettingsPayload;
+  }
+
+  /** P776: PUT /api/toolsets-settings — persist a toolset gate; null
+   * or empty removes it (every toolset available). */
+  async updateToolsetsSetting(
+    key: string,
+    value: string[] | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/toolsets-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        available_toolsets?: string[];
+      };
+      const suffix = body.available_toolsets?.length
+        ? ` (available: ${body.available_toolsets.join(", ")})`
+        : "";
+      throw new Error(`${body.error ?? `toolsets-settings PUT HTTP ${response.status}`}${suffix}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/oauth-settings — P775 device-flow knobs. */

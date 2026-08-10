@@ -337,6 +337,7 @@ export interface Translations {
   syncSettingsPanel: { title: string; baseUrl: string; deviceName: string; apiKey: string; inert: string; apply: string; clear: string; };
   oauthPanel: { title: string; syncAccount: string; loggedIn: string; loggedOut: string; expiredTag: string; scopes: string; expires: string; tokenPreview: string; googleSecret: string; configured: string; notConfigured: string; accounts: string; noneAccounts: string; };
   oauthSettingsPanel: { title: string; deviceAuthUrl: string; tokenUrl: string; clientId: string; scopes: string; portalUrl: string; configured: string; apply: string; clear: string; };
+  toolsetsPanel: { title: string; enabled: string; disabled: string; available: string; allWord: string; noneWord: string; placeholder: string; apply: string; clear: string; };
   metricsPanel: { title: string; summary: string; };
   egressPanel: { title: string; };
   channelsPanel: { title: string; enabled: string; disabled: string; noneEnabled: string; test: string; stateConnected: string; stateNotConfigured: string; summary: string; summaryValue: string; homeChannel: string; knownChannels: string; recent: string; };
@@ -877,6 +878,7 @@ const en: Translations = {
     syncSettingsPanel: { title: "Skills sync settings", baseUrl: "Sync endpoint", deviceName: "Device name", apiKey: "API key configured", inert: "inert (not configured)", apply: "Apply", clear: "Clear" },
   oauthPanel: { title: "Authorization", syncAccount: "Sync account", loggedIn: "logged in", loggedOut: "not logged in", expiredTag: "token expired", scopes: "Scopes", expires: "Expires", tokenPreview: "Token", googleSecret: "Google Chat client secret", configured: "configured", notConfigured: "not configured", accounts: "Google Chat accounts", noneAccounts: "none" },
   oauthSettingsPanel: { title: "OAuth device flow settings", deviceAuthUrl: "Device authorization URL", tokenUrl: "Token URL", clientId: "Client id", scopes: "Scopes", portalUrl: "Portal URL", configured: "Configured", apply: "Apply", clear: "Clear" },
+  toolsetsPanel: { title: "Toolset gates", enabled: "Enabled allowlist", disabled: "Disabled denylist", available: "Available toolsets", allWord: "all", noneWord: "none", placeholder: "coding, browser", apply: "Apply", clear: "Clear" },
   metricsPanel: { title: "Prometheus metrics", summary: "Show raw /metrics exposition" },
   egressPanel: { title: "Egress proxy" },
   channelsPanel: { title: "Messaging channels", enabled: "Enabled", disabled: "Disabled", noneEnabled: "(none)", test: "Test", stateConnected: "connected", stateNotConfigured: "not configured", summary: "Connected", summaryValue: "{connected}/{enabled} connected", homeChannel: "home", knownChannels: "{count} known", recent: "Recently active" },
@@ -1494,6 +1496,7 @@ const zh: Translations = {
     syncSettingsPanel: { title: "技能同步设置", baseUrl: "同步端点", deviceName: "设备名称", apiKey: "API 密钥已配置", inert: "未启用（未配置）", apply: "应用", clear: "清除" },
   oauthPanel: { title: "授权", syncAccount: "同步账号", loggedIn: "已登录", loggedOut: "未登录", expiredTag: "令牌已过期", scopes: "权限范围", expires: "过期时间", tokenPreview: "令牌", googleSecret: "Google Chat 客户端密钥", configured: "已配置", notConfigured: "未配置", accounts: "Google Chat 账号", noneAccounts: "无" },
   oauthSettingsPanel: { title: "OAuth 设备流设置", deviceAuthUrl: "设备授权地址", tokenUrl: "令牌地址", clientId: "客户端 ID", scopes: "权限范围", portalUrl: "门户地址", configured: "配置状态", apply: "应用", clear: "清除" },
+  toolsetsPanel: { title: "工具集门控", enabled: "启用白名单", disabled: "禁用黑名单", available: "可用工具集", allWord: "全部", noneWord: "无", placeholder: "coding, browser", apply: "应用", clear: "清除" },
   metricsPanel: { title: "Prometheus 指标", summary: "显示 /metrics 原始输出" },
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "消息通道", enabled: "已启用", disabled: "未启用", noneEnabled: "（无）", test: "测试", stateConnected: "已连接", stateNotConfigured: "未配置", summary: "连接状况", summaryValue: "已连接 {connected}/{enabled}", homeChannel: "主频道", knownChannels: "已知 {count} 个", recent: "最近活跃" },
@@ -2111,6 +2114,7 @@ const zhHant: Translations = {
     syncSettingsPanel: { title: "技能同步設定", baseUrl: "同步端點", deviceName: "裝置名稱", apiKey: "API 金鑰已設定", inert: "未啟用（未設定）", apply: "套用", clear: "清除" },
   oauthPanel: { title: "授權", syncAccount: "同步帳號", loggedIn: "已登入", loggedOut: "未登入", expiredTag: "令牌已過期", scopes: "權限範圍", expires: "過期時間", tokenPreview: "令牌", googleSecret: "Google Chat 用戶端金鑰", configured: "已配置", notConfigured: "未配置", accounts: "Google Chat 帳號", noneAccounts: "無" },
   oauthSettingsPanel: { title: "OAuth 裝置流設定", deviceAuthUrl: "裝置授權位址", tokenUrl: "權杖位址", clientId: "用戶端 ID", scopes: "權限範圍", portalUrl: "門戶位址", configured: "設定狀態", apply: "套用", clear: "清除" },
+  toolsetsPanel: { title: "工具集門控", enabled: "啟用白名單", disabled: "停用黑名單", available: "可用工具集", allWord: "全部", noneWord: "無", placeholder: "coding, browser", apply: "套用", clear: "清除" },
   metricsPanel: { title: "Prometheus 指標", summary: "顯示 /metrics 原始輸出" },
   egressPanel: { title: "出站代理" },
   channelsPanel: { title: "訊息通道", enabled: "已啟用", disabled: "未啟用", noneEnabled: "（無）", test: "測試", stateConnected: "已連線", stateNotConfigured: "未設定", summary: "連線狀況", summaryValue: "已連線 {connected}/{enabled}", homeChannel: "主頻道", knownChannels: "已知 {count} 個", recent: "最近活躍" },
@@ -2728,6 +2732,7 @@ const ja: Translations = {
     syncSettingsPanel: { title: "スキル同期設定", baseUrl: "同期エンドポイント", deviceName: "デバイス名", apiKey: "API キー設定済み", inert: "非アクティブ（未設定）", apply: "適用", clear: "クリア" },
   oauthPanel: { title: "Authorization", syncAccount: "Sync account", loggedIn: "logged in", loggedOut: "not logged in", expiredTag: "token expired", scopes: "Scopes", expires: "Expires", tokenPreview: "Token", googleSecret: "Google Chat client secret", configured: "configured", notConfigured: "not configured", accounts: "Google Chat accounts", noneAccounts: "none" },
   oauthSettingsPanel: { title: "OAuth デバイスフロー設定", deviceAuthUrl: "デバイス承認 URL", tokenUrl: "トークン URL", clientId: "クライアント ID", scopes: "スコープ", portalUrl: "ポータル URL", configured: "設定済み", apply: "適用", clear: "クリア" },
+  toolsetsPanel: { title: "ツールセットゲート", enabled: "有効許可リスト", disabled: "無効拒否リスト", available: "利用可能なツールセット", allWord: "すべて", noneWord: "なし", placeholder: "coding, browser", apply: "適用", clear: "クリア" },
   metricsPanel: { title: "Prometheus メトリクス", summary: "/metrics 生の出力を表示" },
   egressPanel: { title: "エグレスプロキシ" },
   channelsPanel: { title: "メッセージングチャネル", enabled: "有効", disabled: "無効", noneEnabled: "（なし）", test: "テスト", stateConnected: "接続済み", stateNotConfigured: "未設定", summary: "接続状況", summaryValue: "接続済み {connected}/{enabled}", homeChannel: "ホーム", knownChannels: "既知 {count}", recent: "最近の活動" },
@@ -3345,6 +3350,7 @@ const ar: Translations = {
     syncSettingsPanel: { title: "إعدادات مزامنة المهارات", baseUrl: "نقطة المزامنة", deviceName: "اسم الجهاز", apiKey: "مفتاح API مهيأ", inert: "غير نشط (غير مهيأ)", apply: "تطبيق", clear: "مسح" },
   oauthPanel: { title: "التفويض", syncAccount: "حساب المزامنة", loggedIn: "مسجل الدخول", loggedOut: "غير مسجل الدخول", expiredTag: "انتهت صلاحية الرمز", scopes: "النطاقات", expires: "تنتهي في", tokenPreview: "الرمز", googleSecret: "سر عميل Google Chat", configured: "مُهيأ", notConfigured: "غير مُهيأ", accounts: "حسابات Google Chat", noneAccounts: "لا شيء" },
   oauthSettingsPanel: { title: "إعدادات تدفق أجهزة OAuth", deviceAuthUrl: "عنوان تفويض الجهاز", tokenUrl: "عنوان الرمز", clientId: "معرّف العميل", scopes: "النطاقات", portalUrl: "عنوان البوابة", configured: "مهيأ", apply: "تطبيق", clear: "مسح" },
+  toolsetsPanel: { title: "بوابات مجموعات الأدوات", enabled: "قائمة التمكين", disabled: "قائمة التعطيل", available: "المجموعات المتاحة", allWord: "الكل", noneWord: "لا شيء", placeholder: "coding, browser", apply: "تطبيق", clear: "مسح" },
   metricsPanel: { title: "مقاييس Prometheus", summary: "عرض إخراج /metrics الخام" },
   egressPanel: { title: "وكيل الخروج" },
   channelsPanel: { title: "قنوات المراسلة", enabled: "مفعلة", disabled: "معطلة", noneEnabled: "(لا شيء)", test: "اختبار", stateConnected: "متصل", stateNotConfigured: "غير مهيأ", summary: "المتصلة", summaryValue: "متصلة {connected}/{enabled}", homeChannel: "الرئيسية", knownChannels: "{count} معروفة", recent: "النشاط الأخير" },

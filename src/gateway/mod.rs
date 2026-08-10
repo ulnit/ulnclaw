@@ -6023,6 +6023,120 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/toolsets-settings` — P776: global toolset gating for
+/// the shell: the enabled allowlist (empty = every toolset), the
+/// disabled denylist, and the available toolset names from the
+/// registry so editors can validate against them.
+async fn toolsets_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let mut available: Vec<&str> = crate::toolsets::toolsets().keys().copied().collect();
+    available.sort_unstable();
+    Json(json!({
+        "enabled_toolsets": config.enabled_toolsets,
+        "disabled_toolsets": config.disabled_toolsets,
+        "available_toolsets": available,
+    }))
+}
+
+/// `PUT /api/toolsets-settings` — P776: persist the global toolset
+/// gates from the shell. Body: `{"key": "enabled_toolsets"|
+/// "disabled_toolsets", "value": ["name", ...] | "a, b" | null}` —
+/// null or empty removes the gate (every toolset available). Entries
+/// must be registered toolset names; the 400 reply lists them.
+/// Applies on the next agent boot.
+async fn update_toolsets_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["enabled_toolsets", "disabled_toolsets"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown toolsets key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let names: Vec<String> = match v {
+                Value::Array(items) => items
+                    .iter()
+                    .map(|item| item.as_str().map(str::trim).unwrap_or_default().to_string())
+                    .collect(),
+                Value::String(string) => string
+                    .split(',')
+                    .map(|part| part.trim().to_string())
+                    .collect(),
+                _ => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!("{key} must be an array of toolset names or a comma-separated string") })),
+                    )
+                }
+            };
+            let registry = crate::toolsets::toolsets();
+            let mut list: Vec<toml::Value> = Vec::new();
+            for name in names {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                if !registry.contains_key(name.as_str()) {
+                    let mut available: Vec<&str> = registry.keys().copied().collect();
+                    available.sort_unstable();
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "error": format!("unknown toolset '{name}'"),
+                            "available_toolsets": available,
+                        })),
+                    );
+                }
+                list.push(toml::Value::String(name));
+            }
+            if !list.is_empty() {
+                raw = Some(toml::Value::Array(list).to_string());
+            }
+        }
+    }
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&key)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&key, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/oauth-settings` — P775: device-flow OAuth endpoint
 /// knobs for the shell: device authorization URL, token URL, client
 /// id, requested scopes and the human portal page (all strings,
@@ -10605,6 +10719,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/hooks-settings", get(hooks_settings_api).put(update_hooks_settings_api))
         .route("/api/sync-settings", get(sync_settings_api).put(update_sync_settings_api))
         .route("/api/oauth-settings", get(oauth_settings_api).put(update_oauth_settings_api))
+        .route("/api/toolsets-settings", get(toolsets_settings_api).put(update_toolsets_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -22985,6 +23100,78 @@ mod tests {
         let (_, body) = get_json(app.clone(), "/api/oauth-settings", Some("sekret")).await;
         assert_eq!(body["token_url"], "", "{body}");
         assert_eq!(body["configured"], false, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_toolsets_settings_editor() {
+        // P776: GET /api/toolsets-settings surfaces the global gates +
+        // registry names; PUT validates against the registry.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "disabled_toolsets = [\"kanban\"]\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Fixture denylist surfaces; registry names available.
+        let (status, body) = get_json(app.clone(), "/api/toolsets-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["disabled_toolsets"], json!(["kanban"]), "{body}");
+        assert_eq!(body["enabled_toolsets"], json!([]), "{body}");
+        assert!(body["available_toolsets"].as_array().unwrap().len() > 5, "{body}");
+
+        // Persist both gates.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/toolsets-settings",
+            Some("sekret"),
+            json!({ "key": "enabled_toolsets", "value": ["coding", "browser"] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/toolsets-settings",
+            Some("sekret"),
+            json!({ "key": "disabled_toolsets", "value": "kanban, discord" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/toolsets-settings", Some("sekret")).await;
+        assert_eq!(body["enabled_toolsets"], json!(["coding", "browser"]), "{body}");
+        assert_eq!(body["disabled_toolsets"], json!(["kanban", "discord"]), "{body}");
+
+        // Unknown toolsets are rejected with the registry list.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/toolsets-settings", Some("sekret"),
+            json!({ "key": "enabled_toolsets", "value": ["warp-drive"] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["available_toolsets"].as_array().is_some(), "{body}");
+
+        // null removes a gate.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/toolsets-settings", Some("sekret"),
+            json!({ "key": "enabled_toolsets", "value": Value::Null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/toolsets-settings", Some("sekret")).await;
+        assert_eq!(body["enabled_toolsets"], json!([]), "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
