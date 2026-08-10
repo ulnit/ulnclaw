@@ -56,6 +56,7 @@ interface DesktopBridge {
   setTrayTooltip(tooltip: string): Promise<void>;
   setCloseToTray(enabled: boolean): Promise<void>;
   setWindowTitle(title: string): Promise<void>;
+  setTrayHealth(up: boolean): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -77,6 +78,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       setTrayTooltip: (tooltip) => invoke<void>("desktop_set_tray_tooltip", { tooltip }),
       setCloseToTray: (enabled) => invoke<void>("desktop_set_close_to_tray", { enabled }),
       setWindowTitle: (title) => invoke<void>("desktop_set_window_title", { title }),
+      setTrayHealth: (up) => invoke<void>("desktop_set_tray_health", { up }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -2266,6 +2268,8 @@ async function pollHealth(): Promise<void> {
   state.bridge
     ?.setTrayTooltip(`ulnclaw · ${ok ? "gateway up" : "gateway down"} · ${probeLatencyMs}ms`)
     .catch(() => undefined);
+  // P793: tray icon — colour when up, grayscale when down.
+  state.bridge?.setTrayHealth(ok).catch(() => undefined);
   if (ok) {
     // P452: toast the recovery transition.
     if (lastHealthOk === false) notifySuccess(t.chrome.healthRestored);

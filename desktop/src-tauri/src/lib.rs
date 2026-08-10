@@ -43,6 +43,9 @@ struct QuitConfirmed(Mutex<bool>);
 /// P790: the tray icon id, so commands can update its tooltip live.
 struct TrayId(Mutex<Option<String>>);
 
+/// P793: last tray health icon applied (avoids re-setting every probe).
+struct TrayHealth(Mutex<Option<bool>>);
+
 /// P791: hide-to-tray on close — the webview reports its settings
 /// toggle; `QuitRequested` distinguishes a real exit (menu/tray Quit,
 /// confirmed quit-guard) from a bare close button.
@@ -492,6 +495,35 @@ fn desktop_set_close_to_tray(state: State<'_, CloseToTray>, enabled: bool) {
     }
 }
 
+/// P793: the tray icon mirrors gateway health — full colour when the
+/// gateway answers, grayscale when it does not.
+#[tauri::command]
+fn desktop_set_tray_health(app: tauri::AppHandle, up: bool) {
+    if let Some(last) = app.try_state::<TrayHealth>() {
+        if let Ok(mut guard) = last.0.lock() {
+            if *guard == Some(up) {
+                return;
+            }
+            *guard = Some(up);
+        }
+    }
+    let id = app
+        .try_state::<TrayId>()
+        .and_then(|state| state.0.lock().ok().and_then(|guard| guard.clone()));
+    if let Some(id) = id {
+        if let Some(tray) = app.tray_by_id(id.as_str()) {
+            let bytes: &[u8] = if up {
+                include_bytes!("../icons/icon.png")
+            } else {
+                include_bytes!("../icons/icon-down.png")
+            };
+            if let Ok(icon) = tauri::image::Image::from_bytes(bytes) {
+                let _ = tray.set_icon(Some(icon));
+            }
+        }
+    }
+}
+
 /// P792: sync the native title bar with the page's `document.title`
 /// (session name + unread count; Tauri does not sync it on its own).
 #[tauri::command]
@@ -747,6 +779,7 @@ pub fn run() {
         .manage(TrayId(Mutex::new(None)))
         .manage(CloseToTray(Mutex::new(false)))
         .manage(QuitRequested(Mutex::new(false)))
+        .manage(TrayHealth(Mutex::new(None)))
         .plugin(
             // P780: global quick-entry shortcut — summon the window and
             // open the quick-entry overlay from anywhere.
@@ -966,7 +999,8 @@ pub fn run() {
             desktop_gateway_pid_alive,
             desktop_set_tray_tooltip,
             desktop_set_close_to_tray,
-            desktop_set_window_title
+            desktop_set_window_title,
+            desktop_set_tray_health
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");
