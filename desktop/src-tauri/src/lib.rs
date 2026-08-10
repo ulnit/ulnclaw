@@ -9,6 +9,7 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_opener::OpenerExt;
 
 /// Handle of the managed gateway child process.
 struct GatewayProcess(Mutex<Option<u32>>);
@@ -610,8 +611,20 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         None::<&str>,
     )?;
+    // P788: the gateway also serves the browser dashboard — open it in
+    // the default browser.
+    let open_dashboard = MenuItem::with_id(
+        app,
+        "open_dashboard",
+        "Open Dashboard",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &new_session, &restart_gateway, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&show, &new_session, &restart_gateway, &open_dashboard, &quit],
+    )?;
 
     let mut builder = TrayIconBuilder::new()
         .tooltip("ulnclaw")
@@ -630,6 +643,13 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             // triggers it.
             "restart_gateway" => {
                 let _ = app.emit("ulnclaw://restart-gateway", ());
+            }
+            // P788: gateway dashboard in the default browser.
+            "open_dashboard" => {
+                let url = format!("http://127.0.0.1:{}", default_gateway_port());
+                if let Err(err) = app.opener().open_url(url, None::<&str>) {
+                    eprintln!("ulnclaw desktop: could not open dashboard: {err}");
+                }
             }
             // P783: route through the quit guard.
             "quit" => request_quit(app),
@@ -691,6 +711,8 @@ pub fn run() {
         }))
         // P785: ulnclaw:// deep-link routing (hermes deep-link parity).
         .plugin(tauri_plugin_deep_link::init())
+        // P788: default-browser opening for the dashboard tray item.
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             if let Err(err) = setup_tray(app) {
                 eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
