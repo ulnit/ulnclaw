@@ -1687,6 +1687,11 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .mcp-catalog-badge.off { opacity: 0.45; }
 .mcp-install-btn { font-size: 11px; padding: 1px 10px; margin-left: auto; white-space: nowrap; }
 .channels-disabled { opacity: 0.5; }
+/* P804: messaging env-value editor rows */
+.channels-env { display: flex; flex-direction: column; gap: 4px; flex: 1 1 100%; }
+.channels-env-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.channels-env-row .monitoring-label { flex: 0 0 200px; font-family: var(--mono, monospace); font-size: 12px; }
+.channels-env-row input.ghost { min-width: 180px; }
 
 /* Runs view (P279) */
 .runs-list { padding: 8px 16px; display: flex; flex-direction: column; gap: 10px; }

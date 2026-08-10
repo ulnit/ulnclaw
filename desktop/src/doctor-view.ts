@@ -2350,6 +2350,84 @@ export class DoctorWidget {
           row.append(label, value);
           rows.appendChild(row);
         }
+
+        // P804: env-value editor — set/clear each catalog env key via
+        // PUT /api/messaging/platforms/:id. Values are write-only: GET
+        // returns redacted previews only, inputs never round-trip.
+        let envEditorAdded = false;
+        for (const platform of enabled) {
+          if (platform.env_vars.length === 0) continue;
+          envEditorAdded = true;
+          const block = document.createElement("div");
+          block.className = "monitoring-row";
+          const label = document.createElement("span");
+          label.className = "monitoring-label";
+          label.textContent = `${platform.name} \u00b7 ${t.channelsPanel.envTitle}`;
+          const value = document.createElement("span");
+          value.className = "monitoring-value channels-env";
+          for (const envVar of platform.env_vars) {
+            const keyRow = document.createElement("div");
+            keyRow.className = "channels-env-row";
+            const keyLabel = document.createElement("span");
+            keyLabel.className = "monitoring-label";
+            keyLabel.textContent = envVar.required ? `${envVar.key} *` : envVar.key;
+            const status = document.createElement("span");
+            status.className = "jobs-counts";
+            status.textContent = envVar.is_set
+              ? envVar.redacted_value ?? ""
+              : t.channelsPanel.envNotSet;
+            const input = document.createElement("input");
+            input.className = "ghost";
+            input.placeholder = envVar.is_set
+              ? t.channelsPanel.envReplace
+              : t.channelsPanel.envPlaceholder;
+            const setBtn = document.createElement("button");
+            setBtn.className = "ghost mcp-add-btn";
+            setBtn.textContent = t.channelsPanel.envSet;
+            setBtn.onclick = async () => {
+              const next = input.value.trim();
+              if (!next) return;
+              setBtn.disabled = true;
+              try {
+                await client.messagingPlatformUpdate(platform.id, {
+                  env: { [envVar.key]: next },
+                });
+                input.value = "";
+                await this.loadChannels();
+              } catch (error) {
+                status.textContent = error instanceof Error ? error.message : String(error);
+              } finally {
+                setBtn.disabled = false;
+              }
+            };
+            const clearBtn = document.createElement("button");
+            clearBtn.className = "ghost mcp-add-btn";
+            clearBtn.textContent = t.channelsPanel.envClear;
+            clearBtn.disabled = !envVar.is_set;
+            clearBtn.onclick = async () => {
+              clearBtn.disabled = true;
+              try {
+                await client.messagingPlatformUpdate(platform.id, {
+                  clear_env: [envVar.key],
+                });
+                await this.loadChannels();
+              } catch (error) {
+                status.textContent = error instanceof Error ? error.message : String(error);
+                clearBtn.disabled = false;
+              }
+            };
+            keyRow.append(keyLabel, status, input, setBtn, clearBtn);
+            value.appendChild(keyRow);
+          }
+          block.append(label, value);
+          rows.appendChild(block);
+        }
+        if (envEditorAdded) {
+          const noteRow = document.createElement("div");
+          noteRow.className = "config-note";
+          noteRow.textContent = t.channelsPanel.envNote;
+          rows.appendChild(noteRow);
+        }
       } else {
         // P720: deepened channels panel over the P699 payload — state
         // ladder, home channel and known-channel counts per enabled
