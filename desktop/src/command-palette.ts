@@ -33,6 +33,7 @@ export interface CommandPaletteHooks {
   openSettings(): void;
   refreshSessions(): void | Promise<void>;
   restartGateway(): void | Promise<void>;
+  gatewayLog(): void | Promise<void>;
   shortcuts(): void;
   notifications(): void;
   updateCheck(): void | Promise<void>;
@@ -170,6 +171,7 @@ export class CommandPalette {
       { id: "refresh", label: t.palette.refreshSessions, group: t.palette.gatewayGroup, run: () => hooks.refreshSessions() },
       { id: "settings", label: t.palette.openSettings, group: t.palette.gatewayGroup, hint: "Ctrl/Cmd+,", run: () => hooks.openSettings() },
       { id: "restart-gateway", label: t.palette.restartGateway, group: t.palette.gatewayGroup, run: () => hooks.restartGateway() },
+      { id: "gateway-log", label: t.palette.gatewayLog, group: t.palette.gatewayGroup, run: () => hooks.gatewayLog() },
       { id: "update-check", label: t.palette.updateCheck, group: t.palette.gatewayGroup, run: () => hooks.updateCheck() },
       { id: "shortcuts", label: t.palette.shortcuts, group: t.palette.gatewayGroup, hint: "F1", run: () => hooks.shortcuts() },
       { id: "notifications", label: t.palette.notifications, group: t.palette.gatewayGroup, run: () => hooks.notifications() },

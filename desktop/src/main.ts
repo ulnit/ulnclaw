@@ -57,6 +57,7 @@ interface DesktopBridge {
   setCloseToTray(enabled: boolean): Promise<void>;
   setWindowTitle(title: string): Promise<void>;
   setTrayHealth(up: boolean): Promise<void>;
+  gatewayLogTail(lines: number): Promise<string[]>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -79,6 +80,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       setCloseToTray: (enabled) => invoke<void>("desktop_set_close_to_tray", { enabled }),
       setWindowTitle: (title) => invoke<void>("desktop_set_window_title", { title }),
       setTrayHealth: (up) => invoke<void>("desktop_set_tray_health", { up }),
+      gatewayLogTail: (lines) => invoke<string[]>("desktop_gateway_log_tail", { lines }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -4156,6 +4158,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     restartGateway: () => {
       void restartGateway();
     },
+    gatewayLog: () => {
+      void openGatewayLog();
+    },
     shortcuts: () => openShortcuts(),
     notifications: () => openNotifyHistory(),
     updateCheck: () => runUpdateCheck(),
@@ -5156,5 +5161,63 @@ async function openSessionInWindow(): Promise<void> {
         error instanceof Error ? error.message : String(error),
       ),
     );
+  }
+}
+
+/** P794: gateway child-log viewer (Tauri-only) — the shell captures the
+ * managed gateway's stdout/stderr into ~/.ulnclaw/gateway.log. */
+let gatewayLogDialog: HTMLDialogElement | null = null;
+let gatewayLogTimer: number | null = null;
+
+async function refreshGatewayLog(): Promise<void> {
+  if (!state.bridge || !gatewayLogDialog) return;
+  try {
+    const lines = await state.bridge.gatewayLogTail(300);
+    const body = gatewayLogDialog.querySelector(".gateway-log-body") as HTMLPreElement | null;
+    if (body) {
+      body.textContent = lines.length > 0 ? lines.join("\n") : t.chrome.gatewayLogEmpty;
+    }
+  } catch {
+    /* shell unavailable */
+  }
+}
+
+async function openGatewayLog(): Promise<void> {
+  if (!state.bridge) return;
+  if (!gatewayLogDialog) {
+    gatewayLogDialog = document.createElement("dialog");
+    gatewayLogDialog.className = "gateway-log-dialog";
+    const inner = document.createElement("div");
+    inner.className = "gateway-log-inner";
+    const head = document.createElement("div");
+    head.className = "gateway-log-head";
+    const title = document.createElement("h2");
+    title.textContent = t.chrome.gatewayLogTitle;
+    const actions = document.createElement("div");
+    const refreshBtn = document.createElement("button");
+    refreshBtn.className = "ghost";
+    refreshBtn.textContent = t.chrome.gatewayLogRefresh;
+    refreshBtn.onclick = () => void refreshGatewayLog();
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = t.chrome.gatewayLogClose;
+    closeBtn.onclick = () => gatewayLogDialog?.close();
+    actions.append(refreshBtn, closeBtn);
+    head.append(title, actions);
+    const body = document.createElement("pre");
+    body.className = "gateway-log-body";
+    inner.append(head, body);
+    gatewayLogDialog.append(inner);
+    document.body.append(gatewayLogDialog);
+    gatewayLogDialog.addEventListener("close", () => {
+      if (gatewayLogTimer !== null) {
+        window.clearInterval(gatewayLogTimer);
+        gatewayLogTimer = null;
+      }
+    });
+  }
+  await refreshGatewayLog();
+  gatewayLogDialog.showModal();
+  if (gatewayLogTimer === null) {
+    gatewayLogTimer = window.setInterval(() => void refreshGatewayLog(), 2000);
   }
 }

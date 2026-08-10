@@ -98,6 +98,13 @@ fn desktop_pidfile_path() -> Option<std::path::PathBuf> {
         .map(|home| home.join(".ulnclaw").join("desktop.pid"))
 }
 
+/// P794: rolling log for the managed gateway child's output.
+fn gateway_log_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .map(|home| home.join(".ulnclaw").join("gateway.log"))
+}
+
 /// Field 22 (`starttime`) of `/proc/<pid>/stat`, anchored on the last
 /// `)` because comm may contain spaces (same math as gateway_pidfile).
 fn desktop_process_start_time(pid: u32) -> Option<u64> {
@@ -246,12 +253,28 @@ fn spawn_gateway(state: State<'_, GatewayProcess>, binary: String, port: u16) ->
     // the desktop bridge in the child gateway (P231): events stream back
     // over /api/desktop/events and read_terminal round-trips through
     // /api/desktop/read-response.
-    let child = std::process::Command::new(&binary)
+    let mut command = std::process::Command::new(&binary);
+    command
         .args(["gateway", "--port", &port.to_string()])
         .env("ULNCLAW_DESKTOP", "1")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+    // P794: capture the child's output for the gateway-log viewer —
+    // crude rotation drops the file once it passes 2 MiB.
+    if let Some(path) = gateway_log_path() {
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > 2 * 1024 * 1024 {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            if let Ok(dup) = file.try_clone() {
+                command
+                    .stdout(std::process::Stdio::from(file))
+                    .stderr(std::process::Stdio::from(dup));
+            }
+        }
+    }
+    let child = command
         .spawn()
         .map_err(|e| format!("spawn {binary}: {e}"))?;
     let pid = child.id();
@@ -529,6 +552,21 @@ fn desktop_set_tray_health(app: tauri::AppHandle, up: bool) {
 #[tauri::command]
 fn desktop_set_window_title(window: tauri::Window, title: String) {
     let _ = window.set_title(&title);
+}
+
+/// P794: tail of the managed gateway's captured output (newest last,
+/// capped) for the shell's log viewer.
+#[tauri::command]
+fn desktop_gateway_log_tail(lines: usize) -> Vec<String> {
+    let Some(path) = gateway_log_path() else {
+        return Vec::new();
+    };
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let all: Vec<&str> = contents.lines().collect();
+    let start = all.len().saturating_sub(lines.min(500));
+    all[start..].iter().map(|line| line.to_string()).collect()
 }
 
 /// P783: the user confirmed quitting with work in flight — latch and exit.
@@ -1000,7 +1038,8 @@ pub fn run() {
             desktop_set_tray_tooltip,
             desktop_set_close_to_tray,
             desktop_set_window_title,
-            desktop_set_tray_health
+            desktop_set_tray_health,
+            desktop_gateway_log_tail
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");

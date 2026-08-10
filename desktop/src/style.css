@@ -1928,3 +1928,10 @@ html[data-font="space-mono"] { --font-stack: "Space Mono", ui-monospace, Menlo, 
 #quick-entry-input:disabled { opacity: 0.55; }
 #quick-entry-target { max-width: 180px; background: var(--panel-2); color: var(--text); border: 1px solid var(--hover); border-radius: 8px; padding: 4px 6px; font-size: 12px; }
 .quick-entry-hint { margin-top: 4px; text-align: center; font-size: 11px; color: var(--dim); }
+/* P794: gateway child-log viewer */
+.gateway-log-dialog { width: min(920px, 92vw); max-width: 92vw; }
+.gateway-log-inner { display: flex; flex-direction: column; gap: 10px; }
+.gateway-log-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gateway-log-head h2 { margin: 0; }
+.gateway-log-head div { display: flex; gap: 8px; }
+.gateway-log-body { margin: 0; padding: 10px; background: var(--hover); border-radius: 6px; font-family: var(--mono, monospace); font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 62vh; overflow: auto; }
