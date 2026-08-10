@@ -55,6 +55,7 @@ interface DesktopBridge {
   pidAlive(pid: number): Promise<boolean>;
   setTrayTooltip(tooltip: string): Promise<void>;
   setCloseToTray(enabled: boolean): Promise<void>;
+  setWindowTitle(title: string): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -75,6 +76,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       pidAlive: (pid) => invoke<boolean>("desktop_gateway_pid_alive", { pid }),
       setTrayTooltip: (tooltip) => invoke<void>("desktop_set_tray_tooltip", { tooltip }),
       setCloseToTray: (enabled) => invoke<void>("desktop_set_close_to_tray", { enabled }),
+      setWindowTitle: (title) => invoke<void>("desktop_set_window_title", { title }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -1139,6 +1141,8 @@ function refreshWindowTitle(): void {
   // P404: unread notification count prefixes the title.
   const unread = notificationUnread();
   document.title = unread > 0 ? `(${unread > 99 ? "99+" : unread}) ${base}` : base;
+  // P792: mirror it into the native title bar.
+  state.bridge?.setWindowTitle(document.title).catch(() => undefined);
 }
 
 async function openSession(session: SessionRow): Promise<void> {

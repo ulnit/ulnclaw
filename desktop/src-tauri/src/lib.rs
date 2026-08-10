@@ -492,6 +492,13 @@ fn desktop_set_close_to_tray(state: State<'_, CloseToTray>, enabled: bool) {
     }
 }
 
+/// P792: sync the native title bar with the page's `document.title`
+/// (session name + unread count; Tauri does not sync it on its own).
+#[tauri::command]
+fn desktop_set_window_title(window: tauri::Window, title: String) {
+    let _ = window.set_title(&title);
+}
+
 /// P783: the user confirmed quitting with work in flight — latch and exit.
 #[tauri::command]
 fn desktop_confirm_quit(app: tauri::AppHandle, confirmed: State<'_, QuitConfirmed>) {
@@ -958,7 +965,8 @@ pub fn run() {
             desktop_open_session_window,
             desktop_gateway_pid_alive,
             desktop_set_tray_tooltip,
-            desktop_set_close_to_tray
+            desktop_set_close_to_tray,
+            desktop_set_window_title
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");
