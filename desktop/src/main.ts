@@ -53,6 +53,7 @@ interface DesktopBridge {
   deepLinksPending(): Promise<string[]>;
   openSessionWindow(sessionId: string): Promise<void>;
   pidAlive(pid: number): Promise<boolean>;
+  setTrayTooltip(tooltip: string): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -71,6 +72,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       openSessionWindow: (sessionId) =>
         invoke<void>("desktop_open_session_window", { sessionId }),
       pidAlive: (pid) => invoke<boolean>("desktop_gateway_pid_alive", { pid }),
+      setTrayTooltip: (tooltip) => invoke<void>("desktop_set_tray_tooltip", { tooltip }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -2252,6 +2254,10 @@ async function pollHealth(): Promise<void> {
   const probeLatencyMs = Math.round(performance.now() - probeStartedAt);
   el.dot.className = "dot " + (ok ? "up" : "down");
   el.dot.title = ok ? t.session.reachable : t.session.unreachable;
+  // P790: mirror the health in the tray tooltip.
+  state.bridge
+    ?.setTrayTooltip(`ulnclaw · ${ok ? "gateway up" : "gateway down"} · ${probeLatencyMs}ms`)
+    .catch(() => undefined);
   if (ok) {
     // P452: toast the recovery transition.
     if (lastHealthOk === false) notifySuccess(t.chrome.healthRestored);

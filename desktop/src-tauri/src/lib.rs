@@ -40,6 +40,9 @@ struct WindowGeometry(Mutex<Option<WindowState>>);
 struct ActiveWork(Mutex<u32>);
 struct QuitConfirmed(Mutex<bool>);
 
+/// P790: the tray icon id, so commands can update its tooltip live.
+struct TrayId(Mutex<Option<String>>);
+
 fn window_state_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -457,6 +460,19 @@ fn desktop_gateway_pid_alive(pid: u32) -> bool {
     desktop_pid_alive(pid)
 }
 
+/// P790: live tray tooltip — the webview reports gateway health.
+#[tauri::command]
+fn desktop_set_tray_tooltip(app: tauri::AppHandle, tooltip: String) {
+    let id = app
+        .try_state::<TrayId>()
+        .and_then(|state| state.0.lock().ok().and_then(|guard| guard.clone()));
+    if let Some(id) = id {
+        if let Some(tray) = app.tray_by_id(id.as_str()) {
+            let _ = tray.set_tooltip(Some(tooltip));
+        }
+    }
+}
+
 /// P783: the user confirmed quitting with work in flight — latch and exit.
 #[tauri::command]
 fn desktop_confirm_quit(app: tauri::AppHandle, confirmed: State<'_, QuitConfirmed>) {
@@ -675,7 +691,13 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(icon) = app.default_window_icon().cloned() {
         builder = builder.icon(icon);
     }
-    builder.build(app.handle())?;
+    let icon = builder.build(app.handle())?;
+    // P790: remember the tray id for live tooltip updates.
+    if let Some(tray_id) = app.try_state::<TrayId>() {
+        if let Ok(mut guard) = tray_id.0.lock() {
+            *guard = Some(icon.id().as_ref().to_string());
+        }
+    }
     Ok(())
 }
 
@@ -691,6 +713,7 @@ pub fn run() {
         .manage(ZoomLevel(Mutex::new(0.0)))
         .manage(ActiveWork(Mutex::new(0)))
         .manage(QuitConfirmed(Mutex::new(false)))
+        .manage(TrayId(Mutex::new(None)))
         .plugin(
             // P780: global quick-entry shortcut — summon the window and
             // open the quick-entry overlay from anywhere.
@@ -891,7 +914,8 @@ pub fn run() {
             desktop_confirm_quit,
             desktop_deep_links_pending,
             desktop_open_session_window,
-            desktop_gateway_pid_alive
+            desktop_gateway_pid_alive,
+            desktop_set_tray_tooltip
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");
