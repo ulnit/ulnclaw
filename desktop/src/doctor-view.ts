@@ -344,6 +344,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-dashboard-theme" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="dashboardThemePanel.title">Dashboard theme & font</h3>
+        <div id="dashboard-theme-rows"></div>
+        <div id="dashboard-theme-editor" class="monitoring-row" hidden>
+          <select id="dashboard-theme-key" class="ghost"></select>
+          <input id="dashboard-theme-value" class="ghost" />
+          <button id="dashboard-theme-apply" class="ghost mcp-add-btn" data-i18n="dashboardThemePanel.apply">Apply</button>
+          <button id="dashboard-theme-clear" class="ghost mcp-add-btn" data-i18n="dashboardThemePanel.clear">Reset</button>
+          <span id="dashboard-theme-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-browser-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="browserSettingsPanel.title">Browser tool settings</h3>
         <div id="browser-settings-rows"></div>
@@ -557,6 +568,7 @@ export class DoctorWidget {
     this.loadDiscordSettings().catch(() => undefined);
     this.loadPetsSettings().catch(() => undefined);
     this.loadBrowserSettings().catch(() => undefined);
+    this.loadDashboardTheme().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2640,6 +2652,91 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadDashboardTheme(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-dashboard-theme") as HTMLElement;
+    const rows = this.root.querySelector("#dashboard-theme-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const [themes, fontInfo] = await Promise.all([
+        client.dashboardThemes(),
+        client.dashboardFontInfo(),
+      ]);
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const activeTheme = themes.themes.find((theme) => theme.name === themes.active);
+      addRow(
+        t.dashboardThemePanel.activeTheme,
+        escapeHtmlDoctor(
+          activeTheme ? `${activeTheme.label} (${activeTheme.name})` : themes.active,
+        ),
+      );
+      addRow(t.dashboardThemePanel.activeFont, escapeHtmlDoctor(fontInfo.font));
+      addRow(
+        t.dashboardThemePanel.themes,
+        themes.themes.map((theme) => escapeHtmlDoctor(theme.name)).join(", "),
+      );
+      addRow(
+        t.dashboardThemePanel.fontChoices,
+        fontInfo.font_choices.map(escapeHtmlDoctor).join(", "),
+      );
+      // P764: dashboard theme/font editor — pick the knob, type a
+      // catalog name, Apply persists through PUT /api/dashboard/theme
+      // or /api/dashboard/font, Reset returns to the default theme /
+      // the theme's own font.
+      const editor = this.root.querySelector("#dashboard-theme-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#dashboard-theme-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#dashboard-theme-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#dashboard-theme-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#dashboard-theme-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#dashboard-theme-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        keySel.innerHTML = "";
+        for (const key of ["theme", "font"]) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            if (keySel.value === "theme") {
+              await client.dashboardSetTheme(value);
+            } else {
+              await client.dashboardSetFont(value);
+            }
+            await this.loadDashboardTheme();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueInput.value.trim());
+        clearBtn.onclick = () =>
+          void applyEdit(keySel.value === "theme" ? "default" : "theme");
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

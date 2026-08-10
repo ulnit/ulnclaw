@@ -2784,12 +2784,13 @@ async fn dashboard_theme_set(Json(body): Json<Value>) -> Response {
 }
 
 /// `GET /api/dashboard/font` — active font override (`"theme"` = the
-/// theme's own font).
+/// theme's own font) plus the curated choice list so editors can
+/// render a picker (P764).
 async fn dashboard_font_get(State(state): State<Arc<GatewayState>>) -> Json<Value> {
     let config = state.agent.context().config.clone();
     let raw = read_dashboard_value("dashboard.font").unwrap_or(config.dashboard.font.clone());
     let font = normalize_dashboard_font(&raw);
-    Json(json!({ "font": font }))
+    Json(json!({ "font": font, "font_choices": DASHBOARD_FONT_CHOICES }))
 }
 
 /// `PUT /api/dashboard/font` — set + persist the font override; unknown
@@ -27878,6 +27879,13 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let (status, body) = get_json(app.clone(), "/api/dashboard/font", Some(token)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["font"], "theme");
+        // P764: the curated choice list surfaces for editor pickers.
+        let choices = body["font_choices"].as_array().unwrap();
+        assert!(choices.len() > 8, "{body}");
+        assert!(
+            choices.iter().any(|c| c == "jetbrains-mono"),
+            "{body}"
+        );
         let (status, body) = send_json(
             app.clone(), "PUT", "/api/dashboard/font", Some(token),
             json!({"font": "jetbrains-mono"}),

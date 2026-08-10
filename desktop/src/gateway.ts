@@ -3704,6 +3704,19 @@ export class GatewayClient {
     return typeof value.font === "string" ? value.font : "theme";
   }
 
+  /** GET /api/dashboard/font — active font + curated choices (P764). */
+  async dashboardFontInfo(): Promise<{ font: string; font_choices: string[] }> {
+    const response = await fetch(this.endpoint("/api/dashboard/font"), {
+      headers: this.headers(),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || `font HTTP ${response.status}`);
+    return {
+      font: typeof value.font === "string" ? value.font : "theme",
+      font_choices: Array.isArray(value.font_choices) ? value.font_choices : [],
+    };
+  }
+
   /** PUT /api/dashboard/font — persist the font override (P331). */
   async dashboardSetFont(font: string): Promise<void> {
     const response = await fetch(this.endpoint("/api/dashboard/font"), {
