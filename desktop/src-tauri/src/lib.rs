@@ -43,6 +43,12 @@ struct QuitConfirmed(Mutex<bool>);
 /// P790: the tray icon id, so commands can update its tooltip live.
 struct TrayId(Mutex<Option<String>>);
 
+/// P791: hide-to-tray on close — the webview reports its settings
+/// toggle; `QuitRequested` distinguishes a real exit (menu/tray Quit,
+/// confirmed quit-guard) from a bare close button.
+struct CloseToTray(Mutex<bool>);
+struct QuitRequested(Mutex<bool>);
+
 fn window_state_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -435,6 +441,11 @@ fn request_quit(app: &tauri::AppHandle) {
         .and_then(|flag| flag.0.lock().ok().map(|guard| *guard))
         .unwrap_or(false);
     if active == 0 || confirmed {
+        if let Some(flag) = app.try_state::<QuitRequested>() {
+            if let Ok(mut guard) = flag.0.lock() {
+                *guard = true;
+            }
+        }
         app.exit(0);
         return;
     }
@@ -473,11 +484,24 @@ fn desktop_set_tray_tooltip(app: tauri::AppHandle, tooltip: String) {
     }
 }
 
+/// P791: the webview reports its hide-to-tray toggle.
+#[tauri::command]
+fn desktop_set_close_to_tray(state: State<'_, CloseToTray>, enabled: bool) {
+    if let Ok(mut guard) = state.0.lock() {
+        *guard = enabled;
+    }
+}
+
 /// P783: the user confirmed quitting with work in flight — latch and exit.
 #[tauri::command]
 fn desktop_confirm_quit(app: tauri::AppHandle, confirmed: State<'_, QuitConfirmed>) {
     if let Ok(mut guard) = confirmed.0.lock() {
         *guard = true;
+    }
+    if let Some(flag) = app.try_state::<QuitRequested>() {
+        if let Ok(mut guard) = flag.0.lock() {
+            *guard = true;
+        }
     }
     app.exit(0);
 }
@@ -714,6 +738,8 @@ pub fn run() {
         .manage(ActiveWork(Mutex::new(0)))
         .manage(QuitConfirmed(Mutex::new(false)))
         .manage(TrayId(Mutex::new(None)))
+        .manage(CloseToTray(Mutex::new(false)))
+        .manage(QuitRequested(Mutex::new(false)))
         .plugin(
             // P780: global quick-entry shortcut — summon the window and
             // open the quick-entry overlay from anywhere.
@@ -861,6 +887,17 @@ pub fn run() {
                     }
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // P791: hide-to-tray on a bare close button when the
+                    // toggle is on (a real quit carries the QuitRequested
+                    // latch and proceeds normally).
+                    let quit_requested = window
+                        .try_state::<QuitRequested>()
+                        .and_then(|flag| flag.0.lock().ok().map(|guard| *guard))
+                        .unwrap_or(false);
+                    let close_to_tray = window
+                        .try_state::<CloseToTray>()
+                        .and_then(|flag| flag.0.lock().ok().map(|guard| *guard))
+                        .unwrap_or(false);
                     // P783: block the close while a turn is in flight —
                     // the page confirms, then desktop_confirm_quit exits.
                     let active = window
@@ -877,6 +914,11 @@ pub fn run() {
                             "ulnclaw://quit-blocked",
                             serde_json::json!({ "count": active }),
                         );
+                        api.prevent_close();
+                        return;
+                    }
+                    if close_to_tray && !quit_requested {
+                        let _ = window.hide();
                         api.prevent_close();
                         return;
                     }
@@ -915,7 +957,8 @@ pub fn run() {
             desktop_deep_links_pending,
             desktop_open_session_window,
             desktop_gateway_pid_alive,
-            desktop_set_tray_tooltip
+            desktop_set_tray_tooltip,
+            desktop_set_close_to_tray
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");

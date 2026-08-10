@@ -16,6 +16,8 @@ export interface GatewaySettings {
   notifySystem: boolean;
   /** P786: completion chime when a turn settles (default off). */
   completionChime: boolean;
+  /** P791: hide the shell to the tray on close instead of quitting. */
+  hideToTray: boolean;
 }
 
 export interface SessionRow {
@@ -1773,12 +1775,13 @@ export function loadSettings(): GatewaySettings {
         charLimit: Number(parsed.charLimit) > 0 ? Math.floor(Number(parsed.charLimit)) : 0,
         notifySystem: parsed.notifySystem !== false,
         completionChime: Boolean(parsed.completionChime),
+        hideToTray: Boolean(parsed.hideToTray),
       };
     }
   } catch {
     /* fall through */
   }
-  return { url: "http://127.0.0.1:8642", key: "", manage: true, reopenLast: true, charWarn: 4000, charLimit: 0, notifySystem: true, completionChime: false };
+  return { url: "http://127.0.0.1:8642", key: "", manage: true, reopenLast: true, charWarn: 4000, charLimit: 0, notifySystem: true, completionChime: false, hideToTray: false };
 }
 
 export function saveSettings(settings: GatewaySettings): void {

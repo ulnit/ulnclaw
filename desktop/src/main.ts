@@ -54,6 +54,7 @@ interface DesktopBridge {
   openSessionWindow(sessionId: string): Promise<void>;
   pidAlive(pid: number): Promise<boolean>;
   setTrayTooltip(tooltip: string): Promise<void>;
+  setCloseToTray(enabled: boolean): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -73,6 +74,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
         invoke<void>("desktop_open_session_window", { sessionId }),
       pidAlive: (pid) => invoke<boolean>("desktop_gateway_pid_alive", { pid }),
       setTrayTooltip: (tooltip) => invoke<void>("desktop_set_tray_tooltip", { tooltip }),
+      setCloseToTray: (enabled) => invoke<void>("desktop_set_close_to_tray", { enabled }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -404,6 +406,8 @@ const el = {
   settingCharLimit: document.getElementById("setting-char-limit") as HTMLInputElement,
   settingNotifySystem: document.getElementById("setting-notify-system") as HTMLInputElement,
   settingChime: document.getElementById("setting-chime") as HTMLInputElement,
+  settingHideTrayRow: document.getElementById("setting-hide-tray-row") as HTMLLabelElement,
+  settingHideTray: document.getElementById("setting-hide-tray") as HTMLInputElement,
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
   settingPersonalityRow: document.getElementById("setting-personality-row") as HTMLLabelElement,
@@ -3616,6 +3620,14 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     el.settingNotifySystem.checked = state.settings.notifySystem;
     // P786: completion-chime toggle.
     el.settingChime.checked = state.settings.completionChime;
+    // P791: hide-to-tray is shell-owned — hide the row in a plain
+    // browser tab, otherwise reflect the persisted setting.
+    if (state.bridge) {
+      el.settingHideTrayRow.hidden = false;
+      el.settingHideTray.checked = state.settings.hideToTray;
+    } else {
+      el.settingHideTrayRow.hidden = true;
+    }
     el.settings.showModal();
     // P634: personalities surface — fill the picker from the gateway and
     // hide the row when no personas are configured.
@@ -3670,6 +3682,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
         : 0,
       notifySystem: el.settingNotifySystem.checked,
       completionChime: el.settingChime.checked,
+      hideToTray: state.bridge ? el.settingHideTray.checked : state.settings.hideToTray,
     };
     saveSettings(next);
     state.settings = next;
@@ -3679,6 +3692,10 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       state.bridge
         .setAutostart(el.settingAutostart.checked)
         .catch(() => notifyError(t.chrome.autostartFailed));
+    }
+    // P791: report the hide-to-tray toggle to the shell.
+    if (state.bridge) {
+      state.bridge.setCloseToTray(next.hideToTray).catch(() => undefined);
     }
     startDesktopEvents();
     // P634: persist the personality pick alongside the other settings.
@@ -4231,6 +4248,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
       )
       .catch(() => undefined);
   }
+
+  // P791: seed the shell with the persisted hide-to-tray toggle.
+  state.bridge?.setCloseToTray(state.settings.hideToTray).catch(() => undefined);
 
   installHotkeys();
   installDragDrop();
