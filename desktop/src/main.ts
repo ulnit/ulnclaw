@@ -3209,6 +3209,12 @@ function installHotkeys(): void {
       void toggleFileTree();
       return;
     }
+    // P798: mod+shift+l — open the gateway log viewer (Tauri-only).
+    if (mod && event.shiftKey && key === "l") {
+      event.preventDefault();
+      void openGatewayLog();
+      return;
+    }
     // mod+, — settings (hermes nav.settings chord).
     if (mod && !event.shiftKey && event.key === ",") {
       event.preventDefault();
@@ -4729,6 +4735,7 @@ function shortcutRows(): [string, string][] {
     [`${mod}+Shift+E`, t.chrome.scExport],
     [`${mod}+Shift+T`, t.chrome.scFileTree],
     [`${mod}+Shift+Q`, t.chrome.scQuickEntry],
+    [`${mod}+Shift+L`, t.chrome.scGatewayLog],
     [`${mod}+,`, t.chrome.scSettings],
     [`${mod}+B`, t.chrome.scSidebar],
     [`${mod}+K`, t.chrome.scPalette],
