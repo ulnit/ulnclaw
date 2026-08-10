@@ -623,6 +623,12 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // P784: a second launch surfaces the running window instead of
+        // vanishing silently (hermes second-instance handoff parity).
+        // The P555 pidfile guard stays as the hard single-instance lock.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main_window(app);
+        }))
         .setup(|app| {
             if let Err(err) = setup_tray(app) {
                 eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
