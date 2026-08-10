@@ -376,6 +376,7 @@ export interface Translations {
   proxyPanel: { title: string; host: string; port: string; upstreamUrl: string; allowedPaths: string; maxRequestBytes: string; authenticated: string; apply: string; clear: string; };
   auxiliaryPanel: { title: string; keySet: string; disabled: string; lang: string; apply: string; clear: string; };
   providersPanel: { title: string; none: string; apply: string; clear: string; };
+  profilesPanel: { title: string; multiplex: string; none: string; enabled: string; disabled: string; apply: string; clear: string; clearUnsupported: string; notANumber: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -912,6 +913,7 @@ const en: Translations = {
   proxyPanel: { title: "Bearer proxy", host: "Listener host", port: "Listener port", upstreamUrl: "Upstream URL", allowedPaths: "Allowed paths", maxRequestBytes: "Request cap (bytes)", authenticated: "OAuth credentials", apply: "Apply", clear: "Clear" },
   auxiliaryPanel: { title: "Auxiliary tasks", keySet: "api key set", disabled: "disabled", lang: "lang", apply: "Apply", clear: "Clear" },
   providersPanel: { title: "Custom providers", none: "No custom providers configured", apply: "Apply", clear: "Clear" },
+  profilesPanel: { title: "Profiles", multiplex: "Gateway multiplex", none: "No profiles configured", enabled: "enabled", disabled: "disabled", apply: "Apply", clear: "Clear", clearUnsupported: "This field is edited, not cleared", notANumber: "Temperature must be a number" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1525,6 +1527,7 @@ const zh: Translations = {
   proxyPanel: { title: "Bearer 代理", host: "监听主机", port: "监听端口", upstreamUrl: "上游地址", allowedPaths: "允许路径", maxRequestBytes: "请求上限（字节）", authenticated: "OAuth 凭据", apply: "应用", clear: "清除" },
   auxiliaryPanel: { title: "辅助任务", keySet: "密钥已配置", disabled: "已禁用", lang: "语言", apply: "应用", clear: "清除" },
   providersPanel: { title: "自定义 Provider", none: "未配置自定义 Provider", apply: "应用", clear: "清除" },
+  profilesPanel: { title: "配置档案", multiplex: "网关多路复用", none: "未配置档案", enabled: "启用", disabled: "禁用", apply: "应用", clear: "清除", clearUnsupported: "该字段仅可编辑，不可清除", notANumber: "温度必须是数字" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2138,6 +2141,7 @@ const zhHant: Translations = {
   proxyPanel: { title: "Bearer 代理", host: "監聽主機", port: "監聽埠", upstreamUrl: "上游位址", allowedPaths: "允許路徑", maxRequestBytes: "請求上限（位元組）", authenticated: "OAuth 憑證", apply: "套用", clear: "清除" },
   auxiliaryPanel: { title: "輔助任務", keySet: "金鑰已設定", disabled: "已停用", lang: "語言", apply: "套用", clear: "清除" },
   providersPanel: { title: "自訂 Provider", none: "未設定自訂 Provider", apply: "套用", clear: "清除" },
+  profilesPanel: { title: "設定檔", multiplex: "閘道多工復用", none: "未設定檔", enabled: "啟用", disabled: "停用", apply: "套用", clear: "清除", clearUnsupported: "此欄位僅可編輯，無法清除", notANumber: "溫度必須是數字" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2751,6 +2755,7 @@ const ja: Translations = {
   proxyPanel: { title: "Bearer プロキシ", host: "リッスンホスト", port: "リッスンポート", upstreamUrl: "アップストリーム URL", allowedPaths: "許可パス", maxRequestBytes: "リクエスト上限（バイト）", authenticated: "OAuth 認証情報", apply: "適用", clear: "クリア" },
   auxiliaryPanel: { title: "補助タスク", keySet: "API キー設定済み", disabled: "無効", lang: "言語", apply: "適用", clear: "クリア" },
   providersPanel: { title: "カスタムプロバイダー", none: "カスタムプロバイダー未設定", apply: "適用", clear: "クリア" },
+  profilesPanel: { title: "プロファイル", multiplex: "ゲートウェイマルチプレクス", none: "プロファイル未設定", enabled: "有効", disabled: "無効", apply: "適用", clear: "クリア", clearUnsupported: "このフィールドは編集のみでクリア不可", notANumber: "temperature は数値である必要があります" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3364,6 +3369,7 @@ const ar: Translations = {
   proxyPanel: { title: "وكيل Bearer", host: "مضيف الاستماع", port: "منفذ الاستماع", upstreamUrl: "عنوان المنبع", allowedPaths: "المسارات المسموحة", maxRequestBytes: "حد الطلب (بايت)", authenticated: "بيانات OAuth", apply: "تطبيق", clear: "مسح" },
   auxiliaryPanel: { title: "المهام المساعدة", keySet: "مفتاح API مُهيأ", disabled: "معطل", lang: "اللغة", apply: "تطبيق", clear: "مسح" },
   providersPanel: { title: "الموفرون المخصصون", none: "لا موفرون مخصصون", apply: "تطبيق", clear: "مسح" },
+  profilesPanel: { title: "الملفات التعريفية", multiplex: "تعدد الإرسال", none: "لا ملفات تعريفية", enabled: "مفعل", disabled: "معطل", apply: "تطبيق", clear: "مسح", clearUnsupported: "هذا الحقل يُحرر ولا يُمسح", notANumber: "يجب أن تكون الحرارة رقمًا" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

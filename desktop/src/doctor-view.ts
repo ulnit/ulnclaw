@@ -345,6 +345,18 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-profiles" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="profilesPanel.title">Profiles</h3>
+        <div id="profiles-rows"></div>
+        <div id="profiles-editor" class="monitoring-row" hidden>
+          <select id="profiles-name" class="ghost"></select>
+          <select id="profiles-field" class="ghost"></select>
+          <input id="profiles-value" class="ghost" />
+          <button id="profiles-apply" class="ghost mcp-add-btn" data-i18n="profilesPanel.apply">Apply</button>
+          <button id="profiles-clear" class="ghost mcp-add-btn" data-i18n="profilesPanel.clear">Clear</button>
+          <span id="profiles-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-providers-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="providersPanel.title">Custom providers</h3>
         <div id="providers-rows"></div>
@@ -637,6 +649,7 @@ export class DoctorWidget {
     this.loadProxySettings().catch(() => undefined);
     this.loadAuxiliarySettings().catch(() => undefined);
     this.loadProvidersSettings().catch(() => undefined);
+    this.loadProfiles().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2744,6 +2757,163 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadProfiles(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-profiles") as HTMLElement;
+    const rows = this.root.querySelector("#profiles-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.profilesList();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(t.profilesPanel.multiplex, payload.multiplex_profiles ? on : off);
+      if (payload.profiles.length === 0) {
+        addRow(t.profilesPanel.none, escapeHtmlDoctor(auto));
+      }
+      for (const profile of payload.profiles) {
+        const parts: string[] = [];
+        if (profile.model) {
+          parts.push(escapeHtmlDoctor(`${profile.model.provider}:${profile.model.model}`));
+          if (profile.model.base_url) parts.push(escapeHtmlDoctor(profile.model.base_url));
+          if (profile.model.temperature !== null && profile.model.temperature !== undefined) {
+            parts.push(escapeHtmlDoctor(`T=${profile.model.temperature}`));
+          }
+        } else {
+          parts.push(escapeHtmlDoctor(auto));
+        }
+        if (profile.enabled_toolsets !== null) {
+          parts.push(
+            escapeHtmlDoctor(`${t.profilesPanel.enabled}: ${profile.enabled_toolsets.join(", ")}`),
+          );
+        }
+        if (profile.disabled_toolsets !== null) {
+          parts.push(
+            escapeHtmlDoctor(`${t.profilesPanel.disabled}: ${profile.disabled_toolsets.join(", ")}`),
+          );
+        }
+        addRow(profile.name, parts.join(" · "));
+      }
+      // P772: profiles editor — pick the profile and the field, type
+      // the value (toolsets take comma lists), Apply persists through
+      // POST /api/profiles. Clear empties toolset lists / base_url;
+      // provider/model/temperature are edited, not cleared.
+      const editor = this.root.querySelector("#profiles-editor") as HTMLElement;
+      const nameSel = this.root.querySelector("#profiles-name") as HTMLSelectElement;
+      const fieldSel = this.root.querySelector("#profiles-field") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#profiles-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#profiles-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#profiles-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#profiles-status") as HTMLElement;
+      if (!nameSel.dataset.wired) {
+        const fields = [
+          "provider",
+          "model",
+          "base_url",
+          "temperature",
+          "enabled_toolsets",
+          "disabled_toolsets",
+        ];
+        const reloadNames = (): void => {
+          const previous = nameSel.value;
+          nameSel.innerHTML = "";
+          for (const profile of payload.profiles) {
+            const option = document.createElement("option");
+            option.value = profile.name;
+            option.textContent = profile.name;
+            nameSel.appendChild(option);
+          }
+          if (payload.profiles.some((profile) => profile.name === previous)) {
+            nameSel.value = previous;
+          }
+          fieldSel.innerHTML = "";
+          for (const field of fields) {
+            const option = document.createElement("option");
+            option.value = field;
+            option.textContent = field;
+            fieldSel.appendChild(option);
+          }
+        };
+        reloadNames();
+        const applyEdit = async (clear: boolean): Promise<void> => {
+          statusEl.textContent = "";
+          const name = nameSel.value;
+          const field = fieldSel.value;
+          const row = payload.profiles.find((profile) => profile.name === name);
+          if (!row) return;
+          try {
+            const body: Record<string, unknown> = { name };
+            if (field === "enabled_toolsets" || field === "disabled_toolsets") {
+              const list = clear
+                ? []
+                : valueInput.value
+                    .split(",")
+                    .map((part) => part.trim())
+                    .filter((part) => part.length > 0);
+              body[field] = list;
+            } else if (field === "base_url") {
+              body.base_url = clear ? "" : valueInput.value.trim();
+            } else if (field === "temperature") {
+              if (clear) {
+                statusEl.textContent = t.profilesPanel.clearUnsupported;
+                return;
+              }
+              const parsed = Number(valueInput.value.trim());
+              if (Number.isNaN(parsed)) {
+                statusEl.textContent = t.profilesPanel.notANumber;
+                return;
+              }
+              body.temperature = parsed;
+            } else {
+              if (clear) {
+                statusEl.textContent = t.profilesPanel.clearUnsupported;
+                return;
+              }
+              const text = valueInput.value.trim();
+              if (field === "provider") {
+                body.provider = text;
+                if (row.model) body.model = row.model.model;
+              } else {
+                body.model = text;
+                if (row.model) body.provider = row.model.provider;
+              }
+            }
+            await client.profileSave(
+              body as Parameters<typeof client.profileSave>[0],
+            );
+            await this.loadProfiles();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(false);
+        clearBtn.onclick = () => void applyEdit(true);
+        nameSel.dataset.wired = "1";
+      }
+      editor.hidden = payload.profiles.length === 0;
       section.hidden = false;
     } catch {
       section.hidden = true;
