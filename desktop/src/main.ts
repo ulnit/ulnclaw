@@ -58,6 +58,7 @@ interface DesktopBridge {
   setWindowTitle(title: string): Promise<void>;
   setTrayHealth(up: boolean): Promise<void>;
   gatewayLogTail(lines: number): Promise<string[]>;
+  openPath(path: string): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -81,6 +82,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       setWindowTitle: (title) => invoke<void>("desktop_set_window_title", { title }),
       setTrayHealth: (up) => invoke<void>("desktop_set_tray_health", { up }),
       gatewayLogTail: (lines) => invoke<string[]>("desktop_gateway_log_tail", { lines }),
+      openPath: (path) => invoke<void>("desktop_open_path", { path }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -4170,6 +4172,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     gatewayLog: () => {
       void openGatewayLog();
     },
+    openWorkingDir: () => {
+      void openWorkingDirectory();
+    },
     shortcuts: () => openShortcuts(),
     notifications: () => openNotifyHistory(),
     updateCheck: () => runUpdateCheck(),
@@ -5228,5 +5233,21 @@ async function openGatewayLog(): Promise<void> {
   gatewayLogDialog.showModal();
   if (gatewayLogTimer === null) {
     gatewayLogTimer = window.setInterval(() => void refreshGatewayLog(), 2000);
+  }
+}
+/** P797: open the current session's working directory in the OS file
+ * manager (Tauri-only). */
+async function openWorkingDirectory(): Promise<void> {
+  const cwd = state.current?.cwd?.trim();
+  if (!state.bridge || !cwd) return;
+  try {
+    await state.bridge.openPath(cwd);
+  } catch (error) {
+    notifyError(
+      t.chrome.openDirFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
   }
 }

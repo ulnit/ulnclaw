@@ -34,6 +34,7 @@ export interface CommandPaletteHooks {
   refreshSessions(): void | Promise<void>;
   restartGateway(): void | Promise<void>;
   gatewayLog(): void | Promise<void>;
+  openWorkingDir(): void | Promise<void>;
   shortcuts(): void;
   notifications(): void;
   updateCheck(): void | Promise<void>;
@@ -196,6 +197,7 @@ export class CommandPalette {
       { id: "new-session-in-project", label: t.palette.newSessionInProject, group: t.palette.sessionGroup, run: () => hooks.newSessionInProject() },
       { id: "view-in-sessions", label: t.palette.viewInSessionsBrowser, group: t.palette.sessionGroup, run: () => hooks.openInSessionsBrowser() },
       { id: "toggle-file-tree", label: t.palette.fileTree, group: t.palette.sessionGroup, hint: "Ctrl/Cmd+Shift+T", run: () => hooks.toggleFileTree() },
+      { id: "open-working-dir", label: t.palette.openWorkingDir, group: t.palette.sessionGroup, run: () => hooks.openWorkingDir() },
       { id: "quick-entry", label: t.palette.quickEntry, group: t.palette.sessionGroup, hint: "Ctrl/Cmd+Shift+Q", run: () => hooks.quickEntry() },
     ];
     const current = hooks.currentSessionId();

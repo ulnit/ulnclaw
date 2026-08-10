@@ -571,6 +571,14 @@ fn desktop_gateway_log_tail(lines: usize) -> Vec<String> {
     all[start..].iter().map(|line| line.to_string()).collect()
 }
 
+/// P797: open a directory in the OS file manager (the session cwd).
+#[tauri::command]
+fn desktop_open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// P783: the user confirmed quitting with work in flight — latch and exit.
 #[tauri::command]
 fn desktop_confirm_quit(app: tauri::AppHandle, confirmed: State<'_, QuitConfirmed>) {
@@ -1061,7 +1069,8 @@ pub fn run() {
             desktop_set_close_to_tray,
             desktop_set_window_title,
             desktop_set_tray_health,
-            desktop_gateway_log_tail
+            desktop_gateway_log_tail,
+            desktop_open_path
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");
