@@ -46,6 +46,8 @@ interface DesktopBridge {
   spawnGateway(binary: string, port: number): Promise<number>;
   stopGateway(pid: number): Promise<void>;
   defaultPort(): Promise<number>;
+  autostartEnabled(): Promise<boolean>;
+  setAutostart(enabled: boolean): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -56,6 +58,8 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       spawnGateway: (binary, port) => invoke<number>("spawn_gateway", { binary, port }),
       stopGateway: (pid) => invoke<void>("stop_gateway", { pid }),
       defaultPort: () => invoke<number>("default_gateway_port"),
+      autostartEnabled: () => invoke<boolean>("desktop_autostart_enabled"),
+      setAutostart: (enabled) => invoke<void>("desktop_autostart_set", { enabled }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -294,6 +298,8 @@ const el = {
   settingUrl: document.getElementById("setting-url") as HTMLInputElement,
   settingKey: document.getElementById("setting-key") as HTMLInputElement,
   settingManage: document.getElementById("setting-manage") as HTMLInputElement,
+  settingAutostartRow: document.getElementById("setting-autostart-row") as HTMLLabelElement,
+  settingAutostart: document.getElementById("setting-autostart") as HTMLInputElement,
   settingReopen: document.getElementById("setting-reopen") as HTMLInputElement,
   settingCharWarn: document.getElementById("setting-char-warn") as HTMLInputElement,
   settingCharLimit: document.getElementById("setting-char-limit") as HTMLInputElement,
@@ -3446,6 +3452,21 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     el.settingUrl.value = state.settings.url;
     el.settingKey.value = state.settings.key;
     el.settingManage.checked = state.settings.manage;
+    // P781: launch-at-login is shell-owned (OS facility) — hide the row
+    // in a plain browser tab, otherwise reflect the current OS state.
+    if (state.bridge) {
+      el.settingAutostartRow.hidden = false;
+      state.bridge
+        .autostartEnabled()
+        .then((enabled) => {
+          el.settingAutostart.checked = enabled;
+        })
+        .catch(() => {
+          el.settingAutostartRow.hidden = true;
+        });
+    } else {
+      el.settingAutostartRow.hidden = true;
+    }
     // P431: the reopen-last-session launch toggle.
     el.settingReopen.checked = state.settings.reopenLast;
     // P434: composer warn threshold.
@@ -3511,6 +3532,12 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     saveSettings(next);
     state.settings = next;
     state.client = new GatewayClient(next);
+    // P781: launch-at-login lives outside GatewaySettings (OS-level).
+    if (state.bridge && !el.settingAutostartRow.hidden) {
+      state.bridge
+        .setAutostart(el.settingAutostart.checked)
+        .catch(() => notifyError(t.chrome.autostartFailed));
+    }
     startDesktopEvents();
     // P634: persist the personality pick alongside the other settings.
     void applySettingsPersonality();

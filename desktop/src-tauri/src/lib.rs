@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// Handle of the managed gateway child process.
@@ -257,6 +258,25 @@ fn stop_gateway(state: State<'_, GatewayProcess>, pid: u32) -> Result<(), String
     Ok(())
 }
 
+/// P781: whether the OS launches ulnclaw at login.
+#[tauri::command]
+fn desktop_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// P781: toggle launch-at-login through the OS autostart facility
+/// (LaunchAgent on macOS, autostart .desktop entry on Linux, registry
+/// run key on Windows).
+#[tauri::command]
+fn desktop_autostart_set(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
 /// Minimal TOML reader for the port lookup (avoids a toml crate dep in
 /// the shell crate).
 mod toml_min {
@@ -487,6 +507,11 @@ pub fn run() {
                 })
                 .build(),
         )
+        // P781: launch-at-login support (settings-dialog toggle).
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             if let Err(err) = setup_tray(app) {
                 eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
@@ -595,7 +620,9 @@ pub fn run() {
             default_gateway_port,
             spawn_gateway,
             stop_gateway,
-            desktop_about
+            desktop_about,
+            desktop_autostart_enabled,
+            desktop_autostart_set
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");
