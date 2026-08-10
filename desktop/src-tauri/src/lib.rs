@@ -407,6 +407,8 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+    // P796: let the page restore input focus after being surfaced.
+    let _ = app.emit("ulnclaw://window-shown", ());
 }
 
 /// P782: webview zoom (hermes zoom parity). Levels are exponents of a

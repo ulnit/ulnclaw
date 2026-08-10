@@ -201,6 +201,11 @@ async function listenMenuEvents(): Promise<void> {
     await listen("ulnclaw://gateway-log", () => {
       void openGatewayLog();
     });
+    // P796: whenever the shell surfaces the window (tray show,
+    // second-instance handoff, quit-guard surface), refocus the composer.
+    await listen("ulnclaw://window-shown", () => {
+      if (!document.querySelector("dialog[open]")) el.input.focus();
+    });
     await listen("ulnclaw://menu-toggle-fullscreen", () => {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => undefined);
