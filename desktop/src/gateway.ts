@@ -1044,6 +1044,23 @@ export interface SecretsStatus {
   };
 }
 
+export interface SecretsSyncReport {
+  apply: boolean;
+  fetches: {
+    name: string;
+    ok: boolean;
+    error: string | null;
+    warnings: string[];
+    count: number;
+  }[];
+  applied: { var: string; source: string }[];
+  skipped_existing: string[];
+  skipped_protected: string[];
+  conflicts: string[];
+  errors: string[];
+  persisted: string[];
+}
+
 export interface ComputerUseStatus {
   installed: boolean;
   driver: string | null;
@@ -2429,6 +2446,18 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return (await response.json()) as SecretsStatus;
+  }
+
+  /** POST /api/secrets/sync — fetch sources, report winners; with
+   * `apply` persist them to `.env`. Values never in the payload (P801). */
+  async secretsSync(apply: boolean): Promise<SecretsSyncReport> {
+    const response = await fetch(this.endpoint("/api/secrets/sync"), {
+      method: "POST",
+      headers: { ...this.headers(), "Content-Type": "application/json" },
+      body: JSON.stringify({ apply }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as SecretsSyncReport;
   }
 
   /** GET /api/computer-use — cua-driver status + config (P641). */

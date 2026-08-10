@@ -533,6 +533,11 @@ export class DoctorWidget {
       <section id="doctor-secrets" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="secretsPanel.title">Secret sources</h3>
         <div id="secrets-rows"></div>
+        <div class="kanban-detail-model">
+          <button id="secrets-sync-dry" type="button" data-i18n="secretsPanel.syncNow">Sync now</button>
+          <button id="secrets-sync-apply" type="button" data-i18n="secretsPanel.applyNow">Apply to .env</button>
+        </div>
+        <div id="secrets-sync-report"></div>
       </section>
       <section id="doctor-computer-use" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="computerUsePanel.title">Computer Use</h3>
@@ -1513,9 +1518,91 @@ export class DoctorWidget {
         row.append(labelEl, valueEl);
         rows.appendChild(row);
       }
+      const dryBtn = this.root.querySelector("#secrets-sync-dry") as HTMLButtonElement;
+      dryBtn.onclick = () => void this.syncSecrets(false);
+      const applyBtn = this.root.querySelector("#secrets-sync-apply") as HTMLButtonElement;
+      applyBtn.onclick = () => void this.syncSecrets(true);
       section.hidden = false;
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** P801: run the secret sources on demand. Dry-run reports the
+   * winners; apply persists them to `.env` (loaded at next startup).
+   * Values are never rendered — variable names and counts only. */
+  private async syncSecrets(apply: boolean): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const v = t.secretsPanel;
+    const dryBtn = this.root.querySelector("#secrets-sync-dry") as HTMLButtonElement;
+    const applyBtn = this.root.querySelector("#secrets-sync-apply") as HTMLButtonElement;
+    const report = this.root.querySelector("#secrets-sync-report") as HTMLElement;
+    dryBtn.disabled = true;
+    applyBtn.disabled = true;
+    const busy = apply ? v.applying : v.syncing;
+    (apply ? applyBtn : dryBtn).textContent = busy;
+    try {
+      const info = await client.secretsSync(apply);
+      report.innerHTML = "";
+      const entries: [string, string][] = [];
+      for (const fetchRow of info.fetches) {
+        entries.push([
+          fetchRow.name,
+          fetchRow.ok
+            ? `${fetchRow.count} ${v.secretsWord}${fetchRow.warnings.length > 0 ? ` · ${fetchRow.warnings.length} ⚠` : ""}`
+            : fetchRow.error || "error",
+        ]);
+      }
+      entries.push([
+        v.appliedLabel,
+        info.applied.length > 0
+          ? info.applied.map((row) => `${row.var} (${row.source})`).join(", ")
+          : v.noneWord,
+      ]);
+      if (info.skipped_existing.length > 0) {
+        entries.push([v.skippedExistingLabel, info.skipped_existing.join(", ")]);
+      }
+      if (info.skipped_protected.length > 0) {
+        entries.push([v.skippedProtectedLabel, info.skipped_protected.join(", ")]);
+      }
+      if (info.conflicts.length > 0) {
+        entries.push([v.conflictsLabel, info.conflicts.join(", ")]);
+      }
+      if (info.errors.length > 0) {
+        entries.push([v.errorsLabel, info.errors.join(", ")]);
+      }
+      if (info.persisted.length > 0) {
+        entries.push([v.persistedLabel, info.persisted.join(", ")]);
+      }
+      for (const [label, value] of entries) {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.textContent = value;
+        valueEl.title = value;
+        row.append(labelEl, valueEl);
+        report.appendChild(row);
+      }
+      const note = document.createElement("div");
+      note.className = "config-note";
+      note.textContent = apply ? v.applyNote : v.dryRunNote;
+      report.appendChild(note);
+    } catch (error) {
+      report.innerHTML = "";
+      const note = document.createElement("div");
+      note.className = "config-note";
+      note.textContent = String(error);
+      report.appendChild(note);
+    } finally {
+      dryBtn.disabled = false;
+      applyBtn.disabled = false;
+      dryBtn.textContent = v.syncNow;
+      applyBtn.textContent = v.applyNow;
     }
   }
 

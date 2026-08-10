@@ -9724,6 +9724,65 @@ async fn sync_status(Query(query): Query<SyncQuery>) -> Response {
     Json(payload).into_response()
 }
 
+/// `POST /api/secrets/sync` — P801: fetch the external secret sources
+/// and report what would change (dry-run by default). `apply: true`
+/// persists the winners into `<home>/.env` — the gateway is
+/// multithreaded, so the CLI's export-into-process semantics are
+/// unsafe here; persisted values load at the next startup. Secret
+/// VALUES never appear in the response.
+async fn secrets_sync_api(Json(body): Json<Value>) -> Response {
+    let apply = body.get("apply").and_then(Value::as_bool).unwrap_or(false);
+    let config = match crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+    {
+        Ok(config) => config,
+        Err(e) => return server_error(&format!("load config: {e}")),
+    };
+    let home = crate::config::ulnclaw_home();
+    let fetches = crate::secrets::fetch_all(&config.secrets, &home);
+    // Base view: process env plus .env (same merge apply_all uses).
+    let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    for (key, value) in crate::config::load_env_file(&home.join(".env")) {
+        env.entry(key).or_insert(value);
+    }
+    let report = crate::secrets::apply_to_env(&mut env, &config.secrets, &fetches);
+    let mut persisted: Vec<String> = Vec::new();
+    if apply {
+        for (var, _source) in &report.applied {
+            let value = env.get(var).cloned().unwrap_or_default();
+            if let Err(e) = crate::config_cmd::set_config_value(var, &value, true) {
+                return server_error(&format!("persist {var}: {e}"));
+            }
+            persisted.push(var.clone());
+        }
+    }
+    Json(json!({
+        "apply": apply,
+        "fetches": fetches
+            .iter()
+            .map(|(name, result)| {
+                json!({
+                    "name": name,
+                    "ok": result.ok,
+                    "error": result.error,
+                    "warnings": result.warnings,
+                    "count": result.secrets.len(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "applied": report
+            .applied
+            .iter()
+            .map(|(var, source)| json!({ "var": var, "source": source }))
+            .collect::<Vec<_>>(),
+        "skipped_existing": report.skipped_existing,
+        "skipped_protected": report.skipped_protected,
+        "conflicts": report.conflicts,
+        "errors": report.errors,
+        "persisted": persisted,
+    }))
+    .into_response()
+}
+
 /// `GET /api/secrets` — external secret-source status for the
 /// desktop Doctor panel (hermes `ulnclaw secrets status` parity):
 /// source order + per-source posture. Strictly read-only — secret
@@ -10842,6 +10901,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/system", get(system_info))
         .route("/api/computer-use", get(computer_use_status))
         .route("/api/secrets", get(secrets_status))
+        .route("/api/secrets/sync", post(secrets_sync_api))
         .route("/api/sync", get(sync_status))
         .route("/api/pairing", get(pairing_status))
         .route("/api/pairing/approve", post(pairing_approve))
@@ -23030,6 +23090,63 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/sync-settings", Some("sekret")).await;
         assert_eq!(body["base_url"], "", "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_secrets_sync_endpoint() {
+        // P801: POST /api/secrets/sync reports (dry-run) and persists
+        // (apply) the command-source winners; values never surface.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[secrets.command]\nenabled = true\ncommand = \"echo ULNCLAW_TEST_SECRET=s3cret\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Dry run: reports the winner, persists nothing.
+        let (status, body) = send_json(
+            app.clone(),
+            "POST",
+            "/api/secrets/sync",
+            Some("sekret"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["apply"], false, "{body}");
+        let applied = body["applied"].as_array().expect("applied rows");
+        assert!(
+            applied
+                .iter()
+                .any(|row| row["var"] == "ULNCLAW_TEST_SECRET"),
+            "{body}"
+        );
+        assert!(!body.to_string().contains("s3cret"), "{body}");
+        assert!(!dir.path().join(".env").exists());
+
+        // Apply: the winner lands in .env; the payload stays value-free.
+        let (status, body) = send_json(
+            app.clone(),
+            "POST",
+            "/api/secrets/sync",
+            Some("sekret"),
+            json!({ "apply": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!body.to_string().contains("s3cret"), "{body}");
+        let env_file = std::fs::read_to_string(dir.path().join(".env")).unwrap_or_default();
+        assert!(env_file.contains("ULNCLAW_TEST_SECRET"), "{env_file}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
