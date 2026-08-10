@@ -65,7 +65,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
 /** P540: native app-menu events (Tauri only) — File › New Session
  * drives the same flow as the sidebar button. P777 adds View ›
  * Reload / Toggle Full Screen and Help › About. P779 adds the tray
- * Restart Gateway trigger. */
+ * Restart Gateway trigger; P780 the global quick-entry shortcut. */
 async function listenMenuEvents(): Promise<void> {
   try {
     const { listen } = await import("@tauri-apps/api/event");
@@ -80,6 +80,11 @@ async function listenMenuEvents(): Promise<void> {
     // (stop, respawn, health-wait) lives in restartGateway().
     await listen("ulnclaw://restart-gateway", () => {
       void restartGateway();
+    });
+    // P780: the global CmdOrCtrl+Shift+Space accelerator summons the
+    // window and opens the quick-entry overlay (hermes quick-entry).
+    await listen("ulnclaw://quick-entry", () => {
+      state.quickEntry?.toggle();
     });
     await listen("ulnclaw://menu-toggle-fullscreen", () => {
       if (document.fullscreenElement) {

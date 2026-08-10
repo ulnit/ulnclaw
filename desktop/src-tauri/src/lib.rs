@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// Handle of the managed gateway child process.
 struct GatewayProcess(Mutex<Option<u32>>);
@@ -343,6 +344,14 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// P780: the global quick-entry accelerator — hermes' default
+/// (`CommandOrControl+Shift+Space`), mapped per platform by the plugin.
+fn quick_entry_shortcut() -> Shortcut {
+    "CmdOrCtrl+Shift+Space"
+        .parse()
+        .expect("static quick-entry shortcut parses")
+}
+
 /// P540: native app menu — File › New Session (CmdOrCtrl+N) emits an
 /// event the webview turns into the new-session flow; Edit carries the
 /// standard clipboard roles so the webview keeps them on every OS.
@@ -464,12 +473,31 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(GatewayProcess(Mutex::new(None)))
         .manage(WindowGeometry(Mutex::new(None)))
+        .plugin(
+            // P780: global quick-entry shortcut — summon the window and
+            // open the quick-entry overlay from anywhere.
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state == ShortcutState::Pressed
+                        && *shortcut == quick_entry_shortcut()
+                    {
+                        show_main_window(app);
+                        let _ = app.emit("ulnclaw://quick-entry", ());
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             if let Err(err) = setup_tray(app) {
                 eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
             }
             if let Err(err) = setup_app_menu(app) {
                 eprintln!("ulnclaw desktop: app menu unavailable: {err}");
+            }
+            // P780: register the accelerator; failure is non-fatal (e.g.
+            // another app already owns the grab).
+            if let Err(err) = app.global_shortcut().register(quick_entry_shortcut()) {
+                eprintln!("ulnclaw desktop: global quick-entry shortcut unavailable: {err}");
             }
             // P535: restore the persisted window geometry.
             if let Some(window) = app.get_webview_window("main") {
