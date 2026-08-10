@@ -50,6 +50,7 @@ export class DoctorWidget {
           <option value="warn" data-i18n="doctor.levelWarn">Warnings + failures</option>
           <option value="fail" data-i18n="doctor.levelFail">Failures only</option>
         </select>
+        <input id="doctor-settings-search" type="search" data-i18n-ph="doctor.settingsSearchPh" data-i18n-title="doctor.settingsSearchTitle" placeholder="Filter panels…" />
         <button id="doctor-export" class="ghost" data-i18n="doctor.exportJson" hidden>JSON</button>
         <button id="doctor-gateway-restart" class="ghost" data-i18n="doctor.gatewayRestart">Restart gateway</button>
         <button id="doctor-gateway-stop" class="ghost" data-i18n="doctor.gatewayStop">Stop gateway</button>
@@ -526,6 +527,11 @@ export class DoctorWidget {
         this.render(this.lastReport.report.sections, this.lastReport.report.issues);
       }
     });
+    // P766: filter Doctor panels by text content.
+    this.root.querySelector("#doctor-settings-search")!.addEventListener("input", () => {
+      const input = this.root.querySelector("#doctor-settings-search") as HTMLInputElement;
+      this.applySettingsSearch(input.value);
+    });
     this.root.querySelector("#ops-audit-btn")!.addEventListener("click", () => {
       this.runOps("securityAudit").catch(() => undefined);
     });
@@ -614,6 +620,21 @@ export class DoctorWidget {
     }
     for (const poller of this.mcpPollers) window.clearInterval(poller);
     this.mcpPollers = [];
+  }
+
+  /** P766: hide Doctor panels whose text does not match the query;
+   * an empty query restores every panel's loader-controlled state. */
+  private applySettingsSearch(query: string): void {
+    const needle = query.trim().toLowerCase();
+    const sections = this.root.querySelectorAll<HTMLElement>("section.doctor-monitoring");
+    sections.forEach((section) => {
+      if (!needle) {
+        section.classList.remove("doctor-search-hide");
+        return;
+      }
+      const text = (section.textContent ?? "").toLowerCase();
+      section.classList.toggle("doctor-search-hide", !text.includes(needle));
+    });
   }
 
   /** P765: transient save confirmation for settings editors. */

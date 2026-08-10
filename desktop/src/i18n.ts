@@ -276,6 +276,7 @@ export interface Translations {
     run: string; running: string; online: string; issues: string;
     noIssues: string; failed: string; empty: string; exportJson: string;
     levelTitle: string; levelAll: string; levelWarn: string; levelFail: string; filterNoMatch: string;
+    settingsSearchPh: string; settingsSearchTitle: string;
     gatewayRestart: string; gatewayStop: string; restartConfirm: string; stopConfirm: string; restarting: string; stopping: string; lifecycleFailed: string;
   };
   webhooks: {
@@ -789,6 +790,7 @@ const en: Translations = {
     issues: "Issues found", noIssues: "✓ No issues found.",
     failed: "Doctor run failed: {error}", empty: "No checks reported.", exportJson: "Export JSON", gatewayRestart: "Restart gateway", gatewayStop: "Stop gateway", restartConfirm: "Restart the gateway? A replacement process takes over; desktop sessions reconnect automatically.", stopConfirm: "Stop the gateway? The desktop loses its connection until the gateway starts again.", restarting: "Restarting gateway…", stopping: "Stopping gateway…", lifecycleFailed: "Gateway action failed: {error}",
     levelTitle: "Filter checks by severity", levelAll: "All levels", levelWarn: "Warnings + failures", levelFail: "Failures only", filterNoMatch: "No checks match this severity filter.",
+    settingsSearchPh: "Filter panels…", settingsSearchTitle: "Filter Doctor panels by title or content",
   },
   webhooks: {
     count: "{count} subscription(s)", empty: "No dynamic webhook subscriptions yet.",
@@ -1396,6 +1398,7 @@ const zh: Translations = {
     issues: "发现的问题", noIssues: "✓ 未发现问题。",
     failed: "诊断失败：{error}", empty: "没有检查项。", exportJson: "导出 JSON", gatewayRestart: "重启网关", gatewayStop: "停止网关", restartConfirm: "重启网关？接替进程将接管服务，桌面会自动重连。", stopConfirm: "停止网关？桌面将断开连接，直到网关再次启动。", restarting: "正在重启网关…", stopping: "正在停止网关…", lifecycleFailed: "网关操作失败：{error}",
     levelTitle: "按严重级别筛选检查项", levelAll: "全部级别", levelWarn: "警告与失败", levelFail: "仅失败", filterNoMatch: "没有匹配该严重级别的检查项。",
+    settingsSearchPh: "筛选面板…", settingsSearchTitle: "按标题或内容筛选 Doctor 面板",
   },
   webhooks: {
     count: "{count} 个订阅", empty: "还没有动态 webhook 订阅。",
@@ -2003,6 +2006,7 @@ const zhHant: Translations = {
     issues: "發現的問題", noIssues: "✓ 未發現問題。",
     failed: "診斷失敗：{error}", empty: "沒有檢查項。", exportJson: "匯出 JSON", gatewayRestart: "重啟閘道", gatewayStop: "停止閘道", restartConfirm: "重啟閘道？接替處理程序將接管服務，桌面會自動重連。", stopConfirm: "停止閘道？桌面將中斷連線，直到閘道再次啟動。", restarting: "正在重啟閘道…", stopping: "正在停止閘道…", lifecycleFailed: "閘道操作失敗：{error}",
     levelTitle: "依嚴重程度篩選檢查項", levelAll: "全部層級", levelWarn: "警告與失敗", levelFail: "僅失敗", filterNoMatch: "沒有匹配該嚴重程度的檢查項。",
+    settingsSearchPh: "篩選面板…", settingsSearchTitle: "依標題或內容篩選 Doctor 面板",
   },
   webhooks: {
     count: "{count} 個訂閱", empty: "還沒有動態 webhook 訂閱。",
@@ -2610,6 +2614,7 @@ const ja: Translations = {
     issues: "見つかった問題", noIssues: "✓ 問題は見つかりませんでした。",
     failed: "ドクター実行に失敗：{error}", empty: "チェック項目がありません。", exportJson: "JSON をエクスポート", gatewayRestart: "ゲートウェイを再起動", gatewayStop: "ゲートウェイを停止", restartConfirm: "ゲートウェイを再起動しますか？代替プロセスが引き継ぎ、デスクトップは自動的に再接続します。", stopConfirm: "ゲートウェイを停止しますか？ゲートウェイが再起動するまでデスクトップは切断されます。", restarting: "ゲートウェイを再起動中…", stopping: "ゲートウェイを停止中…", lifecycleFailed: "ゲートウェイ操作に失敗しました: {error}",
     levelTitle: "重要度でチェックを絞り込み", levelAll: "すべてのレベル", levelWarn: "警告と失敗", levelFail: "失敗のみ", filterNoMatch: "この重要度に一致するチェック項目はありません。",
+    settingsSearchPh: "パネルを絞り込み…", settingsSearchTitle: "タイトルや内容で Doctor パネルを絞り込み",
   },
   webhooks: {
     count: "{count} 件の購読", empty: "動的 webhook 購読はまだありません。",
@@ -3217,6 +3222,7 @@ const ar: Translations = {
     issues: "المشاكل المكتشفة", noIssues: "✓ لم يتم العثور على مشاكل.",
     failed: "فشل الفحص: {error}", empty: "لا توجد فحوصات.", exportJson: "تصدير JSON", gatewayRestart: "إعادة تشغيل البوابة", gatewayStop: "إيقاف البوابة", restartConfirm: "إعادة تشغيل البوابة؟ ستحل عملية بديلة محلها وسيعيد سطح المكتب الاتصال تلقائياً.", stopConfirm: "إيقاف البوابة؟ سيفقد سطح المكتب الاتصال حتى تعمل البوابة مجدداً.", restarting: "جارٍ إعادة تشغيل البوابة…", stopping: "جارٍ إيقاف البوابة…", lifecycleFailed: "فشلت عملية البوابة: {error}",
     levelTitle: "تصفية الفحوصات حسب الخطورة", levelAll: "جميع المستويات", levelWarn: "تحذيرات وأعطال", levelFail: "الأعطال فقط", filterNoMatch: "لا توجد فحوصات تطابق مستوى الخطورة هذا.",
+    settingsSearchPh: "تصفية اللوحات…", settingsSearchTitle: "تصفية لوحات Doctor حسب العنوان أو المحتوى",
   },
   webhooks: {
     count: "{count} اشتراك(ات)", empty: "لا توجد اشتراكات ويب هوك ديناميكية بعد.",
