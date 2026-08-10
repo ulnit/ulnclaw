@@ -345,6 +345,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-monitoring-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="monitoringSettingsPanel.title">Monitoring settings</h3>
+        <div id="monitoring-settings-rows"></div>
+        <div id="monitoring-settings-editor" class="monitoring-row" hidden>
+          <select id="monitoring-settings-key" class="ghost"></select>
+          <input id="monitoring-settings-value" class="ghost" />
+          <button id="monitoring-settings-apply" class="ghost mcp-add-btn" data-i18n="monitoringSettingsPanel.apply">Apply</button>
+          <button id="monitoring-settings-clear" class="ghost mcp-add-btn" data-i18n="monitoringSettingsPanel.clear">Clear</button>
+          <span id="monitoring-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-timezone-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="timezonePanel.title">Timezone</h3>
         <div id="timezone-rows"></div>
@@ -587,6 +598,7 @@ export class DoctorWidget {
     this.loadBrowserSettings().catch(() => undefined);
     this.loadDashboardTheme().catch(() => undefined);
     this.loadTimezoneSettings().catch(() => undefined);
+    this.loadMonitoringSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2694,6 +2706,124 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadMonitoringSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-monitoring-settings") as HTMLElement;
+    const rows = this.root.querySelector("#monitoring-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.monitoringSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      const tri = (value: boolean | null): string =>
+        value === null ? escapeHtmlDoctor(auto) : value ? on : off;
+      addRow(
+        t.monitoringSettingsPanel.installId,
+        payload.install_id !== null ? escapeHtmlDoctor(payload.install_id) : escapeHtmlDoctor(auto),
+      );
+      addRow(t.monitoringSettingsPanel.healthExport, tri(payload.gateway_health_export_enabled));
+      addRow(t.monitoringSettingsPanel.metrics, tri(payload.metrics_enabled));
+      addRow(t.monitoringSettingsPanel.diagnosticEvents, tri(payload.diagnostic_events_enabled));
+      addRow(t.monitoringSettingsPanel.warningEvents, tri(payload.warning_error_events_enabled));
+      addRow(
+        t.monitoringSettingsPanel.exportInterval,
+        payload.export_interval_seconds !== null
+          ? escapeHtmlDoctor(String(payload.export_interval_seconds))
+          : escapeHtmlDoctor(auto),
+      );
+      addRow(
+        t.monitoringSettingsPanel.logsInterval,
+        payload.logs_export_interval_seconds !== null
+          ? escapeHtmlDoctor(String(payload.logs_export_interval_seconds))
+          : escapeHtmlDoctor(auto),
+      );
+      addRow(t.monitoringSettingsPanel.otlpEnabled, tri(payload.otlp_enabled));
+      addRow(
+        t.monitoringSettingsPanel.otlpEndpoint,
+        payload.otlp_endpoint !== null
+          ? escapeHtmlDoctor(payload.otlp_endpoint)
+          : escapeHtmlDoctor(auto),
+      );
+      // P768: monitoring editor — booleans take true/false, cadences
+      // take integers (floors enforced server-side), strings persist as
+      // typed; Apply goes through PUT /api/monitoring-settings, Clear
+      // removes the override. Applies on gateway restart.
+      const editor = this.root.querySelector("#monitoring-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#monitoring-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#monitoring-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#monitoring-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#monitoring-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#monitoring-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = [
+          "install_id",
+          "gateway_health_export_enabled",
+          "metrics_enabled",
+          "diagnostic_events_enabled",
+          "warning_error_events_enabled",
+          "export_interval_seconds",
+          "logs_export_interval_seconds",
+          "otlp_enabled",
+          "otlp_endpoint",
+        ];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (
+          value: string | number | boolean | null,
+        ): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateMonitoringSetting(keySel.value, value);
+            await this.loadMonitoringSettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number | boolean =
+            raw === "true"
+              ? true
+              : raw === "false"
+                ? false
+                : /^\d+$/.test(raw)
+                  ? Number(raw)
+                  : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

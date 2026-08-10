@@ -6023,6 +6023,164 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/monitoring-settings` — P768: gateway monitoring knobs
+/// for the shell: the pseudonymous install id, the health-export
+/// master switch + per-plane toggles + export cadences, and the OTLP
+/// export switch/endpoint (all tri-state: null = inherit defaults).
+async fn monitoring_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let monitoring = config.monitoring;
+    let tri = |truthiness: &Option<crate::config::Truthiness>| -> Value {
+        match truthiness {
+            Some(t) => json!(t.resolve(false)),
+            None => Value::Null,
+        }
+    };
+    let ghe = &monitoring.gateway_health_export;
+    Json(json!({
+        "install_id": monitoring.install_id,
+        "gateway_health_export_enabled": tri(&ghe.enabled),
+        "metrics_enabled": tri(&ghe.metrics_enabled),
+        "diagnostic_events_enabled": tri(&ghe.diagnostic_events_enabled),
+        "warning_error_events_enabled": tri(&ghe.warning_error_events_enabled),
+        "export_interval_seconds": ghe.export_interval_seconds,
+        "logs_export_interval_seconds": ghe.logs_export_interval_seconds,
+        "otlp_enabled": tri(&monitoring.export.otlp.enabled),
+        "otlp_endpoint": monitoring.export.otlp.endpoint,
+    }))
+}
+
+/// `PUT /api/monitoring-settings` — P768: persist gateway monitoring
+/// knobs from the shell. Keys: `install_id` (clear rotates the id on
+/// next start), the `gateway_health_export` master switch, per-plane
+/// toggles and cadences (`export_interval_seconds` floor 5,
+/// `logs_export_interval_seconds` floor 1), and `otlp_enabled`/
+/// `otlp_endpoint`. null removes the key (inherit defaults). Applies
+/// on gateway restart.
+async fn update_monitoring_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "install_id",
+        "gateway_health_export_enabled",
+        "metrics_enabled",
+        "diagnostic_events_enabled",
+        "warning_error_events_enabled",
+        "export_interval_seconds",
+        "logs_export_interval_seconds",
+        "otlp_enabled",
+        "otlp_endpoint",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown monitoring key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let dotted = match key.as_str() {
+        "install_id" => "monitoring.install_id".to_string(),
+        "gateway_health_export_enabled" => "monitoring.gateway_health_export.enabled".to_string(),
+        "metrics_enabled" => "monitoring.gateway_health_export.metrics_enabled".to_string(),
+        "diagnostic_events_enabled" => {
+            "monitoring.gateway_health_export.diagnostic_events_enabled".to_string()
+        }
+        "warning_error_events_enabled" => {
+            "monitoring.gateway_health_export.warning_error_events_enabled".to_string()
+        }
+        "export_interval_seconds" => {
+            "monitoring.gateway_health_export.export_interval_seconds".to_string()
+        }
+        "logs_export_interval_seconds" => {
+            "monitoring.gateway_health_export.logs_export_interval_seconds".to_string()
+        }
+        "otlp_enabled" => "monitoring.export.otlp.enabled".to_string(),
+        "otlp_endpoint" => "monitoring.export.otlp.endpoint".to_string(),
+        _ => unreachable!("validated above"),
+    };
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "gateway_health_export_enabled"
+                | "metrics_enabled"
+                | "diagnostic_events_enabled"
+                | "warning_error_events_enabled"
+                | "otlp_enabled" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("monitoring.{key} must be a boolean") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "export_interval_seconds" | "logs_export_interval_seconds" => {
+                    let number = match v.as_u64() {
+                        Some(n) => n,
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": format!("monitoring.{key} must be a positive integer") })),
+                            )
+                        }
+                    };
+                    let floor: u64 = if key == "export_interval_seconds" { 5 } else { 1 };
+                    if number < floor {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("monitoring.{key} must be at least {floor}") })),
+                        );
+                    }
+                    raw = Some(number.to_string());
+                }
+                _ => {
+                    let text = v.as_str().map(str::trim).unwrap_or_default();
+                    if !text.is_empty() {
+                        raw = Some(text.to_string());
+                    }
+                }
+            }
+        }
+    }
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/timezone-settings` — P767: the agent wall-clock timezone
 /// knob for the shell: the configured IANA name from config.toml
 /// (null when unset), the `ULNCLAW_TIMEZONE`/`HERMES_TIMEZONE`
@@ -9696,6 +9854,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/pets-settings", get(pets_settings_api).put(update_pets_settings_api))
         .route("/api/browser-settings", get(browser_settings_api).put(update_browser_settings_api))
         .route("/api/timezone-settings", get(timezone_settings_api).put(update_timezone_settings_api))
+        .route("/api/monitoring-settings", get(monitoring_settings_api).put(update_monitoring_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -21498,6 +21657,94 @@ mod tests {
         let (_, body) = get_json(app.clone(), "/api/timezone-settings", Some("sekret")).await;
         assert_eq!(body["timezone"], Value::Null, "{body}");
         assert_eq!(body["effective"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_monitoring_settings_editor() {
+        // P768: GET /api/monitoring-settings surfaces the health-export
+        // + OTLP knobs tri-state; PUT persists with floor validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[monitoring]\ninstall_id = \"abc123\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: install id from fixture, everything else unset.
+        let (status, body) = get_json(app.clone(), "/api/monitoring-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["install_id"], "abc123", "{body}");
+        assert_eq!(body["gateway_health_export_enabled"], Value::Null, "{body}");
+        assert_eq!(body["export_interval_seconds"], Value::Null, "{body}");
+        assert_eq!(body["otlp_endpoint"], Value::Null, "{body}");
+
+        // Persist switches + cadences + OTLP endpoint.
+        for (key, value) in [
+            ("gateway_health_export_enabled", json!(true)),
+            ("metrics_enabled", json!(false)),
+            ("export_interval_seconds", json!(30)),
+            ("logs_export_interval_seconds", json!(2)),
+            ("otlp_enabled", json!(true)),
+            ("otlp_endpoint", json!("http://localhost:4318")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/monitoring-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/monitoring-settings", Some("sekret")).await;
+        assert_eq!(body["gateway_health_export_enabled"], true, "{body}");
+        assert_eq!(body["metrics_enabled"], false, "{body}");
+        assert_eq!(body["export_interval_seconds"], 30, "{body}");
+        assert_eq!(body["logs_export_interval_seconds"], 2, "{body}");
+        assert_eq!(body["otlp_enabled"], true, "{body}");
+        assert_eq!(body["otlp_endpoint"], "http://localhost:4318", "{body}");
+
+        // Validation: floor breaches, wrong types.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/monitoring-settings", Some("sekret"),
+            json!({ "key": "export_interval_seconds", "value": 2 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/monitoring-settings", Some("sekret"),
+            json!({ "key": "logs_export_interval_seconds", "value": 0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/monitoring-settings", Some("sekret"),
+            json!({ "key": "metrics_enabled", "value": "on" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Clearing the install id rotates it on the next start.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/monitoring-settings", Some("sekret"),
+            json!({ "key": "install_id", "value": Value::Null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/monitoring-settings", Some("sekret")).await;
+        assert_eq!(body["install_id"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

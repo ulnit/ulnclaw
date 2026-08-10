@@ -628,6 +628,19 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/monitoring-settings` — P768 gateway monitoring knobs. */
+export interface MonitoringSettingsPayload {
+  install_id: string | null;
+  gateway_health_export_enabled: boolean | null;
+  metrics_enabled: boolean | null;
+  diagnostic_events_enabled: boolean | null;
+  warning_error_events_enabled: boolean | null;
+  export_interval_seconds: number | null;
+  logs_export_interval_seconds: number | null;
+  otlp_enabled: boolean | null;
+  otlp_endpoint: string | null;
+}
+
 /** `GET /api/timezone-settings` — P767 agent wall-clock timezone. */
 export interface TimezoneSettingsPayload {
   timezone: string | null;
@@ -4175,6 +4188,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/monitoring-settings — P768 health-export + OTLP knobs. */
+  async monitoringSettings(): Promise<MonitoringSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/monitoring-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`monitoring-settings HTTP ${response.status}`);
+    return (await response.json()) as MonitoringSettingsPayload;
+  }
+
+  /** P768: PUT /api/monitoring-settings — persist a monitoring knob;
+   * null removes it (inherit defaults). Applies on gateway restart. */
+  async updateMonitoringSetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/monitoring-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `monitoring-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/timezone-settings — P767 IANA timezone knob. */
