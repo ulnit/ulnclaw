@@ -245,6 +245,17 @@ export class DoctorWidget {
           <span id="video-gen-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-pets-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="petsPanel.title">Pet images</h3>
+        <div id="pets-rows"></div>
+        <div id="pets-editor" class="monitoring-row" hidden>
+          <select id="pets-key" class="ghost"></select>
+          <input id="pets-value" class="ghost" />
+          <button id="pets-apply" class="ghost mcp-add-btn" data-i18n="petsPanel.apply">Apply</button>
+          <button id="pets-clear" class="ghost mcp-add-btn" data-i18n="petsPanel.clear">Clear</button>
+          <span id="pets-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-discord-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="discordPanel.title">Discord tool</h3>
         <div id="discord-rows"></div>
@@ -533,6 +544,7 @@ export class DoctorWidget {
     this.loadVideoGenSettings().catch(() => undefined);
     this.loadMoaSettings().catch(() => undefined);
     this.loadDiscordSettings().catch(() => undefined);
+    this.loadPetsSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2616,6 +2628,90 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadPetsSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-pets-settings") as HTMLElement;
+    const rows = this.root.querySelector("#pets-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.petsSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.petsPanel.baseUrl,
+        payload.image_base_url !== null
+          ? escapeHtmlDoctor(payload.image_base_url)
+          : escapeHtmlDoctor(auto),
+      );
+      addRow(
+        t.petsPanel.model,
+        payload.image_model !== null ? escapeHtmlDoctor(payload.image_model) : escapeHtmlDoctor(auto),
+      );
+      addRow(t.petsPanel.apiKey, payload.image_api_key_configured ? on : off);
+      const envParts: string[] = [];
+      if (payload.openai_key_env) envParts.push("OPENAI_API_KEY");
+      if (payload.ulnclaw_key_env) envParts.push("ULNCLAW_API_KEY");
+      addRow(
+        t.petsPanel.envFallback,
+        envParts.length > 0
+          ? envParts.map(escapeHtmlDoctor).join(", ")
+          : escapeHtmlDoctor(off),
+      );
+      // P762: pet image editor — base URL/model overrides persist
+      // through PUT /api/pets-settings, Clear restores the defaults;
+      // the API key is secret material and stays out of the shell.
+      const editor = this.root.querySelector("#pets-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#pets-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#pets-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#pets-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#pets-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#pets-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["image_base_url", "image_model"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updatePetsSetting(keySel.value, value);
+            await this.loadPetsSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueInput.value.trim());
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

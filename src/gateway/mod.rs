@@ -6022,6 +6022,99 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/pets-settings` — P762: pet image-generation pipeline
+/// knobs for the shell: the OpenAI-compatible base URL and image
+/// model overrides (null when unset — the built-in defaults apply),
+/// plus a configured-flag for the images API key (never echoed: it is
+/// a secret) and whether the `OPENAI_API_KEY`/`ULNCLAW_API_KEY` env
+/// fallbacks are present.
+async fn pets_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let pets = config.pets;
+    let env_set = |name: &str| {
+        std::env::var(name)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    };
+    Json(json!({
+        "image_base_url": pets.image_base_url,
+        "image_model": pets.image_model,
+        "image_api_key_configured": pets
+            .image_api_key
+            .as_deref()
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false),
+        "openai_key_env": env_set("OPENAI_API_KEY"),
+        "ulnclaw_key_env": env_set("ULNCLAW_API_KEY"),
+    }))
+}
+
+/// `PUT /api/pets-settings` — P762: persist pet image-generation
+/// knobs from the shell. Body: `{"key": "image_base_url"|
+/// "image_model", "value": ...|null}` — null or empty string removes
+/// the key (falls back to the built-in defaults). The images API key
+/// is deliberately not editable here: it is a secret and belongs in
+/// config/env, never echoed through the shell. Applies to the next
+/// pet generation run.
+async fn update_pets_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["image_base_url", "image_model"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown pets key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let text = v.as_str().map(str::trim).unwrap_or_default();
+            if !text.is_empty() {
+                raw = Some(text.to_string());
+            }
+        }
+    }
+    let dotted = format!("pets.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/discord-settings` — P761: Discord tool knobs for the
 /// shell: the `server_actions` allowlist (comma string or list in
 /// config, normalised to a list here; null when unset — every
@@ -9368,6 +9461,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/video-gen-settings", get(video_gen_settings_api).put(update_video_gen_settings_api))
         .route("/api/moa-settings", get(moa_settings_api).put(update_moa_settings_api))
         .route("/api/discord-settings", get(discord_settings_api).put(update_discord_settings_api))
+        .route("/api/pets-settings", get(pets_settings_api).put(update_pets_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -20947,6 +21041,78 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/discord-settings", Some("sekret")).await;
         assert_eq!(body["server_actions"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pets_settings_editor() {
+        // P762: GET /api/pets-settings surfaces the image pipeline
+        // knobs with a configured-flag (never the key value); PUT
+        // persists base URL/model but refuses the key.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[pets]\nimage_api_key = \"sk-secret\"\nimage_model = \"gpt-image-2\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Key surfaces only as a configured flag; the value never
+        // leaks through the endpoint.
+        let (status, body) = get_json(app.clone(), "/api/pets-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["image_api_key_configured"], true, "{body}");
+        assert_eq!(body["image_model"], "gpt-image-2", "{body}");
+        assert_eq!(body["image_base_url"], Value::Null, "{body}");
+        assert!(!body.to_string().contains("sk-secret"), "{body}");
+
+        // Persist base URL + model.
+        for (key, value) in [
+            ("image_base_url", json!("http://localhost:11434/v1")),
+            ("image_model", json!("custom-image-1")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/pets-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/pets-settings", Some("sekret")).await;
+        assert_eq!(body["image_base_url"], "http://localhost:11434/v1", "{body}");
+        assert_eq!(body["image_model"], "custom-image-1", "{body}");
+
+        // The API key is not editable through the shell.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/pets-settings", Some("sekret"),
+            json!({ "key": "image_api_key", "value": "sk-other" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+        // Empty string clears a knob back to the default.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/pets-settings", Some("sekret"),
+            json!({ "key": "image_base_url", "value": "" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/pets-settings", Some("sekret")).await;
+        assert_eq!(body["image_base_url"], Value::Null, "{body}");
+        // The untouched key stays configured.
+        assert_eq!(body["image_api_key_configured"], true, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

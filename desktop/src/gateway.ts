@@ -628,6 +628,15 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/pets-settings` — P762 pet image-generation knobs. */
+export interface PetsSettingsPayload {
+  image_base_url: string | null;
+  image_model: string | null;
+  image_api_key_configured: boolean;
+  openai_key_env: boolean;
+  ulnclaw_key_env: boolean;
+}
+
 /** `GET /api/discord-settings` — P761 Discord tool action allowlist. */
 export interface DiscordSettingsPayload {
   server_actions: string[] | null;
@@ -4136,6 +4145,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/pets-settings — P762 image pipeline knobs. */
+  async petsSettings(): Promise<PetsSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/pets-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`pets-settings HTTP ${response.status}`);
+    return (await response.json()) as PetsSettingsPayload;
+  }
+
+  /** P762: PUT /api/pets-settings — persist a pet image knob; null or
+   * empty string restores the default. The API key is not editable. */
+  async updatePetsSetting(
+    key: string,
+    value: string | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/pets-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `pets-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/discord-settings — P761 server_actions allowlist. */
