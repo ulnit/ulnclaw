@@ -6022,6 +6022,140 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/browser-settings` — P763: browser tool endpoint knobs
+/// for the shell: the persistent CDP URL (`ws://`/`http(s)://`/`auto`,
+/// null when unset), the cloud provider override (`browser-use`/
+/// `browserbase`/`firecrawl`/`local`, null for the legacy
+/// availability walk), the managed-gateway preference (null when
+/// unset) and the `ULNCLAW_BROWSER_CDP` env-override flag.
+async fn browser_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let browser = config.browser;
+    let env_set = |name: &str| {
+        std::env::var(name)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    };
+    Json(json!({
+        "cdp_url": browser.cdp_url,
+        "cdp_env_override": env_set("ULNCLAW_BROWSER_CDP"),
+        "cloud_provider": browser.cloud_provider,
+        "use_gateway": browser.use_gateway.as_ref().map(|t| t.resolve(false)),
+        "valid_cloud_providers": ["local", "browser-use", "browserbase", "firecrawl"],
+    }))
+}
+
+/// `PUT /api/browser-settings` — P763: persist browser tool endpoint
+/// knobs from the shell. Body: `{"key": "cdp_url"|"cloud_provider"|
+/// "use_gateway", "value": ...|null}` — null or empty string removes
+/// the key (falls back to auto/legacy behavior). `cdp_url` must be
+/// `auto` or a ws/http(s) URL; `cloud_provider` must be one of
+/// local|browser-use|browserbase|firecrawl; `use_gateway` is a
+/// boolean. Applies on the next browser tool use.
+async fn update_browser_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &["cdp_url", "cloud_provider", "use_gateway"];
+    const VALID_PROVIDERS: &[&str] = &["local", "browser-use", "browserbase", "firecrawl"];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown browser key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "cdp_url" => {
+                    let text = v.as_str().map(str::trim).unwrap_or_default();
+                    if !text.is_empty() {
+                        let ok = text.eq_ignore_ascii_case("auto")
+                            || text.starts_with("ws://")
+                            || text.starts_with("wss://")
+                            || text.starts_with("http://")
+                            || text.starts_with("https://");
+                        if !ok {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "browser.cdp_url must be 'auto' or a ws://, wss://, http:// or https:// URL" })),
+                            );
+                        }
+                        raw = Some(text.to_string());
+                    }
+                }
+                "cloud_provider" => {
+                    let text = v
+                        .as_str()
+                        .map(str::trim)
+                        .map(str::to_lowercase)
+                        .unwrap_or_default();
+                    if !text.is_empty() {
+                        if !VALID_PROVIDERS.contains(&text.as_str()) {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({
+                                    "error": format!("browser.cloud_provider '{text}' is not registered"),
+                                    "valid_cloud_providers": VALID_PROVIDERS,
+                                })),
+                            );
+                        }
+                        raw = Some(text);
+                    }
+                }
+                "use_gateway" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "browser.use_gateway must be a boolean" })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    let dotted = format!("browser.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/pets-settings` — P762: pet image-generation pipeline
 /// knobs for the shell: the OpenAI-compatible base URL and image
 /// model overrides (null when unset — the built-in defaults apply),
@@ -9462,6 +9596,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/moa-settings", get(moa_settings_api).put(update_moa_settings_api))
         .route("/api/discord-settings", get(discord_settings_api).put(update_discord_settings_api))
         .route("/api/pets-settings", get(pets_settings_api).put(update_pets_settings_api))
+        .route("/api/browser-settings", get(browser_settings_api).put(update_browser_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -21113,6 +21248,97 @@ mod tests {
         assert_eq!(body["image_base_url"], Value::Null, "{body}");
         // The untouched key stays configured.
         assert_eq!(body["image_api_key_configured"], true, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_browser_settings_editor() {
+        // P763: GET /api/browser-settings surfaces the CDP/cloud knobs;
+        // PUT persists them with shape validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[browser]\ncdp_url = \"ws://localhost:9222\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: cdp from the fixture, rest unset.
+        let (status, body) = get_json(app.clone(), "/api/browser-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["cdp_url"], "ws://localhost:9222", "{body}");
+        assert_eq!(body["cloud_provider"], Value::Null, "{body}");
+        assert_eq!(body["use_gateway"], Value::Null, "{body}");
+        assert_eq!(
+            body["valid_cloud_providers"],
+            json!(["local", "browser-use", "browserbase", "firecrawl"]),
+            "{body}"
+        );
+
+        // Persist each knob.
+        for (key, value) in [
+            ("cdp_url", json!("auto")),
+            ("cloud_provider", json!("browserbase")),
+            ("use_gateway", json!(true)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/browser-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/browser-settings", Some("sekret")).await;
+        assert_eq!(body["cdp_url"], "auto", "{body}");
+        assert_eq!(body["cloud_provider"], "browserbase", "{body}");
+        assert_eq!(body["use_gateway"], true, "{body}");
+
+        // Validation: bad URL shape, unknown provider, non-bool flag.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/browser-settings", Some("sekret"),
+            json!({ "key": "cdp_url", "value": "ftp://nope" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/browser-settings", Some("sekret"),
+            json!({ "key": "cloud_provider", "value": "netscape" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(
+            body["valid_cloud_providers"],
+            json!(["local", "browser-use", "browserbase", "firecrawl"]),
+            "{body}"
+        );
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/browser-settings", Some("sekret"),
+            json!({ "key": "use_gateway", "value": "yes" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Empty string clears back to unset.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/browser-settings", Some("sekret"),
+            json!({ "key": "cloud_provider", "value": "" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/browser-settings", Some("sekret")).await;
+        assert_eq!(body["cloud_provider"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

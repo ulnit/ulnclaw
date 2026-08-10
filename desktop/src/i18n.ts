@@ -368,6 +368,7 @@ export interface Translations {
   moaPanel: { title: string; defaultPreset: string; saveTraces: string; traceDir: string; privacyFilter: string; presets: string; apply: string; clear: string; };
   discordPanel: { title: string; serverActions: string; knownActions: string; placeholder: string; apply: string; clear: string; };
   petsPanel: { title: string; baseUrl: string; model: string; apiKey: string; envFallback: string; apply: string; clear: string; };
+  browserSettingsPanel: { title: string; cdpUrl: string; cdpEnvOverride: string; cloudProvider: string; useGateway: string; validProviders: string; apply: string; clear: string; };
   learningPanel: { title: string; skills: string; memoryNodes: string; edges: string; skillEdgesWord: string; memoryEdgesWord: string; density: string; linked: string; isolated: string; origin: string; agentCreatedWord: string; usedWord: string; categories: string; topCategories: string; hint: string; };
   backupsPanel: { title: string; empty: string; newSnapshot: string; labelPrompt: string; created: string; createFailed: string; restore: string; restoreConfirm: string; restored: string; restoreFailed: string; download: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; };
   checkpointsPanel: { title: string; size: string; noProjects: string; prune: string; prunePrompt: string; pruned: string; pruneFailed: string; restore: string; restoreTitle: string; restoreEmpty: string; restoreConfirm: string; restoreDone: string; restoreFailed: string; close: string; };
@@ -896,6 +897,7 @@ const en: Translations = {
   moaPanel: { title: "Mixture of Agents", defaultPreset: "Default preset", saveTraces: "Save traces", traceDir: "Trace dir", privacyFilter: "Privacy filter", presets: "Presets", apply: "Apply", clear: "Clear" },
   discordPanel: { title: "Discord tool", serverActions: "Action allowlist", knownActions: "Known actions", placeholder: "fetch_messages, list_pins", apply: "Apply", clear: "Clear" },
   petsPanel: { title: "Pet images", baseUrl: "Images base URL", model: "Image model", apiKey: "API key configured", envFallback: "Env key fallback", apply: "Apply", clear: "Clear" },
+  browserSettingsPanel: { title: "Browser tool settings", cdpUrl: "CDP endpoint", cdpEnvOverride: "CDP env override", cloudProvider: "Cloud provider", useGateway: "Prefer managed gateway", validProviders: "Valid providers", apply: "Apply", clear: "Clear" },
   learningPanel: { title: "Learning graph", skills: "Learned skills", memoryNodes: "Memory chunks", edges: "Graph edges", skillEdgesWord: "skill\u2194skill", memoryEdgesWord: "memory\u2194skill", density: "Edge density", linked: "Linked nodes", isolated: "isolated", origin: "Origin", agentCreatedWord: "agent-created", usedWord: "used", categories: "Categories", topCategories: "Top categories", hint: "Open \u2728 Learning graph from the chat toolbar to browse, edit, and archive nodes." },
   backupsPanel: {
     title: "State snapshots", empty: "No quick snapshots yet.", newSnapshot: "New snapshot",
@@ -1501,6 +1503,7 @@ const zh: Translations = {
   moaPanel: { title: "混合智能体（MoA）", defaultPreset: "默认预设", saveTraces: "保存轨迹", traceDir: "轨迹目录", privacyFilter: "隐私过滤", presets: "预设", apply: "应用", clear: "清除" },
   discordPanel: { title: "Discord 工具", serverActions: "动作白名单", knownActions: "已知动作", placeholder: "fetch_messages, list_pins", apply: "应用", clear: "清除" },
   petsPanel: { title: "宠物图像", baseUrl: "图像服务地址", model: "图像模型", apiKey: "API 密钥已配置", envFallback: "环境变量密钥回退", apply: "应用", clear: "清除" },
+  browserSettingsPanel: { title: "浏览器工具设置", cdpUrl: "CDP 端点", cdpEnvOverride: "CDP 环境变量覆盖", cloudProvider: "云浏览器后端", useGateway: "优先托管网关", validProviders: "可选后端", apply: "应用", clear: "清除" },
   learningPanel: { title: "学习图谱", skills: "已学技能", memoryNodes: "记忆条目", edges: "图谱边", skillEdgesWord: "技能↔技能", memoryEdgesWord: "记忆↔技能", density: "边密度", linked: "有关联节点", isolated: "孤立", origin: "来源", agentCreatedWord: "Agent 创建", usedWord: "已使用", categories: "分类", topCategories: "热门分类", hint: "在聊天工具栏打开 ✨ 学习图谱，可浏览、编辑和归档节点。" },
   backupsPanel: {
     title: "状态快照", empty: "还没有快速快照。", newSnapshot: "新建快照",
@@ -2106,6 +2109,7 @@ const zhHant: Translations = {
   moaPanel: { title: "混合智能體（MoA）", defaultPreset: "預設組合", saveTraces: "儲存追蹤", traceDir: "追蹤目錄", privacyFilter: "隱私過濾", presets: "組合清單", apply: "套用", clear: "清除" },
   discordPanel: { title: "Discord 工具", serverActions: "動作白名單", knownActions: "已知動作", placeholder: "fetch_messages, list_pins", apply: "套用", clear: "清除" },
   petsPanel: { title: "寵物圖像", baseUrl: "圖像服務位址", model: "圖像模型", apiKey: "API 金鑰已設定", envFallback: "環境變數金鑰回退", apply: "套用", clear: "清除" },
+  browserSettingsPanel: { title: "瀏覽器工具設定", cdpUrl: "CDP 端點", cdpEnvOverride: "CDP 環境變數覆蓋", cloudProvider: "雲端瀏覽器後端", useGateway: "優先託管閘道", validProviders: "可選後端", apply: "套用", clear: "清除" },
   learningPanel: { title: "學習圖譜", skills: "已學技能", memoryNodes: "記憶條目", edges: "圖譜邊", skillEdgesWord: "技能↔技能", memoryEdgesWord: "記憶↔技能", density: "邊密度", linked: "有關聯節點", isolated: "孤立", origin: "來源", agentCreatedWord: "Agent 建立", usedWord: "已使用", categories: "分類", topCategories: "熱門分類", hint: "在聊天工具列開啟 ✨ 學習圖譜，可瀏覽、編輯和封存節點。" },
   backupsPanel: {
     title: "狀態快照", empty: "還沒有快速快照。", newSnapshot: "新建快照",
@@ -2711,6 +2715,7 @@ const ja: Translations = {
   moaPanel: { title: "Mixture of Agents", defaultPreset: "既定プリセット", saveTraces: "トレース保存", traceDir: "トレースディレクトリ", privacyFilter: "プライバシーフィルター", presets: "プリセット", apply: "適用", clear: "クリア" },
   discordPanel: { title: "Discord ツール", serverActions: "アクション許可リスト", knownActions: "既知アクション", placeholder: "fetch_messages, list_pins", apply: "適用", clear: "クリア" },
   petsPanel: { title: "ペット画像", baseUrl: "画像エンドポイント", model: "画像モデル", apiKey: "API キー設定済み", envFallback: "環境変数キー代替", apply: "適用", clear: "クリア" },
+  browserSettingsPanel: { title: "ブラウザツール設定", cdpUrl: "CDP エンドポイント", cdpEnvOverride: "CDP 環境変数オーバーライド", cloudProvider: "クラウドプロバイダー", useGateway: "管理ゲートウェイ優先", validProviders: "有効なプロバイダー", apply: "適用", clear: "クリア" },
   learningPanel: { title: "学習グラフ", skills: "学習済みスキル", memoryNodes: "記憶チャンク", edges: "グラフエッジ", skillEdgesWord: "スキル↔スキル", memoryEdgesWord: "記憶↔スキル", density: "エッジ密度", linked: "リンク済みノード", isolated: "孤立", origin: "由来", agentCreatedWord: "エージェント作成", usedWord: "使用済み", categories: "カテゴリ", topCategories: "上位カテゴリ", hint: "チャットツールバーから ✨ 学習グラフを開き、ノードの閲覧・編集・アーカイブができます。" },
   backupsPanel: {
     title: "状態スナップショット", empty: "クイックスナップショットはまだありません。", newSnapshot: "新規スナップショット",
@@ -3316,6 +3321,7 @@ const ar: Translations = {
   moaPanel: { title: "مزيج الوكلاء", defaultPreset: "الإعداد المسبق الافتراضي", saveTraces: "حفظ التتبعات", traceDir: "مجلد التتبع", privacyFilter: "مرشح الخصوصية", presets: "الإعدادات المسبقة", apply: "تطبيق", clear: "مسح" },
   discordPanel: { title: "أداة Discord", serverActions: "قائمة الإجراءات المسموحة", knownActions: "الإجراءات المعروفة", placeholder: "fetch_messages, list_pins", apply: "تطبيق", clear: "مسح" },
   petsPanel: { title: "صور الحيوانات", baseUrl: "عنوان الصور", model: "نموذج الصور", apiKey: "مفتاح API مهيأ", envFallback: "مفتاح البيئة الاحتياطي", apply: "تطبيق", clear: "مسح" },
+  browserSettingsPanel: { title: "إعدادات أداة المتصفح", cdpUrl: "نقطة CDP", cdpEnvOverride: "تجاوز بيئة CDP", cloudProvider: "مزود السحابة", useGateway: "تفضيل البوابة المُدارة", validProviders: "الموفرون الصالحون", apply: "تطبيق", clear: "مسح" },
   learningPanel: { title: "رسم التعلم", skills: "مهارات مكتسبة", memoryNodes: "قطع الذاكرة", edges: "حواف الرسم", skillEdgesWord: "مهارة↔مهارة", memoryEdgesWord: "ذاكرة↔مهارة", density: "كثافة الحواف", linked: "عقد مترابطة", isolated: "معزولة", origin: "المصدر", agentCreatedWord: "أنشأها الوكيل", usedWord: "مستخدمة", categories: "الفئات", topCategories: "أهم الفئات", hint: "افتح ✨ رسم التعلم من شريط أدوات الدردشة لتصفح العقد وتحريرها وأرشفتها." },
   backupsPanel: {
     title: "لقطات الحالة", empty: "لا لقطات سريعة بعد.", newSnapshot: "لقطة جديدة",

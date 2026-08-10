@@ -628,6 +628,15 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/browser-settings` — P763 browser tool endpoint knobs. */
+export interface BrowserSettingsPayload {
+  cdp_url: string | null;
+  cdp_env_override: boolean;
+  cloud_provider: string | null;
+  use_gateway: boolean | null;
+  valid_cloud_providers: string[];
+}
+
 /** `GET /api/pets-settings` — P762 pet image-generation knobs. */
 export interface PetsSettingsPayload {
   image_base_url: string | null;
@@ -4145,6 +4154,39 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/browser-settings — P763 CDP/cloud knobs. */
+  async browserSettings(): Promise<BrowserSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/browser-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`browser-settings HTTP ${response.status}`);
+    return (await response.json()) as BrowserSettingsPayload;
+  }
+
+  /** P763: PUT /api/browser-settings — persist a browser knob; null or
+   * empty string restores auto/legacy behavior. */
+  async updateBrowserSetting(
+    key: string,
+    value: string | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/browser-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        valid_cloud_providers?: string[];
+      };
+      const suffix = body.valid_cloud_providers?.length
+        ? ` (valid: ${body.valid_cloud_providers.join(", ")})`
+        : "";
+      throw new Error(`${body.error ?? `browser-settings PUT HTTP ${response.status}`}${suffix}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/pets-settings — P762 image pipeline knobs. */

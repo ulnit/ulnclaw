@@ -344,6 +344,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-browser-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="browserSettingsPanel.title">Browser tool settings</h3>
+        <div id="browser-settings-rows"></div>
+        <div id="browser-settings-editor" class="monitoring-row" hidden>
+          <select id="browser-settings-key" class="ghost"></select>
+          <input id="browser-settings-value" class="ghost" />
+          <button id="browser-settings-apply" class="ghost mcp-add-btn" data-i18n="browserSettingsPanel.apply">Apply</button>
+          <button id="browser-settings-clear" class="ghost mcp-add-btn" data-i18n="browserSettingsPanel.clear">Clear</button>
+          <span id="browser-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-browser" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="browserPanel.title">Browser (CDP)</h3>
         <div id="browser-rows"></div>
@@ -545,6 +556,7 @@ export class DoctorWidget {
     this.loadMoaSettings().catch(() => undefined);
     this.loadDiscordSettings().catch(() => undefined);
     this.loadPetsSettings().catch(() => undefined);
+    this.loadBrowserSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2628,6 +2640,95 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadBrowserSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-browser-settings") as HTMLElement;
+    const rows = this.root.querySelector("#browser-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.browserSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(
+        t.browserSettingsPanel.cdpUrl,
+        payload.cdp_url !== null ? escapeHtmlDoctor(payload.cdp_url) : escapeHtmlDoctor(auto),
+      );
+      addRow(t.browserSettingsPanel.cdpEnvOverride, payload.cdp_env_override ? on : off);
+      addRow(
+        t.browserSettingsPanel.cloudProvider,
+        payload.cloud_provider !== null
+          ? escapeHtmlDoctor(payload.cloud_provider)
+          : escapeHtmlDoctor(auto),
+      );
+      addRow(
+        t.browserSettingsPanel.useGateway,
+        payload.use_gateway !== null ? (payload.use_gateway ? on : off) : off,
+      );
+      addRow(
+        t.browserSettingsPanel.validProviders,
+        payload.valid_cloud_providers.map(escapeHtmlDoctor).join(", "),
+      );
+      // P763: browser settings editor — cdp_url/cloud_provider take
+      // strings (auto/URL, provider name), use_gateway takes
+      // true/false; Apply persists through PUT /api/browser-settings,
+      // Clear restores auto/legacy behavior.
+      const editor = this.root.querySelector("#browser-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#browser-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#browser-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#browser-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#browser-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#browser-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["cdp_url", "cloud_provider", "use_gateway"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateBrowserSetting(keySel.value, value);
+            await this.loadBrowserSettings();
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | boolean =
+            raw === "true" ? true : raw === "false" ? false : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;
