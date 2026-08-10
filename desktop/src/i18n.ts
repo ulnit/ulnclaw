@@ -293,7 +293,7 @@ export interface Translations {
   monitoring: {
     title: string; healthExport: string; metrics: string; diagnosticEvents: string;
     warningLogs: string; otlpEndpoint: string; otlpNotConfigured: string;
-    queueDepth: string; installId: string; on: string; off: string;
+    queueDepth: string; installId: string; on: string; off: string; saved: string;
   };
   runs: {
     count: string; empty: string; loadFailed: string; stop: string; stopping: string;
@@ -813,7 +813,7 @@ const en: Translations = {
     metrics: "Metrics", diagnosticEvents: "Diagnostic events",
     warningLogs: "Warning/error logs", otlpEndpoint: "OTLP endpoint",
     otlpNotConfigured: "not configured", queueDepth: "Emitter queue depth",
-    installId: "Install id", on: "on", off: "off",
+    installId: "Install id", on: "on", off: "off", saved: "Saved ✓",
   },
   runs: {
     count: "{count} runs · {active} active", empty: "No async runs tracked yet.",
@@ -1420,7 +1420,7 @@ const zh: Translations = {
     metrics: "指标", diagnosticEvents: "诊断事件",
     warningLogs: "警告/错误日志", otlpEndpoint: "OTLP 端点",
     otlpNotConfigured: "未配置", queueDepth: "发射队列深度",
-    installId: "安装 ID", on: "开", off: "关",
+    installId: "安装 ID", on: "开", off: "关", saved: "已保存 ✓",
   },
   runs: {
     count: "{count} 个运行 · {active} 活跃", empty: "还没有跟踪的异步运行。",
@@ -2027,7 +2027,7 @@ const zhHant: Translations = {
     metrics: "指標", diagnosticEvents: "診斷事件",
     warningLogs: "警告/錯誤日誌", otlpEndpoint: "OTLP 端點",
     otlpNotConfigured: "未設定", queueDepth: "發射佇列深度",
-    installId: "安裝 ID", on: "開", off: "關",
+    installId: "安裝 ID", on: "開", off: "關", saved: "已儲存 ✓",
   },
   runs: {
     count: "{count} 個執行 · {active} 活躍", empty: "還沒有追蹤的非同步執行。",
@@ -2634,7 +2634,7 @@ const ja: Translations = {
     metrics: "メトリクス", diagnosticEvents: "診断イベント",
     warningLogs: "警告/エラーログ", otlpEndpoint: "OTLP エンドポイント",
     otlpNotConfigured: "未設定", queueDepth: "エミッターキュー深度",
-    installId: "インストール ID", on: "オン", off: "オフ",
+    installId: "インストール ID", on: "オン", off: "オフ", saved: "保存しました ✓",
   },
   runs: {
     count: "{count} 件の実行 · {active} アクティブ", empty: "追跡中の非同期実行はありません。",
@@ -3241,7 +3241,7 @@ const ar: Translations = {
     metrics: "المقاييس", diagnosticEvents: "الأحداث التشخيصية",
     warningLogs: "سجلات التحذير/الخطأ", otlpEndpoint: "نقطة OTLP",
     otlpNotConfigured: "غير مهيأة", queueDepth: "عمق قائمة الإرسال",
-    installId: "معرّف التثبيت", on: "مفعّل", off: "معطّل",
+    installId: "معرّف التثبيت", on: "مفعّل", off: "معطّل", saved: "تم الحفظ ✓",
   },
   runs: {
     count: "{count} تشغيل(ات) · {active} نشط", empty: "لا توجد تشغيلات غير متزامنة متتبعة بعد.",

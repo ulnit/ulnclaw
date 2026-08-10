@@ -616,6 +616,15 @@ export class DoctorWidget {
     this.mcpPollers = [];
   }
 
+  /** P765: transient save confirmation for settings editors. */
+  private flashSaved(statusEl: HTMLElement): void {
+    const saved = t.monitoring.saved;
+    statusEl.textContent = saved;
+    window.setTimeout(() => {
+      if (statusEl.textContent === saved) statusEl.textContent = "";
+    }, 2000);
+  }
+
   private status(message: string): void {
     (this.root.querySelector("#doctor-status") as HTMLElement).textContent = message;
   }
@@ -2727,6 +2736,7 @@ export class DoctorWidget {
               await client.dashboardSetFont(value);
             }
             await this.loadDashboardTheme();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -2812,6 +2822,7 @@ export class DoctorWidget {
           try {
             await client.updateBrowserSetting(keySel.value, value);
             await this.loadBrowserSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -2901,6 +2912,7 @@ export class DoctorWidget {
           try {
             await client.updatePetsSetting(keySel.value, value);
             await this.loadPetsSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -2971,6 +2983,7 @@ export class DoctorWidget {
           try {
             await client.updateDiscordSetting(keySel.value, value);
             await this.loadDiscordSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3061,6 +3074,7 @@ export class DoctorWidget {
           try {
             await client.updateMoaSetting(keySel.value, value);
             await this.loadMoaSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3140,6 +3154,7 @@ export class DoctorWidget {
           try {
             await client.updateVideoGenSetting(keySel.value, value);
             await this.loadVideoGenSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3211,6 +3226,7 @@ export class DoctorWidget {
           try {
             await client.updateXSearchSetting(keySel.value, value);
             await this.loadXSearchSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3299,6 +3315,7 @@ export class DoctorWidget {
           try {
             await client.updateKanbanSetting(keySel.value, value);
             await this.loadKanbanSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3380,6 +3397,7 @@ export class DoctorWidget {
           try {
             await client.updateVoiceSetting(keySel.value, value);
             await this.loadVoiceSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3450,6 +3468,7 @@ export class DoctorWidget {
           try {
             await client.updateCronSetting(keySel.value, value);
             await this.loadCronSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3515,6 +3534,7 @@ export class DoctorWidget {
           try {
             await client.updateLoggingSetting(keySel.value, value);
             await this.loadLoggingSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3584,6 +3604,7 @@ export class DoctorWidget {
           try {
             await client.updateToolOutputSetting(keySel.value, value);
             await this.loadToolOutputSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3681,6 +3702,7 @@ export class DoctorWidget {
           try {
             await client.updateSecuritySetting(keySel.value, value);
             await this.loadSecuritySettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3762,6 +3784,7 @@ export class DoctorWidget {
           try {
             await client.updateCheckpointSetting(keySel.value, value);
             await this.loadCheckpointSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3833,6 +3856,7 @@ export class DoctorWidget {
           try {
             await client.updateModelCatalog("excluded_providers", value);
             await this.loadModelCatalog();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3906,6 +3930,7 @@ export class DoctorWidget {
           try {
             await client.updateMemorySetting(keySel.value, value);
             await this.loadMemorySettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -3977,6 +4002,7 @@ export class DoctorWidget {
           try {
             await client.updateDelegationSetting(keySel.value, value);
             await this.loadDelegationSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -4062,6 +4088,7 @@ export class DoctorWidget {
           try {
             await client.updateWebSetting(keySel.value, value);
             await this.loadWebSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -4157,6 +4184,7 @@ export class DoctorWidget {
           try {
             await client.updateAgentSetting(keySel.value, value);
             await this.loadAgentSettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -4268,6 +4296,7 @@ export class DoctorWidget {
           try {
             await client.updateGatewaySetting(keySel.value, value);
             await this.loadGatewaySettings();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -4368,6 +4397,7 @@ export class DoctorWidget {
           try {
             await client.approvalsSettingsSet(keySel.value, value);
             await this.loadApprovals();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -4706,6 +4736,7 @@ export class DoctorWidget {
           try {
             await client.updateTerminal(keySel.value, value);
             await this.loadTerminal();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
@@ -4802,6 +4833,7 @@ export class DoctorWidget {
           try {
             await client.updateDisplay(platform, keySel.value, value);
             await this.loadDisplay();
+            this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);
           }
