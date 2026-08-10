@@ -64,7 +64,7 @@ export interface Translations {
     fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
     fsGitRootTitle: string; fsGitRootNone: string; fsPreviewOpen: string; fsPreviewTitle: string; fsPreviewLoading: string; fsPreviewBinary: string; fsPreviewTruncated: string; fsPreviewFailed: string; fsPreviewSave: string; fsPreviewSaved: string; fsPreviewSaveFailed: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
-    manageProcess: string; autostart: string; autostartFailed: string; reopenLast: string; charWarn: string; charLimit: string; charLimitExceeded: string; notifySystem: string; replayOnboarding: string; cancel: string; save: string; delete: string;
+    manageProcess: string; autostart: string; autostartFailed: string; reopenLast: string; charWarn: string; charLimit: string; charLimitExceeded: string; notifySystem: string; completionChime: string; replayOnboarding: string; cancel: string; save: string; delete: string;
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string; settingsPersonality: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string; statusTokens: string; statusCtx: string; statusKanban: string;
@@ -485,7 +485,7 @@ const en: Translations = {
     charWarn: "Composer warn threshold (characters)",
     charLimit: "Composer hard limit (characters, 0 = off)",
     charLimitExceeded: "Message too long ({length}/{limit} characters) — trim it before sending",
-    notifySystem: "System notification when a run finishes",
+    notifySystem: "System notification when a run finishes", completionChime: "Play a chime when a turn completes",
     delete: "Delete",
     replayOnboarding: "Replay onboarding", cancel: "Cancel", save: "Save", restartGateway: "Restart gateway", restartDone: "Gateway restarted.", restartFailed: "Gateway restart timed out.", restartUnavailable: "The gateway is not managed here — restart it where it runs.",
     settingsTheme: "Theme", settingsFont: "Font", settingsPersonality: "Personality",
@@ -1104,7 +1104,7 @@ const zh: Translations = {
     charWarn: "输入框预警阈值（字符数）",
     charLimit: "输入框硬性上限（字符数，0 = 关闭）",
     charLimitExceeded: "消息过长（{length}/{limit} 字符）——请精简后再发送",
-    notifySystem: "运行结束时弹出系统通知",
+    notifySystem: "运行结束时弹出系统通知", completionChime: "回合完成时播放提示音",
     delete: "删除",
     replayOnboarding: "重放引导", cancel: "取消", save: "保存", restartGateway: "重启网关", restartDone: "网关已重启。", restartFailed: "网关重启超时。", restartUnavailable: "此环境不管理网关——请在网关运行处重启。",
     settingsTheme: "主题", settingsFont: "字体", settingsPersonality: "人格",
@@ -1723,7 +1723,7 @@ const zhHant: Translations = {
     charWarn: "輸入框預警閾值（字元數）",
     charLimit: "輸入框硬性上限（字元數，0 = 關閉）",
     charLimitExceeded: "訊息過長（{length}/{limit} 字元）——請精簡後再傳送",
-    notifySystem: "執行結束時彈出系統通知",
+    notifySystem: "執行結束時彈出系統通知", completionChime: "回合完成時播放提示音",
     delete: "刪除",
     replayOnboarding: "重播引導", cancel: "取消", save: "儲存", restartGateway: "重啟閘道", restartDone: "閘道已重啟。", restartFailed: "閘道重啟逾時。", restartUnavailable: "此環境不管理閘道——請在閘道執行處重啟。",
     settingsTheme: "主題", settingsFont: "字型", settingsPersonality: "人格",
@@ -2342,7 +2342,7 @@ const ja: Translations = {
     charWarn: "入力欄の警告しきい値（文字数）",
     charLimit: "入力欄のハードリミット（文字数、0 = 無効）",
     charLimitExceeded: "メッセージが長すぎます（{length}/{limit} 文字）— 短くしてから送信してください",
-    notifySystem: "実行終了時にシステム通知を表示",
+    notifySystem: "実行終了時にシステム通知を表示", completionChime: "ターン完了時にチャイムを鳴らす",
     delete: "削除",
     replayOnboarding: "オンボーディングを再生", cancel: "キャンセル", save: "保存", restartGateway: "ゲートウェイを再起動", restartDone: "ゲートウェイを再起動しました。", restartFailed: "ゲートウェイの再起動がタイムアウトしました。", restartUnavailable: "この環境はゲートウェイを管理していません — 実行場所で再起動してください。",
     settingsTheme: "テーマ", settingsFont: "フォント", settingsPersonality: "パーソナリティ",
@@ -2961,7 +2961,7 @@ const ar: Translations = {
     charWarn: "عتبة التحذير في حقل الإدخال (عدد الأحرف)",
     charLimit: "الحد الأقصى الصارم لحقل الإدخال (عدد الأحرف، 0 = معطل)",
     charLimitExceeded: "الرسالة طويلة جدًا ({length}/{limit} حرفًا) — قم بتقصيرها قبل الإرسال",
-    notifySystem: "إشعار النظام عند انتهاء التشغيل",
+    notifySystem: "إشعار النظام عند انتهاء التشغيل", completionChime: "تشغيل نغمة عند اكتمال الدور",
     delete: "حذف",
     replayOnboarding: "إعادة عرض التهيئة", cancel: "إلغاء", save: "حفظ", restartGateway: "إعادة تشغيل البوابة", restartDone: "تمت إعادة تشغيل البوابة.", restartFailed: "انتهت مهلة إعادة تشغيل البوابة.", restartUnavailable: "البوابة غير مُدارة هنا — أعد تشغيلها حيث تعمل.",
     settingsTheme: "السمة", settingsFont: "الخط", settingsPersonality: "الشخصية",

@@ -78,6 +78,45 @@ function reportActiveWork(): void {
   state.bridge?.setActiveWork(state.busy ? 1 : 0).catch(() => undefined);
 }
 
+/** P786: completion chime (hermes completion-sound parity, lean). The
+ * AudioContext is armed during the submit gesture so autoplay policy
+ * lets it ring when the turn settles. */
+let chimeCtx: AudioContext | null = null;
+
+function armCompletionChime(): void {
+  if (!state.settings.completionChime) return;
+  try {
+    chimeCtx ??= new AudioContext();
+    if (chimeCtx.state === "suspended") void chimeCtx.resume();
+  } catch {
+    /* audio unavailable */
+  }
+}
+
+function playCompletionChime(): void {
+  if (!state.settings.completionChime || !chimeCtx) return;
+  try {
+    const now = chimeCtx.currentTime;
+    for (const [freq, offset] of [
+      [880, 0],
+      [1318.5, 0.09],
+    ] as const) {
+      const osc = chimeCtx.createOscillator();
+      const gain = chimeCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.12, now + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.35);
+      osc.connect(gain).connect(chimeCtx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.4);
+    }
+  } catch {
+    /* audio unavailable */
+  }
+}
+
 /** P785: route `ulnclaw://` deep links (hermes deep-link parity). The
  * blueprint kind submits the matching `/blueprint <name> slot=val…`
  * command through the normal composer path — sendTurn() creates a
@@ -357,6 +396,7 @@ const el = {
   settingCharWarn: document.getElementById("setting-char-warn") as HTMLInputElement,
   settingCharLimit: document.getElementById("setting-char-limit") as HTMLInputElement,
   settingNotifySystem: document.getElementById("setting-notify-system") as HTMLInputElement,
+  settingChime: document.getElementById("setting-chime") as HTMLInputElement,
   settingTheme: document.getElementById("setting-theme") as HTMLSelectElement,
   settingFont: document.getElementById("setting-font") as HTMLSelectElement,
   settingPersonalityRow: document.getElementById("setting-personality-row") as HTMLLabelElement,
@@ -1587,6 +1627,7 @@ async function sendTurn(): Promise<void> {
   state.busy = true;
   updateBusyBadge();
   reportActiveWork();
+  armCompletionChime();
   el.send.disabled = true;
   // P390: thinking indicator while the turn streams.
   el.chatBusy.textContent = t.tools.thinking;
@@ -1692,6 +1733,8 @@ async function sendTurn(): Promise<void> {
       },
       imagePaths,
     );
+    // P786: the turn settled — ring the optional completion chime.
+    playCompletionChime();
     bubble.classList.remove("streaming");
     await refreshSessions();
   } catch (error) {
@@ -3530,6 +3573,8 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     el.settingCharLimit.value = String(state.settings.charLimit);
     // P435: OS-level settle notifications toggle.
     el.settingNotifySystem.checked = state.settings.notifySystem;
+    // P786: completion-chime toggle.
+    el.settingChime.checked = state.settings.completionChime;
     el.settings.showModal();
     // P634: personalities surface — fill the picker from the gateway and
     // hide the row when no personas are configured.
@@ -3583,6 +3628,7 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
         ? Math.floor(Number(el.settingCharLimit.value))
         : 0,
       notifySystem: el.settingNotifySystem.checked,
+      completionChime: el.settingChime.checked,
     };
     saveSettings(next);
     state.settings = next;
