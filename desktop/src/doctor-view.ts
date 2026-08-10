@@ -389,6 +389,17 @@ export class DoctorWidget {
           <span id="hooks-settings-status" class="monitoring-value"></span>
         </div>
       </section>
+      <section id="doctor-computer-use-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="computerUseSettingsPanel.title">Computer Use settings</h3>
+        <div id="computer-use-settings-rows"></div>
+        <div id="computer-use-settings-editor" class="monitoring-row" hidden>
+          <select id="computer-use-settings-key" class="ghost"></select>
+          <input id="computer-use-settings-value" class="ghost" />
+          <button id="computer-use-settings-apply" class="ghost mcp-add-btn" data-i18n="computerUseSettingsPanel.apply">Apply</button>
+          <button id="computer-use-settings-clear" class="ghost mcp-add-btn" data-i18n="computerUseSettingsPanel.clear">Clear</button>
+          <span id="computer-use-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-profiles" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="profilesPanel.title">Profiles</h3>
         <div id="profiles-rows"></div>
@@ -703,6 +714,7 @@ export class DoctorWidget {
     this.loadProvidersSettings().catch(() => undefined);
     this.loadProfiles().catch(() => undefined);
     this.loadHooksSettings().catch(() => undefined);
+    this.loadComputerUseSettings().catch(() => undefined);
     this.loadSyncSettings().catch(() => undefined);
     this.loadOAuthSettings().catch(() => undefined);
     this.loadToolsetsSettings().catch(() => undefined);
@@ -3255,6 +3267,100 @@ export class DoctorWidget {
           try {
             await client.updateHooksSetting(keySel.value, value);
             await this.loadHooksSettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | number | boolean =
+            raw === "true"
+              ? true
+              : raw === "false"
+                ? false
+                : /^\d+$/.test(raw)
+                  ? Number(raw)
+                  : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  /** P803: computer-use settings editor — telemetry opt-in, image
+   * dimension cap, capture-after mode, overlay tri-state; Apply
+   * persists through PUT /api/computer-use-settings, Clear restores
+   * the built-in defaults. Applies from the next cua session. */
+  private async loadComputerUseSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-computer-use-settings") as HTMLElement;
+    const rows = this.root.querySelector("#computer-use-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.computerUseSettings();
+      const cua = t.computerUsePanel;
+      const v = t.computerUseSettingsPanel;
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(cua.telemetry, payload.cua_telemetry ? on : off);
+      addRow(
+        cua.maxDimension,
+        payload.max_image_dimension > 0
+          ? escapeHtmlDoctor(String(payload.max_image_dimension))
+          : escapeHtmlDoctor(v.disabledWord),
+      );
+      addRow(cua.captureAfter, escapeHtmlDoctor(payload.capture_after_mode));
+      addRow(
+        cua.overlay,
+        payload.no_overlay === null
+          ? escapeHtmlDoctor(cua.overlayAuto)
+          : payload.no_overlay
+            ? escapeHtmlDoctor(cua.overlayOff)
+            : escapeHtmlDoctor(cua.overlayOn),
+      );
+      const editor = this.root.querySelector("#computer-use-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#computer-use-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#computer-use-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#computer-use-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#computer-use-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#computer-use-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["cua_telemetry", "max_image_dimension", "capture_after_mode", "no_overlay"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | number | boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateComputerUseSetting(keySel.value, value);
+            await this.loadComputerUseSettings();
             this.flashSaved(statusEl);
           } catch (err) {
             statusEl.textContent = err instanceof Error ? err.message : String(err);

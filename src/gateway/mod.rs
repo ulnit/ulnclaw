@@ -6444,6 +6444,122 @@ async fn update_hooks_settings_api(Json(body): Json<Value>) -> (StatusCode, Json
     }
 }
 
+/// `GET /api/computer-use-settings` — P803: computer-use knobs for
+/// the shell (hermes `computer_use:` block): telemetry opt-in,
+/// screenshot longest-edge cap (0 disables), follow-up capture mode
+/// and the cursor-overlay tri-state (null = auto-detect).
+async fn computer_use_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let cua = config.computer_use;
+    Json(json!({
+        "cua_telemetry": cua.cua_telemetry,
+        "max_image_dimension": cua.max_image_dimension,
+        "capture_after_mode": cua.capture_after_mode,
+        "no_overlay": cua.no_overlay,
+    }))
+}
+
+/// `PUT /api/computer-use-settings` — P803: persist computer-use
+/// knobs from the shell. Keys: `cua_telemetry` (bool),
+/// `max_image_dimension` (integer, 0 disables the cap),
+/// `capture_after_mode` (som|ax|vision), `no_overlay` (bool tri-state).
+/// null removes the override (fall back to the built-in defaults).
+/// Applies from the next computer-use session start.
+async fn update_computer_use_settings_api(
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "cua_telemetry",
+        "max_image_dimension",
+        "capture_after_mode",
+        "no_overlay",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown computer-use key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let dotted = format!("computer_use.{key}");
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "cua_telemetry" | "no_overlay" => {
+                    if !v.is_boolean() {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": format!("computer_use.{key} must be a boolean") })),
+                        );
+                    }
+                    raw = Some(v.to_string());
+                }
+                "max_image_dimension" => {
+                    let number = match v.as_u64() {
+                        Some(n) => n,
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "computer_use.max_image_dimension must be a non-negative integer" })),
+                            )
+                        }
+                    };
+                    raw = Some(number.to_string());
+                }
+                _ => {
+                    let text = v.as_str().map(str::trim).unwrap_or_default();
+                    if !matches!(text, "som" | "ax" | "vision") {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "computer_use.capture_after_mode must be one of: som, ax, vision" })),
+                        );
+                    }
+                    raw = Some(text.to_string());
+                }
+            }
+        }
+    }
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/providers-settings` — P771: user-defined `[providers.*]`
 /// entries for the shell: for each custom slug the base URL, default
 /// model, wire dialect and key env name, with the literal API key
@@ -10933,6 +11049,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/egress/status", get(egress_status))
         .route("/api/system", get(system_info))
         .route("/api/computer-use", get(computer_use_status))
+        .route("/api/computer-use-settings", get(computer_use_settings_api).put(update_computer_use_settings_api))
         .route("/api/secrets", get(secrets_status))
         .route("/api/secrets/sync", post(secrets_sync_api))
         .route("/api/sync", get(sync_status))
@@ -23182,6 +23299,93 @@ mod tests {
         assert!(!body.to_string().contains("s3cret"), "{body}");
         let env_file = std::fs::read_to_string(dir.path().join(".env")).unwrap_or_default();
         assert!(env_file.contains("ULNCLAW_TEST_SECRET"), "{env_file}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_computer_use_settings_editor() {
+        // P803: GET /api/computer-use-settings surfaces the cua knobs;
+        // PUT persists with per-key validation, null removes.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: telemetry off, hermes dimension cap, som capture,
+        // overlay auto-detect (null).
+        let (status, body) =
+            get_json(app.clone(), "/api/computer-use-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["cua_telemetry"], false, "{body}");
+        assert_eq!(body["max_image_dimension"], 1456, "{body}");
+        assert_eq!(body["capture_after_mode"], "som", "{body}");
+        assert!(body["no_overlay"].is_null(), "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("cua_telemetry", json!(true)),
+            ("max_image_dimension", json!(1024)),
+            ("capture_after_mode", json!("ax")),
+            ("no_overlay", json!(true)),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/computer-use-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) =
+            get_json(app.clone(), "/api/computer-use-settings", Some("sekret")).await;
+        assert_eq!(body["cua_telemetry"], true, "{body}");
+        assert_eq!(body["max_image_dimension"], 1024, "{body}");
+        assert_eq!(body["capture_after_mode"], "ax", "{body}");
+        assert_eq!(body["no_overlay"], true, "{body}");
+
+        // Validation: bad mode rejected, unknown key rejected.
+        let (status, _) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/computer-use-settings",
+            Some("sekret"),
+            json!({ "key": "capture_after_mode", "value": "yolo" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/computer-use-settings",
+            Some("sekret"),
+            json!({ "key": "bogus", "value": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Null clears back to defaults.
+        let (status, body) = send_json(
+            app.clone(),
+            "PUT",
+            "/api/computer-use-settings",
+            Some("sekret"),
+            json!({ "key": "max_image_dimension", "value": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) =
+            get_json(app.clone(), "/api/computer-use-settings", Some("sekret")).await;
+        assert_eq!(body["max_image_dimension"], 1456, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

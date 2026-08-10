@@ -657,6 +657,13 @@ export interface SyncSettingsPayload {
 }
 
 /** `GET /api/hooks-settings` — P773 hook runtime knobs. */
+export interface ComputerUseSettingsPayload {
+  cua_telemetry: boolean;
+  max_image_dimension: number;
+  capture_after_mode: string;
+  no_overlay: boolean | null;
+}
+
 export interface HooksSettingsPayload {
   auto_accept: boolean;
   spill_enabled: boolean;
@@ -4436,6 +4443,33 @@ export class GatewayClient {
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(body.error ?? `hooks-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
+  }
+
+  /** GET /api/computer-use-settings — P803 cua knobs. */
+  async computerUseSettings(): Promise<ComputerUseSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/computer-use-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`computer-use-settings HTTP ${response.status}`);
+    return (await response.json()) as ComputerUseSettingsPayload;
+  }
+
+  /** P803: PUT /api/computer-use-settings — persist a cua knob; null
+   * removes the override (fall back to the built-in defaults). */
+  async updateComputerUseSetting(
+    key: string,
+    value: string | number | boolean | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/computer-use-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `computer-use-settings PUT HTTP ${response.status}`);
     }
     return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
