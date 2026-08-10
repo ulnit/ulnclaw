@@ -122,6 +122,50 @@ cd desktop
 npm run tauri build    # bundle under src-tauri/target/release/bundle/
 ```
 
+### Windows install (GUI)
+
+Prerequisites:
+
+- **Rust** via [rustup](https://rustup.rs) — the default MSVC toolchain
+  (install the Visual Studio Build Tools "Desktop development with C++"
+  workload if you don't have a linker yet).
+- **Node.js ≥ 20** + npm.
+- **WebView2 runtime** — preinstalled on Windows 11 and current
+  Windows 10; otherwise install Microsoft's Evergreen WebView2.
+
+Steps (PowerShell):
+
+```powershell
+git clone https://gitee.com/ushaw/ulnclaw.git
+cd ulnclaw
+
+# 1. Core binary (CLI + gateway) — plain MSVC target, no musl
+cargo build --release
+copy target\release\ulnclaw.exe $env:USERPROFILE\.cargo\bin\
+
+# 2. First-run onboarding
+ulnclaw setup        # wizard: provider key, terminal, tools
+ulnclaw init         # optional: write default config
+
+# 3. Desktop shell (NSIS installer)
+cd desktop
+npm install
+npm run tauri build -- --bundles nsis
+# installer: src-tauri\target\release\bundle\nsis\ulnclaw_0.2.0_x64-setup.exe
+```
+
+The shell locates `ulnclaw.exe` on PATH (or in `.local/bin`, `bin`,
+`.cargo/bin` under `%USERPROFILE%`), spawns `ulnclaw gateway --port
+8642` and hosts the chat UI — launch the installed app and use the GUI.
+
+Notes:
+
+- `--bundles nsis` skips the MSI target (needs the WiX toolset); plain
+  `npm run tauri build` builds every bundle.
+- On Windows the gateway stop is best-effort at app exit (no SIGTERM),
+  and the pidfile single-instance guard is disabled (no `/proc`).
+- The Bitwarden `bws` asset path under secrets is untested on Windows.
+
 ---
 
 ## 中文
@@ -217,3 +261,47 @@ npm run tauri dev      # vite 开发服务器 :5180 + tauri 窗口
 cd desktop
 npm run tauri build    # 产物位于 src-tauri/target/release/bundle/
 ```
+
+### Windows 安装（图形界面）
+
+前置条件：
+
+- **Rust**：经 [rustup](https://rustup.rs) 安装，默认 MSVC 工具链
+  （若还没有链接器，安装 Visual Studio Build Tools 的
+  “使用 C++ 的桌面开发”工作负载）。
+- **Node.js ≥ 20** + npm。
+- **WebView2 运行时**：Windows 11 与较新的 Windows 10 已内置；
+  否则安装微软 Evergreen WebView2。
+
+步骤（PowerShell）：
+
+```powershell
+git clone https://gitee.com/ushaw/ulnclaw.git
+cd ulnclaw
+
+# 1. 核心二进制（CLI + 网关）——直接 MSVC target，不用 musl
+cargo build --release
+copy target\release\ulnclaw.exe $env:USERPROFILE\.cargo\bin\
+
+# 2. 首次配置
+ulnclaw setup        # 向导：provider 密钥、终端、工具
+ulnclaw init         # 可选：写入默认配置
+
+# 3. 桌面外壳（NSIS 安装包）
+cd desktop
+npm install
+npm run tauri build -- --bundles nsis
+# 安装包：src-tauri\target\release\bundle\nsis\ulnclaw_0.2.0_x64-setup.exe
+```
+
+外壳会从 PATH（或 `%USERPROFILE%` 下的 `.local/bin`、`bin`、
+`.cargo/bin`）定位 `ulnclaw.exe`，拉起 `ulnclaw gateway --port 8642`
+并承载聊天界面——装好后直接启动应用即可使用图形界面。
+
+说明：
+
+- `--bundles nsis` 跳过 MSI（需要 WiX 工具集）；不带参数执行
+  `npm run tauri build` 会构建全部安装包。
+- Windows 上退出应用时网关进程为尽力而为的停止（无 SIGTERM），
+  单实例 pidfile 守卫不生效（无 `/proc`）。
+- secrets 的 Bitwarden `bws` 资产路径在 Windows 上未经测试。

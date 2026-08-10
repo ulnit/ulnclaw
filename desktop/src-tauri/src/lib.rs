@@ -191,18 +191,22 @@ fn release_single_instance() {
 /// Locate the `ulnclaw` binary: PATH first, then common install spots.
 #[tauri::command]
 fn find_ulnclaw_binary() -> Option<String> {
+    let exe_name = if cfg!(windows) { "ulnclaw.exe" } else { "ulnclaw" };
     if let Ok(path_var) = std::env::var("PATH") {
-        for dir in path_var.split(':') {
-            let candidate = std::path::Path::new(dir).join("ulnclaw");
+        // split_paths handles the platform separator (':' vs ';').
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(exe_name);
             if candidate.is_file() {
                 return Some(candidate.display().to_string());
             }
         }
     }
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from);
     if let Some(home) = home {
-        for rel in [".local/bin/ulnclaw", "bin/ulnclaw", ".cargo/bin/ulnclaw"] {
-            let candidate = home.join(rel);
+        for rel in [".local/bin", "bin", ".cargo/bin"] {
+            let candidate = home.join(rel).join(exe_name);
             if candidate.is_file() {
                 return Some(candidate.display().to_string());
             }
