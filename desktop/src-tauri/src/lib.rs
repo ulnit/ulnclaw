@@ -20,6 +20,9 @@ struct WindowState {
     y: i32,
     #[serde(default)]
     maximized: bool,
+    /// P778: fullscreen state is restored alongside the geometry.
+    #[serde(default)]
+    fullscreen: bool,
 }
 
 /// Managed copy of the last normal geometry (updated on resize/move).
@@ -468,10 +471,14 @@ pub fn run() {
                     if saved.maximized {
                         let _ = window.maximize();
                     }
+                    if saved.fullscreen {
+                        let _ = window.set_fullscreen(true);
+                    }
                     if let Some(geometry) = window.try_state::<WindowGeometry>() {
                         if let Ok(mut guard) = geometry.0.lock() {
                             *guard = Some(WindowState {
                                 maximized: false,
+                                fullscreen: false,
                                 ..saved
                             });
                         }
@@ -490,7 +497,19 @@ pub fn run() {
                     let Ok(maximized) = window.is_maximized() else {
                         return;
                     };
+                    // P778: keep stamping the last normal geometry while
+                    // fullscreen, but remember the fullscreen state itself.
+                    let fullscreen = window.is_fullscreen().unwrap_or(false);
                     if maximized {
+                        if fullscreen {
+                            if let Some(geometry) = window.try_state::<WindowGeometry>() {
+                                if let Ok(mut guard) = geometry.0.lock() {
+                                    if let Some(state) = guard.as_mut() {
+                                        state.fullscreen = true;
+                                    }
+                                }
+                            }
+                        }
                         return;
                     }
                     let Ok(size) = window.outer_size() else {
@@ -507,17 +526,20 @@ pub fn run() {
                                 x: position.x,
                                 y: position.y,
                                 maximized: false,
+                                fullscreen,
                             });
                         }
                     }
                 }
                 tauri::WindowEvent::CloseRequested { .. } => {
                     let maximized = window.is_maximized().unwrap_or(false);
+                    let fullscreen = window.is_fullscreen().unwrap_or(false);
                     if let Some(geometry) = window.try_state::<WindowGeometry>() {
                         if let Ok(guard) = geometry.0.lock() {
                             if let Some(normal) = guard.as_ref() {
                                 let mut saved = normal.clone();
                                 saved.maximized = maximized;
+                                saved.fullscreen = fullscreen;
                                 persist_window_state(&saved);
                             }
                         }
