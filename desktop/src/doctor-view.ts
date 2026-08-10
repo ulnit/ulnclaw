@@ -345,6 +345,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-proxy-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="proxyPanel.title">Bearer proxy</h3>
+        <div id="proxy-rows"></div>
+        <div id="proxy-editor" class="monitoring-row" hidden>
+          <select id="proxy-key" class="ghost"></select>
+          <input id="proxy-value" class="ghost" />
+          <button id="proxy-apply" class="ghost mcp-add-btn" data-i18n="proxyPanel.apply">Apply</button>
+          <button id="proxy-clear" class="ghost mcp-add-btn" data-i18n="proxyPanel.clear">Clear</button>
+          <span id="proxy-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-monitoring-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="monitoringSettingsPanel.title">Monitoring settings</h3>
         <div id="monitoring-settings-rows"></div>
@@ -599,6 +610,7 @@ export class DoctorWidget {
     this.loadDashboardTheme().catch(() => undefined);
     this.loadTimezoneSettings().catch(() => undefined);
     this.loadMonitoringSettings().catch(() => undefined);
+    this.loadProxySettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2706,6 +2718,103 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadProxySettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-proxy-settings") as HTMLElement;
+    const rows = this.root.querySelector("#proxy-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.proxySettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      addRow(t.proxyPanel.host, escapeHtmlDoctor(payload.host));
+      addRow(t.proxyPanel.port, escapeHtmlDoctor(String(payload.port)));
+      addRow(
+        t.proxyPanel.upstreamUrl,
+        payload.upstream_url.length > 0
+          ? escapeHtmlDoctor(payload.upstream_url)
+          : escapeHtmlDoctor(auto),
+      );
+      addRow(
+        t.proxyPanel.allowedPaths,
+        payload.allowed_paths.map(escapeHtmlDoctor).join(", "),
+      );
+      addRow(t.proxyPanel.maxRequestBytes, escapeHtmlDoctor(String(payload.max_request_bytes)));
+      addRow(t.proxyPanel.authenticated, payload.authenticated ? on : off);
+      // P769: proxy editor — host/upstream take strings, port/cap take
+      // integers, allowed_paths takes a comma-separated /-prefixed
+      // list; Apply persists through PUT /api/proxy-settings, Clear
+      // restores the default. Applies on the next proxy start.
+      const editor = this.root.querySelector("#proxy-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#proxy-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#proxy-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#proxy-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#proxy-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#proxy-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = ["host", "port", "upstream_url", "allowed_paths", "max_request_bytes"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (
+          value: string | number | string[] | null,
+        ): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateProxySetting(keySel.value, value);
+            await this.loadProxySettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          if (keySel.value === "allowed_paths") {
+            const paths = raw
+              .split(",")
+              .map((part) => part.trim())
+              .filter((part) => part.length > 0);
+            void applyEdit(paths);
+            return;
+          }
+          const parsed: string | number =
+            /^\d+$/.test(raw) && (keySel.value === "port" || keySel.value === "max_request_bytes")
+              ? Number(raw)
+              : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;

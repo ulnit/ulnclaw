@@ -6023,6 +6023,174 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/proxy-settings` — P769: bearer-proxy knobs for the
+/// shell: listener host/port, the upstream OpenAI-compatible base URL
+/// (empty when unconfigured), the `/v1` path allowlist, the request
+/// body cap and whether OAuth credentials exist for the upstream.
+async fn proxy_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let proxy = config.proxy;
+    Json(json!({
+        "host": proxy.host,
+        "port": proxy.port,
+        "upstream_url": proxy.upstream_url,
+        "allowed_paths": proxy.allowed_paths,
+        "max_request_bytes": proxy.max_request_bytes,
+        "authenticated": crate::proxy_cmd::is_authenticated(&crate::config::ulnclaw_home()),
+    }))
+}
+
+/// `PUT /api/proxy-settings` — P769: persist bearer-proxy knobs from
+/// the shell. Keys: `host`, `port`, `upstream_url` (http(s) URL,
+/// empty removes), `allowed_paths` (array of `/`-prefixed paths, null
+/// restores the defaults) and `max_request_bytes` (floor 1024). null
+/// removes the key (fall back to the default). Applies on the next
+/// `ulnclaw proxy start`.
+async fn update_proxy_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "host",
+        "port",
+        "upstream_url",
+        "allowed_paths",
+        "max_request_bytes",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown proxy key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            match key.as_str() {
+                "port" => {
+                    let number = match v.as_u64() {
+                        Some(n) => n,
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "proxy.port must be an integer" })),
+                            )
+                        }
+                    };
+                    if number == 0 || number > 65535 {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "proxy.port must be in 1-65535" })),
+                        );
+                    }
+                    raw = Some(number.to_string());
+                }
+                "max_request_bytes" => {
+                    let number = match v.as_u64() {
+                        Some(n) => n,
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "proxy.max_request_bytes must be an integer" })),
+                            )
+                        }
+                    };
+                    if number < 1024 {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": "proxy.max_request_bytes must be at least 1024" })),
+                        );
+                    }
+                    raw = Some(number.to_string());
+                }
+                "upstream_url" => {
+                    let text = v.as_str().map(str::trim).unwrap_or_default();
+                    if !text.is_empty() {
+                        if !text.starts_with("http://") && !text.starts_with("https://") {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "proxy.upstream_url must be an http:// or https:// URL" })),
+                            );
+                        }
+                        raw = Some(text.to_string());
+                    }
+                }
+                "allowed_paths" => {
+                    let items = match v.as_array() {
+                        Some(items) => items,
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "proxy.allowed_paths must be an array of /-prefixed paths" })),
+                            )
+                        }
+                    };
+                    let mut list: Vec<toml::Value> = Vec::new();
+                    for item in items {
+                        let path = item.as_str().map(str::trim).unwrap_or_default();
+                        if path.is_empty() {
+                            continue;
+                        }
+                        if !path.starts_with('/') {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": format!("proxy.allowed_paths entry '{path}' must start with /") })),
+                            );
+                        }
+                        list.push(toml::Value::String(path.to_string()));
+                    }
+                    if !list.is_empty() {
+                        raw = Some(toml::Value::Array(list).to_string());
+                    }
+                }
+                _ => {
+                    let text = v.as_str().map(str::trim).unwrap_or_default();
+                    if !text.is_empty() {
+                        raw = Some(text.to_string());
+                    }
+                }
+            }
+        }
+    }
+    let dotted = format!("proxy.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/monitoring-settings` — P768: gateway monitoring knobs
 /// for the shell: the pseudonymous install id, the health-export
 /// master switch + per-plane toggles + export cadences, and the OTLP
@@ -9855,6 +10023,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/browser-settings", get(browser_settings_api).put(update_browser_settings_api))
         .route("/api/timezone-settings", get(timezone_settings_api).put(update_timezone_settings_api))
         .route("/api/monitoring-settings", get(monitoring_settings_api).put(update_monitoring_settings_api))
+        .route("/api/proxy-settings", get(proxy_settings_api).put(update_proxy_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -21745,6 +21914,100 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/monitoring-settings", Some("sekret")).await;
         assert_eq!(body["install_id"], Value::Null, "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_proxy_settings_editor() {
+        // P769: GET /api/proxy-settings surfaces the bearer-proxy knobs
+        // with defaults; PUT persists with shape validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[proxy]\nupstream_url = \"https://example.com/v1\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults merged in; fixture upstream surfaces; no OAuth
+        // credentials in the fresh home.
+        let (status, body) = get_json(app.clone(), "/api/proxy-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["host"], "127.0.0.1", "{body}");
+        assert_eq!(body["port"], 8645, "{body}");
+        assert_eq!(body["upstream_url"], "https://example.com/v1", "{body}");
+        assert!(body["allowed_paths"].as_array().unwrap().len() >= 5, "{body}");
+        assert_eq!(body["authenticated"], false, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("host", json!("0.0.0.0")),
+            ("port", json!(9000)),
+            ("upstream_url", json!("https://other.example/v1")),
+            ("max_request_bytes", json!(2048)),
+            ("allowed_paths", json!(["/chat/completions", "/responses"])),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/proxy-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/proxy-settings", Some("sekret")).await;
+        assert_eq!(body["host"], "0.0.0.0", "{body}");
+        assert_eq!(body["port"], 9000, "{body}");
+        assert_eq!(body["upstream_url"], "https://other.example/v1", "{body}");
+        assert_eq!(body["max_request_bytes"], 2048, "{body}");
+        assert_eq!(body["allowed_paths"], json!(["/chat/completions", "/responses"]), "{body}");
+
+        // Validation: bad port, scheme-less URL, unrooted path, tiny cap.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/proxy-settings", Some("sekret"),
+            json!({ "key": "port", "value": 70000 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/proxy-settings", Some("sekret"),
+            json!({ "key": "upstream_url", "value": "example.com/v1" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/proxy-settings", Some("sekret"),
+            json!({ "key": "allowed_paths", "value": ["chat/completions"] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/proxy-settings", Some("sekret"),
+            json!({ "key": "max_request_bytes", "value": 10 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // null clears the upstream back to unconfigured.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/proxy-settings", Some("sekret"),
+            json!({ "key": "upstream_url", "value": Value::Null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/proxy-settings", Some("sekret")).await;
+        assert_eq!(body["upstream_url"], "", "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

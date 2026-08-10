@@ -628,6 +628,16 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/proxy-settings` — P769 bearer-proxy knobs. */
+export interface ProxySettingsPayload {
+  host: string;
+  port: number;
+  upstream_url: string;
+  allowed_paths: string[];
+  max_request_bytes: number;
+  authenticated: boolean;
+}
+
 /** `GET /api/monitoring-settings` — P768 gateway monitoring knobs. */
 export interface MonitoringSettingsPayload {
   install_id: string | null;
@@ -4188,6 +4198,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/proxy-settings — P769 bearer-proxy knobs. */
+  async proxySettings(): Promise<ProxySettingsPayload> {
+    const response = await fetch(this.endpoint("/api/proxy-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`proxy-settings HTTP ${response.status}`);
+    return (await response.json()) as ProxySettingsPayload;
+  }
+
+  /** P769: PUT /api/proxy-settings — persist a proxy knob; null
+   * removes it (fall back to the default). */
+  async updateProxySetting(
+    key: string,
+    value: string | number | string[] | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/proxy-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `proxy-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/monitoring-settings — P768 health-export + OTLP knobs. */
