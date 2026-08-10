@@ -527,8 +527,11 @@ export class DoctorWidget {
         <div id="sync-rows"></div>
         <div class="kanban-detail-model">
           <button id="sync-fetch-remote" type="button" data-i18n="syncPanel.fetchRemote">Fetch remote</button>
+          <button id="sync-pull" type="button" data-i18n="syncPanel.pull">Pull now</button>
+          <button id="sync-push" type="button" data-i18n="syncPanel.push">Push now</button>
         </div>
         <div id="sync-remote"></div>
+        <div id="sync-transfer-report"></div>
       </section>
       <section id="doctor-secrets" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="secretsPanel.title">Secret sources</h3>
@@ -1401,9 +1404,50 @@ export class DoctorWidget {
       const btn = this.root.querySelector("#sync-fetch-remote") as HTMLButtonElement;
       btn.style.display = info.gate === "active" ? "" : "none";
       btn.onclick = () => void this.fetchSyncRemote();
+      const pullBtn = this.root.querySelector("#sync-pull") as HTMLButtonElement;
+      pullBtn.style.display = info.gate === "active" ? "" : "none";
+      pullBtn.onclick = () => void this.runSyncTransfer(true);
+      const pushBtn = this.root.querySelector("#sync-push") as HTMLButtonElement;
+      pushBtn.style.display = info.gate === "active" ? "" : "none";
+      pushBtn.onclick = () => void this.runSyncTransfer(false);
       section.hidden = false;
     } catch {
       section.hidden = true;
+    }
+  }
+
+  /** P802: on-demand skills-sync pull/push (hermes `ulnclaw sync
+   * pull|push` parity) — reports transferred skill names in-band. */
+  private async runSyncTransfer(isPull: boolean): Promise<void> {
+    const client = this.client();
+    if (!client) return;
+    const v = t.syncPanel;
+    const btn = this.root.querySelector(isPull ? "#sync-pull" : "#sync-push") as HTMLButtonElement;
+    const report = this.root.querySelector("#sync-transfer-report") as HTMLElement;
+    btn.disabled = true;
+    btn.textContent = isPull ? v.pulling : v.pushing;
+    try {
+      const info = isPull ? await client.syncPull() : await client.syncPush();
+      report.innerHTML = "";
+      const note = document.createElement("div");
+      note.className = "config-note";
+      if (!info.ok) {
+        note.textContent = info.error || "error";
+      } else if (info.skills.length === 0) {
+        note.textContent = isPull ? v.nothingNew : v.nothingToPush;
+      } else {
+        note.textContent = `${isPull ? v.pulledWord : v.pushedWord}: ${info.skills.join(", ")}`;
+      }
+      report.appendChild(note);
+    } catch (error) {
+      report.innerHTML = "";
+      const note = document.createElement("div");
+      note.className = "config-note";
+      note.textContent = String(error);
+      report.appendChild(note);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = isPull ? v.pull : v.push;
     }
   }
 

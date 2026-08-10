@@ -1044,6 +1044,12 @@ export interface SecretsStatus {
   };
 }
 
+export interface SyncTransferResult {
+  ok: boolean;
+  skills: string[];
+  error?: string;
+}
+
 export interface SecretsSyncReport {
   apply: boolean;
   fetches: {
@@ -2446,6 +2452,28 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return (await response.json()) as SecretsStatus;
+  }
+
+  /** POST /api/sync/pull — materialize new remote skills (P802). */
+  async syncPull(): Promise<SyncTransferResult> {
+    const response = await fetch(this.endpoint("/api/sync/pull"), {
+      method: "POST",
+      headers: { ...this.headers(), "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as SyncTransferResult;
+  }
+
+  /** POST /api/sync/push — upload opted-in skills (P802). */
+  async syncPush(): Promise<SyncTransferResult> {
+    const response = await fetch(this.endpoint("/api/sync/push"), {
+      method: "POST",
+      headers: { ...this.headers(), "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as SyncTransferResult;
   }
 
   /** POST /api/secrets/sync — fetch sources, report winners; with

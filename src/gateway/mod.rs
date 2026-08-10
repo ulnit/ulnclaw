@@ -9724,6 +9724,39 @@ async fn sync_status(Query(query): Query<SyncQuery>) -> Response {
     Json(payload).into_response()
 }
 
+/// `POST /api/sync/pull` — P802: on-demand skills-sync pull for the
+/// desktop Doctor panel (hermes `ulnclaw sync pull` parity): fetches
+/// the remote manifest and materializes any new skills (never
+/// clobbers local state). Response: `{ok, skills|error}`.
+async fn sync_pull_api() -> Response {
+    sync_transfer_api(true).await
+}
+
+/// `POST /api/sync/push` — P802: on-demand skills-sync push (hermes
+/// `ulnclaw sync push` parity): uploads the opted-in skills. Empty
+/// `skills` means nothing is opted in. Response: `{ok, skills|error}`.
+async fn sync_push_api() -> Response {
+    sync_transfer_api(false).await
+}
+
+async fn sync_transfer_api(is_pull: bool) -> Response {
+    use crate::skills_sync;
+    let config = match crate::config::UlncLawConfig::load(None) {
+        Ok(c) => c,
+        Err(e) => return server_error(&e.to_string()),
+    };
+    let home = crate::config::ulnclaw_home();
+    let result = if is_pull {
+        skills_sync::pull(&config.sync, &config.oauth, &home).await
+    } else {
+        skills_sync::push(&config.sync, &config.oauth, &home).await
+    };
+    match result {
+        Ok(names) => Json(json!({ "ok": true, "skills": names })).into_response(),
+        Err(e) => Json(json!({ "ok": false, "error": e.to_string() })).into_response(),
+    }
+}
+
 /// `POST /api/secrets/sync` — P801: fetch the external secret sources
 /// and report what would change (dry-run by default). `apply: true`
 /// persists the winners into `<home>/.env` — the gateway is
@@ -10903,6 +10936,8 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/secrets", get(secrets_status))
         .route("/api/secrets/sync", post(secrets_sync_api))
         .route("/api/sync", get(sync_status))
+        .route("/api/sync/pull", post(sync_pull_api))
+        .route("/api/sync/push", post(sync_push_api))
         .route("/api/pairing", get(pairing_status))
         .route("/api/pairing/approve", post(pairing_approve))
         .route("/api/pairing/revoke", post(pairing_revoke))
@@ -24183,6 +24218,48 @@ mod tests {
         assert!(body["gate_reason"].is_string(), "{body}");
         assert!(body["opted_in"].as_array().unwrap().is_empty(), "{body}");
         assert!(body.get("remote").is_none(), "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_pull_push_endpoints() {
+        // P802: POST /api/sync/pull|push run the transfer and report
+        // skill names; an inert gate or unreachable remote surfaces as
+        // {ok: false, error} rather than a server error.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Inert gate: both directions refuse with the gate reason.
+        for path in ["/api/sync/pull", "/api/sync/push"] {
+            let (status, body) = send_json(app.clone(), "POST", path, Some("sekret"), json!({})).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["ok"], false, "{body}");
+            let error = body["error"].as_str().unwrap_or_default();
+            assert!(error.to_lowercase().contains("inert"), "{body}");
+        }
+
+        // Active gate, unreachable remote: the network error surfaces
+        // in-band (port 9 is discard — nothing listens there).
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[sync]\nbase_url = \"http://127.0.0.1:9\"
+",
+        )
+        .unwrap();
+        let (status, body) =
+            send_json(app.clone(), "POST", "/api/sync/pull", Some("sekret"), json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], false, "{body}");
+        assert!(body["error"].as_str().unwrap_or_default().len() > 0, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),
