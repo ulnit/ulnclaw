@@ -63,7 +63,8 @@ async function loadBridge(): Promise<DesktopBridge | null> {
 }
 
 /** P540: native app-menu events (Tauri only) — File › New Session
- * drives the same flow as the sidebar button. */
+ * drives the same flow as the sidebar button. P777 adds View ›
+ * Reload / Toggle Full Screen and Help › About. */
 async function listenMenuEvents(): Promise<void> {
   try {
     const { listen } = await import("@tauri-apps/api/event");
@@ -71,6 +72,31 @@ async function listenMenuEvents(): Promise<void> {
       el.newSession.click();
       el.input.focus();
     });
+    await listen("ulnclaw://menu-reload", () => {
+      window.location.reload();
+    });
+    await listen("ulnclaw://menu-toggle-fullscreen", () => {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => undefined);
+      } else {
+        document.documentElement.requestFullscreen().catch(() => undefined);
+      }
+    });
+    await listen<{ version: string; binary: string | null; port: number }>(
+      "ulnclaw://about",
+      (event) => {
+        const info = event.payload;
+        notify({
+          kind: "info",
+          title: t.desktopShell.aboutTitle,
+          message: t.desktopShell.aboutBody
+            .replace("{version}", info.version)
+            .replace("{port}", String(info.port))
+            .replace("{binary}", info.binary ?? t.desktopShell.binaryNotFound),
+          durationMs: 8000,
+        });
+      },
+    );
   } catch {
     /* plain browser tab — no native menu */
   }

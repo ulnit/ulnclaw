@@ -197,6 +197,17 @@ fn default_gateway_port() -> u16 {
     8642
 }
 
+/// P777: About info for the Help menu — shell version, detected
+/// `ulnclaw` binary and the gateway port the shell targets.
+#[tauri::command]
+fn desktop_about() -> serde_json::Value {
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "binary": find_ulnclaw_binary(),
+        "port": default_gateway_port(),
+    })
+}
+
 /// Spawn `ulnclaw gateway --port <port>`; returns the child pid.
 #[tauri::command]
 fn spawn_gateway(state: State<'_, GatewayProcess>, binary: String, port: u16) -> Result<u32, String> {
@@ -349,11 +360,35 @@ fn setup_app_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &PredefinedMenuItem::select_all(app, None)?,
         ],
     )?;
-    let menu = Menu::with_items(app, &[&file, &edit])?;
+    // P777: View menu — reload + fullscreen toggle mirror the webview
+    // shortcuts so the native affordances work before the page loads.
+    let reload = MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?;
+    let fullscreen = MenuItem::with_id(
+        app,
+        "toggle_fullscreen",
+        "Toggle Full Screen",
+        true,
+        Some("F11"),
+    )?;
+    let view = Submenu::with_items(app, "View", true, &[&reload, &fullscreen])?;
+    // P777: Help › About emits the shell version/binary/port payload;
+    // the webview renders it as a notification.
+    let about = MenuItem::with_id(app, "about", "About ulnclaw", true, None::<&str>)?;
+    let help = Submenu::with_items(app, "Help", true, &[&about])?;
+    let menu = Menu::with_items(app, &[&file, &edit, &view, &help])?;
     app.set_menu(menu)?;
     app.on_menu_event(|handle, event| match event.id.as_ref() {
         "new_session" => {
             let _ = handle.emit("ulnclaw://menu-new-session", ());
+        }
+        "reload" => {
+            let _ = handle.emit("ulnclaw://menu-reload", ());
+        }
+        "toggle_fullscreen" => {
+            let _ = handle.emit("ulnclaw://menu-toggle-fullscreen", ());
+        }
+        "about" => {
+            let _ = handle.emit("ulnclaw://about", desktop_about());
         }
         "quit" => handle.exit(0),
         _ => {}
@@ -476,7 +511,7 @@ pub fn run() {
                         }
                     }
                 }
-                tauri::WindowEvent::CloseRequested => {
+                tauri::WindowEvent::CloseRequested { .. } => {
                     let maximized = window.is_maximized().unwrap_or(false);
                     if let Some(geometry) = window.try_state::<WindowGeometry>() {
                         if let Ok(guard) = geometry.0.lock() {
@@ -495,7 +530,8 @@ pub fn run() {
             find_ulnclaw_binary,
             default_gateway_port,
             spawn_gateway,
-            stop_gateway
+            stop_gateway,
+            desktop_about
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");
