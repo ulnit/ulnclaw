@@ -64,7 +64,8 @@ async function loadBridge(): Promise<DesktopBridge | null> {
 
 /** P540: native app-menu events (Tauri only) — File › New Session
  * drives the same flow as the sidebar button. P777 adds View ›
- * Reload / Toggle Full Screen and Help › About. */
+ * Reload / Toggle Full Screen and Help › About. P779 adds the tray
+ * Restart Gateway trigger. */
 async function listenMenuEvents(): Promise<void> {
   try {
     const { listen } = await import("@tauri-apps/api/event");
@@ -74,6 +75,11 @@ async function listenMenuEvents(): Promise<void> {
     });
     await listen("ulnclaw://menu-reload", () => {
       window.location.reload();
+    });
+    // P779: tray Restart Gateway item — the managed restart flow
+    // (stop, respawn, health-wait) lives in restartGateway().
+    await listen("ulnclaw://restart-gateway", () => {
+      void restartGateway();
     });
     await listen("ulnclaw://menu-toggle-fullscreen", () => {
       if (document.fullscreenElement) {

@@ -406,8 +406,16 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Show ulnclaw", true, None::<&str>)?;
     let new_session =
         MenuItem::with_id(app, "new_session", "New Session", true, None::<&str>)?;
+    // P779: restart the managed gateway child via the webview flow.
+    let restart_gateway = MenuItem::with_id(
+        app,
+        "restart_gateway",
+        "Restart Gateway",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &new_session, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &new_session, &restart_gateway, &quit])?;
 
     let mut builder = TrayIconBuilder::new()
         .tooltip("ulnclaw")
@@ -420,6 +428,12 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "new_session" => {
                 show_main_window(app);
                 let _ = app.emit("ulnclaw://menu-new-session", ());
+            }
+            // P779: the webview owns the stop/respawn/health-wait
+            // restart flow (restartGateway, P343) — the tray only
+            // triggers it.
+            "restart_gateway" => {
+                let _ = app.emit("ulnclaw://restart-gateway", ());
             }
             "quit" => app.exit(0),
             _ => {}
