@@ -628,6 +628,16 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/oauth-settings` — P775 device-flow OAuth knobs. */
+export interface OAuthSettingsPayload {
+  device_authorization_url: string;
+  token_url: string;
+  client_id: string;
+  scopes: string;
+  portal_url: string;
+  configured: boolean;
+}
+
 /** `GET /api/sync-settings` — P774 skills-sync endpoint knobs. */
 export interface SyncSettingsPayload {
   base_url: string;
@@ -4243,6 +4253,33 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/oauth-settings — P775 device-flow knobs. */
+  async oauthSettings(): Promise<OAuthSettingsPayload> {
+    const response = await fetch(this.endpoint("/api/oauth-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`oauth-settings HTTP ${response.status}`);
+    return (await response.json()) as OAuthSettingsPayload;
+  }
+
+  /** P775: PUT /api/oauth-settings — persist an OAuth knob; null or
+   * empty string removes it. */
+  async updateOAuthSetting(
+    key: string,
+    value: string | null,
+  ): Promise<{ ok: boolean; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/oauth-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `oauth-settings PUT HTTP ${response.status}`);
+    }
+    return (await response.json()) as { ok: boolean; key: string; removed: boolean };
   }
 
   /** GET /api/sync-settings — P774 sync endpoint knobs. */

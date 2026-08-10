@@ -6023,6 +6023,105 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/oauth-settings` — P775: device-flow OAuth endpoint
+/// knobs for the shell: device authorization URL, token URL, client
+/// id, requested scopes and the human portal page (all strings,
+/// empty when unset) plus a derived `configured` flag (both flow
+/// URLs present — the same gate the flow itself enforces).
+async fn oauth_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let oauth = config.oauth;
+    let configured = !oauth.device_authorization_url.trim().is_empty()
+        && !oauth.token_url.trim().is_empty();
+    Json(json!({
+        "device_authorization_url": oauth.device_authorization_url,
+        "token_url": oauth.token_url,
+        "client_id": oauth.client_id,
+        "scopes": oauth.scopes,
+        "portal_url": oauth.portal_url,
+        "configured": configured,
+    }))
+}
+
+/// `PUT /api/oauth-settings` — P775: persist device-flow OAuth knobs
+/// from the shell. Keys: `device_authorization_url`, `token_url`,
+/// `client_id`, `scopes`, `portal_url`; null or empty string removes
+/// the key. Flow URLs must be http(s); applies to the next device
+/// authorization attempt.
+async fn update_oauth_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "device_authorization_url",
+        "token_url",
+        "client_id",
+        "scopes",
+        "portal_url",
+    ];
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown oauth key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            let text = v.as_str().map(str::trim).unwrap_or_default();
+            if !text.is_empty() {
+                if matches!(key.as_str(), "device_authorization_url" | "token_url" | "portal_url")
+                    && !text.starts_with("http://")
+                    && !text.starts_with("https://")
+                {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!("oauth.{key} must be an http:// or https:// URL") })),
+                    );
+                }
+                raw = Some(text.to_string());
+            }
+        }
+    }
+    let dotted = format!("oauth.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/sync-settings` — P774: skills-sync endpoint knobs for
 /// the shell: the sync base URL (empty = inert), the device label
 /// attached to pushed manifests, and a configured-flag for the static
@@ -10505,6 +10604,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/providers-settings", get(providers_settings_api).put(update_providers_settings_api))
         .route("/api/hooks-settings", get(hooks_settings_api).put(update_hooks_settings_api))
         .route("/api/sync-settings", get(sync_settings_api).put(update_sync_settings_api))
+        .route("/api/oauth-settings", get(oauth_settings_api).put(update_oauth_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -22815,6 +22915,76 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/sync-settings", Some("sekret")).await;
         assert_eq!(body["base_url"], "", "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_oauth_settings_editor() {
+        // P775: GET /api/oauth-settings surfaces the device-flow knobs
+        // + configured gate; PUT persists with URL validation.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Defaults: everything blank, not configured.
+        let (status, body) = get_json(app.clone(), "/api/oauth-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["device_authorization_url"], "", "{body}");
+        assert_eq!(body["configured"], false, "{body}");
+
+        // Persist each knob.
+        for (key, value) in [
+            ("device_authorization_url", json!("https://auth.example/device")),
+            ("token_url", json!("https://auth.example/token")),
+            ("client_id", json!("ulnclaw-desktop")),
+            ("scopes", json!("inference sync")),
+            ("portal_url", json!("https://portal.example")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/oauth-settings",
+                Some("sekret"),
+                json!({ "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/oauth-settings", Some("sekret")).await;
+        assert_eq!(body["device_authorization_url"], "https://auth.example/device", "{body}");
+        assert_eq!(body["token_url"], "https://auth.example/token", "{body}");
+        assert_eq!(body["client_id"], "ulnclaw-desktop", "{body}");
+        assert_eq!(body["scopes"], "inference sync", "{body}");
+        assert_eq!(body["portal_url"], "https://portal.example", "{body}");
+        assert_eq!(body["configured"], true, "{body}");
+
+        // URL fields reject scheme-less values.
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/oauth-settings", Some("sekret"),
+            json!({ "key": "token_url", "value": "auth.example/token" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Clearing a flow URL flips the configured gate back off.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/oauth-settings", Some("sekret"),
+            json!({ "key": "token_url", "value": Value::Null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/oauth-settings", Some("sekret")).await;
+        assert_eq!(body["token_url"], "", "{body}");
+        assert_eq!(body["configured"], false, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

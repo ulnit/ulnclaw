@@ -345,6 +345,17 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-oauth-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="oauthSettingsPanel.title">OAuth device flow settings</h3>
+        <div id="oauth-settings-rows"></div>
+        <div id="oauth-settings-editor" class="monitoring-row" hidden>
+          <select id="oauth-settings-key" class="ghost"></select>
+          <input id="oauth-settings-value" class="ghost" />
+          <button id="oauth-settings-apply" class="ghost mcp-add-btn" data-i18n="oauthSettingsPanel.apply">Apply</button>
+          <button id="oauth-settings-clear" class="ghost mcp-add-btn" data-i18n="oauthSettingsPanel.clear">Clear</button>
+          <span id="oauth-settings-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-sync-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="syncPanel.title">Skills sync settings</h3>
         <div id="sync-settings-rows"></div>
@@ -674,6 +685,7 @@ export class DoctorWidget {
     this.loadProfiles().catch(() => undefined);
     this.loadHooksSettings().catch(() => undefined);
     this.loadSyncSettings().catch(() => undefined);
+    this.loadOAuthSettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2781,6 +2793,85 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadOAuthSettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-oauth-settings") as HTMLElement;
+    const rows = this.root.querySelector("#oauth-settings-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.oauthSettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      const on = t.monitoring.on;
+      const off = t.monitoring.off;
+      const text = (value: string): string =>
+        value.length > 0 ? escapeHtmlDoctor(value) : escapeHtmlDoctor(auto);
+      addRow(t.oauthSettingsPanel.deviceAuthUrl, text(payload.device_authorization_url));
+      addRow(t.oauthSettingsPanel.tokenUrl, text(payload.token_url));
+      addRow(t.oauthSettingsPanel.clientId, text(payload.client_id));
+      addRow(t.oauthSettingsPanel.scopes, text(payload.scopes));
+      addRow(t.oauthSettingsPanel.portalUrl, text(payload.portal_url));
+      addRow(t.oauthSettingsPanel.configured, payload.configured ? on : off);
+      // P775: OAuth editor — URLs and ids persist as typed through PUT
+      // /api/oauth-settings (flow URLs are http(s)-validated), Clear
+      // removes the key. Applies to the next authorization attempt.
+      const editor = this.root.querySelector("#oauth-settings-editor") as HTMLElement;
+      const keySel = this.root.querySelector("#oauth-settings-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#oauth-settings-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#oauth-settings-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#oauth-settings-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#oauth-settings-status") as HTMLElement;
+      if (!keySel.dataset.wired) {
+        const keys = [
+          "device_authorization_url",
+          "token_url",
+          "client_id",
+          "scopes",
+          "portal_url",
+        ];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateOAuthSetting(keySel.value, value);
+            await this.loadOAuthSettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => void applyEdit(valueInput.value.trim());
+        clearBtn.onclick = () => void applyEdit(null);
+        keySel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;
