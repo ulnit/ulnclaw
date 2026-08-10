@@ -450,6 +450,13 @@ fn desktop_set_active_work(state: State<'_, ActiveWork>, count: u32) {
     }
 }
 
+/// P789: expose the P555 liveness probe to the webview so it can tell
+/// a crashed managed gateway from a slow one (zombies count as dead).
+#[tauri::command]
+fn desktop_gateway_pid_alive(pid: u32) -> bool {
+    desktop_pid_alive(pid)
+}
+
 /// P783: the user confirmed quitting with work in flight — latch and exit.
 #[tauri::command]
 fn desktop_confirm_quit(app: tauri::AppHandle, confirmed: State<'_, QuitConfirmed>) {
@@ -883,7 +890,8 @@ pub fn run() {
             desktop_set_active_work,
             desktop_confirm_quit,
             desktop_deep_links_pending,
-            desktop_open_session_window
+            desktop_open_session_window,
+            desktop_gateway_pid_alive
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");

@@ -64,7 +64,7 @@ export interface Translations {
     fsDownloadTitle: string; fsMkdirTitle: string; fsMkdirPrompt: string;
     fsGitRootTitle: string; fsGitRootNone: string; fsPreviewOpen: string; fsPreviewTitle: string; fsPreviewLoading: string; fsPreviewBinary: string; fsPreviewTruncated: string; fsPreviewFailed: string; fsPreviewSave: string; fsPreviewSaved: string; fsPreviewSaveFailed: string;
     settingsTitle: string; gatewayUrl: string; apiKey: string; bearerToken: string;
-    manageProcess: string; autostart: string; autostartFailed: string; popoutFailed: string; reopenLast: string; charWarn: string; charLimit: string; charLimitExceeded: string; notifySystem: string; completionChime: string; replayOnboarding: string; cancel: string; save: string; delete: string;
+    manageProcess: string; autostart: string; autostartFailed: string; popoutFailed: string; gatewayRespawned: string; reopenLast: string; charWarn: string; charLimit: string; charLimitExceeded: string; notifySystem: string; completionChime: string; replayOnboarding: string; cancel: string; save: string; delete: string;
     restartGateway: string; restartDone: string; restartFailed: string; restartUnavailable: string;
     settingsTheme: string; settingsFont: string; settingsPersonality: string;
     statusUp: string; statusSessions: string; statusRuns: string; statusPlugins: string; statusTokens: string; statusCtx: string; statusKanban: string;
@@ -481,7 +481,7 @@ const en: Translations = {
     attachTitle: "Attach a file from the gateway filesystem", fsTitle: "Attach a file", fsUpTitle: "Up one directory", fsEmpty: "Empty directory", fsFailed: "File browser failed: {error}", fsDownloadTitle: "Download this file", fsMkdirTitle: "New folder", fsMkdirPrompt: "New folder name:", fsGitRootTitle: "Jump to the nearest git repository root", fsGitRootNone: "No git repository found above this path.", fsPreviewOpen: "Preview or edit this text file", fsPreviewTitle: "Preview", fsPreviewLoading: "Loading preview…", fsPreviewBinary: "Binary file — no text preview.", fsPreviewTruncated: "Preview truncated — file too large to edit here.", fsPreviewFailed: "Preview failed: {error}", fsPreviewSave: "Save", fsPreviewSaved: "Saved.", fsPreviewSaveFailed: "Save failed: {error}",
     settingsTitle: "Gateway settings", gatewayUrl: "Gateway URL",
     apiKey: "API key (optional, [gateway] key)", bearerToken: "bearer token",
-    manageProcess: "Manage the gateway process (start/stop with the app)", autostart: "Launch ulnclaw at login", autostartFailed: "Could not change the launch-at-login setting.", popoutFailed: "Could not open the session window: {error}", reopenLast: "Reopen the last session at launch",
+    manageProcess: "Manage the gateway process (start/stop with the app)", autostart: "Launch ulnclaw at login", autostartFailed: "Could not change the launch-at-login setting.", popoutFailed: "Could not open the session window: {error}", gatewayRespawned: "The gateway crashed — respawned it automatically.", reopenLast: "Reopen the last session at launch",
     charWarn: "Composer warn threshold (characters)",
     charLimit: "Composer hard limit (characters, 0 = off)",
     charLimitExceeded: "Message too long ({length}/{limit} characters) — trim it before sending",
@@ -1100,7 +1100,7 @@ const zh: Translations = {
     attachTitle: "从网关文件系统附加文件", fsTitle: "附加文件", fsUpTitle: "上一级目录", fsEmpty: "空目录", fsFailed: "文件浏览失败：{error}", fsDownloadTitle: "下载此文件", fsMkdirTitle: "新建文件夹", fsMkdirPrompt: "新文件夹名称：", fsGitRootTitle: "跳转到最近的 Git 仓库根目录", fsGitRootNone: "该路径上方未找到 Git 仓库。", fsPreviewOpen: "预览/编辑此文本文件", fsPreviewTitle: "预览", fsPreviewLoading: "加载预览中…", fsPreviewBinary: "二进制文件——无文本预览。", fsPreviewTruncated: "预览已截断——文件过大，无法在此编辑。", fsPreviewFailed: "预览失败：{error}", fsPreviewSave: "保存", fsPreviewSaved: "已保存。", fsPreviewSaveFailed: "保存失败：{error}",
     settingsTitle: "网关设置", gatewayUrl: "网关 URL",
     apiKey: "API 密钥（可选，[gateway] key）", bearerToken: "bearer 令牌",
-    manageProcess: "管理网关进程（随应用启动/停止）", autostart: "登录时启动 ulnclaw", autostartFailed: "无法更改登录时启动设置。", popoutFailed: "无法打开会话窗口：{error}", reopenLast: "启动时重新打开上次会话",
+    manageProcess: "管理网关进程（随应用启动/停止）", autostart: "登录时启动 ulnclaw", autostartFailed: "无法更改登录时启动设置。", popoutFailed: "无法打开会话窗口：{error}", gatewayRespawned: "网关已崩溃——已自动重新拉起。", reopenLast: "启动时重新打开上次会话",
     charWarn: "输入框预警阈值（字符数）",
     charLimit: "输入框硬性上限（字符数，0 = 关闭）",
     charLimitExceeded: "消息过长（{length}/{limit} 字符）——请精简后再发送",
@@ -1719,7 +1719,7 @@ const zhHant: Translations = {
     attachTitle: "從閘道檔案系統附加檔案", fsTitle: "附加檔案", fsUpTitle: "上一層目錄", fsEmpty: "空目錄", fsFailed: "檔案瀏覽失敗：{error}", fsDownloadTitle: "下載此檔案", fsMkdirTitle: "新增資料夾", fsMkdirPrompt: "新資料夾名稱：", fsGitRootTitle: "跳轉到最近的 Git 倉庫根目錄", fsGitRootNone: "該路徑上方未找到 Git 倉庫。", fsPreviewOpen: "預覽/編輯此文字檔案", fsPreviewTitle: "預覽", fsPreviewLoading: "載入預覽中…", fsPreviewBinary: "二進位檔案——無文字預覽。", fsPreviewTruncated: "預覽已截斷——檔案過大，無法在此編輯。", fsPreviewFailed: "預覽失敗：{error}", fsPreviewSave: "儲存", fsPreviewSaved: "已儲存。", fsPreviewSaveFailed: "儲存失敗：{error}",
     settingsTitle: "閘道設定", gatewayUrl: "閘道 URL",
     apiKey: "API 金鑰（選填，[gateway] key）", bearerToken: "bearer 權杖",
-    manageProcess: "管理閘道程序（隨應用程式啟動/停止）", autostart: "登入時啟動 ulnclaw", autostartFailed: "無法變更登入時啟動設定。", popoutFailed: "無法開啟工作階段視窗：{error}", reopenLast: "啟動時重新開啟上次工作階段",
+    manageProcess: "管理閘道程序（隨應用程式啟動/停止）", autostart: "登入時啟動 ulnclaw", autostartFailed: "無法變更登入時啟動設定。", popoutFailed: "無法開啟工作階段視窗：{error}", gatewayRespawned: "閘道已當機——已自動重新啟動。", reopenLast: "啟動時重新開啟上次工作階段",
     charWarn: "輸入框預警閾值（字元數）",
     charLimit: "輸入框硬性上限（字元數，0 = 關閉）",
     charLimitExceeded: "訊息過長（{length}/{limit} 字元）——請精簡後再傳送",
@@ -2338,7 +2338,7 @@ const ja: Translations = {
     attachTitle: "ゲートウェイのファイルシステムからファイルを添付", fsTitle: "ファイルを添付", fsUpTitle: "一つ上のディレクトリへ", fsEmpty: "空のディレクトリ", fsFailed: "ファイルブラウザーに失敗しました: {error}", fsDownloadTitle: "このファイルをダウンロード", fsMkdirTitle: "新しいフォルダー", fsMkdirPrompt: "新しいフォルダー名:", fsGitRootTitle: "最も近い Git リポジトリのルートへ移動", fsGitRootNone: "このパスの上位に Git リポジトリが見つかりません。", fsPreviewOpen: "このテキストファイルをプレビュー/編集", fsPreviewTitle: "プレビュー", fsPreviewLoading: "プレビューを読み込み中…", fsPreviewBinary: "バイナリファイル — テキストプレビューなし。", fsPreviewTruncated: "プレビューは切り詰められました — ファイルが大きすぎてここでは編集できません。", fsPreviewFailed: "プレビューに失敗しました: {error}", fsPreviewSave: "保存", fsPreviewSaved: "保存しました。", fsPreviewSaveFailed: "保存に失敗しました: {error}",
     settingsTitle: "ゲートウェイ設定", gatewayUrl: "ゲートウェイ URL",
     apiKey: "API キー（任意、[gateway] key）", bearerToken: "bearer トークン",
-    manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）", autostart: "ログイン時に ulnclaw を起動", autostartFailed: "ログイン時の起動設定を変更できませんでした。", popoutFailed: "セッションウィンドウを開けませんでした: {error}", reopenLast: "起動時に最後のセッションを再び開く",
+    manageProcess: "ゲートウェイプロセスを管理（アプリと連動して起動/停止）", autostart: "ログイン時に ulnclaw を起動", autostartFailed: "ログイン時の起動設定を変更できませんでした。", popoutFailed: "セッションウィンドウを開けませんでした: {error}", gatewayRespawned: "ゲートウェイがクラッシュしました — 自動的に再起動しました。", reopenLast: "起動時に最後のセッションを再び開く",
     charWarn: "入力欄の警告しきい値（文字数）",
     charLimit: "入力欄のハードリミット（文字数、0 = 無効）",
     charLimitExceeded: "メッセージが長すぎます（{length}/{limit} 文字）— 短くしてから送信してください",
@@ -2957,7 +2957,7 @@ const ar: Translations = {
     attachTitle: "إرفاق ملف من نظام ملفات البوابة", fsTitle: "إرفاق ملف", fsUpTitle: "مجلد واحد للأعلى", fsEmpty: "مجلد فارغ", fsFailed: "فشل متصفح الملفات: {error}", fsDownloadTitle: "تنزيل هذا الملف", fsMkdirTitle: "مجلد جديد", fsMkdirPrompt: "اسم المجلد الجديد:", fsGitRootTitle: "الانتقال إلى أقرب جذر مستودع Git", fsGitRootNone: "لم يُعثر على مستودع Git فوق هذا المسار.", fsPreviewOpen: "معاينة/تحرير هذا الملف النصي", fsPreviewTitle: "معاينة", fsPreviewLoading: "جارٍ تحميل المعاينة…", fsPreviewBinary: "ملف ثنائي — لا معاينة نصية.", fsPreviewTruncated: "المعاينة مبتورة — الملف أكبر من أن يُحرَّر هنا.", fsPreviewFailed: "فشلت المعاينة: {error}", fsPreviewSave: "حفظ", fsPreviewSaved: "تم الحفظ.", fsPreviewSaveFailed: "فشل الحفظ: {error}",
     settingsTitle: "إعدادات البوابة", gatewayUrl: "عنوان البوابة",
     apiKey: "مفتاح API (اختياري، [gateway] key)", bearerToken: "رمز bearer",
-    manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)", autostart: "تشغيل ulnclaw عند تسجيل الدخول", autostartFailed: "تعذر تغيير إعداد التشغيل عند تسجيل الدخول.", popoutFailed: "تعذر فتح نافذة الجلسة: {error}", reopenLast: "إعادة فتح آخر جلسة عند التشغيل",
+    manageProcess: "إدارة عملية البوابة (تشغيل/إيقاف مع التطبيق)", autostart: "تشغيل ulnclaw عند تسجيل الدخول", autostartFailed: "تعذر تغيير إعداد التشغيل عند تسجيل الدخول.", popoutFailed: "تعذر فتح نافذة الجلسة: {error}", gatewayRespawned: "انهارت البوابة — تمت إعادة تشغيلها تلقائيًا.", reopenLast: "إعادة فتح آخر جلسة عند التشغيل",
     charWarn: "عتبة التحذير في حقل الإدخال (عدد الأحرف)",
     charLimit: "الحد الأقصى الصارم لحقل الإدخال (عدد الأحرف، 0 = معطل)",
     charLimitExceeded: "الرسالة طويلة جدًا ({length}/{limit} حرفًا) — قم بتقصيرها قبل الإرسال",

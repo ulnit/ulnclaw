@@ -52,6 +52,7 @@ interface DesktopBridge {
   confirmQuit(): Promise<void>;
   deepLinksPending(): Promise<string[]>;
   openSessionWindow(sessionId: string): Promise<void>;
+  pidAlive(pid: number): Promise<boolean>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -69,6 +70,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       deepLinksPending: () => invoke<string[]>("desktop_deep_links_pending"),
       openSessionWindow: (sessionId) =>
         invoke<void>("desktop_open_session_window", { sessionId }),
+      pidAlive: (pid) => invoke<boolean>("desktop_gateway_pid_alive", { pid }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -2238,6 +2240,10 @@ async function refreshRunsTabBadge(): Promise<void> {
 /** P452: previous health-probe outcome (null before the first probe). */
 let lastHealthOk: boolean | null = null;
 
+/** P789: consecutive crash-respawns without a healthy probe between —
+ * reset when the gateway answers, capped at 3. */
+let respawnStreak = 0;
+
 async function pollHealth(): Promise<void> {
   if (!state.client) return;
   // P412: time the health probe so the dot tooltip can show latency.
@@ -2250,6 +2256,7 @@ async function pollHealth(): Promise<void> {
     // P452: toast the recovery transition.
     if (lastHealthOk === false) notifySuccess(t.chrome.healthRestored);
     lastHealthOk = true;
+    respawnStreak = 0;
     const model = await state.client.models();
     if (model) {
       gatewayModel = model;
@@ -2302,6 +2309,31 @@ async function pollHealth(): Promise<void> {
     if (lastHealthOk === true) notifyError(t.chrome.healthLost);
     lastHealthOk = false;
     el.statusbar.hidden = true;
+    // P789: when we manage the gateway and the child died, respawn it
+    // (the pid probe tells a crashed child from a slow one). A streak
+    // cap stops a crash-loop from respawning forever.
+    if (
+      state.settings.manage &&
+      state.bridge &&
+      state.managedPid !== null &&
+      respawnStreak < 3
+    ) {
+      const alive = await state.bridge.pidAlive(state.managedPid).catch(() => true);
+      if (!alive) {
+        respawnStreak += 1;
+        state.managedPid = null;
+        const binary = await state.bridge.findBinary();
+        if (binary) {
+          const port = await state.bridge.defaultPort();
+          try {
+            state.managedPid = await state.bridge.spawnGateway(binary, port);
+            notifySuccess(t.chrome.gatewayRespawned);
+          } catch (error) {
+            notifyError(fmt(t.boot.spawnFailed, { error }));
+          }
+        }
+      }
+    }
   }
 }
 
