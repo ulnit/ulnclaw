@@ -10,6 +10,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_notification::NotificationExt;
 
 /// Handle of the managed gateway child process.
 struct GatewayProcess(Mutex<Option<u32>>);
@@ -579,6 +580,17 @@ fn desktop_open_path(app: tauri::AppHandle, path: String) -> Result<(), String> 
         .map_err(|e| e.to_string())
 }
 
+/// P799: native OS notification — the shell replacement for the
+/// webview's Web Notifications (visible even when the window hides).
+#[tauri::command]
+fn desktop_notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    let mut builder = app.notification().builder().title(title);
+    if !body.is_empty() {
+        builder = builder.body(body);
+    }
+    builder.show().map_err(|e| e.to_string())
+}
+
 /// P783: the user confirmed quitting with work in flight — latch and exit.
 #[tauri::command]
 fn desktop_confirm_quit(app: tauri::AppHandle, confirmed: State<'_, QuitConfirmed>) {
@@ -877,6 +889,8 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         // P788: default-browser opening for the dashboard tray item.
         .plugin(tauri_plugin_opener::init())
+        // P799: native OS notifications for settle/approval alerts.
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             if let Err(err) = setup_tray(app) {
                 eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
@@ -1070,7 +1084,8 @@ pub fn run() {
             desktop_set_window_title,
             desktop_set_tray_health,
             desktop_gateway_log_tail,
-            desktop_open_path
+            desktop_open_path,
+            desktop_notify
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");

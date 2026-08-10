@@ -59,6 +59,7 @@ interface DesktopBridge {
   setTrayHealth(up: boolean): Promise<void>;
   gatewayLogTail(lines: number): Promise<string[]>;
   openPath(path: string): Promise<void>;
+  notifyNative(title: string, body: string): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -83,6 +84,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       setTrayHealth: (up) => invoke<void>("desktop_set_tray_health", { up }),
       gatewayLogTail: (lines) => invoke<string[]>("desktop_gateway_log_tail", { lines }),
       openPath: (path) => invoke<void>("desktop_open_path", { path }),
+      notifyNative: (title, body) => invoke<void>("desktop_notify", { title, body }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -2922,8 +2924,9 @@ function transcriptText(): string {
  * lazily requests permission on first use. Click focuses the window and
  * jumps to the runs view.
  */
-function systemNotify(title: string, body: string, tag: string): void {
-  if (!state.settings.notifySystem || typeof Notification === "undefined") return;
+/** P799: the Web Notifications fallback (plain-browser path). */
+function webNotify(title: string, body: string, tag: string): void {
+  if (typeof Notification === "undefined") return;
   const show = () => {
     const note = new Notification(title, {
       body: body || undefined,
@@ -2942,6 +2945,19 @@ function systemNotify(title: string, body: string, tag: string): void {
       if (permission === "granted") show();
     });
   }
+}
+
+function systemNotify(title: string, body: string, tag: string): void {
+  if (!state.settings.notifySystem) return;
+  // P799: under the Tauri shell prefer the native OS notification —
+  // it shows even when the window is hidden to the tray.
+  if (state.bridge) {
+    state.bridge
+      .notifyNative(title, body)
+      .catch(() => webNotify(title, body, tag));
+    return;
+  }
+  webNotify(title, body, tag);
 }
 
 function handleDesktopEvent(envelope: DesktopEnvelope): void {
