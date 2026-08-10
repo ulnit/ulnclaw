@@ -473,6 +473,50 @@ fn desktop_deep_links_pending(
         .unwrap_or_default()
 }
 
+/// P787: open a session in its own window — a full shell seeded with
+/// `?session=<id>` (hermes session-windows parity, lean). Refocusing an
+/// already-open window for the same session wins over a duplicate.
+#[tauri::command]
+fn desktop_open_session_window(app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    let slug: String = session_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(24)
+        .collect();
+    if slug.is_empty() {
+        return Err("empty session id".to_string());
+    }
+    let label = format!("session-{slug}");
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+    let url = tauri::WebviewUrl::App(
+        format!("index.html?session={}", slug_of(&session_id)).into(),
+    );
+    tauri::WebviewWindowBuilder::new(&app, label, url)
+        .title("ulnclaw")
+        .inner_size(1020.0, 700.0)
+        .min_inner_size(640.0, 420.0)
+        .build()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// P787: url-encode the session id for the popout query string.
+fn slug_of(session_id: &str) -> String {
+    session_id
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// P780: the global quick-entry accelerator — hermes' default
 /// (`CommandOrControl+Shift+Space`), mapped per platform by the plugin.
 fn quick_entry_shortcut() -> Shortcut {
@@ -816,7 +860,8 @@ pub fn run() {
             desktop_autostart_set,
             desktop_set_active_work,
             desktop_confirm_quit,
-            desktop_deep_links_pending
+            desktop_deep_links_pending,
+            desktop_open_session_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");

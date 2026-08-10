@@ -51,6 +51,7 @@ interface DesktopBridge {
   setActiveWork(count: number): Promise<void>;
   confirmQuit(): Promise<void>;
   deepLinksPending(): Promise<string[]>;
+  openSessionWindow(sessionId: string): Promise<void>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -66,6 +67,8 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       setActiveWork: (count) => invoke<void>("desktop_set_active_work", { count }),
       confirmQuit: () => invoke<void>("desktop_confirm_quit"),
       deepLinksPending: () => invoke<string[]>("desktop_deep_links_pending"),
+      openSessionWindow: (sessionId) =>
+        invoke<void>("desktop_open_session_window", { sessionId }),
     };
   } catch {
     return null; // plain browser — no process management
@@ -4100,6 +4103,9 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     themePicker: () => openThemePicker(),
     fontPicker: () => openFontPicker(),
     copySessionId: () => runCopySessionId(),
+    openSessionWindow: () => {
+      void openSessionInWindow();
+    },
     copyLastReply: () => runCopyLastReply(),
     copyTranscript: () => runCopyTranscript(),
     forkSession: () => runForkSession(),
@@ -4341,10 +4347,18 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     );
   });
   await refreshSessions();
+  // P787: session-popout windows boot with ?session=<id> — open that
+  // session instead of the reopen-last flow.
+  const popoutSessionId = new URLSearchParams(window.location.search).get("session");
   // P399: reopen the last open session (when it still exists) —
   // P431: gated by the settings toggle.
   const lastSessionId = localStorage.getItem(LAST_SESSION_KEY);
-  if (state.settings.reopenLast && lastSessionId) {
+  if (popoutSessionId) {
+    const target =
+      state.sessions.find((row) => row.id === popoutSessionId) ??
+      state.sessions.find((row) => row.id.startsWith(popoutSessionId));
+    if (target) await openSession(target);
+  } else if (state.settings.reopenLast && lastSessionId) {
     const last = state.sessions.find((row) => row.id === lastSessionId);
     if (last) await openSession(last);
   }
@@ -5063,3 +5077,18 @@ window.addEventListener("beforeunload", () => {
 });
 
 void start();
+/** P787: open the current session in its own window (hermes
+ * session-windows parity, lean — a full shell seeded with ?session=). */
+async function openSessionInWindow(): Promise<void> {
+  if (!state.bridge || !state.current) return;
+  try {
+    await state.bridge.openSessionWindow(state.current.id);
+  } catch (error) {
+    notifyError(
+      t.chrome.popoutFailed.replace(
+        "{error}",
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
+  }
+}
