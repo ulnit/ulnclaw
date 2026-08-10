@@ -6023,6 +6023,140 @@ async fn update_terminal_api(
     }
 }
 
+/// `GET /api/auxiliary-settings` — P770: per-task auxiliary runtime
+/// overrides for the shell: for each canonical task slot (vision,
+/// compression, approval, title_generation) the provider/model/base
+/// URL overrides, a configured-flag for the API key (never echoed —
+/// it is a secret), the key env name, and for title_generation the
+/// enabled kill switch + language pin (tri-state where unset means
+/// inherit the main runtime).
+async fn auxiliary_settings_api(State(_state): State<Arc<GatewayState>>) -> Json<Value> {
+    let config = crate::config::UlncLawConfig::load(Some(&crate::config_cmd::config_path()))
+        .unwrap_or_default();
+    let mut tasks = Value::Object(serde_json::Map::new());
+    for slot in crate::provider::auxiliary::TASK_SLOTS {
+        let entry = config.auxiliary.get(*slot);
+        let value = json!({
+            "provider": entry.and_then(|e| e.provider.clone()),
+            "model": entry.and_then(|e| e.model.clone()),
+            "base_url": entry.and_then(|e| e.base_url.clone()),
+            "api_key_configured": entry
+                .and_then(|e| e.api_key.as_deref())
+                .map(|k| !k.trim().is_empty())
+                .unwrap_or(false),
+            "key_env": entry.and_then(|e| e.key_env.clone()),
+            "enabled": entry.and_then(|e| e.enabled.as_ref()).map(|t| t.resolve(true)),
+            "language": entry.and_then(|e| e.language.clone()),
+        });
+        tasks[slot] = value;
+    }
+    Json(json!({
+        "tasks": crate::provider::auxiliary::TASK_SLOTS,
+        "config": tasks,
+    }))
+}
+
+/// `PUT /api/auxiliary-settings` — P770: persist an auxiliary task
+/// override from the shell. Body: `{"task": "vision"|"compression"|
+/// "approval"|"title_generation", "key": "provider"|"model"|
+/// "base_url"|"key_env"|"enabled"|"language", "value": ...|null}` —
+/// null or empty string removes the key (inherit the main runtime).
+/// The API key is deliberately not editable here: it is a secret.
+/// Applies the next time the task is routed.
+async fn update_auxiliary_settings_api(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    const VALID_KEYS: &[&str] = &[
+        "provider",
+        "model",
+        "base_url",
+        "key_env",
+        "enabled",
+        "language",
+    ];
+    let task = match body.get("task").and_then(Value::as_str) {
+        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'task'" })),
+            )
+        }
+    };
+    if !crate::provider::auxiliary::TASK_SLOTS.contains(&task.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("unknown auxiliary task '{task}'"),
+                "tasks": crate::provider::auxiliary::TASK_SLOTS,
+            })),
+        );
+    }
+    let key = match body.get("key").and_then(Value::as_str) {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing 'key'" })),
+            )
+        }
+    };
+    if !VALID_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("unknown auxiliary key '{key}'"), "valid_keys": VALID_KEYS })),
+        );
+    }
+    let value = body.get("value");
+    let mut raw: Option<String> = None;
+    if let Some(v) = value {
+        if !v.is_null() {
+            if key == "enabled" {
+                if !v.is_boolean() {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "auxiliary enabled must be a boolean" })),
+                    );
+                }
+                raw = Some(v.to_string());
+            } else {
+                let text = v.as_str().map(str::trim).unwrap_or_default();
+                if !text.is_empty() {
+                    raw = Some(text.to_string());
+                }
+            }
+        }
+    }
+    let dotted = format!("auxiliary.{task}.{key}");
+    let removing = matches!(value, None | Some(Value::Null)) || raw.is_none();
+    let result = if removing {
+        crate::config_cmd::unset_config_value(&dotted)
+            .map(|_| ())
+            .or_else(|e| {
+                if e.contains("not set") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    } else {
+        crate::config_cmd::set_config_value(&dotted, raw.as_deref().unwrap_or(""), true).map(|_| ())
+    };
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "task": task,
+                "key": key,
+                "removed": removing,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
 /// `GET /api/proxy-settings` — P769: bearer-proxy knobs for the
 /// shell: listener host/port, the upstream OpenAI-compatible base URL
 /// (empty when unconfigured), the `/v1` path allowlist, the request
@@ -10024,6 +10158,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/timezone-settings", get(timezone_settings_api).put(update_timezone_settings_api))
         .route("/api/monitoring-settings", get(monitoring_settings_api).put(update_monitoring_settings_api))
         .route("/api/proxy-settings", get(proxy_settings_api).put(update_proxy_settings_api))
+        .route("/api/auxiliary-settings", get(auxiliary_settings_api).put(update_auxiliary_settings_api))
         .route(
             "/api/personalities",
             get(personalities_get),
@@ -22008,6 +22143,95 @@ mod tests {
         assert_eq!(body["removed"], true, "{body}");
         let (_, body) = get_json(app.clone(), "/api/proxy-settings", Some("sekret")).await;
         assert_eq!(body["upstream_url"], "", "{body}");
+
+        match saved_home {
+            Some(value) => std::env::set_var("ULNCLAW_HOME", value),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_auxiliary_settings_editor() {
+        // P770: GET /api/auxiliary-settings surfaces per-task overrides
+        // with a key configured-flag; PUT persists per task/key.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[auxiliary.compression]\nprovider = \"ollama\"\nmodel = \"qwen3:8b\"\napi_key = \"sk-secret\"\n",
+        )
+        .unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Fixture task surfaces with a configured-flag; other slots
+        // inherit (all null) and no secret value leaks.
+        let (status, body) = get_json(app.clone(), "/api/auxiliary-settings", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["tasks"], json!(["vision", "compression", "approval", "title_generation"]), "{body}");
+        assert_eq!(body["config"]["compression"]["provider"], "ollama", "{body}");
+        assert_eq!(body["config"]["compression"]["model"], "qwen3:8b", "{body}");
+        assert_eq!(body["config"]["compression"]["api_key_configured"], true, "{body}");
+        assert_eq!(body["config"]["vision"]["provider"], Value::Null, "{body}");
+        assert!(!body.to_string().contains("sk-secret"), "{body}");
+
+        // Persist overrides on different tasks.
+        for (task, key, value) in [
+            ("vision", "provider", json!("anthropic")),
+            ("vision", "model", json!("claude-haiku")),
+            ("title_generation", "enabled", json!(false)),
+            ("title_generation", "language", json!("zh-CN")),
+        ] {
+            let (status, body) = send_json(
+                app.clone(),
+                "PUT",
+                "/api/auxiliary-settings",
+                Some("sekret"),
+                json!({ "task": task, "key": key, "value": value }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{task}.{key}: {body}");
+        }
+        let (_, body) = get_json(app.clone(), "/api/auxiliary-settings", Some("sekret")).await;
+        assert_eq!(body["config"]["vision"]["provider"], "anthropic", "{body}");
+        assert_eq!(body["config"]["vision"]["model"], "claude-haiku", "{body}");
+        assert_eq!(body["config"]["title_generation"]["enabled"], false, "{body}");
+        assert_eq!(body["config"]["title_generation"]["language"], "zh-CN", "{body}");
+
+        // Validation: unknown task, unknown key, api_key refused,
+        // non-bool enabled.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/auxiliary-settings", Some("sekret"),
+            json!({ "task": "teleportation", "key": "provider", "value": "openai" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["tasks"], json!(["vision", "compression", "approval", "title_generation"]), "{body}");
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/auxiliary-settings", Some("sekret"),
+            json!({ "task": "vision", "key": "api_key", "value": "sk-other" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send_json(
+            app.clone(), "PUT", "/api/auxiliary-settings", Some("sekret"),
+            json!({ "task": "title_generation", "key": "enabled", "value": "off" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Empty string clears an override back to inherit.
+        let (status, body) = send_json(
+            app.clone(), "PUT", "/api/auxiliary-settings", Some("sekret"),
+            json!({ "task": "title_generation", "key": "language", "value": "" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true, "{body}");
+        let (_, body) = get_json(app.clone(), "/api/auxiliary-settings", Some("sekret")).await;
+        assert_eq!(body["config"]["title_generation"]["language"], Value::Null, "{body}");
 
         match saved_home {
             Some(value) => std::env::set_var("ULNCLAW_HOME", value),

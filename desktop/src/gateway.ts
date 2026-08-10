@@ -628,6 +628,21 @@ export interface StatusPhrasesPayload {
   >;
 }
 
+/** `GET /api/auxiliary-settings` — P770 per-task auxiliary overrides. */
+export interface AuxiliaryTaskEntry {
+  provider: string | null;
+  model: string | null;
+  base_url: string | null;
+  api_key_configured: boolean;
+  key_env: string | null;
+  enabled: boolean | null;
+  language: string | null;
+}
+export interface AuxiliarySettingsPayload {
+  tasks: string[];
+  config: Record<string, AuxiliaryTaskEntry>;
+}
+
 /** `GET /api/proxy-settings` — P769 bearer-proxy knobs. */
 export interface ProxySettingsPayload {
   host: string;
@@ -4198,6 +4213,38 @@ export class GatewayClient {
     });
     if (!response.ok) throw new Error(`approvals set HTTP ${response.status}`);
     return (await response.json()) as { ok: boolean; mode: string };
+  }
+
+  /** GET /api/auxiliary-settings — P770 per-task overrides. */
+  async auxiliarySettings(): Promise<AuxiliarySettingsPayload> {
+    const response = await fetch(this.endpoint("/api/auxiliary-settings"), {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`auxiliary-settings HTTP ${response.status}`);
+    return (await response.json()) as AuxiliarySettingsPayload;
+  }
+
+  /** P770: PUT /api/auxiliary-settings — persist a task override; null
+   * or empty string removes it (inherit the main runtime). */
+  async updateAuxiliarySetting(
+    task: string,
+    key: string,
+    value: string | boolean | null,
+  ): Promise<{ ok: boolean; task: string; key: string; removed: boolean }> {
+    const response = await fetch(this.endpoint("/api/auxiliary-settings"), {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify({ task, key, value }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        tasks?: string[];
+      };
+      const suffix = body.tasks?.length ? ` (tasks: ${body.tasks.join(", ")})` : "";
+      throw new Error(`${body.error ?? `auxiliary-settings PUT HTTP ${response.status}`}${suffix}`);
+    }
+    return (await response.json()) as { ok: boolean; task: string; key: string; removed: boolean };
   }
 
   /** GET /api/proxy-settings — P769 bearer-proxy knobs. */

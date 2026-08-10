@@ -345,6 +345,18 @@ export class DoctorWidget {
         </h3>
         <div id="drain-rows"></div>
       </section>
+      <section id="doctor-auxiliary-settings" class="doctor-monitoring" hidden>
+        <h3 class="config-section" data-i18n="auxiliaryPanel.title">Auxiliary tasks</h3>
+        <div id="auxiliary-rows"></div>
+        <div id="auxiliary-editor" class="monitoring-row" hidden>
+          <select id="auxiliary-task" class="ghost"></select>
+          <select id="auxiliary-key" class="ghost"></select>
+          <input id="auxiliary-value" class="ghost" />
+          <button id="auxiliary-apply" class="ghost mcp-add-btn" data-i18n="auxiliaryPanel.apply">Apply</button>
+          <button id="auxiliary-clear" class="ghost mcp-add-btn" data-i18n="auxiliaryPanel.clear">Clear</button>
+          <span id="auxiliary-status" class="monitoring-value"></span>
+        </div>
+      </section>
       <section id="doctor-proxy-settings" class="doctor-monitoring" hidden>
         <h3 class="config-section" data-i18n="proxyPanel.title">Bearer proxy</h3>
         <div id="proxy-rows"></div>
@@ -611,6 +623,7 @@ export class DoctorWidget {
     this.loadTimezoneSettings().catch(() => undefined);
     this.loadMonitoringSettings().catch(() => undefined);
     this.loadProxySettings().catch(() => undefined);
+    this.loadAuxiliarySettings().catch(() => undefined);
     this.loadDeliveryLedger().catch(() => undefined);
     this.loadDeadTargets().catch(() => undefined);
     this.loadStallWatch().catch(() => undefined);
@@ -2718,6 +2731,104 @@ export class DoctorWidget {
           );
         }
       }
+      section.hidden = false;
+    } catch {
+      section.hidden = true;
+    }
+  }
+
+  private async loadAuxiliarySettings(): Promise<void> {
+    const client = this.client();
+    const section = this.root.querySelector("#doctor-auxiliary-settings") as HTMLElement;
+    const rows = this.root.querySelector("#auxiliary-rows") as HTMLElement;
+    if (!client) {
+      section.hidden = true;
+      return;
+    }
+    try {
+      const payload = await client.auxiliarySettings();
+      rows.innerHTML = "";
+      const addRow = (label: string, valueHtml: string): void => {
+        const row = document.createElement("div");
+        row.className = "monitoring-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "monitoring-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("span");
+        valueEl.className = "monitoring-value";
+        valueEl.innerHTML = valueHtml;
+        row.append(labelEl, valueEl);
+        rows.appendChild(row);
+      };
+      const auto = t.webSettingsPanel.autoWord;
+      for (const task of payload.tasks) {
+        const entry = payload.config[task];
+        if (!entry) continue;
+        const parts: string[] = [];
+        if (entry.provider !== null || entry.model !== null) {
+          parts.push(
+            escapeHtmlDoctor(`${entry.provider ?? auto}:${entry.model ?? auto}`),
+          );
+        } else {
+          parts.push(escapeHtmlDoctor(auto));
+        }
+        if (entry.base_url !== null) parts.push(escapeHtmlDoctor(entry.base_url));
+        if (entry.api_key_configured) parts.push(escapeHtmlDoctor(t.auxiliaryPanel.keySet));
+        if (entry.key_env !== null) parts.push(escapeHtmlDoctor(entry.key_env));
+        if (entry.enabled === false) parts.push(escapeHtmlDoctor(t.auxiliaryPanel.disabled));
+        if (entry.language !== null)
+          parts.push(escapeHtmlDoctor(`${t.auxiliaryPanel.lang}: ${entry.language}`));
+        addRow(task, parts.join(" · "));
+      }
+      // P770: auxiliary editor — pick the task and the knob, type the
+      // value (enabled takes true/false), Apply persists through PUT
+      // /api/auxiliary-settings, Clear removes the override. The API
+      // key is secret material and stays out of the shell.
+      const editor = this.root.querySelector("#auxiliary-editor") as HTMLElement;
+      const taskSel = this.root.querySelector("#auxiliary-task") as HTMLSelectElement;
+      const keySel = this.root.querySelector("#auxiliary-key") as HTMLSelectElement;
+      const valueInput = this.root.querySelector("#auxiliary-value") as HTMLInputElement;
+      const applyBtn = this.root.querySelector("#auxiliary-apply") as HTMLButtonElement;
+      const clearBtn = this.root.querySelector("#auxiliary-clear") as HTMLButtonElement;
+      const statusEl = this.root.querySelector("#auxiliary-status") as HTMLElement;
+      if (!taskSel.dataset.wired) {
+        taskSel.innerHTML = "";
+        for (const task of payload.tasks) {
+          const option = document.createElement("option");
+          option.value = task;
+          option.textContent = task;
+          taskSel.appendChild(option);
+        }
+        const keys = ["provider", "model", "base_url", "key_env", "enabled", "language"];
+        keySel.innerHTML = "";
+        for (const key of keys) {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = key;
+          keySel.appendChild(option);
+        }
+        const applyEdit = async (value: string | boolean | null): Promise<void> => {
+          statusEl.textContent = "";
+          try {
+            await client.updateAuxiliarySetting(taskSel.value, keySel.value, value);
+            await this.loadAuxiliarySettings();
+            this.flashSaved(statusEl);
+          } catch (err) {
+            statusEl.textContent = err instanceof Error ? err.message : String(err);
+          }
+        };
+        applyBtn.onclick = () => {
+          const raw = valueInput.value.trim();
+          const parsed: string | boolean =
+            keySel.value === "enabled"
+              ? raw === "true"
+              : raw;
+          void applyEdit(parsed);
+        };
+        clearBtn.onclick = () => void applyEdit(null);
+        taskSel.dataset.wired = "1";
+      }
+      editor.hidden = false;
       section.hidden = false;
     } catch {
       section.hidden = true;
