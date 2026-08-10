@@ -197,6 +197,10 @@ async function listenMenuEvents(): Promise<void> {
         state.bridge?.confirmQuit().catch(() => undefined);
       }
     });
+    // P795: tray Show Gateway Log item opens the P794 viewer.
+    await listen("ulnclaw://gateway-log", () => {
+      void openGatewayLog();
+    });
     await listen("ulnclaw://menu-toggle-fullscreen", () => {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => undefined);

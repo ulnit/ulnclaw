@@ -744,10 +744,25 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         true,
         None::<&str>,
     )?;
+    // P795: quick access to the captured gateway log (P794).
+    let gateway_log = MenuItem::with_id(
+        app,
+        "gateway_log",
+        "Show Gateway Log",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&show, &new_session, &restart_gateway, &open_dashboard, &quit],
+        &[
+            &show,
+            &new_session,
+            &restart_gateway,
+            &open_dashboard,
+            &gateway_log,
+            &quit,
+        ],
     )?;
 
     let mut builder = TrayIconBuilder::new()
@@ -774,6 +789,11 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(err) = app.opener().open_url(url, None::<&str>) {
                     eprintln!("ulnclaw desktop: could not open dashboard: {err}");
                 }
+            }
+            // P795: the webview renders the captured gateway log (P794).
+            "gateway_log" => {
+                show_main_window(app);
+                let _ = app.emit("ulnclaw://gateway-log", ());
             }
             // P783: route through the quit guard.
             "quit" => request_quit(app),
