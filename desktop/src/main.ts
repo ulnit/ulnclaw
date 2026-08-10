@@ -50,6 +50,7 @@ interface DesktopBridge {
   setAutostart(enabled: boolean): Promise<void>;
   setActiveWork(count: number): Promise<void>;
   confirmQuit(): Promise<void>;
+  deepLinksPending(): Promise<string[]>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -64,6 +65,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       setAutostart: (enabled) => invoke<void>("desktop_autostart_set", { enabled }),
       setActiveWork: (count) => invoke<void>("desktop_set_active_work", { count }),
       confirmQuit: () => invoke<void>("desktop_confirm_quit"),
+      deepLinksPending: () => invoke<string[]>("desktop_deep_links_pending"),
     };
   } catch {
     return null; // plain browser — no process management
@@ -74,6 +76,31 @@ async function loadBridge(): Promise<DesktopBridge | null> {
  * the window close / menu quit paths. */
 function reportActiveWork(): void {
   state.bridge?.setActiveWork(state.busy ? 1 : 0).catch(() => undefined);
+}
+
+/** P785: route `ulnclaw://` deep links (hermes deep-link parity). The
+ * blueprint kind submits the matching `/blueprint <name> slot=val…`
+ * command through the normal composer path — sendTurn() creates a
+ * fresh session when none is open. */
+function handleDeepLinks(urls: string[], toChat: () => void): void {
+  for (const raw of urls) {
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== "ulnclaw:") continue;
+    const kind = parsed.hostname;
+    const name = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+    if (kind !== "blueprint" || !name) continue;
+    const slots: string[] = [];
+    parsed.searchParams.forEach((value, key) => slots.push(`${key}=${value}`));
+    toChat();
+    el.input.value = ["/blueprint", name, ...slots].join(" ");
+    refreshCharCount();
+    void sendTurn();
+  }
 }
 
 /** P540: native app-menu events (Tauri only) — File › New Session
@@ -4097,6 +4124,23 @@ function handleComposerHistory(event: KeyboardEvent): boolean {
     state.jobs?.rerender();
     state.findBar?.rerender();
   });
+
+  // P785: deep-link routing — flush a cold-launch link and subscribe to
+  // live arrivals (both submit through the composer path).
+  if (state.bridge) {
+    const toChat = () => switchView("chat");
+    state.bridge
+      .deepLinksPending()
+      .then((urls) => handleDeepLinks(urls, toChat))
+      .catch(() => undefined);
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<string[]>("ulnclaw://deep-link", (event) => {
+          handleDeepLinks(event.payload, toChat);
+        }),
+      )
+      .catch(() => undefined);
+  }
 
   installHotkeys();
   installDragDrop();

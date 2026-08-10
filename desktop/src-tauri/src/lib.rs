@@ -7,6 +7,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// Handle of the managed gateway child process.
@@ -457,6 +458,21 @@ fn desktop_confirm_quit(app: tauri::AppHandle, confirmed: State<'_, QuitConfirme
     app.exit(0);
 }
 
+/// P785: deep links that cold-launched this instance — the page flushes
+/// them once its listener is mounted (live arrivals stream over the
+/// `ulnclaw://deep-link` event).
+#[tauri::command]
+fn desktop_deep_links_pending(
+    deep_link: State<'_, tauri_plugin_deep_link::DeepLink<tauri::Wry>>,
+) -> Vec<String> {
+    deep_link
+        .get_current()
+        .ok()
+        .flatten()
+        .map(|urls| urls.into_iter().map(|url| url.to_string()).collect())
+        .unwrap_or_default()
+}
+
 /// P780: the global quick-entry accelerator — hermes' default
 /// (`CommandOrControl+Shift+Space`), mapped per platform by the plugin.
 fn quick_entry_shortcut() -> Shortcut {
@@ -629,6 +645,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
+        // P785: ulnclaw:// deep-link routing (hermes deep-link parity).
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             if let Err(err) = setup_tray(app) {
                 eprintln!("ulnclaw desktop: tray unavailable, continuing windowed: {err}");
@@ -640,6 +658,24 @@ pub fn run() {
             // another app already owns the grab).
             if let Err(err) = app.global_shortcut().register(quick_entry_shortcut()) {
                 eprintln!("ulnclaw desktop: global quick-entry shortcut unavailable: {err}");
+            }
+            // P785: register the ulnclaw:// scheme, then route live
+            // arrivals to the page. Cold-launch links are flushed by the
+            // page through desktop_deep_links_pending.
+            {
+                let deep_link = app.deep_link();
+                if let Err(err) = deep_link.register_all() {
+                    eprintln!("ulnclaw desktop: deep-link registration unavailable: {err}");
+                }
+                let handle = app.handle().clone();
+                deep_link.on_open_url(move |event| {
+                    let urls: Vec<String> =
+                        event.urls().into_iter().map(|url| url.to_string()).collect();
+                    if !urls.is_empty() {
+                        show_main_window(&handle);
+                        let _ = handle.emit("ulnclaw://deep-link", urls);
+                    }
+                });
             }
             // P535: restore the persisted window geometry.
             if let Some(window) = app.get_webview_window("main") {
@@ -779,7 +815,8 @@ pub fn run() {
             desktop_autostart_enabled,
             desktop_autostart_set,
             desktop_set_active_work,
-            desktop_confirm_quit
+            desktop_confirm_quit,
+            desktop_deep_links_pending
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");
