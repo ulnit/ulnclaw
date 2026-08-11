@@ -1,3 +1,4 @@
+import { ICON, icon } from "./icons";
 // Boot-failure overlay (P253) — scoped port of hermes apps/desktop
 // `components/boot-failure-overlay.tsx`: when the cold-boot health poll
 // exhausts, show a structured recovery card (title, description,
@@ -36,7 +37,7 @@ function mount(onRetry: () => void, onOpenSettings: () => void): HTMLDivElement 
   const glyph = document.createElement("div");
   glyph.className = "boot-failure-glyph";
   glyph.setAttribute("aria-hidden", "true");
-  glyph.textContent = "⚠️";
+  glyph.innerHTML = icon("warn", "g-warn");
   const title = document.createElement("h2");
   title.className = "boot-failure-title";
   title.textContent = t.boot.failureTitle;

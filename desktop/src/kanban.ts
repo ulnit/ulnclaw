@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Kanban board widget — renders the shared ulnclaw coordination board
 // (same kanban.db the CLI `ulnclaw kanban` and the agent kanban_* tools
 // use) as a four-column card wall with quick actions.
@@ -56,7 +57,7 @@ export class KanbanWidget {
         <input id="kanban-filter" type="search" data-i18n-ph="kanban.filterPlaceholder" />
         <button id="kanban-new" class="primary" data-i18n="kanban.newTask">New task</button>
         <button id="kanban-dispatch" class="ghost" data-i18n="kanban.dispatch">Dispatch</button>
-        <button id="kanban-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="kanban-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="kanban-columns"></div>
       <dialog id="kanban-detail">
@@ -676,7 +677,7 @@ export class KanbanWidget {
       const warn = document.createElement("span");
       warn.className = "kanban-chip diagnostic";
       warn.title = flagged.map((d) => d.title).join("; ");
-      warn.textContent = `⚠ ${flagged.length}`;
+      warn.innerHTML = `${ICON.warn} ${flagged.length}`;
       meta.appendChild(warn);
     }
     if (task.assignee) {

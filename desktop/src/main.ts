@@ -38,6 +38,7 @@ import { SessionPickerDialog } from "./session-picker";
 import { clearIntro, renderIntro } from "./intro";
 import { ActivityTimer, formatElapsed } from "./activity-timer";
 import { initWakeIndicator } from "./wake";
+import { ICON } from "./icons";
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
@@ -476,11 +477,11 @@ function sessionWhen(epochSeconds: number): string {
 
 /** P384: compact glyphs for well-known non-gateway session sources. */
 const SOURCE_BADGES: Record<string, string> = {
-  cli: "⌨",
-  tui: "⌨",
-  import: "⭳",
-  "cron-run": "⏰",
-  "gateway-run": "⚙",
+  cli: ICON.keyboard,
+  tui: ICON.keyboard,
+  import: ICON.download,
+  "cron-run": ICON.clock,
+  "gateway-run": ICON.gear,
 };
 
 /** P409: short glyphs for session end reasons (complete, branched…). */
@@ -489,9 +490,9 @@ const END_BADGES: Record<string, string> = {
   completed: "✓",
   max_iterations: "∞",
   compression: "⧉",
-  branched: "⑂",
+  branched: ICON.fork,
   ended: "■",
-  archived: "🗄",
+  archived: ICON.archive,
 };
 
 /** P392: sidebar session rows group by relative age. */
@@ -521,7 +522,7 @@ function ageGroupLabel(group: "today" | "yesterday" | "week" | "older"): string 
 
 /** P407: reflect the session sort mode on the toggle button. */
 function refreshSortButton(): void {
-  el.sessionSort.textContent = state.sessionSortMode === "title" ? "AZ" : "⏱";
+  el.sessionSort.innerHTML = state.sessionSortMode === "title" ? '<span class="sort-az">AZ</span>' : ICON.clock;
   el.sessionSort.title =
     state.sessionSortMode === "title" ? t.session.sortByTitle : t.session.sortByActivity;
 }
@@ -660,7 +661,7 @@ function renderSessions(): void {
       const sourceBadge = document.createElement("span");
       sourceBadge.className = "session-source-badge";
       sourceBadge.title = session.source;
-      sourceBadge.textContent = SOURCE_BADGES[session.source] ?? session.source;
+      sourceBadge.innerHTML = SOURCE_BADGES[session.source] ?? session.source;
       item.appendChild(sourceBadge);
     }
     // P409: badge sessions that carry an end reason.
@@ -668,7 +669,7 @@ function renderSessions(): void {
       const endBadge = document.createElement("span");
       endBadge.className = "session-end-badge";
       endBadge.title = fmt(t.session.endReasonTitle, { reason: session.end_reason });
-      endBadge.textContent = END_BADGES[session.end_reason] ?? session.end_reason;
+      endBadge.innerHTML = END_BADGES[session.end_reason] ?? session.end_reason;
       item.appendChild(endBadge);
     }
     const actions = document.createElement("span");
@@ -678,7 +679,7 @@ function renderSessions(): void {
     pinBtn.className = "icon";
     const rowPinned = pinnedSessions.has(session.id);
     pinBtn.title = rowPinned ? t.palette.unpinSession : t.palette.pinSession;
-    pinBtn.textContent = rowPinned ? "\u{1F4CC}" : "\u{1F4CD}";
+    pinBtn.innerHTML = rowPinned ? ICON.pinFilled : ICON.pin;
     pinBtn.onclick = (event) => {
       event.stopPropagation();
       togglePinSession(session);
@@ -686,7 +687,7 @@ function renderSessions(): void {
     const renameBtn = document.createElement("button");
     renameBtn.className = "icon";
     renameBtn.title = t.palette.renameSession;
-    renameBtn.textContent = "✎";
+    renameBtn.innerHTML = ICON.pencil;
     renameBtn.onclick = (event) => {
       event.stopPropagation();
       void renameSession(session);
@@ -694,7 +695,7 @@ function renderSessions(): void {
     const exportBtn = document.createElement("button");
     exportBtn.className = "icon";
     exportBtn.title = t.palette.exportMd;
-    exportBtn.textContent = "⭳";
+    exportBtn.innerHTML = ICON.download;
     exportBtn.onclick = (event) => {
       event.stopPropagation();
       void exportSession(session, "md");
@@ -704,7 +705,7 @@ function renderSessions(): void {
     archiveBtn.className = "icon";
     const rowArchived = session.end_reason === "archived";
     archiveBtn.title = rowArchived ? t.palette.unarchiveSession : t.palette.archiveSession;
-    archiveBtn.textContent = rowArchived ? "♻" : "🗄";
+    archiveBtn.innerHTML = rowArchived ? ICON.unarchive : ICON.archive;
     archiveBtn.onclick = (event) => {
       event.stopPropagation();
       void toggleSessionArchived(session);
@@ -712,7 +713,7 @@ function renderSessions(): void {
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "icon danger";
     deleteBtn.title = t.palette.deleteSession;
-    deleteBtn.textContent = "🗑";
+    deleteBtn.innerHTML = ICON.trash;
     deleteBtn.onclick = (event) => {
       event.stopPropagation();
       void deleteSession(session);
@@ -1913,7 +1914,7 @@ function toggleApprovalsPop(): void {
   el.approvalsPop.innerHTML = modes
     .map((mode) => {
       const active = mode === state.approvalsMode;
-      return `<div class="slash-item${active ? " selected" : ""}" data-mode="${mode}">\u{1F6E1} ${escapeHtmlInfo(mode)}</div>`;
+      return `<div class="slash-item${active ? " selected" : ""}" data-mode="${mode}">${ICON.shield} ${escapeHtmlInfo(mode)}</div>`;
     })
     .join("");
   const rect = el.approvalsBadge.getBoundingClientRect();
@@ -2019,7 +2020,7 @@ function toggleReasoningPop(): void {
     .map((level) => {
       const label = level ?? t.chrome.reasoningAuto;
       const active = (level ?? "") === (state.reasoningEffort ?? "");
-      return `<div class="slash-item${active ? " selected" : ""}" data-level="${level ?? ""}">\u{26A1} ${escapeHtmlInfo(label)}</div>`;
+      return `<div class="slash-item${active ? " selected" : ""}" data-level="${level ?? ""}">${ICON.zap} ${escapeHtmlInfo(label)}</div>`;
     })
     .join("");
   const rect = el.reasoningBadge.getBoundingClientRect();
@@ -2151,7 +2152,7 @@ function refreshModelBadge(): void {
 function refreshEndBadge(): void {
   const reason = state.current?.end_reason;
   if (reason) {
-    el.endBadge.textContent = `${END_BADGES[reason] ?? "■"} ${reason}`;
+    el.endBadge.innerHTML = `${END_BADGES[reason] ?? "■"} ${reason}`;
     el.endBadge.title = reason;
     el.endBadge.hidden = false;
   } else {
@@ -2165,7 +2166,7 @@ function refreshEndBadge(): void {
   el.chatArchive.dataset.i18nTitle = archived
     ? "palette.unarchiveSession"
     : "palette.archiveSession";
-  el.chatArchive.textContent = archived ? "\u{267B}" : "\u{1F5C4}";
+  el.chatArchive.innerHTML = archived ? ICON.unarchive : ICON.archive;
 }
 
 /** P429: owning-project badge beside the model badge (if any). */
@@ -2659,7 +2660,7 @@ function renderAttachChips(): void {
     name.textContent = upload.path.split("/").pop() || upload.path;
     name.title = upload.path;
     const remove = document.createElement("button");
-    remove.textContent = "✕";
+    remove.innerHTML = ICON.x;
     remove.title = t.session.removeAttachment;
     remove.onclick = () => {
       state.pendingUploads.splice(index, 1);
@@ -4568,7 +4569,7 @@ async function openSessionInfo(): Promise<void> {
   if (detail.end_reason) {
     rows.push([
       t.session.infoEndReason,
-      `${END_BADGES[detail.end_reason] ?? "■"} ${detail.end_reason}`,
+      detail.end_reason,
     ]);
   }
   if (typeof detail.total_tokens === "number") {

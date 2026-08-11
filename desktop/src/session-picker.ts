@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Session picker (P254) — dependency-free port of hermes apps/desktop
 // `components/session-picker.tsx`: the desktop equivalent of the TUI's
 // `/resume` sessions overlay. A focused, type-to-filter list of recent
@@ -231,7 +232,7 @@ export class SessionPickerDialog {
       const rowPinned = this.hooks.isPinned?.(session.id) ?? false;
       pin.className = "session-picker-pin" + (rowPinned ? " pinned" : "");
       pin.title = rowPinned ? t.palette.unpinSession : t.palette.pinSession;
-      pin.textContent = rowPinned ? "\u{1F4CC}" : "\u{1F4CD}";
+      pin.innerHTML = rowPinned ? ICON.pinFilled : ICON.pin;
       pin.onclick = (event) => {
         event.stopPropagation();
         if (!this.hooks.togglePin) return;

@@ -2174,3 +2174,107 @@ dialog input:focus, dialog select:focus, dialog textarea:focus {
 .usage-table th { border-bottom-color: var(--border-strong); }
 .usage-table td { border-bottom-color: var(--border); }
 .sessions-view-raw, .sessions-view-toolcall pre { font-family: var(--mono); }
+
+/* ===========================================================================
+   v0.3.1 refinement — SVG icon chrome, calmer nav, brand polish.
+   =========================================================================== */
+
+/* icon buttons: square hit-area, centered glyph */
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; flex: none;
+}
+.icon-btn svg, .scroll-bottom svg { width: 15px; height: 15px; display: block; }
+button svg { pointer-events: none; }
+#chat-header-actions { display: inline-flex; gap: 2px; align-items: center; }
+#chat-header-actions .icon-btn:hover { background: var(--hover); color: var(--text); }
+#chat-header-actions .icon-btn.danger:hover { color: var(--bad); }
+
+/* view tabs: quiet pill grid instead of boxed strip */
+.view-tabs {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+  gap: 3px; padding: 0 6px 10px;
+}
+.view-tabs .tab {
+  min-width: 0; padding: 5px 4px; border: none; border-radius: 7px;
+  background: transparent; color: var(--dim);
+  font-size: 11.5px; font-weight: 500; letter-spacing: 0.01em;
+}
+.view-tabs .tab:hover { background: var(--hover); color: var(--text); }
+.view-tabs .tab.active {
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+}
+
+/* brand wordmark: subtle accent gradient text */
+.wordmark {
+  background: linear-gradient(120deg, var(--text) 30%, var(--accent));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: var(--accent);
+  font-size: 15px; font-weight: 750; letter-spacing: 0.02em;
+}
+
+/* scroll-to-bottom FAB */
+.scroll-bottom {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border-strong);
+  color: var(--dim); box-shadow: var(--shadow-2);
+}
+.scroll-bottom:hover { color: var(--text); border-color: var(--accent); }
+
+/* composer: align the icon column with the textarea */
+#composer { align-items: flex-end; }
+#composer .icon-btn { margin-bottom: 4px; }
+#composer .icon-btn:hover { background: var(--hover); color: var(--text); }
+
+/* sidebar footer alignment */
+.sidebar-footer { align-items: center; gap: 6px; justify-content: space-between; }
+.notify-bell { position: relative; }
+
+/* ===========================================================================
+   v0.3.1 icon unification — every chrome glyph is a stroke SVG.
+   =========================================================================== */
+button.ghost { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+button.ghost svg { width: 14px; height: 14px; flex: none; display: block; }
+button.ghost.icon-btn svg { width: 15px; height: 15px; }
+.sort-az { font-size: 10px; font-weight: 700; letter-spacing: 0.03em; line-height: 1; }
+
+.session-actions button.icon { display: inline-flex; align-items: center; justify-content: center; }
+.session-actions button.icon svg { width: 13px; height: 13px; display: block; }
+.session-source-badge, .session-end-badge { display: inline-flex; align-items: center; gap: 3px; }
+.session-source-badge svg, .session-end-badge svg { width: 10px; height: 10px; display: block; }
+#chat-header-actions .session-end-badge svg { width: 11px; height: 11px; }
+
+.attach-chip button { display: inline-flex; align-items: center; }
+.attach-chip button svg { width: 11px; height: 11px; display: block; }
+
+.sessions-view-row-action { display: inline-flex; align-items: center; justify-content: center; }
+.sessions-view-row-action svg { width: 13px; height: 13px; display: block; }
+.sessions-view-copy svg { width: 12px; height: 12px; display: block; }
+.sessions-view-role { display: inline-flex; align-items: center; gap: 5px; }
+.sessions-view-chip svg { width: 10px; height: 10px; display: block; }
+.sessions-view-row-meta .sessions-view-chip { display: inline-flex; align-items: center; gap: 4px; }
+.sessions-view-toolcall summary { display: inline-flex; align-items: center; gap: 5px; }
+.sessions-view-toolcall summary svg { width: 12px; height: 12px; display: block; }
+
+.job-actions button svg { width: 13px; height: 13px; }
+.job-meta svg { width: 11px; height: 11px; margin-right: 4px; color: var(--warn); }
+.kanban-chip svg { width: 11px; height: 11px; display: block; }
+.kanban-chip.diagnostic { display: inline-flex; align-items: center; gap: 4px; color: var(--warn); }
+
+.doctor-icon svg { width: 14px; height: 14px; display: block; }
+.notify-icon svg { width: 15px; height: 15px; display: block; }
+.boot-failure-glyph svg { width: 28px; height: 28px; }
+.g-ok { color: var(--ok); }
+.g-warn { color: var(--warn); }
+.g-bad { color: var(--bad); }
+.g-info { color: var(--accent); }
+
+.slash-item svg { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
+.session-picker-pin svg { width: 12px; height: 12px; display: block; }
+.session-picker-pin { display: inline-flex; align-items: center; }
+
+.artifacts-icon svg { width: 15px; height: 15px; display: block; }
+.learning-icon svg { width: 15px; height: 15px; display: block; }
+.models-view-body td svg { width: 12px; height: 12px; vertical-align: -1.5px; margin-right: 2px; }
+.models-view-body .jobs-counts svg { width: 12px; height: 12px; vertical-align: -1.5px; }

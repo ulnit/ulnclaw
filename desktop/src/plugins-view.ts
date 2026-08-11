@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Plugins view — plugin inventory over `/api/plugins` (hermes `plugins
 // list` parity): plugin rows with version, description, hook/tool
 // counts, disabled badge and enable/disable toggles, plus the `[hooks]`
@@ -29,7 +30,7 @@ export class PluginsViewWidget {
         <span class="spacer"></span>
         <input id="plugins-view-filter" type="search" data-i18n-ph="pluginsView.filterPlaceholder" />
         <button id="plugins-view-rescan" class="ghost" data-i18n="pluginsView.rescan">Rescan</button>
-        <button id="plugins-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="plugins-view-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="plugins-view-status" class="config-status" hidden></div>
       <div id="plugins-view-list" class="skills-list"></div>

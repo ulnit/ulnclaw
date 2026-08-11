@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Projects widget — first-class multi-folder workspaces (P163), backed by
 // the gateway `/api/projects/*` API that shares the same per-profile
 // `projects.db` as the `ulnclaw project` CLI. Projects anchor kanban
@@ -33,7 +34,7 @@ export class ProjectsWidget {
         <span class="spacer"></span>
         <input id="projects-filter" type="search" data-i18n-ph="projects.filterPlaceholder" />
         <button id="projects-scan" class="ghost" title="Scan the filesystem for git repos" data-i18n-title="projects.scanTitle" data-i18n="projects.scanRepos">Scan repos</button>
-        <button id="projects-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="projects-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
         <button id="projects-new" class="primary" data-i18n="projects.newProject">New project</button>
       </header>
       <div id="projects-list"></div>
@@ -307,7 +308,7 @@ export class ProjectsWidget {
       const remove = document.createElement("button");
       remove.className = "icon danger";
       remove.title = t.projects.removeFolder;
-      remove.textContent = "✕";
+      remove.innerHTML = ICON.x;
       remove.onclick = () => {
         if (!client) return;
         void client.projectRemoveFolder(project.id, folder.path).then(() => void this.refresh());

@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Models view — read-only provider/model inventory over
 // `/api/model/options` (same payload as the chat model picker): provider
 // cards with auth posture, catalog freshness, API/doc links and a
@@ -209,7 +210,7 @@ export class ModelsViewWidget {
             <span class="monitoring-value">${escapeHtml(endpoint.base_url)}${endpoint.model ? ` · ${escapeHtml(endpoint.model)}` : ""}</span>
             <span class="jobs-counts">
               <button class="ghost models-view-ep-activate" data-id="${escapeHtml(endpoint.id)}">${escapeHtml(v.endpointsActivate)}</button>
-              <button class="ghost danger models-view-ep-delete" data-id="${escapeHtml(endpoint.id)}">✕</button>
+              <button class="ghost danger models-view-ep-delete" data-id="${escapeHtml(endpoint.id)}">${ICON.x}</button>
             </span>
           </div>`)
         .join("");
@@ -619,9 +620,9 @@ export class ModelsViewWidget {
         const caps = provider.capabilities?.[model];
         const price = provider.pricing?.[model];
         const icons = [
-          caps?.reasoning ? "🧠" : "",
-          caps?.tools ? "🔧" : "",
-          caps?.vision ? "👁" : "",
+          caps?.reasoning ? ICON.brain : "",
+          caps?.tools ? ICON.wrench : "",
+          caps?.vision ? ICON.eye : "",
         ]
           .filter(Boolean)
           .join(" ");

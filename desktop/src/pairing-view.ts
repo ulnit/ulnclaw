@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Pairing view — messaging-platform pairing management over
 // `/api/pairing*` (hermes `pairing list/approve/revoke/clear-pending`
 // parity): per-platform pending requests with one-click approve,
@@ -27,7 +28,7 @@ export class PairingViewWidget {
         <span id="pairing-view-count" class="jobs-counts"></span>
         <span class="spacer"></span>
         <button id="pairing-view-clear" class="ghost" data-i18n="pairingView.clearPending">Clear pending</button>
-        <button id="pairing-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="pairing-view-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="pairing-view-status" class="config-status" hidden></div>
       <div id="pairing-view-body"></div>

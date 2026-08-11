@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Usage view — token-accounting dashboard over the gateway `/api/usage`
 // API (same metrics the `ulnclaw status` CLI prints): process/store
 // summary cards plus a per-session token table with proportional bars.
@@ -80,7 +81,7 @@ export class UsageWidget {
         </select>
         <input id="usage-filter" type="search" data-i18n-ph="usage.filterPlaceholder" />
         <button id="usage-export" class="ghost" data-i18n="usage.exportCsv">CSV</button>
-        <button id="usage-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="usage-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="usage-cards" class="usage-cards"></div>
       <h3 class="usage-section-title" data-i18n="usage.perSession">Per-session breakdown</h3>

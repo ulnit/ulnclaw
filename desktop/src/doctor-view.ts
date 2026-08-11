@@ -1,3 +1,4 @@
+import { ICON, icon } from "./icons";
 // Doctor view — runs the gateway doctor checks over `GET /api/doctor`
 // (the same report `ulnclaw doctor` prints) and renders ✓/⚠/✗/ℹ rows
 // grouped by section, with an issues panel up top. Online provider
@@ -7,10 +8,10 @@ import type { BrowserStatus, CheckpointEntry, DoctorPayload, GatewayClient, Doct
 import { t } from "./i18n";
 
 const LEVEL_ICON: Record<DoctorCheck["level"], string> = {
-  ok: "✓",
-  warn: "⚠",
-  fail: "✗",
-  info: "ℹ",
+  ok: icon("check", "g-ok"),
+  warn: icon("warn", "g-warn"),
+  fail: icon("x", "g-bad"),
+  info: icon("info", "g-info"),
 };
 
 const LOGS_REFRESH_MS = 10_000;
@@ -632,7 +633,7 @@ export class DoctorWidget {
           </select>
           <span id="logs-path" class="config-note"></span>
           <span class="spacer"></span>
-          <button id="logs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+          <button id="logs-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
         </div>
         <pre id="logs-body" class="logs-body"></pre>
       </section>
@@ -1606,7 +1607,7 @@ export class DoctorWidget {
         entries.push([
           fetchRow.name,
           fetchRow.ok
-            ? `${fetchRow.count} ${v.secretsWord}${fetchRow.warnings.length > 0 ? ` · ${fetchRow.warnings.length} ⚠` : ""}`
+            ? `${fetchRow.count} ${v.secretsWord}${fetchRow.warnings.length > 0 ? ` · ${fetchRow.warnings.length} ⚠\uFE0E` : ""}`
             : fetchRow.error || "error",
         ]);
       }
@@ -6602,7 +6603,7 @@ export class DoctorWidget {
         row.className = `doctor-row doctor-${check.level}`;
         const icon = document.createElement("span");
         icon.className = "doctor-icon";
-        icon.textContent = LEVEL_ICON[check.level] ?? "?";
+        icon.innerHTML = LEVEL_ICON[check.level] ?? "?";
         const text = document.createElement("span");
         text.className = "doctor-text";
         text.textContent = check.text;

@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Webhooks view — manages dynamic webhook subscriptions (hermes
 // `ulnclaw webhook subscribe|list|remove|test`) over the gateway
 // `/api/webhooks/subscriptions` API: list with URL copy + signed test
@@ -35,7 +36,7 @@ export class WebhooksWidget {
         <span id="webhooks-count" class="jobs-counts"></span>
         <span class="spacer"></span>
         <input id="webhooks-filter" type="search" data-i18n-ph="webhooks.filterPlaceholder" />
-        <button id="webhooks-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="webhooks-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="webhooks-status" class="config-status" hidden></div>
       <div id="webhooks-list" class="webhooks-list"></div>

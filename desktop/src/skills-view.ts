@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Skills view — catalog of installed skills (`/v1/skills`) and toolsets
 // (`/v1/toolsets`): skill cards with category + description + source
 // path, and toolset rows showing enabled state with an expandable tool
@@ -30,7 +31,7 @@ export class SkillsWidget {
         <span id="skills-count" class="jobs-counts"></span>
         <span class="spacer"></span>
         <input id="skills-filter" type="search" data-i18n-ph="skillsView.filterPlaceholder" />
-        <button id="skills-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="skills-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="skills-status" class="config-status" hidden></div>
       <h3 class="config-section" data-i18n="skillsView.skillsTitle">Installed skills</h3>

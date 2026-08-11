@@ -1,3 +1,4 @@
+import { ICON, icon } from "./icons";
 // Desktop notification stacks (P249) — scoped port of hermes
 // apps/desktop `store/notifications.ts` + `components/notifications.tsx`
 // to dependency-free TypeScript.
@@ -40,10 +41,10 @@ interface AppNotification extends NotificationInput {
 }
 
 const KIND_ICON: Record<NotificationKind, string> = {
-  error: "⛔",
-  warning: "⚠️",
-  info: "ℹ️",
-  success: "✅",
+  error: icon("ban", "g-bad"),
+  warning: icon("warn", "g-warn"),
+  info: icon("info", "g-info"),
+  success: icon("checkCircle", "g-ok"),
 };
 
 const AMBIENT_CAP = 4;
@@ -193,7 +194,7 @@ function itemNode(note: AppNotification): HTMLElement {
 
   const icon = document.createElement("span");
   icon.className = "notify-icon";
-  icon.textContent = KIND_ICON[note.kind];
+  icon.innerHTML = KIND_ICON[note.kind];
   node.appendChild(icon);
 
   const body = document.createElement("div");
@@ -241,7 +242,7 @@ function itemNode(note: AppNotification): HTMLElement {
   close.className = "notify-close";
   close.type = "button";
   close.setAttribute("aria-label", t.notify.dismiss);
-  close.textContent = "✕";
+  close.innerHTML = ICON.x;
   close.onclick = () => dismissNotification(note.id);
   node.appendChild(close);
   return node;

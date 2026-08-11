@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Desktop learning view — GUI twin of hermes' "star map" (learning
 // graph) page: renders GET /api/learning/graph (learned skills +
 // memory chunks + relation edges) with search, node detail, edit, and
@@ -178,7 +179,7 @@ export class LearningOverlay {
     row.className = "learning-row";
     const icon = document.createElement("span");
     icon.className = "learning-icon";
-    icon.textContent = node.kind === "memory" ? "🧠" : "🧩";
+    icon.innerHTML = node.kind === "memory" ? ICON.brain : ICON.puzzle;
     const main = document.createElement("div");
     main.className = "learning-main";
     const label = document.createElement("div");

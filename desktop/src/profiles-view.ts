@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Profiles view — `[profiles.*]` config-override management over
 // `/api/profiles*` (hermes desktop profiles parity, lean port over
 // ulnclaw's config-override profiles): list, create, edit (model +
@@ -36,7 +37,7 @@ export class ProfilesViewWidget {
         <span id="profiles-view-multiplex" class="config-note"></span>
         <span class="spacer"></span>
         <button id="profiles-view-new" class="ghost" data-i18n="profilesView.new">New profile</button>
-        <button id="profiles-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="profiles-view-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="profiles-view-status" class="config-status" hidden></div>
       <div id="profiles-view-editor" class="profiles-view-editor" hidden>
@@ -193,9 +194,9 @@ export class ProfilesViewWidget {
               ${chips.join("")}
             </div>
             <div class="profiles-view-row-actions">
-              <button class="ghost" data-action="edit" title="${escapeHtml(t.profilesView.edit)}">✎</button>
+              <button class="ghost" data-action="edit" title="${escapeHtml(t.profilesView.edit)}">${ICON.pencil}</button>
               <button class="ghost" data-action="rename">${escapeHtml(t.profilesView.rename)}</button>
-              <button class="ghost" data-action="delete" title="${escapeHtml(t.profilesView.del)}">🗑</button>
+              <button class="ghost" data-action="delete" title="${escapeHtml(t.profilesView.del)}">${ICON.trash}</button>
             </div>
           </div>`;
       })

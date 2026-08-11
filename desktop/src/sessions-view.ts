@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Sessions view — read-only transcript browser over `/api/sessions` +
 // `/api/sessions/:id/messages`: filterable session list on the left,
 // full transcript render on the right (role headers, tool-call chips
@@ -129,20 +130,20 @@ export class SessionsViewWidget {
         <span id="sessions-view-count" class="jobs-counts"></span>
         <span id="sessions-view-stats" class="config-note" hidden></span>
         <span class="spacer"></span>
-        <button id="sessions-view-rename" class="ghost" data-i18n-title="sessionsView.renameTitle" hidden>✎</button>
-        <button id="sessions-view-delete" class="ghost" data-i18n-title="sessionsView.deleteTitle" hidden>🗑</button>
-        <button id="sessions-view-fork" class="ghost" data-i18n-title="sessionsView.forkTitle" hidden>⑂</button>
+        <button id="sessions-view-rename" class="ghost icon-btn" data-i18n-title="sessionsView.renameTitle" hidden>${ICON.pencil}</button>
+        <button id="sessions-view-delete" class="ghost icon-btn" data-i18n-title="sessionsView.deleteTitle" hidden>${ICON.trash}</button>
+        <button id="sessions-view-fork" class="ghost icon-btn" data-i18n-title="sessionsView.forkTitle" hidden>${ICON.fork}</button>
         <button id="sessions-view-open-chat" class="ghost" data-i18n="sessionsView.openInChat" data-i18n-title="sessionsView.openInChatTitle" hidden></button>
         <button id="sessions-view-recap" class="ghost" data-i18n="sessionsView.recap" data-i18n-title="sessionsView.recapTitle" hidden></button>
-        <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>⭳ MD</button>
-        <button id="sessions-view-export-html" class="ghost" data-i18n-title="sessionsView.exportHtmlTitle" hidden>⭳ HTML</button>
-        <button id="sessions-view-export-json" class="ghost" data-i18n-title="sessionsView.exportJsonTitle" hidden>⭳ JSON</button>
+        <button id="sessions-view-export" class="ghost" data-i18n-title="sessionsView.exportTitle" hidden>${ICON.download} MD</button>
+        <button id="sessions-view-export-html" class="ghost" data-i18n-title="sessionsView.exportHtmlTitle" hidden>${ICON.download} HTML</button>
+        <button id="sessions-view-export-json" class="ghost" data-i18n-title="sessionsView.exportJsonTitle" hidden>${ICON.download} JSON</button>
         <button id="sessions-view-import" class="ghost" data-i18n="sessionsView.import" data-i18n-title="sessionsView.importTitle"></button>
         <button id="sessions-view-list-csv" class="ghost" data-i18n="sessionsView.listCsv" data-i18n-title="sessionsView.listCsvTitle"></button>
         <button id="sessions-view-prune" class="ghost" data-i18n="sessionsView.prune" data-i18n-title="sessionsView.pruneTitle"></button>
         <button id="sessions-view-archive" class="ghost" data-i18n="sessionsView.archive" data-i18n-title="sessionsView.archiveTitle"></button>
         <select id="sessions-view-dayjump" class="ghost" data-i18n-title="session.dayJumpTitle" hidden></select>
-        <button id="sessions-view-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="sessions-view-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="sessions-view-status" class="config-status" hidden></div>
       <div class="sessions-view-body">
@@ -1034,17 +1035,17 @@ export class SessionsViewWidget {
           <div class="sessions-view-row${active}${kb}${unread}" data-id="${escapeHtml(session.id)}">
             <span class="sessions-view-row-actions">
               <button class="sessions-view-row-action" data-action="pin" title="${escapeHtml(pinned ? t.palette.unpinSession : t.palette.pinSession)}">${pinned ? "\u{1F4CC}" : "\u{1F4CD}"}</button>
-              <button class="sessions-view-row-action" data-action="rename" title="${escapeHtml(t.sessionsView.renameTitle)}">✎</button>
-              <button class="sessions-view-row-action" data-action="retitle" title="${escapeHtml(t.sessionsView.retitleTitle)}">✨</button>
-              <button class="sessions-view-row-action" data-action="fork" title="${escapeHtml(t.sessionsView.forkTitle)}">⑂</button>
-              <button class="sessions-view-row-action" data-action="delete" title="${escapeHtml(t.sessionsView.deleteTitle)}">🗑</button>
+              <button class="sessions-view-row-action" data-action="rename" title="${escapeHtml(t.sessionsView.renameTitle)}">${ICON.pencil}</button>
+              <button class="sessions-view-row-action" data-action="retitle" title="${escapeHtml(t.sessionsView.retitleTitle)}">${ICON.sparkle}</button>
+              <button class="sessions-view-row-action" data-action="fork" title="${escapeHtml(t.sessionsView.forkTitle)}">${ICON.fork}</button>
+              <button class="sessions-view-row-action" data-action="delete" title="${escapeHtml(t.sessionsView.deleteTitle)}">${ICON.trash}</button>
             </span>
             <div class="sessions-view-row-title">${pinned ? "\u{1F4CC} " : ""}${escapeHtml(title)}</div>
             ${session.last_message ? `<div class="sessions-view-row-snippet">${escapeHtml(session.last_message)}</div>` : ""}
             <div class="sessions-view-row-meta">
               ${session.source && session.source !== "gateway" ? `<span class="sessions-view-chip sessions-view-source" data-source="${escapeHtml(session.source)}" title="${escapeHtml(session.source)}">${escapeHtml(session.source)}</span>` : ""}
               ${session.end_reason ? `<span class="sessions-view-chip sessions-view-endreason" data-reason="${escapeHtml(session.end_reason)}" title="${escapeHtml(session.end_reason)}">${escapeHtml(session.end_reason)}</span>` : ""}
-              ${session.archived ? `<span class="sessions-view-chip sessions-view-endreason" title="${escapeHtml(t.sessionsView.statusArchived)}">␡ ${escapeHtml(t.sessionsView.statusArchived)}</span>` : ""}
+              ${session.archived ? `<span class="sessions-view-chip sessions-view-endreason" title="${escapeHtml(t.sessionsView.statusArchived)}">${ICON.archive} ${escapeHtml(t.sessionsView.statusArchived)}</span>` : ""}
               ${session.model ? `<span class="sessions-view-chip sessions-view-model" data-model="${escapeHtml(session.model)}" title="${escapeHtml(session.model)}">${escapeHtml(session.model)}</span>` : ""}
               ${session.project ? `<span class="sessions-view-chip sessions-view-project" data-project="${escapeHtml(session.project)}" title="${escapeHtml(session.project)}">${escapeHtml(session.project)}</span>` : ""}
               ${session.message_count ? `<span class="sessions-view-msgcount">${escapeHtml(fmt(t.sessionsView.msgCount, { count: String(session.message_count) }))}</span>` : ""}
@@ -1568,7 +1569,7 @@ export class SessionsViewWidget {
             const args = call.function?.arguments || "";
             return `
               <details class="sessions-view-toolcall">
-                <summary>🔧 ${escapeHtml(name)}</summary>
+                <summary>${ICON.wrench} ${escapeHtml(name)}</summary>
                 <pre>${escapeHtml(args)}</pre>
               </details>`;
           })
@@ -1585,7 +1586,7 @@ export class SessionsViewWidget {
         const tsAttr = message.timestamp ? ` data-ts="${message.timestamp}"` : "";
         return `
           <div class="sessions-view-msg sessions-view-msg-${escapeHtml(message.role)}"${tsAttr}>
-            <div class="sessions-view-role"${whenAttr}>${escapeHtml(this.roleLabel(message.role))}${nameTag}${message.content ? `<button class="sessions-view-copy" title="${escapeHtml(t.sessionsView.copyMessageTitle)}">⧉</button>` : ""}</div>
+            <div class="sessions-view-role"${whenAttr}>${escapeHtml(this.roleLabel(message.role))}${nameTag}${message.content ? `<button class="sessions-view-copy" title="${escapeHtml(t.sessionsView.copyMessageTitle)}">${ICON.copy}</button>` : ""}</div>
             ${content}
             ${toolCalls}
           </div>`;

@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Runs view — tracked async runs (`/v1/runs`) with live approval
 // resolution: waiting runs surface their pending command with
 // once/session/always/deny buttons (gateway approval gateway parity with
@@ -66,7 +67,7 @@ export class RunsWidget {
           <option value="failed" data-i18n="runs.statusFailed">Failed</option>
           <option value="stopped" data-i18n="runs.statusStopped">Stopped</option>
         </select>
-        <button id="runs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="runs-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
       </header>
       <div id="runs-status" class="config-status" hidden></div>
       <div id="runs-list" class="runs-list"></div>

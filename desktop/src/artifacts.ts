@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Desktop artifacts browser — GUI twin of hermes' artifacts view
 // (apps/desktop/src/app/artifacts/): scans recent session transcripts
 // client-side for links, files, and images produced by the agent and
@@ -224,7 +225,7 @@ export class ArtifactsOverlay {
       row.className = "artifacts-row";
       const icon = document.createElement("span");
       icon.className = "artifacts-icon";
-      icon.textContent = record.kind === "image" ? "🖼️" : record.kind === "file" ? "📄" : "🔗";
+      icon.innerHTML = record.kind === "image" ? ICON.image : record.kind === "file" ? ICON.file : ICON.link;
       const main = document.createElement("div");
       main.className = "artifacts-main";
       const label = document.createElement("div");

@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Cron jobs widget — dashboard over the gateway `/api/jobs` API (same
 // cron store as the `ulnclaw cron` CLI): list/pause/resume/run-now,
 // create + edit + delete. Hermes cron-dashboard parity (P166).
@@ -49,7 +50,7 @@ export class JobsWidget {
           <option value="default" data-i18n="jobs.sortDefault">Default order</option>
           <option value="next_run" data-i18n="jobs.sortNextRun">Next run first</option>
         </select>
-        <button id="jobs-refresh" class="ghost" title="Refresh" data-i18n-title="kanban.refresh">↻</button>
+        <button id="jobs-refresh" class="ghost icon-btn" title="Refresh" data-i18n-title="kanban.refresh">${ICON.rotate}</button>
         <button id="jobs-blueprints" class="ghost" data-i18n="jobs.blueprintsAction">Templates</button>
         <button id="jobs-ideas" class="ghost" data-i18n="jobs.ideasAction">Ideas</button>
         <button id="jobs-new" class="primary" data-i18n="jobs.newJob">New job</button>
@@ -689,7 +690,7 @@ export class JobsWidget {
       const deliveryError = document.createElement("div");
       deliveryError.className = "job-meta job-delivery-error";
       deliveryError.title = job.last_delivery_error;
-      deliveryError.textContent = `\u26a0 ${t.jobs.deliveryError}`;
+      deliveryError.innerHTML = `${ICON.warn} ${t.jobs.deliveryError}`;
       body.appendChild(deliveryError);
     }
     row.appendChild(body);
@@ -699,23 +700,23 @@ export class JobsWidget {
     const mk = (label: string, title: string, onclick: () => void, danger = false): void => {
       const button = document.createElement("button");
       button.className = danger ? "ghost danger" : "ghost";
-      button.textContent = label;
+      button.innerHTML = label;
       button.title = title;
       button.onclick = onclick;
       actions.appendChild(button);
     };
-    mk(job.enabled ? "⏸" : "▶", job.enabled ? t.jobs.pause : t.jobs.resume, () => {
+    mk(job.enabled ? ICON.pause : ICON.play, job.enabled ? t.jobs.pause : t.jobs.resume, () => {
       if (!client) return;
       void client.jobSetEnabled(job.id, !job.enabled).then(() => void this.refresh());
     });
-    mk("⚡", t.jobs.runNow, () => {
+    mk(ICON.zap, t.jobs.runNow, () => {
       if (!client) return;
       void client.jobRunNow(job.id).then(() => void this.refresh());
     });
     // P674: per-job tracked-run history dialog.
-    mk("▤", t.jobs.runsHistory, () => void this.openJobRuns(job));
-    mk("⧉", t.jobs.duplicate, () => this.openCreateDialog(job));
-    mk("✎", t.jobs.edit, () => {
+    mk(ICON.list, t.jobs.runsHistory, () => void this.openJobRuns(job));
+    mk(ICON.copy, t.jobs.duplicate, () => this.openCreateDialog(job));
+    mk(ICON.pencil, t.jobs.edit, () => {
       if (!client) return;
       const nextPrompt = window.prompt(t.jobs.promptPrompt, job.prompt);
       if (nextPrompt === null) return;
@@ -725,7 +726,7 @@ export class JobsWidget {
       if (nextDeliver === null) return;
       void this.updateJob(job.id, nextPrompt, nextSchedule, nextDeliver.trim() || null);
     });
-    mk("🗑", t.jobs.delete, () => {
+    mk(ICON.trash, t.jobs.delete, () => {
       if (!client) return;
       if (!window.confirm(fmt(t.jobs.deleteConfirm, { name: job.name }))) return;
       void client.jobDelete(job.id).then(() => void this.refresh());

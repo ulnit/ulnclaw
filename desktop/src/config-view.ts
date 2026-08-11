@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 // Config view — config.toml editor over the gateway `/api/config` API.
 // Flattens the nested TOML into dotted-path rows grouped by top-level
 // section, tracks pending edits locally, and parses input values the way
@@ -334,7 +335,7 @@ export class ConfigWidget {
       input.addEventListener("input", () => this.updatePendingBadge());
       const remove = document.createElement("button");
       remove.className = "ghost config-remove";
-      remove.textContent = "✕";
+      remove.innerHTML = ICON.x;
       remove.title = t.config.removeTitle;
       remove.addEventListener("click", () => {
         this.removed.add(path);
@@ -1149,7 +1150,7 @@ export class ConfigWidget {
           row.appendChild(meta);
           const remove = document.createElement("button");
           remove.className = "ghost danger";
-          remove.textContent = "✕";
+          remove.innerHTML = ICON.x;
           remove.title = t.session.removeAttachment;
           remove.onclick = () => {
             this.removePoolEntry(provider.provider, entry.index).catch(() => undefined);
