@@ -1076,6 +1076,25 @@ mark.find-hit.current { background: #ff9f43; outline: 1px solid #ffd8a8; }
 .boot-failure-description { margin: 0 0 18px; font-size: 13px; color: #8fa3c0; line-height: 1.5; }
 .boot-failure-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 
+/* P806: boot-failure diagnostics */
+.boot-failure-diagnostics { margin: 0 0 16px; text-align: left; font-size: 12px; }
+.boot-failure-diagnostics summary {
+  cursor: pointer; color: #8fa3c0; text-align: center; padding: 4px 0;
+  user-select: none;
+}
+.boot-failure-diagnostics-body {
+  margin-top: 8px; padding: 10px 12px; border: 1px solid var(--hover);
+  border-radius: 8px; background: rgba(0, 0, 0, 0.2); max-height: 220px; overflow: auto;
+}
+.boot-failure-diag-row { display: flex; gap: 8px; padding: 2px 0; word-break: break-all; }
+.boot-failure-diag-key { flex: none; min-width: 64px; color: #8fa3c0; }
+.boot-failure-diag-bad { color: #ff8f8f; }
+.boot-failure-diag-log {
+  margin: 8px 0 0; padding: 8px; border-radius: 6px; background: rgba(0, 0, 0, 0.3);
+  font-family: ui-monospace, monospace; font-size: 11px; white-space: pre-wrap;
+  word-break: break-all; max-height: 140px; overflow: auto; color: #c6d4e8;
+}
+
 /* Session picker (P254) */
 .session-picker-dialog {
   background: var(--panel); color: var(--text); border: 1px solid var(--hover);

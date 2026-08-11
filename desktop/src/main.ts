@@ -30,7 +30,7 @@ import { LearningOverlay } from "./learning";
 import { FileTreePanel } from "./file-tree";
 import { notify, notifyError, notifySuccess, notificationHistory, notificationUnread, markNotificationsRead, clearNotificationHistory, onNotificationHistoryChange, loadPersistedNotificationHistory } from "./notifications";
 import { hideConnecting, showConnecting } from "./connecting";
-import { resolveBootFailure, showBootFailure } from "./boot-failure";
+import { resolveBootFailure, showBootFailure, type BootDiagnostics } from "./boot-failure";
 import { applyStatic, currentLocale, fmt, onLocaleChange, t } from "./i18n";
 import { LanguageSwitcher } from "./language-switcher";
 import { OnboardingOverlay } from "./onboarding";
@@ -60,6 +60,7 @@ interface DesktopBridge {
   gatewayLogTail(lines: number): Promise<string[]>;
   openPath(path: string): Promise<void>;
   notifyNative(title: string, body: string): Promise<void>;
+  diagnostics(): Promise<BootDiagnostics | null>;
 }
 
 async function loadBridge(): Promise<DesktopBridge | null> {
@@ -85,6 +86,7 @@ async function loadBridge(): Promise<DesktopBridge | null> {
       gatewayLogTail: (lines) => invoke<string[]>("desktop_gateway_log_tail", { lines }),
       openPath: (path) => invoke<void>("desktop_open_path", { path }),
       notifyNative: (title, body) => invoke<void>("desktop_notify", { title, body }),
+      diagnostics: () => invoke<BootDiagnostics>("desktop_gateway_diagnostics"),
     };
   } catch {
     return null; // plain browser — no process management
@@ -3323,6 +3325,19 @@ async function restartGateway(): Promise<boolean> {
  * boot so cold-start failures stay on the boot-failure surface. */
 let wakeArmed = false;
 
+/** P806: last spawn/start error, surfaced on the boot-failure card. */
+let lastSpawnError: string | null = null;
+
+async function loadBootDiagnostics(): Promise<BootDiagnostics | null> {
+  if (!state.bridge) return null;
+  try {
+    const diag = await state.bridge.diagnostics();
+    return diag ? { ...diag, spawnError: lastSpawnError } : null;
+  } catch {
+    return null;
+  }
+}
+
 async function start(): Promise<void> {
   // Translate the static chrome for any persisted non-en locale (P251).
   applyStatic();
@@ -3337,9 +3352,11 @@ async function start(): Promise<void> {
       const port = await state.bridge.defaultPort();
       try {
         state.managedPid = await state.bridge.spawnGateway(binary, port);
+        lastSpawnError = null;
         // Give the listener a moment to bind.
         await new Promise((resolve) => setTimeout(resolve, 1500));
       } catch (error) {
+        lastSpawnError = String(error);
         console.warn("gateway spawn failed:", error);
         notifyError(fmt(t.boot.spawnFailed, { error }));
       }
@@ -3372,7 +3389,7 @@ async function start(): Promise<void> {
       }
     }
     hideConnecting();
-    showBootFailure(() => void bootPoll(), () => el.settingsBtn.click());
+    showBootFailure(() => void bootPoll(), () => el.settingsBtn.click(), loadBootDiagnostics);
   };
   void bootPoll();
   // P537: wake indicator — after sleep/lid-close (30 s+ hidden) or a

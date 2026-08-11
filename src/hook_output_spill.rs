@@ -91,7 +91,7 @@ fn resolve_spill_dir(config: &SpillConfig, home: &std::path::Path, session_id: O
     let base = match &config.directory {
         Some(dir) => {
             let expanded = if let Some(rest) = dir.strip_prefix("~/") {
-                match std::env::var_os("HOME") {
+                match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
                     Some(home_dir) => PathBuf::from(home_dir).join(rest),
                     None => PathBuf::from(dir),
                 }

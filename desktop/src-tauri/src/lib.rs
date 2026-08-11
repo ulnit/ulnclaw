@@ -53,10 +53,16 @@ struct TrayHealth(Mutex<Option<bool>>);
 struct CloseToTray(Mutex<bool>);
 struct QuitRequested(Mutex<bool>);
 
-fn window_state_path() -> Option<std::path::PathBuf> {
+/// User home: `HOME` on unix, with a `USERPROFILE` fallback so the
+/// shell works on Windows where GUI processes don't inherit `HOME`.
+fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
-        .map(|home| home.join(".ulnclaw").join("desktop-window.json"))
+}
+
+fn window_state_path() -> Option<std::path::PathBuf> {
+    home_dir().map(|home| home.join(".ulnclaw").join("desktop-window.json"))
 }
 
 fn load_window_state() -> Option<WindowState> {
@@ -94,16 +100,12 @@ struct DesktopPidRecord {
 }
 
 fn desktop_pidfile_path() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .map(|home| home.join(".ulnclaw").join("desktop.pid"))
+    home_dir().map(|home| home.join(".ulnclaw").join("desktop.pid"))
 }
 
 /// P794: rolling log for the managed gateway child's output.
 fn gateway_log_path() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .map(|home| home.join(".ulnclaw").join("gateway.log"))
+    home_dir().map(|home| home.join(".ulnclaw").join("gateway.log"))
 }
 
 /// Field 22 (`starttime`) of `/proc/<pid>/stat`, anchored on the last
@@ -115,8 +117,9 @@ fn desktop_process_start_time(pid: u32) -> Option<u64> {
     rest.split_whitespace().nth(19)?.parse().ok()
 }
 
-/// True iff `pid` is a live process — `/proc` state check, zombies dead.
-/// Platforms without `/proc` degrade to "not alive", disabling the guard.
+/// True iff `pid` is a live process — `/proc` state check on unix,
+/// `OpenProcess` probe on Windows; zombies count as dead.
+#[cfg(unix)]
 fn desktop_pid_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
@@ -133,6 +136,29 @@ fn desktop_pid_alive(pid: u32) -> bool {
             }
         }
         Err(_) => false,
+    }
+}
+
+/// Windows liveness probe: `OpenProcess` succeeds for live pids;
+/// `ERROR_INVALID_PARAMETER` means the pid is gone.
+#[cfg(windows)]
+fn desktop_pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_INVALID_PARAMETER,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return false;
+    }
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return GetLastError() != ERROR_INVALID_PARAMETER;
+        }
+        CloseHandle(handle);
+        true
     }
 }
 
@@ -194,9 +220,21 @@ fn release_single_instance() {
 /// alongside the shell as a Tauri resource (`binaries/ulnclaw[.exe]`).
 fn bundled_binary(app: &tauri::AppHandle) -> Option<String> {
     let name = if cfg!(windows) { "ulnclaw.exe" } else { "ulnclaw" };
-    let dir = app.path().resource_dir().ok()?;
-    let candidate = dir.join("binaries").join(name);
-    candidate.is_file().then(|| candidate.display().to_string())
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.join("binaries").join(name));
+        candidates.push(dir.join("resources").join("binaries").join(name));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("binaries").join(name));
+            candidates.push(dir.join("resources").join("binaries").join(name));
+        }
+    }
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.display().to_string())
 }
 
 #[tauri::command]
@@ -269,8 +307,12 @@ fn desktop_about(app: tauri::AppHandle) -> serde_json::Value {
 fn spawn_gateway(state: State<'_, GatewayProcess>, binary: String, port: u16) -> Result<u32, String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     if let Some(pid) = *guard {
-        return Ok(pid); // already managed
+        if desktop_pid_alive(pid) {
+            return Ok(pid); // already managed
+        }
+        *guard = None; // stale record: the previous child exited
     }
+    let binary_path = std::path::PathBuf::from(&binary);
     // ULNCLAW_DESKTOP=1 registers the desktop affordance tools and arms
     // the desktop bridge in the child gateway (P231): events stream back
     // over /api/desktop/events and read_terminal round-trips through
@@ -280,6 +322,41 @@ fn spawn_gateway(state: State<'_, GatewayProcess>, binary: String, port: u16) ->
         .args(["gateway", "--port", &port.to_string()])
         .env("ULNCLAW_DESKTOP", "1")
         .stdin(std::process::Stdio::null());
+    // Windows launch hygiene: no console window pops for the headless
+    // child, HOME mirrors USERPROFILE so home-relative paths resolve,
+    // and PATH fronts the binary/app dirs so bundled runtime DLLs win
+    // the loader search (v0.2.1 CONNECTING-freeze hardening).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+        if std::env::var_os("HOME").is_none() {
+            if let Some(profile) = std::env::var_os("USERPROFILE") {
+                command.env("HOME", profile);
+            }
+        }
+        if let Some(parent) = binary_path.parent() {
+            let mut paths = vec![parent.to_path_buf()];
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    paths.push(dir.to_path_buf());
+                }
+            }
+            if let Some(existing) = std::env::var_os("PATH") {
+                paths.extend(std::env::split_paths(&existing));
+            }
+            if let Ok(joined) = std::env::join_paths(paths) {
+                command.env("PATH", joined);
+            }
+        }
+    }
+    // Run from beside the binary so relative lookups stay local.
+    if let Some(parent) = binary_path.parent() {
+        if parent.is_dir() {
+            command.current_dir(parent);
+        }
+    }
     // P794: capture the child's output for the gateway-log viewer —
     // crude rotation drops the file once it passes 2 MiB.
     if let Some(path) = gateway_log_path() {
@@ -296,16 +373,29 @@ fn spawn_gateway(state: State<'_, GatewayProcess>, binary: String, port: u16) ->
             }
         }
     }
-    let child = command
+    let mut child = command
         .spawn()
         .map_err(|e| format!("spawn {binary}: {e}"))?;
     let pid = child.id();
+    // Surface instant crashes (missing runtime DLLs, config panics)
+    // with the log tail instead of a silent 20 s boot-poll timeout.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    if !desktop_pid_alive(pid) {
+        let _ = child.wait();
+        return Err(format!(
+            "gateway exited immediately after start{}",
+            gateway_log_tail_text(20)
+                .map(|tail| format!(":\n{tail}"))
+                .unwrap_or_default()
+        ));
+    }
     std::mem::forget(child); // keep it running; stop_gateway reaps by pid
     *guard = Some(pid);
     Ok(pid)
 }
 
-/// Stop a managed gateway by pid (SIGTERM on unix).
+/// Stop a managed gateway by pid (SIGTERM on unix, TerminateProcess
+/// on Windows — the child is a detached console-less process).
 #[tauri::command]
 fn stop_gateway(state: State<'_, GatewayProcess>, pid: u32) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
@@ -317,9 +407,20 @@ fn stop_gateway(state: State<'_, GatewayProcess>, pid: u32) -> Result<(), String
         // SAFETY: kill(2) with a pid we spawned; SIGTERM = 15.
         unsafe { kill(pid as i32, 15) };
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = pid; // best-effort: the process exits with the app
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+        };
+        // SAFETY: TerminateProcess on a pid we spawned.
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if handle != 0 {
+                TerminateProcess(handle, 1);
+                CloseHandle(handle);
+            }
+        }
     }
     *guard = None;
     Ok(())
@@ -582,15 +683,42 @@ fn desktop_set_window_title(window: tauri::Window, title: String) {
 /// capped) for the shell's log viewer.
 #[tauri::command]
 fn desktop_gateway_log_tail(lines: usize) -> Vec<String> {
-    let Some(path) = gateway_log_path() else {
-        return Vec::new();
-    };
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    gateway_log_tail_text(lines.min(500))
+        .map(|tail| tail.lines().map(|line| line.to_string()).collect())
+        .unwrap_or_default()
+}
+
+/// Shared tail reader: last `lines` of the gateway log as one string.
+fn gateway_log_tail_text(lines: usize) -> Option<String> {
+    let path = gateway_log_path()?;
+    let contents = std::fs::read_to_string(path).ok()?;
     let all: Vec<&str> = contents.lines().collect();
+    if all.is_empty() {
+        return None;
+    }
     let start = all.len().saturating_sub(lines.min(500));
-    all[start..].iter().map(|line| line.to_string()).collect()
+    Some(all[start..].join("\n"))
+}
+
+/// P806: boot diagnostics for the failure card — which binary the
+/// shell resolved, whether the managed child lives, and the log tail.
+#[tauri::command]
+fn desktop_gateway_diagnostics(
+    app: tauri::AppHandle,
+    state: State<'_, GatewayProcess>,
+) -> serde_json::Value {
+    let bundled = bundled_binary(&app);
+    let binary = find_ulnclaw_binary(app);
+    let pid = state.0.lock().ok().and_then(|guard| *guard);
+    serde_json::json!({
+        "binary": binary,
+        "bundled": bundled,
+        "port": default_gateway_port(),
+        "log_path": gateway_log_path().map(|path| path.display().to_string()),
+        "child_pid": pid,
+        "child_alive": pid.map(desktop_pid_alive).unwrap_or(false),
+        "log_tail": gateway_log_tail_text(30).unwrap_or_default(),
+    })
 }
 
 /// P797: open a directory in the OS file manager (the session cwd).
@@ -1120,7 +1248,8 @@ pub fn run() {
             desktop_set_tray_health,
             desktop_gateway_log_tail,
             desktop_open_path,
-            desktop_notify
+            desktop_notify,
+            desktop_gateway_diagnostics
         ])
         .build(tauri::generate_context!())
         .expect("error while building ulnclaw desktop");

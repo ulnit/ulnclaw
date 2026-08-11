@@ -3177,6 +3177,7 @@ fn fs_resolve_path(raw: &str) -> std::result::Result<PathBuf, (StatusCode, Strin
     }
     let expanded = if let Some(stripped) = raw.strip_prefix('~') {
         let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .unwrap_or_default();
         home.join(stripped.trim_start_matches('/'))

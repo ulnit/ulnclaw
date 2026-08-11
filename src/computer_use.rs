@@ -101,7 +101,9 @@ pub fn resolve_cua_driver_cmd() -> Option<String> {
 }
 
 fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 /// True when the overlay should be disabled (hermes `_cua_no_overlay`):

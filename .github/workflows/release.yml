@@ -25,6 +25,12 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      # Static CRT: the bundled gateway binary must not depend on
+      # VCRUNTIME140.dll being present on the user's machine (v0.2.0
+      # shipped a dynamically-linked core that failed to start on clean
+      # Windows installs — the desktop CONNECTING freeze).
+      RUSTFLAGS: "-C target-feature=+crt-static"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

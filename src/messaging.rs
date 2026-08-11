@@ -2777,6 +2777,7 @@ pub fn extract_media_tags(text: &str) -> (String, Vec<std::path::PathBuf>) {
             if !candidate.is_empty() {
                 let expanded = if let Some(stripped) = candidate.strip_prefix("~/") {
                     std::env::var_os("HOME")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
                         .map(|home| {
                             std::path::PathBuf::from(home)
                                 .join(stripped)
@@ -8588,4 +8589,3 @@ mod tests {
         }
     }
 }
-

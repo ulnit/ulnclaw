@@ -94,7 +94,9 @@ export interface Translations {
   /** P682: composer busy-behavior toggle (hermes /busy parity). */
   busy: { titlePlain: string; title: string; queue: string; steer: string; interrupt: string; queued: string; steerSent: string; interruptQueued: string; modeChanged: string };
   boot: { spawnFailed: string; unreachable: string; unreachableDetail: string; connecting: string; starting: string;
-    failureTitle: string; retry: string; openSettings: string; dismiss: string };
+    failureTitle: string; retry: string; openSettings: string; dismiss: string;
+    diagTitle: string; diagBinary: string; diagPort: string; diagProcess: string; diagLog: string;
+    diagAlive: string; diagDead: string; diagPid: string; diagNoLog: string; diagNoBinary: string; diagNoData: string };
   quickEntry: { placeholder: string; disconnected: string; hint: string; reconnectHint: string; targetCurrent: string; targetNew: string };
   wake: { unreachable: string; reconnected: string };
     bridge: { preview: string; terminalClosed: string; stillRunning: string; terminalEmpty: string; runCompleted: string; runFailed: string; runOpenRuns: string; approvalNeeded: string; approvalReview: string; sessionCreated: string; sessionDeleted: string };
@@ -557,6 +559,11 @@ const en: Translations = {
     connecting: "CONNECTING", starting: "starting the ulnclaw gateway…",
     failureTitle: "Desktop boot failed", retry: "Retry",
     openSettings: "Open settings", dismiss: "Dismiss",
+    diagTitle: "Diagnostics", diagBinary: "Binary", diagPort: "Port", diagProcess: "Process",
+    diagLog: "Log", diagAlive: "running", diagDead: "not running", diagPid: "pid",
+    diagNoLog: "(no log output captured)",
+    diagNoBinary: "not found — reinstall the app or add ulnclaw to PATH",
+    diagNoData: "diagnostics unavailable (browser mode)",
   },
   bridge: {
     preview: "Preview: {label}",
@@ -1177,6 +1184,11 @@ const zh: Translations = {
     connecting: "连接中", starting: "正在启动 ulnclaw 网关…",
     failureTitle: "桌面启动失败", retry: "重试",
     openSettings: "打开设置", dismiss: "忽略",
+    diagTitle: "诊断信息", diagBinary: "二进制", diagPort: "端口", diagProcess: "进程",
+    diagLog: "日志", diagAlive: "运行中", diagDead: "未运行", diagPid: "pid",
+    diagNoLog: "（未捕获到日志输出）",
+    diagNoBinary: "未找到 — 请重新安装应用或将 ulnclaw 加入 PATH",
+    diagNoData: "诊断不可用（浏览器模式）",
   },
   bridge: {
     preview: "预览：{label}",
@@ -1797,6 +1809,11 @@ const zhHant: Translations = {
     connecting: "連線中", starting: "正在啟動 ulnclaw 閘道…",
     failureTitle: "桌面啟動失敗", retry: "重試",
     openSettings: "開啟設定", dismiss: "忽略",
+    diagTitle: "診斷資訊", diagBinary: "二進位檔", diagPort: "連接埠", diagProcess: "處理程序",
+    diagLog: "日誌", diagAlive: "執行中", diagDead: "未執行", diagPid: "pid",
+    diagNoLog: "（未擷取到日誌輸出）",
+    diagNoBinary: "未找到 — 請重新安裝應用程式或將 ulnclaw 加入 PATH",
+    diagNoData: "診斷不可用（瀏覽器模式）",
   },
   bridge: {
     preview: "預覽：{label}",
@@ -2417,6 +2434,11 @@ const ja: Translations = {
     connecting: "接続中", starting: "ulnclaw ゲートウェイを起動中…",
     failureTitle: "デスクトップの起動に失敗", retry: "再試行",
     openSettings: "設定を開く", dismiss: "閉じる",
+    diagTitle: "診断", diagBinary: "バイナリ", diagPort: "ポート", diagProcess: "プロセス",
+    diagLog: "ログ", diagAlive: "実行中", diagDead: "未実行", diagPid: "pid",
+    diagNoLog: "（ログ出力は捕捉されていません）",
+    diagNoBinary: "未検出 — アプリを再インストールするか ulnclaw を PATH に追加してください",
+    diagNoData: "診断は利用できません（ブラウザモード）",
   },
   bridge: {
     preview: "プレビュー：{label}",
@@ -3037,6 +3059,11 @@ const ar: Translations = {
     connecting: "جارٍ الاتصال", starting: "جارٍ تشغيل بوابة ulnclaw…",
     failureTitle: "فشل تشغيل سطح المكتب", retry: "إعادة المحاولة",
     openSettings: "فتح الإعدادات", dismiss: "تجاهل",
+    diagTitle: "التشخيصات", diagBinary: "الملف الثنائي", diagPort: "المنفذ", diagProcess: "العملية",
+    diagLog: "السجل", diagAlive: "قيد التشغيل", diagDead: "غير قيد التشغيل", diagPid: "pid",
+    diagNoLog: "(لم يتم التقاط أي إخراج سجل)",
+    diagNoBinary: "غير موجود — أعد تثبيت التطبيق أو أضف ulnclaw إلى PATH",
+    diagNoData: "التشخيصات غير متاحة (وضع المتصفح)",
   },
   bridge: {
     preview: "معاينة: {label}",

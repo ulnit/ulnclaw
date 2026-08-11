@@ -298,7 +298,9 @@ pub fn resolve_private_key(cfg: &ResolvedBuzz) -> String {
 }
 
 fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
 }
 
 fn expand_home(path: &str) -> std::path::PathBuf {

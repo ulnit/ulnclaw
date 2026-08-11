@@ -337,7 +337,9 @@ pub fn run_manifest_command(
 
 fn shellexpand_path(raw: &str) -> std::path::PathBuf {
     if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home_dir) = std::env::var_os("HOME") {
+        if let Some(home_dir) = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+        {
             return std::path::PathBuf::from(home_dir).join(rest);
         }
     }

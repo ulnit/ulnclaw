@@ -1776,7 +1776,9 @@ pub fn parse_duration(value: &str) -> std::result::Result<Option<i64>, String> {
 /// Expand a leading `~/` against $HOME (hermes `os.path.expanduser`).
 fn expand_tilde(raw: &str) -> PathBuf {
     if raw == "~" || raw.starts_with("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
+        if let Some(home) = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+        {
             return PathBuf::from(home).join(&raw[2..]);
         }
     }
