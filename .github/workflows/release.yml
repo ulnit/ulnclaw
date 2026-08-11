@@ -149,11 +149,14 @@ jobs:
       # Needs the GITEE_TOKEN secret (Gitee personal access token,
       # scope: projects). Skipped when the secret is absent.
       - name: Gitee release
-        if: env.GITEE_TOKEN != ''
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         continue-on-error: true
         run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "GITEE_TOKEN secret not configured; skipping Gitee mirror"
+            exit 0
+          fi
           set -x
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           OWNER=ushaw
