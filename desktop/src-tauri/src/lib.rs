@@ -108,13 +108,42 @@ fn gateway_log_path() -> Option<std::path::PathBuf> {
     home_dir().map(|home| home.join(".ulnclaw").join("gateway.log"))
 }
 
-/// Field 22 (`starttime`) of `/proc/<pid>/stat`, anchored on the last
-/// `)` because comm may contain spaces (same math as gateway_pidfile).
+/// PID-reuse token (same math as gateway_pidfile): field 22
+/// (`starttime`) of `/proc/<pid>/stat` on unix, process creation time
+/// on Windows.
+#[cfg(unix)]
 fn desktop_process_start_time(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let close = stat.rfind(')')?;
     let rest = stat.get(close + 2..)?;
     rest.split_whitespace().nth(19)?.parse().ok()
+}
+
+#[cfg(windows)]
+fn desktop_process_start_time(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return None;
+    }
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return None;
+        }
+        let mut creation: FILETIME = std::mem::zeroed();
+        let mut exit: FILETIME = std::mem::zeroed();
+        let mut kernel: FILETIME = std::mem::zeroed();
+        let mut user: FILETIME = std::mem::zeroed();
+        let ok = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) != 0;
+        CloseHandle(handle);
+        if !ok {
+            return None;
+        }
+        Some(((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64)
+    }
 }
 
 /// True iff `pid` is a live process — `/proc` state check on unix,
@@ -317,9 +346,14 @@ fn spawn_gateway(state: State<'_, GatewayProcess>, binary: String, port: u16) ->
     // the desktop bridge in the child gateway (P231): events stream back
     // over /api/desktop/events and read_terminal round-trips through
     // /api/desktop/read-response.
+    // --replace: the shell owns the gateway lifecycle. When a pidfile
+    // names a live process but health is unreachable, the leftover is by
+    // definition broken (or a pid the start-token guard failed to
+    // classify) — take it over instead of looping on "Another gateway
+    // instance is already running" (v0.2.3 CONNECTING-loop fix).
     let mut command = std::process::Command::new(&binary);
     command
-        .args(["gateway", "--port", &port.to_string()])
+        .args(["gateway", "--port", &port.to_string(), "--replace"])
         .env("ULNCLAW_DESKTOP", "1")
         .stdin(std::process::Stdio::null());
     // Windows launch hygiene: no console window pops for the headless

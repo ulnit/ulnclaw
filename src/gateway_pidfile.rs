@@ -34,8 +34,11 @@ pub fn pidfile_path(home: &Path) -> PathBuf {
 }
 
 /// Start token for `pid` — field 22 (`starttime`) of
-/// `/proc/<pid>/stat`. The comm field is parenthesized and may contain
-/// spaces, so parsing anchors on the LAST `)`.
+/// Process-start token used as the PID-reuse guard. Unix reads field 22
+/// of `/proc/<pid>/stat` (the comm field is parenthesized and may
+/// contain spaces, so parsing anchors on the LAST `)`); Windows reads
+/// the process creation time via `GetProcessTimes`.
+#[cfg(unix)]
 pub fn process_start_time(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let close = stat.rfind(')')?;
@@ -44,6 +47,37 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
     // (token 0 is field 3, `state`).
     let field = rest.split_whitespace().nth(19)?;
     field.parse().ok()
+}
+
+/// Windows PID-reuse token: the process creation time (100-ns ticks
+/// since the Windows epoch) — a recycled pid carries a different
+/// creation time, so a stale pidfile pointing at a reused pid is
+/// detected exactly like the `/proc` starttime on unix.
+#[cfg(windows)]
+pub fn process_start_time(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return None;
+    }
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return None;
+        }
+        let mut creation: FILETIME = std::mem::zeroed();
+        let mut exit: FILETIME = std::mem::zeroed();
+        let mut kernel: FILETIME = std::mem::zeroed();
+        let mut user: FILETIME = std::mem::zeroed();
+        let ok = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) != 0;
+        CloseHandle(handle);
+        if !ok {
+            return None;
+        }
+        Some(((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64)
+    }
 }
 
 /// `/proc/<pid>/stat` state character (`S`, `R`, `Z`, …), when

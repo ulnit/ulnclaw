@@ -3290,6 +3290,15 @@ async function restartGateway(): Promise<boolean> {
     return false;
   }
   const bridge = state.bridge;
+  // Graceful HTTP stop first so the child runs its clean-shutdown path
+  // (lifecycle ledger, pidfile removal); the hard kill below covers an
+  // unreachable child (v0.2.3).
+  try {
+    await state.client?.gatewayStop();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  } catch {
+    /* unreachable — fall through to the hard kill */
+  }
   try {
     await bridge.stopGateway(state.managedPid);
   } catch {
