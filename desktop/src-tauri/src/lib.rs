@@ -381,9 +381,12 @@ fn spawn_gateway(state: State<'_, GatewayProcess>, binary: String, port: u16) ->
     // with the log tail instead of a silent 20 s boot-poll timeout.
     std::thread::sleep(std::time::Duration::from_millis(600));
     if !desktop_pid_alive(pid) {
-        let _ = child.wait();
+        let exit_code = child.wait().ok().and_then(|status| status.code());
         return Err(format!(
-            "gateway exited immediately after start{}",
+            "gateway exited immediately after start{}{}",
+            exit_code
+                .map(|code| format!(" (exit code {code})"))
+                .unwrap_or_default(),
             gateway_log_tail_text(20)
                 .map(|tail| format!(":\n{tail}"))
                 .unwrap_or_default()
