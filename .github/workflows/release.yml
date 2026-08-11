@@ -71,9 +71,13 @@ jobs:
     strategy:
       matrix:
         include:
+          # Both dmg flavors build on ARM runners; Intel is a Rust
+          # cross-compile (macos-13 runners are retired).
           - runner: macos-latest
+            target: aarch64-apple-darwin
             arch: aarch64
-          - runner: macos-13
+          - runner: macos-latest
+            target: x86_64-apple-darwin
             arch: x64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -84,6 +88,8 @@ jobs:
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Node.js
         uses: actions/setup-node@v4
@@ -98,25 +104,25 @@ jobs:
             desktop/src-tauri -> target
 
       - name: Build core binary
-        run: cargo build --release --bin ulnclaw
+        run: cargo build --release --target ${{ matrix.target }} --bin ulnclaw
 
       - name: Stage binary into the desktop bundle
         run: |
           mkdir -p desktop/src-tauri/binaries
-          cp target/release/ulnclaw desktop/src-tauri/binaries/ulnclaw
+          cp target/${{ matrix.target }}/release/ulnclaw desktop/src-tauri/binaries/ulnclaw
           chmod +x desktop/src-tauri/binaries/ulnclaw
 
       - name: Build dmg
         working-directory: desktop
         run: |
           npm ci
-          npx tauri build --bundles dmg
+          npx tauri build --target ${{ matrix.target }} --bundles dmg
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-${{ matrix.arch }}
-          path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
 
   release:
     needs: [build-windows, build-macos]
