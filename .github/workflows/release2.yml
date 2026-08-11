@@ -1,0 +1,177 @@
+# Build desktop installers (Windows NSIS exe, macOS dmg) and attach them
+# to the release for the pushed tag.
+#
+# The installers are self-contained: the core `ulnclaw` binary is
+# built first and shipped inside the Tauri bundle as a resource
+# (`desktop/src-tauri/binaries/`), so end users don't need Rust.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            desktop/src-tauri -> target
+
+      - name: Build core binary
+        run: cargo build --release --bin ulnclaw
+
+      - name: Stage binary into the desktop bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force desktop\src-tauri\binaries | Out-Null
+          Copy-Item target\release\ulnclaw.exe desktop\src-tauri\binaries\ulnclaw.exe
+
+      - name: Build NSIS installer
+        working-directory: desktop
+        run: |
+          npm ci
+          npx tauri build --bundles nsis
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: aarch64
+          - runner: macos-13
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            desktop/src-tauri -> target
+
+      - name: Build core binary
+        run: cargo build --release --bin ulnclaw
+
+      - name: Stage binary into the desktop bundle
+        run: |
+          mkdir -p desktop/src-tauri/binaries
+          cp target/release/ulnclaw desktop/src-tauri/binaries/ulnclaw
+          chmod +x desktop/src-tauri/binaries/ulnclaw
+
+      - name: Build dmg
+        working-directory: desktop
+        run: |
+          npm ci
+          npx tauri build --bundles dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-${{ matrix.arch }}
+          path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Collect artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.exe *.dmg > SHA256SUMS.txt
+
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: dist/*
+
+      # Best-effort mirror of the installers onto the Gitee release.
+      # Needs the GITEE_TOKEN secret (Gitee personal access token,
+      # scope: projects). Skipped when the secret is absent.
+      - name: Gitee release
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        continue-on-error: true
+        run: |
+          set -x
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          OWNER=ushaw
+          REPO=ulnclaw
+          API="https://gitee.com/api/v5/repos/$OWNER/$REPO"
+
+          release_id=$(curl -sS "$API/releases/tags/$TAG?access_token=$GITEE_TOKEN" \
+            | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" || true)
+
+          if [ -z "$release_id" ]; then
+            release_id=$(curl -sS -X POST "$API/releases" \
+              -H "Content-Type: application/json" \
+              -d "{\"access_token\":\"$GITEE_TOKEN\",\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"target_commitish\":\"master\",\"prerelease\":false,\"body\":\"Desktop installers (see SHA256SUMS.txt). macOS dmg is unsigned — if Gatekeeper blocks it, run: xattr -cr /Applications/ulnclaw.app\"}" \
+              | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+          fi
+
+          for file in dist/*; do
+            curl -sS -X POST "$API/releases/$release_id/attach_files" \
+              -F "access_token=$GITEE_TOKEN" \
+              -F "file=@$file" > /dev/null
+          done
+          echo "Gitee release $release_id updated"
