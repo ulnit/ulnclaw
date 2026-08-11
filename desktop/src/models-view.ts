@@ -382,8 +382,8 @@ export class ModelsViewWidget {
       .replace("{model}", model);
     if (!window.confirm(message)) return;
     try {
-      await client.modelSet(provider, model);
-      this.status(v.gatewaySetDone);
+      const result = await client.modelSet(provider, model);
+      this.status(result.note ? `${v.gatewaySetDone} — ${result.note}` : v.gatewaySetDone);
       await this.renderGatewayModel();
     } catch (error) {
       this.status(

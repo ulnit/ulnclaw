@@ -3707,7 +3707,7 @@ export class GatewayClient {
   }
 
   /** POST /api/model/set — persist the gateway provider/model (P332). */
-  async modelSet(provider: string, model: string): Promise<void> {
+  async modelSet(provider: string, model: string): Promise<{ note?: string }> {
     const response = await fetch(this.endpoint("/api/model/set"), {
       method: "POST",
       headers: this.headers(),
@@ -3715,6 +3715,7 @@ export class GatewayClient {
     });
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `model HTTP ${response.status}`);
+    return value as { note?: string };
   }
 
   /** GET /api/model/auxiliary — per-task provider assignments (P605). */

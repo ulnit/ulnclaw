@@ -2231,6 +2231,20 @@ fn build_provider(
     config: &UlncLawConfig,
     session_id: Option<&str>,
 ) -> Result<Arc<dyn ulnclaw::provider::Provider>, String> {
+    build_provider_with(config, session_id, false)
+}
+
+/// Like [`build_provider`] with an explicit keyless policy. The gateway
+/// stack passes `keyless_ok = true` so a fresh install with no provider
+/// key still boots — the UI surfaces setup guidance (onboarding, Models
+/// view) and runs fail with the provider's own auth error until a key
+/// lands in `[model] api_key`, the credentials pool or the environment
+/// and the gateway restarts. CLI entry points stay strict.
+fn build_provider_with(
+    config: &UlncLawConfig,
+    session_id: Option<&str>,
+    keyless_ok: bool,
+) -> Result<Arc<dyn ulnclaw::provider::Provider>, String> {
     // Persistent MoA facade (hermes build_moa_facade): `[model] provider
     // = "moa"` runs the whole agent loop on the preset — `model` selects
     // the preset. Slot keys resolve per preset, no main key required.
@@ -2249,10 +2263,18 @@ fn build_provider(
         "ollama" | "llamacpp" | "llama_cpp" | "local"
     );
     if api_key.is_none() && !keyless {
-        return Err(
-            "No API key found. Set OPENAI_API_KEY / ANTHROPIC_API_KEY (or api_key in config.toml)."
-                .into(),
-        );
+        if keyless_ok {
+            eprintln!(
+                "gateway: no API key configured — starting keyless; add a provider key \
+                 (Models view, credentials pool, or OPENAI_API_KEY/ANTHROPIC_API_KEY) \
+                 and restart the gateway to enable chat."
+            );
+        } else {
+            return Err(
+                "No API key found. Set OPENAI_API_KEY / ANTHROPIC_API_KEY (or api_key in config.toml)."
+                    .into(),
+            );
+        }
     }
     if config.model.provider == "anthropic" {
         let mut builder = ulnclaw::provider::anthropic::AnthropicProvider::builder()
@@ -2347,7 +2369,7 @@ async fn build_gateway_stack(
     // Messaging turns render approvals in-chat (adaptive cards on Teams,
     // /approve text elsewhere) instead of the run-based HTTP flow.
     let approve = ulnclaw::messaging::messaging_aware_approve_fn(approve);
-    let agent = make_agent_in(config, false, Some(approve), home, None).await?;
+    let agent = make_agent_in(config, false, Some(approve), home, None, true).await?;
     agent.context().set_async_delivery(true);
     // P723: placeholder-aware terminal cwd (hermes cwd_placeholder) —
     // messaging turns start in the resolved cwd when one applies.
@@ -2450,7 +2472,7 @@ async fn build_profile_messaging_stack(
     > = std::sync::Arc::new(tokio::sync::OnceCell::new());
     let approve = ulnclaw::gateway::gateway_approve_fn(router.clone(), state_holder.clone());
     let approve = ulnclaw::messaging::messaging_aware_approve_fn(approve);
-    let agent = make_agent_in(&profile_config, false, Some(approve), &profile_home, None).await?;
+    let agent = make_agent_in(&profile_config, false, Some(approve), &profile_home, None, true).await?;
     agent.context().set_async_delivery(true);
     // P723: placeholder-aware terminal cwd for profile gateways too.
     if let Some(cwd) = ulnclaw::cwd_placeholder::resolve_messaging_cwd(&profile_config) {
@@ -3543,7 +3565,7 @@ async fn make_agent(
     session_id: Option<String>,
 ) -> Result<Arc<Agent>, String> {
     let home = ulnclaw::config::ensure_home().map_err(|e| e.to_string())?;
-    make_agent_in(config, interactive, approve_override, &home, session_id).await
+    make_agent_in(config, interactive, approve_override, &home, session_id, false).await
 }
 
 /// Build an agent rooted at an explicit home directory — the multiplex
@@ -3555,8 +3577,9 @@ async fn make_agent_in(
     approve_override: Option<ulnclaw::tools::context::ApproveFn>,
     home: &std::path::Path,
     session_id: Option<String>,
+    keyless_ok: bool,
 ) -> Result<Arc<Agent>, String> {
-    let provider = build_provider(config, session_id.as_deref())?;
+    let provider = build_provider_with(config, session_id.as_deref(), keyless_ok)?;
     // Tirith scanner availability (hermes `_ensure_tirith_security`):
     // quick PATH/local checks now, network download in a background
     // thread so startup never blocks.

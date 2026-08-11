@@ -83,6 +83,11 @@ Prebuilt installers ship on the GitHub releases page
   `xattr -cr /Applications/ulnclaw.app`.
 - Verify with `SHA256SUMS.txt` attached to each release.
 
+First launch needs no pre-configured API key: since v0.2.2 the gateway
+boots keyless and the onboarding / Models view walk you through adding a
+provider key (persisted to `config.toml` / the credentials pool); restart
+the gateway once a key is saved (tray › Restart Gateway).
+
 Configuration lives in `~/.ulnclaw/config.toml` (on Windows:
 `%USERPROFILE%\.ulnclaw\config.toml`) — the app's Settings dialog edits
 gateway URL/key and shell behaviour; provider keys and messaging
@@ -418,6 +423,10 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
   `ulnclaw_<ver>_x64.dmg`（Intel）。拖入 Applications 即可；包未签名，
   首次启动若被 Gatekeeper 拦截，执行 `xattr -cr /Applications/ulnclaw.app`。
 - 每个 release 附 `SHA256SUMS.txt` 供校验。
+
+首次启动无需预先配置 API key：v0.2.2 起网关支持无 key 启动，
+首次引导与 Models 视图会指引你添加 provider 密钥（持久化到
+`config.toml` / 凭据池）；保存 key 后重启网关即可（托盘 › 重启网关）。
 
 配置位于 `~/.ulnclaw/config.toml`（Windows：`%USERPROFILE%\.ulnclaw\config.toml`）——
 应用内设置对话框可改网关 URL/密钥与外壳行为；provider 密钥与消息平台的
