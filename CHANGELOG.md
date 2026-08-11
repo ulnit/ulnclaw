@@ -46,6 +46,13 @@ Hermes v2026.8.3 parity milestone.
   native notifications, update checks, gateway log viewer, single-instance
   handoff, quit guard.
 
+### Continuous delivery
+
+- Tag pushes run GitHub Actions (`.github/workflows/release.yml`):
+  Windows NSIS installer + macOS dmg (Apple Silicon and Intel) built
+  with the core binary bundled inside, checksums published, assets
+  attached to the release (P805).
+
 ### Verification
 
 - 2399 lib tests passing; desktop `tsc --noEmit` + vite build green.
