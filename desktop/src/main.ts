@@ -3383,6 +3383,9 @@ async function start(): Promise<void> {
       wakeArmed = true;
       hideConnecting();
       resolveBootFailure();
+      // The cold-boot loadAppearance() ran while the gateway was still
+      // coming up; re-apply the persisted theme/font now that it answers.
+      void loadAppearance();
       void state.onboarding!.maybeOpen();
       return;
     }
@@ -3393,6 +3396,7 @@ async function start(): Promise<void> {
         wakeArmed = true;
         hideConnecting();
         resolveBootFailure();
+        void loadAppearance();
         void state.onboarding!.maybeOpen();
         return;
       }
