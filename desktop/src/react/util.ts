@@ -1,3 +1,12 @@
+import { useSyncExternalStore } from "react";
+import { currentLocale, onLocaleChange, t } from "../i18n";
+
+/** Live translation accessor that re-renders on locale change. */
+export function useT() {
+  useSyncExternalStore(onLocaleChange, currentLocale);
+  return t;
+}
+
 export function relTime(epochSeconds: number): string {
   const delta = Math.max(0, Date.now() / 1000 - epochSeconds);
   if (delta < 60) return "now";

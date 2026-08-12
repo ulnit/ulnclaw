@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { GatewayClient } from "../../gateway";
 import { Button } from "../../hermes/button";
+import { LOCALE_OPTIONS, currentLocale, setLocale } from "../../i18n";
+import { useT } from "../util";
 import { switchShell } from "../util";
 
 interface ThemeRow {
@@ -14,6 +16,7 @@ export function SettingsView({ client }: { client: GatewayClient }) {
   const [active, setActive] = useState("");
   const [fonts, setFonts] = useState<string[]>([]);
   const [font, setFont] = useState("theme");
+  const locale = useT() && currentLocale();
   const [shell, setShell] = useState(localStorage.getItem("ulnclaw.shell") || "vanilla");
 
   useEffect(() => {
@@ -71,6 +74,20 @@ export function SettingsView({ client }: { client: GatewayClient }) {
               {themes.map((t) => (
                 <option key={t.name} value={t.name}>
                   {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid grid-cols-[10rem_1fr] items-center gap-3 text-[13px]">
+            <span className="text-(--dim-strong,--dim)">Language</span>
+            <select
+              value={locale}
+              onChange={(e) => setLocale(e.target.value as import("../../i18n").Locale)}
+              className="rounded-md border border-(--border) bg-(--seed-card) px-2 py-1.5 text-[13px] outline-none focus:border-(--accent)"
+            >
+              {LOCALE_OPTIONS.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
                 </option>
               ))}
             </select>

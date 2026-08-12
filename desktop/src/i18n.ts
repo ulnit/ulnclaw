@@ -3597,7 +3597,7 @@ const ar: Translations = {
 
 const CATALOGS: Record<Locale, Translations> = { en, zh, "zh-hant": zhHant, ja, ar };
 
-const STORAGE_KEY = "***";
+const STORAGE_KEY = "ulnclaw.locale";
 const RTL_LOCALES = new Set<Locale>(["ar"]);
 
 let current: Locale = normalizeLocale(((): string | null => {

@@ -27,7 +27,26 @@ export function Palette({ open, onOpenChange, onView, onNewSession }: Props) {
 
   const actions: PaletteAction[] = [
     { id: "new", label: "New session", hint: "chat", run: onNewSession },
-    ...(["chat", "sessions", "jobs", "usage", "models", "settings"] as ShellView[]).map(
+    ...(
+      [
+        "chat",
+        "sessions",
+        "jobs",
+        "usage",
+        "models",
+        "skills",
+        "kanban",
+        "projects",
+        "runs",
+        "webhooks",
+        "plugins",
+        "pairing",
+        "profiles",
+        "config",
+        "doctor",
+        "settings",
+      ] as ShellView[]
+    ).map(
       (v) => ({ id: `view-${v}`, label: `Go to ${v[0].toUpperCase()}${v.slice(1)}`, run: () => onView(v) }),
     ),
     { id: "classic", label: "Switch to classic shell", run: () => switchShell("vanilla") },

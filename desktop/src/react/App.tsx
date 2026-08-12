@@ -8,6 +8,16 @@ import { JobsView } from "./views/JobsView";
 import { UsageView } from "./views/UsageView";
 import { ModelsView } from "./views/ModelsView";
 import { SettingsView } from "./views/SettingsView";
+import { SkillsView } from "./views/SkillsView";
+import { KanbanView } from "./views/KanbanView";
+import { ProjectsView } from "./views/ProjectsView";
+import { WebhooksView } from "./views/WebhooksView";
+import { RunsView } from "./views/RunsView";
+import { PluginsView } from "./views/PluginsView";
+import { PairingView } from "./views/PairingView";
+import { ProfilesView } from "./views/ProfilesView";
+import { ConfigView } from "./views/ConfigView";
+import { DoctorView } from "./views/DoctorView";
 import { Palette } from "./Palette";
 
 export function App() {
@@ -88,6 +98,56 @@ export function App() {
       {view === "models" && (
         <div className="min-h-0 overflow-y-auto">
           <ModelsView client={client} />
+        </div>
+      )}
+      {view === "skills" && (
+        <div className="min-h-0 overflow-y-auto">
+          <SkillsView client={client} />
+        </div>
+      )}
+      {view === "kanban" && (
+        <div className="min-h-0 overflow-y-auto">
+          <KanbanView client={client} />
+        </div>
+      )}
+      {view === "projects" && (
+        <div className="min-h-0 overflow-y-auto">
+          <ProjectsView client={client} />
+        </div>
+      )}
+      {view === "runs" && (
+        <div className="min-h-0 overflow-y-auto">
+          <RunsView client={client} />
+        </div>
+      )}
+      {view === "webhooks" && (
+        <div className="min-h-0 overflow-y-auto">
+          <WebhooksView client={client} />
+        </div>
+      )}
+      {view === "plugins" && (
+        <div className="min-h-0 overflow-y-auto">
+          <PluginsView client={client} />
+        </div>
+      )}
+      {view === "pairing" && (
+        <div className="min-h-0 overflow-y-auto">
+          <PairingView client={client} />
+        </div>
+      )}
+      {view === "profiles" && (
+        <div className="min-h-0 overflow-y-auto">
+          <ProfilesView client={client} />
+        </div>
+      )}
+      {view === "config" && (
+        <div className="min-h-0 overflow-y-auto">
+          <ConfigView client={client} />
+        </div>
+      )}
+      {view === "doctor" && (
+        <div className="min-h-0 overflow-y-auto">
+          <DoctorView client={client} />
         </div>
       )}
       {view === "settings" && (

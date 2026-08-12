@@ -93,6 +93,13 @@ Configuration lives in `~/.ulnclaw/config.toml` (on Windows:
 gateway URL/key and shell behaviour; provider keys and messaging
 platforms are configured exactly as in the CLI flow below.
 
+Since v0.5.0 the desktop UI runs the React hermes-parity shell by default:
+all sixteen views (chat, sessions, jobs, usage, models, skills, kanban,
+projects, runs, webhooks, plugins, pairing, profiles, config, doctor,
+settings) plus the Ctrl/Cmd+K command palette, dashboard themes/fonts and
+a five-locale language picker (Settings › Language). The classic shell
+remains available behind `?shell=classic` for one more release.
+
 ### CLI Quick Start
 
 ```bash
@@ -431,6 +438,11 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 配置位于 `~/.ulnclaw/config.toml`（Windows：`%USERPROFILE%\.ulnclaw\config.toml`）——
 应用内设置对话框可改网关 URL/密钥与外壳行为；provider 密钥与消息平台的
 配置方式与下面的 CLI 流程完全一致。
+
+v0.5.0 起桌面 UI 默认运行 React 高保真外壳：全部 16 个视图（聊天、会话、
+任务、用量、模型、技能、看板、项目、运行、Webhooks、插件、配对、配置
+文件、配置、诊断、设置）+ Ctrl/Cmd+K 命令面板、主题/字体与五语言切换
+（设置 › Language）。经典外壳本版本仍可经 `?shell=classic` 访问。
 
 ### CLI 快速开始
 

@@ -1,9 +1,25 @@
 import { useMemo, useState } from "react";
 import type { SessionRow } from "../gateway";
 import { Button } from "../hermes/button";
-import { relTime, switchShell } from "./util";
+import { relTime, switchShell, useT } from "./util";
 
-export type ShellView = "chat" | "sessions" | "jobs" | "usage" | "models" | "settings";
+export type ShellView =
+  | "chat"
+  | "sessions"
+  | "jobs"
+  | "usage"
+  | "models"
+  | "skills"
+  | "kanban"
+  | "projects"
+  | "runs"
+  | "webhooks"
+  | "plugins"
+  | "pairing"
+  | "profiles"
+  | "config"
+  | "doctor"
+  | "settings";
 
 interface Props {
   sessions: SessionRow[];
@@ -15,7 +31,76 @@ interface Props {
   onRefresh: () => Promise<void>;
 }
 
+
+const NAV_GROUPS: { caption: string; items: [ShellView, string][] }[] = [
+  {
+    caption: "",
+    items: [
+      ["chat", "chatTab"],
+      ["sessions", "sessionsTab"],
+      ["jobs", "jobsTab"],
+      ["usage", "usageTab"],
+      ["models", "modelsTab"],
+    ],
+  },
+  {
+    caption: "Workspace",
+    items: [
+      ["skills", "skillsTab"],
+      ["kanban", "kanbanTab"],
+      ["projects", "projectsTab"],
+      ["runs", "runsTab"],
+      ["webhooks", "webhooksTab"],
+    ],
+  },
+  {
+    caption: "System",
+    items: [
+      ["plugins", "pluginsTab"],
+      ["pairing", "pairingTab"],
+      ["profiles", "profilesTab"],
+      ["config", "configTab"],
+      ["doctor", "doctorTab"],
+      ["settings", "settings"],
+    ],
+  },
+];
+
+function NavTabs({ view, onView }: { view: ShellView; onView: (v: ShellView) => void }) {
+  const t = useT();
+  const chrome = t.chrome as unknown as Record<string, string>;
+  return (
+    <nav className="flex flex-col gap-1.5 px-0.5 pb-2">
+      {NAV_GROUPS.map((group) => (
+        <div key={group.caption || "primary"} className="flex flex-col gap-0.5">
+          {group.caption && (
+            <span className="px-1 pt-0.5 text-[10px] font-semibold tracking-[0.08em] text-(--dim-faint) uppercase">
+              {group.caption}
+            </span>
+          )}
+          <div className="flex flex-wrap gap-0.5">
+            {group.items.map(([id, key]) => (
+              <button
+                key={id}
+                onClick={() => onView(id)}
+                className={`rounded-md px-2 py-1 text-xs ${
+                  view === id
+                    ? "bg-(--hover-strong) font-semibold text-(--text)"
+                    : "font-medium text-(--dim) hover:bg-(--hover) hover:text-(--text)"
+                }`}
+              >
+                {chrome[key] ?? key}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
 export function Sidebar({ sessions, activeId, online, view, onView, onSelect, onRefresh }: Props) {
+  const t = useT();
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -44,49 +129,17 @@ export function Sidebar({ sessions, activeId, online, view, onView, onSelect, on
         />
       </div>
 
-      <div className="flex flex-wrap gap-0.5 px-0.5 pb-2">
-        {(
-          [
-            ["chat", "Chat"],
-            ["sessions", "Sessions"],
-            ["jobs", "Jobs"],
-            ["usage", "Usage"],
-            ["models", "Models"],
-          ] as [ShellView, string][]
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => onView(id)}
-            className={`rounded-md px-2 py-1 text-xs ${
-              view === id
-                ? "bg-(--hover-strong) font-semibold text-(--text)"
-                : "font-medium text-(--dim) hover:bg-(--hover) hover:text-(--text)"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-        <button
-          onClick={() => onView("settings")}
-          className={`rounded-md px-2 py-1 text-xs ${
-            view === "settings"
-              ? "bg-(--hover-strong) font-semibold text-(--text)"
-              : "font-medium text-(--dim) hover:bg-(--hover) hover:text-(--text)"
-          }`}
-        >
-          Settings
-        </button>
-      </div>
+      <NavTabs view={view} onView={onView} />
 
       <Button variant="default" className="w-full" disabled={busy} onClick={() => void newSession()}>
-        New session
+        {t.chrome.newSession}
       </Button>
 
       <div className="flex items-center gap-1 px-0.5">
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter sessions…"
+          placeholder={t.session.filterPlaceholder}
           className="min-w-0 flex-1 border-b border-(--border) bg-transparent px-0.5 py-1 text-[13px] outline-none placeholder:text-(--dim-faint) focus:border-(--accent)"
         />
       </div>

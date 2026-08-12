@@ -1,10 +1,11 @@
-// Shell selector (Phase 1): the React hermes-parity shell runs behind
-// ?shell=react or a persisted choice; the vanilla shell stays default so
-// secondary views keep working until the migration completes.
+// Shell selector (Phase 4): the React hermes-parity shell is the default;
+// the classic vanilla shell remains available behind ?shell=classic or a
+// persisted "vanilla" choice until the migration is retired.
 const params = new URLSearchParams(location.search);
-const chosen = params.get("shell") || localStorage.getItem("ulnclaw.shell") || "vanilla";
-if (chosen === "react") {
-  void import("./react/main");
-} else {
+const raw = params.get("shell") || localStorage.getItem("ulnclaw.shell") || "react";
+const chosen = raw === "classic" ? "vanilla" : raw;
+if (chosen === "vanilla") {
   void import("./main");
+} else {
+  void import("./react/main");
 }
