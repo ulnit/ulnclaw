@@ -188,7 +188,16 @@ async fn dispatch(state: Arc<GatewayState>, method: &str, params: Value) -> Resu
         "llm.oneshot" => llm_oneshot(state, params).await,
         "message.react" => Ok(json!({"ok": true})),
         "wake.pause" | "wake.resume" => Ok(json!({"ok": true})),
-        "pet.remove" | "pet.cancel" => Ok(json!({"ok": true})),
+        "wake.start" => Ok(wake_start()),
+        "wake.status" => Ok(wake_status()),
+        "wake.stop" => Ok(wake_stop()),
+        "pet.generate.status" => Ok(pet_generate_status()),
+        "pet.generate" => pet_generate(params).await,
+        "pet.hatch" => pet_hatch(params).await,
+        "pet.rename" => pet_rename(params),
+        "pet.select" => pet_select(params),
+        "pet.remove" => pet_remove(params).await,
+        "pet.cancel" => pet_cancel(params).await,
         other => Err(format!("unknown method: {other}")),
     }
 }
@@ -601,4 +610,486 @@ async fn llm_oneshot(state: Arc<GatewayState>, params: Value) -> Result<Value, S
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({"text": result.content}))
+}
+
+// ---------------------------------------------------------------------------
+// Pet generate / hatch / adopt (hermes tui_gateway pet.* WS parity)
+// ---------------------------------------------------------------------------
+
+fn pet_gen_root() -> std::path::PathBuf {
+    crate::config::ulnclaw_home().join("pets").join(".gen")
+}
+
+fn pet_cancel_flags() -> &'static Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>> {
+    static MAP: std::sync::OnceLock<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(Default::default)
+}
+
+fn png_data_uri(img: &image::RgbaImage) -> String {
+    use base64::Engine;
+    let mut buf = Vec::new();
+    if img
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .is_err()
+    {
+        return String::new();
+    }
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(buf)
+    )
+}
+
+fn pet_generate_status() -> Value {
+    match crate::pets_generate::resolve_image_endpoint() {
+        Ok(endpoint) => json!({
+            "available": true,
+            "providers": [{
+                "name": endpoint.model,
+                "label": format!("OpenAI-compatible images ({})", endpoint.model),
+                "default": true,
+            }],
+        }),
+        Err(reason) => json!({ "available": false, "providers": [], "reason": reason }),
+    }
+}
+
+async fn pet_generate(params: Value) -> Result<Value, String> {
+    let prompt = params
+        .get("prompt")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let reference_raw = params
+        .get("referenceImage")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if prompt.is_empty() && reference_raw.is_empty() {
+        return Err("missing prompt".into());
+    }
+    let count = params
+        .get("count")
+        .and_then(Value::as_u64)
+        .unwrap_or(4)
+        .clamp(1, 4) as usize;
+    let style = params
+        .get("style")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let endpoint = crate::pets_generate::resolve_image_endpoint()
+        .map_err(|e| crate::pets_generate::humanize_image_error(&e))?;
+
+    let token = uuid::Uuid::new_v4().to_string()[..12].to_string();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    pet_cancel_flags().lock().await.insert(token.clone(), cancel.clone());
+    let stage = pet_gen_root().join(&token);
+    std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+
+    let reference: Option<std::path::PathBuf> = if reference_raw.is_empty() {
+        None
+    } else {
+        use base64::Engine;
+        let comma = reference_raw
+            .find(',')
+            .ok_or_else(|| "invalid referenceImage data URL".to_string())?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&reference_raw[comma + 1..])
+            .map_err(|e| format!("decode referenceImage: {e}"))?;
+        let path = stage.join("reference.png");
+        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+        Some(path)
+    };
+
+    publish("", "pet.generate.progress", json!({ "token": token, "count": count }));
+
+    let concept = if prompt.is_empty() {
+        "a pet based on the reference image".to_string()
+    } else {
+        prompt
+    };
+    let token_emit = token.clone();
+    let cancel_inner = cancel.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let collected: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
+        let stage_for_cb = stage.clone();
+        let on_draft = |index: usize, img: &image::RgbaImage| {
+            let uri = png_data_uri(img);
+            let _ = img.save(stage_for_cb.join(format!("draft-{index}.png")));
+            collected.lock().unwrap().push((index, uri.clone()));
+            publish(
+                "",
+                "pet.generate.progress",
+                json!({ "token": token_emit, "index": index, "dataUri": uri, "count": count }),
+            );
+        };
+        let reference_arg = reference.as_deref();
+        let result = if reference_arg.is_some() {
+            // Grounded generation: fan out manually so every draft rides the
+            // reference image (generate_base_drafts has no reference input).
+            let mut images = Vec::new();
+            for index in 0..count {
+                if cancel_inner.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+                let variation = ["front view", "three-quarter view", "side view", "close-up"]
+                    [index % 4];
+                let prompt = crate::pets_generate::build_base_prompt(&concept, style.as_deref(), variation);
+                match crate::pets_generate::generate_image(&endpoint, &prompt, reference_arg, false)
+                    .map(|bytes| crate::pets_generate::harden_transparency(&bytes))
+                {
+                    Ok(img) => {
+                        images.push(img.clone());
+                        on_draft(index, &img);
+                    }
+                    Err(error) => tracing::warn!("pet.generate draft {index} failed: {error}"),
+                }
+            }
+            Ok(images)
+        } else {
+            crate::pets_generate::generate_base_drafts(
+                &endpoint,
+                &concept,
+                count,
+                style.as_deref(),
+                Some(&on_draft),
+                Some(&cancel_inner),
+            )
+        };
+        (result, collected.into_inner().unwrap())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    pet_cancel_flags().lock().await.remove(&token);
+    let (result, mut drafts) = outcome;
+    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("generation cancelled".into());
+    }
+    let generated = result.map_err(|e| crate::pets_generate::humanize_image_error(&e))?;
+    if drafts.is_empty() && !generated.is_empty() {
+        // Callback stream unavailable — fall back to the collected images.
+        drafts = generated
+            .iter()
+            .enumerate()
+            .map(|(index, img)| (index, png_data_uri(img)))
+            .collect();
+    }
+    if drafts.is_empty() {
+        return Err("generation produced no usable drafts".into());
+    }
+    drafts.sort_by_key(|(index, _)| *index);
+    Ok(json!({
+        "ok": true,
+        "token": token,
+        "drafts": drafts
+            .into_iter()
+            .map(|(index, data_uri)| json!({ "index": index, "dataUri": data_uri }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+async fn pet_hatch(params: Value) -> Result<Value, String> {
+    let token = params
+        .get("token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let cancel_token = params
+        .get("cancelToken")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let cancel_token = if cancel_token.is_empty() { token.clone() } else { cancel_token };
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        return Err("missing token".into());
+    }
+    if name.is_empty() {
+        return Err("missing name".into());
+    }
+    let index = params.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let base = pet_gen_root().join(&token).join(format!("draft-{index}.png"));
+    if !base.is_file() {
+        return Err("draft expired — generate again".into());
+    }
+    let description = params
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let concept = params
+        .get("prompt")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| name.clone());
+    let style = params
+        .get("style")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let home = crate::config::ulnclaw_home();
+    let endpoint = crate::pets_generate::resolve_image_endpoint()
+        .map_err(|e| crate::pets_generate::humanize_image_error(&e))?;
+    let mut slug = crate::pets::slugify(&name);
+    let mut bump = 2;
+    while crate::pets::load_pet(&home, &slug).is_some() {
+        slug = format!("{}-{}", crate::pets::slugify(&name), bump);
+        bump += 1;
+    }
+
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    pet_cancel_flags()
+        .lock()
+        .await
+        .insert(cancel_token.clone(), cancel.clone());
+
+    let outcome = tokio::task::spawn_blocking(move || {
+        let base_image = image::open(&base)
+            .map_err(|e| format!("read staged draft: {e}"))?
+            .to_rgba8();
+        let on_progress = |event: &str, detail: &str| {
+            let payload = if event == "row" && detail.matches(':').count() == 2 {
+                let mut parts = detail.split(':');
+                json!({
+                    "event": "row",
+                    "state": parts.next().unwrap_or_default(),
+                    "done": parts.next().unwrap_or_default(),
+                    "total": parts.next().unwrap_or_default(),
+                })
+            } else {
+                json!({ "event": event, "detail": detail })
+            };
+            publish("", "pet.hatch.progress", payload);
+        };
+        crate::pets_generate::hatch_pet(
+            &home,
+            &endpoint,
+            &base_image,
+            &slug,
+            &name,
+            &description,
+            &concept,
+            style.as_deref(),
+            Some(&on_progress),
+            Some(&cancel),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    pet_cancel_flags().lock().await.remove(&cancel_token);
+    let result = outcome.map_err(|e| crate::pets_generate::humanize_image_error(&e))?;
+    Ok(json!({
+        "ok": true,
+        "slug": result.slug,
+        "displayName": result.display_name,
+        "warnings": result.validation.warnings,
+        "pet": {
+            "enabled": false,
+            "slug": result.slug,
+            "displayName": result.display_name,
+            "spritesheet": format!("/api/pets/{}/spritesheet", result.slug),
+        },
+    }))
+}
+
+fn pet_rename(params: Value) -> Result<Value, String> {
+    let slug = params
+        .get("slug")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if slug.is_empty() {
+        return Err("missing slug".into());
+    }
+    if name.is_empty() {
+        return Err("missing name".into());
+    }
+    let home = crate::config::ulnclaw_home();
+    let new_slug = crate::pets::rename_pet(&home, &slug, &name)
+        .ok_or_else(|| format!("could not rename pet '{slug}'"))?;
+    Ok(json!({ "ok": true, "slug": new_slug, "displayName": name }))
+}
+
+fn pet_select(params: Value) -> Result<Value, String> {
+    let slug = params
+        .get("slug")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if slug.is_empty() {
+        return Err("missing slug".into());
+    }
+    let home = crate::config::ulnclaw_home();
+    let pet = crate::pets::load_pet(&home, &slug)
+        .filter(|p| p.exists())
+        .ok_or_else(|| format!("'{slug}' is not installed"))?;
+    crate::pets::set_active(&slug).map_err(|e| format!("could not persist active pet: {e}"))?;
+    Ok(json!({ "ok": true, "slug": slug, "displayName": pet.display_name }))
+}
+
+async fn pet_remove(params: Value) -> Result<Value, String> {
+    let slug = params
+        .get("slug")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if slug.is_empty() {
+        return Err("missing slug".into());
+    }
+    let home = crate::config::ulnclaw_home();
+    crate::pets::clear_active_if(&slug);
+    let removed = crate::pets::remove_pet(&home, &slug);
+    Ok(json!({ "ok": removed }))
+}
+
+async fn pet_cancel(params: Value) -> Result<Value, String> {
+    let token = params
+        .get("token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if let Some(flag) = pet_cancel_flags().lock().await.get(&token) {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    Ok(json!({ "ok": true }))
+}
+
+// ---------------------------------------------------------------------------
+// Wake word (hermes tui_gateway wake.* WS parity)
+//
+// The ulnclaw build has no always-on mic/STT runtime, so the wake engine
+// reports unavailable; the renderer degrades gracefully (slash output shows
+// the hint, settings show the wake word as off).
+// ---------------------------------------------------------------------------
+
+const WAKE_UNAVAILABLE_HINT: &str =
+    "wake-word listening is not built into this ulnclaw gateway (needs a mic + STT runtime)";
+
+fn wake_status() -> Value {
+    json!({
+        "listening": false,
+        "owned_by_caller": false,
+        "owner_surface": Value::Null,
+        "enabled": false,
+        "available": false,
+        "audio_silent": false,
+        "phrase": "hey ulnclaw",
+        "hint": WAKE_UNAVAILABLE_HINT,
+        "input_device": { "status": "missing", "error": "no audio input runtime" },
+    })
+}
+
+fn wake_start() -> Value {
+    json!({
+        "started": false,
+        "reason": "not_available",
+        "hint": WAKE_UNAVAILABLE_HINT,
+    })
+}
+
+fn wake_stop() -> Value {
+    json!({ "stopped": false, "reason": "not_owner", "disabled_persisted": false })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::Agent;
+    use crate::provider::openai::OpenAiProvider;
+    use crate::session::sqlite::SqliteSessionStore;
+    use crate::gateway::ApprovalRouter;
+    use crate::tools::ToolRegistry;
+
+    fn test_state() -> Arc<GatewayState> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SqliteSessionStore::open(temp.path().join("state.db")).expect("store opens"),
+        );
+        std::mem::forget(temp);
+        let provider = Arc::new(
+            OpenAiProvider::builder()
+                .endpoint("http://127.0.0.1:9/v1")
+                .model("test-model")
+                .name("test")
+                .build()
+                .expect("provider builds"),
+        );
+        let agent = Agent::new(provider, ToolRegistry::new()).with_store(store);
+        GatewayState::new(
+            Arc::new(agent),
+            "test-model".into(),
+            "test".into(),
+            Some("sekret".into()),
+            ApprovalRouter::new(),
+        )
+        .expect("state builds")
+    }
+
+    #[tokio::test]
+    async fn wake_methods_report_unavailable_gracefully() {
+        let state = test_state();
+        let status = dispatch(state.clone(), "wake.status", json!({})).await.unwrap();
+        assert_eq!(status["listening"], false);
+        assert_eq!(status["available"], false);
+        assert!(status["hint"].as_str().unwrap().contains("not built"));
+
+        let start = dispatch(state.clone(), "wake.start", json!({"persist": true})).await.unwrap();
+        assert_eq!(start["started"], false);
+        assert!(start["hint"].as_str().is_some());
+
+        let stop = dispatch(state, "wake.stop", json!({})).await.unwrap();
+        assert_eq!(stop["stopped"], false);
+        assert_eq!(stop["reason"], "not_owner");
+    }
+
+    #[tokio::test]
+    async fn pet_generate_status_shape() {
+        let state = test_state();
+        let status = dispatch(state, "pet.generate.status", json!({})).await.unwrap();
+        assert!(status.get("available").is_some());
+        assert!(status["providers"].is_array());
+    }
+
+    #[tokio::test]
+    async fn pet_methods_validate_params() {
+        let state = test_state();
+        assert!(dispatch(state.clone(), "pet.generate", json!({})).await.is_err());
+        assert!(dispatch(state.clone(), "pet.hatch", json!({"name": "x"})).await.is_err());
+        assert!(dispatch(state.clone(), "pet.hatch", json!({"token": "t"})).await.is_err());
+        assert!(
+            dispatch(state.clone(), "pet.hatch", json!({"token": "nope", "index": 0, "name": "x"}))
+                .await
+                .is_err()
+        );
+        assert!(dispatch(state.clone(), "pet.rename", json!({"slug": "s"})).await.is_err());
+        assert!(dispatch(state.clone(), "pet.select", json!({"slug": "ghost"})).await.is_err());
+
+        let removed = dispatch(state.clone(), "pet.remove", json!({"slug": "ghost"})).await.unwrap();
+        assert_eq!(removed["ok"], false);
+
+        let cancel = dispatch(state, "pet.cancel", json!({"token": "unknown"})).await.unwrap();
+        assert_eq!(cancel["ok"], true);
+    }
 }

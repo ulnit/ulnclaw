@@ -363,7 +363,7 @@ pub struct HatchResult {
 
 /// Key out any solid backdrop the provider painted; returns the cleaned RGBA
 /// (hermes `_harden_transparency`).
-fn harden_transparency(bytes: &[u8]) -> RgbaImage {
+pub fn harden_transparency(bytes: &[u8]) -> RgbaImage {
     match image::load_from_memory(bytes) {
         Ok(img) => {
             let keyed = crate::pets_atlas::remove_background(&img.to_rgba8(), None);
