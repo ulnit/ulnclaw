@@ -1,6 +1,6 @@
 [package]
 name = "ulnclaw-desktop"
-version = "0.3.2"
+version = "0.4.0"
 description = "Tauri desktop shell for the ulnclaw agent"
 edition = "2021"
 license = "MIT"

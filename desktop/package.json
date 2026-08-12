@@ -2,7 +2,7 @@
   "name": "ulnclaw-desktop",
   "productName": "ulnclaw",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Tauri desktop shell for the ulnclaw agent (gateway-backed chat UI).",
   "type": "module",
   "scripts": {

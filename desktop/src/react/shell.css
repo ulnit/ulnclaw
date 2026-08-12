@@ -1,0 +1,43 @@
+/* React shell base (Phase 1) — hermes Nous light seeds, independent of the
+   vanilla stylesheet so the legacy css can retire with the vanilla shell. */
+:root {
+  --seed-bg: #f8faff;
+  --seed-sidebar: #f3f7ff;
+  --seed-card: #ffffff;
+  --seed-fg: #17171a;
+  --accent: #0053fd;
+  --warm: #cf806d;
+  --ok: #1f8a65;
+  --warn: #c08532;
+  --bad: #cf2d56;
+  --bg: var(--seed-bg);
+  --panel: var(--seed-sidebar);
+  --panel-2: color-mix(in srgb, var(--accent) 4%, var(--seed-card));
+  --text: color-mix(in srgb, var(--seed-fg) 94%, transparent);
+  --dim: color-mix(in srgb, var(--seed-fg) 54%, transparent);
+  --dim-strong: color-mix(in srgb, var(--seed-fg) 74%, transparent);
+  --dim-faint: color-mix(in srgb, var(--seed-fg) 36%, transparent);
+  --border: color-mix(in srgb, var(--accent) 10%, color-mix(in srgb, var(--seed-fg) 5%, transparent));
+  --border-strong: color-mix(in srgb, var(--accent) 24%, color-mix(in srgb, var(--seed-fg) 10%, transparent));
+  --hover: color-mix(in srgb, var(--accent) 4%, color-mix(in srgb, var(--seed-fg) 3%, transparent));
+  --hover-strong: color-mix(in srgb, var(--accent) 8%, color-mix(in srgb, var(--seed-fg) 5%, transparent));
+  --ring: color-mix(in srgb, var(--accent) 45%, transparent);
+  --shadow-nous:
+    0 2px 4px -2px rgb(0 0 0 / 7%),
+    0 8px 12px -6px rgb(0 0 0 / 6%),
+    0 20px 28px -14px rgb(0 0 0 / 6%);
+  --stroke-nous: color-mix(in srgb, currentColor 3%, transparent);
+  --shadow-composer: 0 1px 2px rgb(0 0 0 / 5%);
+  --font-stack: "Segoe WPC", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "SF Pro Display", system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --mono: Menlo, Monaco, "SF Mono", "Courier Prime", ui-monospace, Consolas,
+    monospace, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  color-scheme: light;
+}
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font-stack); font-size: 14px; -webkit-font-smoothing: antialiased; }
+#react-root { height: 100%; }
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--seed-fg) 22%, transparent) transparent; }
+::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

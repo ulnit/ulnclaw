@@ -3357,6 +3357,11 @@ async function start(): Promise<void> {
   applyStatic();
   state.bridge = await loadBridge();
   state.client = new GatewayClient(state.settings);
+  // Phase 1: two-way shell toggle into the React hermes-parity shell.
+  document.getElementById("shell-react-btn")?.addEventListener("click", () => {
+    localStorage.setItem("ulnclaw.shell", "react");
+    location.reload();
+  });
   void listenMenuEvents();
 
   // Managed gateway: start one when unreachable and management is on.
