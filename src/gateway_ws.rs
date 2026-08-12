@@ -176,7 +176,8 @@ async fn dispatch(state: Arc<GatewayState>, method: &str, params: Value) -> Resu
         "reload.env" | "reload.mcp" => Ok(json!({"ok": true})),
         "approval.respond" => approval_respond(params),
         "clarify.respond" => clarify_respond(params),
-        "sudo.respond" | "secret.respond" => Ok(json!({"status": "ignored"})),
+        "sudo.respond" => prompt_respond(params, "password"),
+        "secret.respond" => prompt_respond(params, "value"),
         "terminal.read.respond" => terminal_read_respond(params),
         "process.list" => Ok(process_list()),
         "process.kill" => process_kill(params),
@@ -186,7 +187,7 @@ async fn dispatch(state: Arc<GatewayState>, method: &str, params: Value) -> Resu
         "complete.path" => Ok(complete_path(params)),
         "slash.exec" => Ok(json!({"ok": false, "error": "slash exec runs client-side in ulnclaw"})),
         "llm.oneshot" => llm_oneshot(state, params).await,
-        "message.react" => Ok(json!({"ok": true})),
+        "message.react" => message_react(state, params),
         "wake.pause" | "wake.resume" => Ok(json!({"ok": true})),
         "wake.start" => Ok(wake_start()),
         "wake.status" => Ok(wake_status()),
@@ -610,6 +611,116 @@ async fn llm_oneshot(state: Arc<GatewayState>, params: Value) -> Result<Value, S
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({"text": result.content}))
+}
+
+// ---------------------------------------------------------------------------
+// Mid-turn prompt capture (hermes tui_gateway sudo/secret.respond parity)
+// ---------------------------------------------------------------------------
+
+/// Pending mid-turn prompt requests (sudo password / skill secret capture).
+/// Future gateway-side emitters register a request id here and await the
+/// oneshot; the desktop overlay answers over sudo.respond / secret.respond.
+fn pending_prompts()
+    -> &'static std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>> {
+    static MAP: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
+    > = std::sync::OnceLock::new();
+    MAP.get_or_init(Default::default)
+}
+
+/// Register a mid-turn prompt so a surface can answer it. Returns the receiver
+/// the emitter awaits for the user-supplied value.
+pub fn request_prompt(request_id: &str) -> tokio::sync::oneshot::Receiver<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    pending_prompts()
+        .lock()
+        .unwrap()
+        .insert(request_id.to_string(), tx);
+    rx
+}
+
+fn prompt_respond(params: Value, key: &str) -> Result<Value, String> {
+    let request_id = params
+        .get("request_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut map = pending_prompts().lock().unwrap();
+    match map.remove(&request_id) {
+        Some(sender) => {
+            let value = params
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let _ = sender.send(value);
+            Ok(json!({ "status": "ok" }))
+        }
+        // allow_expired semantics (hermes _respond): a late answer racing a
+        // backend timeout is normal — report expired, not an error.
+        None if !request_id.is_empty() => Ok(json!({ "status": "expired" })),
+        None => Err(format!("no pending {key} request")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Message reactions (hermes message.react WS parity)
+// ---------------------------------------------------------------------------
+
+fn message_react(state: Arc<GatewayState>, params: Value) -> Result<Value, String> {
+    let session_id = params
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if session_id.is_empty() {
+        return Err("session_id is required".into());
+    }
+    let emoji = params
+        .get("emoji")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let author = params
+        .get("author")
+        .and_then(Value::as_str)
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or("user")
+        .to_string();
+
+    let store = &state.store;
+    let mut target_role = "user".to_string();
+    let row_id: i64 = if let Some(id) = params.get("row_id").and_then(Value::as_i64) {
+        match store.message_role(&session_id, id) {
+            Some(role) => {
+                target_role = role;
+                id
+            }
+            None => return Err(format!("Message {id} is not part of this conversation.")),
+        }
+    } else {
+        let role = params
+            .get("newest_role")
+            .and_then(Value::as_str)
+            .unwrap_or("user");
+        store
+            .latest_message_row_id(&session_id, role, 0, true)
+            .ok_or_else(|| "No message to react to yet.".to_string())?
+    };
+
+    let emoji_opt = if emoji.is_empty() { None } else { Some(emoji.as_str()) };
+    let Some(reactions) = store.set_message_reaction(&session_id, row_id, emoji_opt, &author)
+    else {
+        return Err(format!("Message {row_id} is not part of this conversation."));
+    };
+
+    publish(
+        &session_id,
+        "message.reaction",
+        json!({ "row_id": row_id, "reactions": reactions, "role": target_role }),
+    );
+    Ok(json!({ "ok": true, "row_id": row_id, "reactions": reactions }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,5 +1202,77 @@ mod tests {
 
         let cancel = dispatch(state, "pet.cancel", json!({"token": "unknown"})).await.unwrap();
         assert_eq!(cancel["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn prompt_respond_follows_hermes_expired_semantics() {
+        let state = test_state();
+        // No request id at all -> hard error the renderer surfaces.
+        let err = dispatch(state.clone(), "sudo.respond", json!({})).await;
+        assert!(err.unwrap_err().contains("no pending password request"));
+
+        // Late answer for a known-but-unpending id -> expired, not an error.
+        let expired = dispatch(state.clone(), "sudo.respond", json!({"request_id": "r1", "password": "x"}))
+            .await
+            .unwrap();
+        assert_eq!(expired["status"], "expired");
+
+        // A registered prompt is answered over the WS method.
+        let rx = request_prompt("r2");
+        let ok = dispatch(state.clone(), "secret.respond", json!({"request_id": "r2", "value": "sekret"}))
+            .await
+            .unwrap();
+        assert_eq!(ok["status"], "ok");
+        assert_eq!(rx.await.unwrap(), "sekret");
+
+        // Answering twice reports expired (entry consumed).
+        let again = dispatch(state, "secret.respond", json!({"request_id": "r2", "value": "x"}))
+            .await
+            .unwrap();
+        assert_eq!(again["status"], "expired");
+    }
+
+    #[tokio::test]
+    async fn message_react_persists_and_publishes() {
+        let state = test_state();
+        state
+            .store
+            .ensure_session("s-react", "desktop", None, None)
+            .expect("session");
+        state
+            .store
+            .append_message(
+                "s-react",
+                &crate::provider::Message {
+                    role: crate::provider::Role::User,
+                    content: Some("hello".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+            )
+            .expect("append");
+        let result = dispatch(
+            state.clone(),
+            "message.react",
+            json!({"session_id": "s-react", "emoji": "👍", "author": "user"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["ok"], true);
+        let row = result["row_id"].as_i64().unwrap();
+        let reactions = result["reactions"].as_array().unwrap();
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0]["emoji"], "👍");
+
+        // Toggling the same emoji retracts it.
+        let result = dispatch(
+            state,
+            "message.react",
+            json!({"session_id": "s-react", "row_id": row, "emoji": "👍", "author": "user"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["reactions"].as_array().unwrap().len(), 0);
     }
 }
