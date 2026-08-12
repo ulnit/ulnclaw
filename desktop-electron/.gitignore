@@ -2,3 +2,5 @@ node_modules/
 dist/
 release/
 *.log
+build/electron-types/
+build/install-stamp.json
