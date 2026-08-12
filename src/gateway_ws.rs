@@ -173,7 +173,8 @@ async fn dispatch(state: Arc<GatewayState>, method: &str, params: Value) -> Resu
         "session.title" => session_title(state, params),
         "config.get" => config_get(),
         "config.set" => config_set(params),
-        "reload.env" | "reload.mcp" => Ok(json!({"ok": true})),
+        "reload.env" => reload_env(),
+        "reload.mcp" => reload_mcp_ws(state, params).await,
         "approval.respond" => approval_respond(params),
         "clarify.respond" => clarify_respond(params),
         "sudo.respond" => prompt_respond(params, "password"),
@@ -185,7 +186,7 @@ async fn dispatch(state: Arc<GatewayState>, method: &str, params: Value) -> Resu
         "commands.catalog" => Ok(commands_catalog()),
         "complete.slash" => Ok(complete_slash(params)),
         "complete.path" => Ok(complete_path(params)),
-        "slash.exec" => Ok(json!({"ok": false, "error": "slash exec runs client-side in ulnclaw"})),
+        "slash.exec" => slash_exec(state, params),
         "llm.oneshot" => llm_oneshot(state, params).await,
         "message.react" => message_react(state, params),
         "wake.pause" | "wake.resume" => Ok(json!({"ok": true})),
@@ -611,6 +612,83 @@ async fn llm_oneshot(state: Arc<GatewayState>, params: Value) -> Result<Value, S
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({"text": result.content}))
+}
+
+// ---------------------------------------------------------------------------
+// Config env + MCP reload (hermes reload.env / reload.mcp parity)
+// ---------------------------------------------------------------------------
+
+fn reload_env() -> Result<Value, String> {
+    let applied = crate::config::reload_env();
+    Ok(json!({
+        "ok": true,
+        "applied": applied,
+        "output": format!("{applied} env var(s) reloaded from .env"),
+    }))
+}
+
+async fn reload_mcp_ws(state: Arc<GatewayState>, params: Value) -> Result<Value, String> {
+    let confirm = params.get("confirm").and_then(Value::as_bool).unwrap_or(false);
+    if !confirm {
+        return Ok(json!({
+            "warning": "Reloading MCP servers disconnects and reconnects every configured server (live sessions' prompt cache is invalidated). Pass confirm=true to proceed.",
+            "output": "MCP reload skipped — confirmation required.",
+        }));
+    }
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let report = state.agent.reload_mcp(&config).await;
+    Ok(json!({ "ok": true, "output": crate::mcp::format_reload_report(&report) }))
+}
+
+// ---------------------------------------------------------------------------
+// Gateway-side slash execution (hermes slash.exec parity, lean)
+// ---------------------------------------------------------------------------
+
+fn slash_exec(state: Arc<GatewayState>, params: Value) -> Result<Value, String> {
+    let session_id = params
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let command = params
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches('/')
+        .to_string();
+    if command.is_empty() {
+        return Err("empty command".into());
+    }
+    let mut parts = command.splitn(2, char::is_whitespace);
+    let base = parts.next().unwrap_or_default().to_lowercase();
+    let arg = parts.next().unwrap_or_default().trim().to_lowercase();
+
+    match base.as_str() {
+        "goal" => {
+            let mut manager =
+                crate::goals::GoalManager::new(session_id, Some(state.store.clone()), 0);
+            let no_goal = || "No active goal. Set one with /goal <text>.".to_string();
+            let output = match arg.as_str() {
+                "" | "status" => manager.status_line(),
+                "pause" => manager
+                    .pause("paused via /goal pause")
+                    .map(|s| format!("⏸ Goal paused: {}", s.goal))
+                    .unwrap_or_else(no_goal),
+                "resume" => manager
+                    .resume(false)
+                    .map(|s| format!("▶ Goal resumed: {}", s.goal))
+                    .unwrap_or_else(no_goal),
+                "clear" => {
+                    manager.clear();
+                    "✓ Goal cleared.".to_string()
+                }
+                other => return Err(format!("unknown goal subcommand: {other}")),
+            };
+            Ok(json!({ "output": output }))
+        }
+        other => Err(format!("not a gateway slash command: {other}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1274,5 +1352,91 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result["reactions"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn slash_exec_goal_lifecycle() {
+        let state = test_state();
+        state
+            .store
+            .ensure_session("s-goal", "desktop", None, None)
+            .expect("session");
+
+        // No goal yet -> status line says so.
+        let status = dispatch(
+            state.clone(),
+            "slash.exec",
+            json!({"session_id": "s-goal", "command": "goal status"}),
+        )
+        .await
+        .unwrap();
+        assert!(status["output"].as_str().unwrap().starts_with("No active goal"));
+
+        // Seed a goal through the manager, then pause/resume/clear over WS.
+        let mut manager = crate::goals::GoalManager::new("s-goal", Some(state.store.clone()), 5);
+        manager.set("ship the desktop", None, None);
+
+        let paused = dispatch(
+            state.clone(),
+            "slash.exec",
+            json!({"session_id": "s-goal", "command": "/goal pause"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(paused["output"], "⏸ Goal paused: ship the desktop");
+
+        let resumed = dispatch(
+            state.clone(),
+            "slash.exec",
+            json!({"session_id": "s-goal", "command": "goal resume"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed["output"], "▶ Goal resumed: ship the desktop");
+
+        let status = dispatch(
+            state.clone(),
+            "slash.exec",
+            json!({"session_id": "s-goal", "command": "goal"}),
+        )
+        .await
+        .unwrap();
+        assert!(status["output"].as_str().unwrap().contains("ship the desktop"));
+
+        let cleared = dispatch(
+            state.clone(),
+            "slash.exec",
+            json!({"session_id": "s-goal", "command": "goal clear"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared["output"], "✓ Goal cleared.");
+
+        assert!(dispatch(
+            state,
+            "slash.exec",
+            json!({"session_id": "s-goal", "command": "goal bogus"}),
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn reload_mcp_requires_confirm() {
+        let state = test_state();
+        let skipped = dispatch(state.clone(), "reload.mcp", json!({})).await.unwrap();
+        assert!(skipped["warning"].as_str().is_some());
+
+        let done = dispatch(state, "reload.mcp", json!({"confirm": true})).await.unwrap();
+        assert_eq!(done["ok"], true);
+        assert!(done["output"].as_str().unwrap().contains("No MCP servers connected"));
+    }
+
+    #[tokio::test]
+    async fn reload_env_reports_applied_count() {
+        let state = test_state();
+        let result = dispatch(state, "reload.env", json!({})).await.unwrap();
+        assert_eq!(result["ok"], true);
+        assert!(result["applied"].is_u64());
     }
 }
