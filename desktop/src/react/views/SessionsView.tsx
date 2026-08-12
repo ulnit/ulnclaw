@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { GatewayClient, SessionRow } from "../../gateway";
 import { Button } from "../../hermes/button";
 import { Icon } from "../Icon";
-import { relTime } from "../util";
+import { relTime, useT } from "../util";
 import { downloadBlob } from "./download";
 
 interface Props {
@@ -27,12 +27,53 @@ export function SessionsView({ client, onOpen }: Props) {
     return [...list].sort((a, b) => b.last_activity_at - a.last_activity_at);
   }, [rows, filter]);
 
+  const t = useT();
+
   const exportMd = async (id: string) => {
     try {
       const { blob, filename } = await client.exportSession(id, "md");
       downloadBlob(blob, filename);
     } catch {
       /* gateway unreachable */
+    }
+  };
+
+  const rename = async (id: string, current: string) => {
+    const title = window.prompt(t.sessionsView.renamePrompt, current);
+    if (title === null || title.trim() === "") return;
+    try {
+      await client.renameSession(id, title.trim());
+      load();
+    } catch {
+      window.alert(t.session.renameFailed);
+    }
+  };
+
+  const retitle = async (id: string) => {
+    try {
+      await client.retitleSession(id, true);
+      load();
+    } catch {
+      /* gateway unreachable */
+    }
+  };
+
+  const toggleArchive = async (id: string, archived: boolean) => {
+    try {
+      await client.setSessionEndReason(id, archived ? null : "complete");
+      load();
+    } catch {
+      /* gateway unreachable */
+    }
+  };
+
+  const remove = async (id: string) => {
+    if (!window.confirm(t.session.deleteConfirm)) return;
+    try {
+      await client.deleteSession(id);
+      load();
+    } catch {
+      window.alert(t.session.deleteFailed);
     }
   };
 
@@ -70,11 +111,38 @@ export function SessionsView({ client, onOpen }: Props) {
               </span>
             </button>
             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-              <Button variant="ghost" size="icon-xs" title="Open in chat" onClick={() => onOpen(s.id)}>
+              <Button variant="ghost" size="icon-xs" title={t.palette.resumeSession} onClick={() => onOpen(s.id)}>
                 <Icon name="fork" className="size-3" />
               </Button>
-              <Button variant="ghost" size="icon-xs" title="Export Markdown" onClick={() => void exportMd(s.id)}>
+              <Button variant="ghost" size="icon-xs" title={t.palette.exportMd} onClick={() => void exportMd(s.id)}>
                 <Icon name="download" className="size-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                title={t.palette.retitleCurrent}
+                onClick={() => void retitle(s.id)}
+              >
+                <Icon name="sparkle" className="size-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                title={t.palette.renameSession}
+                onClick={() => void rename(s.id, s.title ?? "")}
+              >
+                <Icon name="pencil" className="size-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                title={s.archived ? t.palette.unarchiveSession : t.palette.archiveSession}
+                onClick={() => void toggleArchive(s.id, Boolean(s.archived))}
+              >
+                <Icon name={s.archived ? "unarchive" : "archive"} className="size-3" />
+              </Button>
+              <Button variant="ghost" size="icon-xs" title={t.palette.deleteSession} onClick={() => void remove(s.id)}>
+                <Icon name="trash" className="size-3" />
               </Button>
             </div>
           </div>

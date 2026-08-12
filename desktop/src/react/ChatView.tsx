@@ -5,6 +5,7 @@ import type { GatewayClient, MessageRow, ToolCardEvent } from "../gateway";
 import { Button } from "../hermes/button";
 import { Loader } from "../hermes/loader";
 import { Icon } from "./Icon";
+import { ModelPicker } from "./ModelPicker";
 import { useT } from "./util";
 
 interface Props {
@@ -158,13 +159,7 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
     <main className="flex min-h-0 flex-col">
       <header className="flex items-center justify-between border-b border-[color-mix(in_srgb,var(--seed-fg)_4%,transparent)] px-4 py-2.5">
         <span className="text-[13px] font-semibold">{t.chrome.chatTab}</span>
-        <button
-          className="rounded-md px-2 py-0.5 text-xs text-(--dim) hover:bg-(--hover) hover:text-(--text)"
-          title="Model"
-          onClick={() => void client.models().then(setModel).catch(() => undefined)}
-        >
-          {model || "no model"}
-        </button>
+        <ModelPicker client={client} onChanged={setModel} />
       </header>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">

@@ -35,6 +35,8 @@ export const ICON = {
   wrench: s24('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
   warn: s16('<path d="M8 2.8 14.2 13.4H1.8Z"/><path d="M8 7v3.2M8 12v.01"/>'),
   info: s24('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
+  cpu: s16('<rect x="4.5" y="4.5" width="7" height="7" rx="1.2"/><rect x="6.8" y="6.8" width="2.4" height="2.4" rx="0.5"/><path d="M6.2 4.5V2.5M9.8 4.5V2.5M6.2 13.5v-2M9.8 13.5v-2M4.5 6.2h-2M4.5 9.8h-2M13.5 6.2h-2M13.5 9.8h-2"/>'),
+  chevronDown: s16('<path d="m4 6.2 4 4 4-4"/>'),
   check: s16('<path d="m3.5 8.6 3 3 6-6.8"/>'),
   checkCircle: s24('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>'),
   ban: s24('<circle cx="12" cy="12" r="10"/><path d="m5.5 5.5 13 13"/>'),
