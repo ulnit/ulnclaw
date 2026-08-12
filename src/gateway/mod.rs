@@ -12632,6 +12632,7 @@ async fn models(State(state): State<Arc<GatewayState>>) -> Json<Value> {
 }
 
 #[derive(serde::Deserialize)]
+#[derive(Default)]
 struct ModelOptionsQuery {
     refresh: Option<String>,
     include_unconfigured: Option<String>,
@@ -12652,6 +12653,36 @@ fn query_flag(value: Option<&String>) -> bool {
 /// setup hints. `?refresh=true` busts the catalog cache and probes every
 /// configured OpenAI-compatible endpoint; `?explicit_only=true` keeps
 /// only explicitly-configured rows (hermes query params).
+/// pub(crate) seam for the WS RPC layer (`crate::gateway_ws`).
+pub(crate) async fn model_options_pub(State(state): State<Arc<GatewayState>>) -> Response {
+    model_options(State(state), Query(ModelOptionsQuery::default()))
+        .await
+        .into_response()
+}
+
+/// Static slash-command catalog for the desktop composer's completion
+/// menu (`commands.catalog` / `complete.slash` over the WS RPC).
+pub(crate) fn slash_catalog_pub() -> Vec<(String, String)> {
+    vec![
+        ("/help".into(), "Show gateway slash-command help".into()),
+        ("/commands".into(), "List available commands".into()),
+        ("/skills".into(), "List installed skills".into()),
+        ("/clear".into(), "Start a fresh session".into()),
+        ("/compact".into(), "Compress conversation context".into()),
+        ("/title".into(), "Set the session title".into()),
+        ("/retry".into(), "Retry the last turn".into()),
+        ("/undo".into(), "Rewind the last turn".into()),
+        ("/model".into(), "Show or switch the model".into()),
+        ("/yolo".into(), "Toggle approval-free mode".into()),
+        ("/branch".into(), "Fork the conversation".into()),
+        ("/export".into(), "Export the session transcript".into()),
+        ("/stop".into(), "Interrupt the running turn".into()),
+        ("/queue".into(), "Queue a prompt for the next turn".into()),
+        ("/image".into(), "Stage an image for the next turn".into()),
+        ("/usage".into(), "Show session token usage".into()),
+    ]
+}
+
 async fn model_options(
     State(state): State<Arc<GatewayState>>,
     Query(query): Query<ModelOptionsQuery>,
@@ -14102,9 +14133,9 @@ async fn list_sessions(
                     Some(reason) => row.end_reason.as_deref() == Some(reason),
                 })
                 .filter(|row| match query.archived.as_deref() {
-                    Some("only") => row.end_reason.is_some(),
+                    Some("only") => row.archived,
                     Some("include") | None => true,
-                    _ => row.end_reason.is_none(),
+                    _ => !row.archived,
                 })
                 .filter(|row| {
                     query
@@ -17762,7 +17793,9 @@ async fn patch_session(
     };
     let unknown: Vec<&String> = obj
         .keys()
-        .filter(|k| k.as_str() != "title" && k.as_str() != "end_reason")
+        .filter(|k| {
+            k.as_str() != "title" && k.as_str() != "end_reason" && k.as_str() != "archived"
+        })
         .collect();
     if !unknown.is_empty() {
         let names = unknown
@@ -17784,6 +17817,19 @@ async fn patch_session(
         if let Err(e) = state.store.set_session_title(&id, &title) {
             return bad_request(&e.to_string(), Some("invalid_title"));
         }
+    }
+    match obj.get("archived") {
+        Some(Value::Bool(flag)) => {
+            if let Err(e) = state.store.set_session_archived(&id, *flag) {
+                return server_error(&e.to_string());
+            }
+        }
+        Some(Value::Null) => {
+            if let Err(e) = state.store.set_session_archived(&id, false) {
+                return server_error(&e.to_string());
+            }
+        }
+        _ => {}
     }
     match obj.get("end_reason") {
         // `end_reason: null` clears the recorded end (unarchive; P414).
