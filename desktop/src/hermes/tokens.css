@@ -1,0 +1,85 @@
+/* hermes primitive bridge (v0.3.2 PoC): tailwind v4 theme mapped onto the
+   ulnclaw seed tokens, so hermes components render verbatim. */
+@import "tailwindcss";
+
+/* --dt-* bridge: hermes theme-preset layer, fed from ulnclaw seeds */
+:root {
+  --dt-background: var(--bg);
+  --dt-foreground: var(--text);
+  --dt-card: var(--panel-2);
+  --dt-card-foreground: var(--text);
+  --dt-muted: var(--hover);
+  --dt-muted-foreground: var(--dim);
+  --dt-popover: var(--panel-2);
+  --dt-popover-foreground: var(--text);
+  --dt-primary: var(--accent);
+  --dt-primary-foreground: #fcfcfc;
+  --dt-secondary: var(--hover);
+  --dt-secondary-foreground: var(--text);
+  --dt-accent: var(--hover-strong);
+  --dt-accent-foreground: var(--text);
+  --dt-border: var(--border);
+  --dt-input: var(--border);
+  --dt-ring: var(--accent);
+  --dt-destructive: var(--bad);
+  --dt-destructive-foreground: #fff;
+  --dt-midground: var(--accent);
+  --dt-midground-foreground: #fcfcfc;
+  --dt-font-sans: var(--font-stack);
+  --dt-font-mono: var(--mono);
+  --radius-scalar: 1;
+  /* --ui-* layer used by button variants */
+  --ui-text-primary: var(--text);
+  --ui-text-secondary: var(--dim-strong, var(--dim));
+  --ui-bg-quaternary: var(--hover);
+  --ui-stroke-secondary: var(--border-strong);
+  --chrome-action-hover: var(--hover-strong);
+  --sidebar-ring: var(--ring);
+  --sidebar-border: var(--border);
+  --sidebar-accent: var(--hover-strong);
+  --sidebar-accent-foreground: var(--text);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: #fcfcfc;
+  --sidebar-foreground: var(--text);
+  --sidebar: var(--panel);
+}
+
+@theme inline {
+  --color-background: var(--dt-background);
+  --color-foreground: var(--dt-foreground);
+  --color-card: var(--dt-card);
+  --color-card-foreground: var(--dt-card-foreground);
+  --color-muted: var(--dt-muted);
+  --color-muted-foreground: var(--dt-muted-foreground);
+  --color-popover: var(--dt-popover);
+  --color-popover-foreground: var(--dt-popover-foreground);
+  --color-primary: var(--dt-primary);
+  --color-primary-foreground: var(--dt-primary-foreground);
+  --color-secondary: var(--dt-secondary);
+  --color-secondary-foreground: var(--dt-secondary-foreground);
+  --color-accent: var(--dt-accent);
+  --color-accent-foreground: var(--dt-accent-foreground);
+  --color-border: var(--dt-border);
+  --color-input: var(--dt-input);
+  --color-ring: var(--dt-ring);
+  --color-destructive: var(--dt-destructive);
+  --color-destructive-foreground: var(--dt-destructive-foreground);
+  --color-midground: var(--dt-midground);
+  --color-midground-foreground: var(--dt-midground-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans: var(--dt-font-sans);
+  --font-mono: var(--dt-font-mono);
+  --radius-xs: calc(var(--radius-scalar) * 0.125rem);
+  --radius-sm: calc(var(--radius-scalar) * 0.5rem);
+  --radius-md: calc(var(--radius-scalar) * 0.625rem);
+  --radius-lg: calc(var(--radius-scalar) * 0.75rem);
+  --radius-xl: calc(var(--radius-scalar) * 1rem);
+  --radius-2xl: calc(var(--radius-scalar) * 1.5rem);
+}

@@ -39,6 +39,10 @@ import { clearIntro, renderIntro } from "./intro";
 import { ActivityTimer, formatElapsed } from "./activity-timer";
 import { initWakeIndicator } from "./wake";
 import { ICON } from "./icons";
+// v0.3.2 PoC: hermes React primitives probe (dev or ?probe=1 only).
+if (import.meta.env.DEV || location.search.includes("probe=1")) {
+  void import("./react-probe").catch(() => undefined);
+}
 
 // Tauri IPC is optional: the same UI runs in a plain browser tab against
 // a gateway (dev mode), so guard the dynamic import.
