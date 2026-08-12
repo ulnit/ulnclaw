@@ -8,6 +8,7 @@ import { JobsView } from "./views/JobsView";
 import { UsageView } from "./views/UsageView";
 import { ModelsView } from "./views/ModelsView";
 import { SettingsView } from "./views/SettingsView";
+import { Palette } from "./Palette";
 
 export function App() {
   const [client] = useState(() => new GatewayClient(loadSettings()));
@@ -15,6 +16,7 @@ export function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
   const [online, setOnline] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -35,6 +37,17 @@ export function App() {
     setActiveId(id);
     setView("chat");
   };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[14.8125rem_1fr]">
@@ -82,6 +95,15 @@ export function App() {
           <SettingsView client={client} />
         </div>
       )}
+      <Palette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onView={(v) => setView(v)}
+        onNewSession={() => {
+          setActiveId(null);
+          setView("chat");
+        }}
+      />
     </div>
   );
 }
