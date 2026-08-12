@@ -131,6 +131,22 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Headless gateway alias (hermes `serve` parity) — desktop shells
+    /// spawn `ulnclaw serve --host 127.0.0.1 --port 0`.
+    Serve {
+        /// Bind host (overrides [gateway] host / ULNCLAW_GATEWAY_HOST)
+        #[arg(long)]
+        host: Option<String>,
+        /// Bind port (overrides [gateway] port / ULNCLAW_GATEWAY_PORT)
+        #[arg(long)]
+        port: Option<u16>,
+        /// Terminate the recorded gateway instance and take over
+        #[arg(long)]
+        replace: bool,
+        /// Start even if another gateway instance is already running
+        #[arg(long)]
+        force: bool,
+    },
     /// Web dashboard server management — run/status/stop over the gateway
     /// process that serves the dashboard (hermes dashboard/serve)
     Dashboard {
@@ -3012,6 +3028,7 @@ async fn dispatch(cli: Cli, config: UlncLawConfig) -> Result<(), String> {
         Commands::Egress { action } => egress_cmd(action).await,
         Commands::Cron { action } => cron_cmd(&config, action.unwrap_or(CronAction::List)).await,
         Commands::Gateway { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
+        Commands::Serve { host, port, replace, force } => gateway_cmd(&config, host, port, replace, force).await,
         Commands::Dashboard { action, host, port } => {
             dashboard_cmd(&config, action.as_deref().unwrap_or("run"), host, port).await
         }

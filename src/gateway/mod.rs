@@ -11213,6 +11213,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/v1/delegations", get(list_delegations_http))
         .route("/v1/delegations/:id", get(get_delegation_http))
         .route("/api/desktop/events", get(desktop_events))
+        .route("/api/ws", get(crate::gateway_ws::dashboard_ws))
         .route("/api/desktop/read-response", post(desktop_read_response))
         .route("/v1/browser/status", get(browser_status))
         .route("/v1/browser/connect", post(browser_connect))
@@ -12155,20 +12156,28 @@ pub async fn serve_multiplex(
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| AgentError::config(format!("gateway bind {}: {}", addr, e)))?;
+    // Report the ACTUAL bound address so `--port 0` (ephemeral, used by
+    // desktop shells) announces the real port on stdout for port
+    // discovery.
+    let bound = listener
+        .local_addr()
+        .map_err(|e| AgentError::config(format!("gateway local_addr {}: {}", addr, e)))?;
+    let bound_host = if bound.ip().is_unspecified() { "127.0.0.1" } else { &bound.ip().to_string() };
+    let bound_display = format!("{bound_host}:{}", bound.port());
     tracing::info!(
         "ulnclaw gateway listening on http://{} (auth: {})",
-        addr,
+        bound_display,
         if state.key.is_some() { "bearer token" } else { "none" }
     );
     println!(
         "ulnclaw gateway listening on http://{} (auth: {})",
-        addr,
+        bound_display,
         if state.key.is_some() { "bearer token" } else { "none" }
     );
     // P712: READY=1 + STATUS once the listener is bound (hermes
     // `watchdog.ready` after a configured gateway is truly running).
     crate::systemd_notify::notify_ready(&format!(
-        "ulnclaw gateway listening on http://{addr}"
+        "ulnclaw gateway listening on http://{bound_display}"
     ));
     // Raft bridge spawn (hermes `_spawn_bridge`) — the wake endpoint
     // rides this listener, so the bridge gets its URL from the bound
@@ -12179,7 +12188,7 @@ pub async fn serve_multiplex(
         } else {
             host.to_string()
         };
-        let endpoint = format!("http://{endpoint_host}:{port}/webhooks/raft/wake");
+        let endpoint = format!("http://{endpoint_host}:{}/webhooks/raft/wake", bound.port());
         crate::raft::spawn_bridge(&state.agent.context().config.messaging.raft, &endpoint)
     } else {
         None

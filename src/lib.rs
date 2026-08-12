@@ -146,6 +146,7 @@ pub mod feishu_meeting;
 pub mod feishu_ws;
 pub mod focus_view;
 pub mod gateway;
+pub mod gateway_ws;
 pub mod gateway_pidfile;
 pub mod git_diff;
 pub mod goals;
