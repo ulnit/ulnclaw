@@ -1812,6 +1812,22 @@ function unpackedPathFor(filePath) {
   return filePath.replace(/app\.asar(?=$|[\\/])/, 'app.asar.unpacked')
 }
 
+function bundledulnclawBinary(): string | null {
+  if (!process.resourcesPath) return null
+  const candidates = [
+    path.join(process.resourcesPath, 'binaries', 'ulnclaw'),
+    path.join(process.resourcesPath, 'binaries', 'ulnclaw.exe'),
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      // ignore
+    }
+  }
+  return null
+}
+
 function findOnPath(command) {
   if (!command) {
     return null
@@ -3940,7 +3956,11 @@ function resolveulnclawBackend(backendArgs) {
         rememberLog(`Ignoring Windows ulnclaw override under WSL: ${ulnclawOverride}`)
       }
     } else {
-      ulnclawCommand = findOnPath('ulnclaw')
+      // Self-contained installers ship the gateway binary next to the app
+      // (resources/binaries/). Prefer it over whatever is on PATH so a clean
+      // machine without a ulnclaw install still boots straight into the shell.
+      const bundled = bundledulnclawBinary()
+      ulnclawCommand = bundled ?? findOnPath('ulnclaw')
     }
 
     if (ulnclawCommand) {

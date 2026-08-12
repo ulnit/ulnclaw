@@ -1,0 +1,135 @@
+# Build the "ulnclaw desktop" Electron installers (Windows NSIS exe, macOS
+# dmg, Linux AppImage) and attach them to the release for the pushed tag.
+#
+# The installers are self-contained: the core `ulnclaw` gateway binary is
+# built first (statically linked on Windows/musl) and staged into
+# desktop-electron/resources/binaries/ so the packaged app can spawn the
+# gateway without a local Rust/Python toolchain (fixes the Windows
+# "CONNECTING / gateway won't start" freeze on clean installs).
+
+name: release-desktop
+
+on:
+  push:
+    tags: ["vd*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. vd0.7.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      # Static CRT: the bundled gateway must not depend on VCRUNTIME140.dll
+      # being present on a clean Windows install.
+      RUSTFLAGS: "-C target-feature=+crt-static"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+      - name: Build core binary (static)
+        run: cargo build --release
+      - name: Stage gateway binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force desktop-electron/resources/binaries | Out-Null
+          Copy-Item target\release\ulnclaw.exe desktop-electron\resources\binaries\ulnclaw.exe
+      - name: Install desktop deps
+        working-directory: desktop-electron
+        run: npm ci
+      - name: Package NSIS installer
+        working-directory: desktop-electron
+        run: npm run dist:win:nsis
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            desktop-electron/release/*.exe
+            desktop-electron/dist/*.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+      - name: Build core binary (universal)
+        run: |
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          mkdir -p target/universal/release
+          lipo -create -output target/universal/release/ulnclaw \
+            target/x86_64-apple-darwin/release/ulnclaw \
+            target/aarch64-apple-darwin/release/ulnclaw
+      - name: Stage gateway binary
+        run: |
+          mkdir -p desktop-electron/resources/binaries
+          cp target/universal/release/ulnclaw desktop-electron/resources/binaries/ulnclaw
+          chmod +x desktop-electron/resources/binaries/ulnclaw
+      - name: Install desktop deps
+        working-directory: desktop-electron
+        run: npm ci
+      - name: Package dmg
+        working-directory: desktop-electron
+        run: npm run dist:mac:dmg
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            desktop-electron/release/*.dmg
+            desktop-electron/dist/*.dmg
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+      - name: Build core binary (musl static)
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo build --release --target x86_64-unknown-linux-musl
+      - name: Stage gateway binary
+        run: |
+          mkdir -p desktop-electron/resources/binaries
+          cp target/x86_64-unknown-linux-musl/release/ulnclaw desktop-electron/resources/binaries/ulnclaw
+          chmod +x desktop-electron/resources/binaries/ulnclaw
+      - name: Install desktop deps
+        working-directory: desktop-electron
+        run: npm ci
+      - name: Package AppImage
+        working-directory: desktop-electron
+        run: npm run dist:linux
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            desktop-electron/release/*
+            desktop-electron/dist/*

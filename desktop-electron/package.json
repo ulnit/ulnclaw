@@ -163,8 +163,8 @@
   "build": {
     "electronVersion": "40.10.2",
     "appId": "com.nousresearch.ulnclaw",
-    "productName": "ulnclaw",
-    "executableName": "ulnclaw",
+    "productName": "ulnclaw desktop",
+    "executableName": "ulnclaw-desktop",
     "protocols": [
       {
         "name": "ulnclaw Protocol",
@@ -195,6 +195,10 @@
       {
         "from": "assets/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "resources/binaries",
+        "to": "binaries"
       }
     ],
     "asar": true,
