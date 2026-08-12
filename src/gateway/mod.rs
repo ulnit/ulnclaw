@@ -73,6 +73,7 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 
 mod kanban;
+mod parity;
 mod pets;
 mod projects;
 
@@ -11088,6 +11089,79 @@ pub fn router(state: Arc<GatewayState>) -> Router {
             get(get_response).delete(delete_response),
         )
         .route("/api/sessions", get(list_sessions).post(create_session))
+        .route("/api/profiles/sessions", get(profiles_sessions))
+        .route(
+            "/api/profiles/sessions/sidebar",
+            get(profiles_sessions_sidebar),
+        )
+        .route("/api/profiles/active", get(profiles_active))
+        // v0.7 desktop parity — hermes renderer views against ulnclaw.
+        .route("/api/status", get(parity::get_status))
+        .route("/api/analytics/usage", get(parity::analytics_usage))
+        .route("/api/actions/:name/status", get(parity::action_status))
+        .route("/api/skills", get(parity::skills_list))
+        .route(
+            "/api/skills/toggle",
+            put(parity::skills_toggle).post(parity::skills_toggle),
+        )
+        .route("/api/skills/hub/sources", get(parity::hub_sources))
+        .route("/api/skills/hub/search", get(parity::hub_search))
+        .route("/api/skills/hub/preview", get(parity::hub_preview))
+        .route("/api/skills/hub/scan", get(parity::hub_scan))
+        .route("/api/skills/hub/install", post(parity::hub_install))
+        .route("/api/skills/hub/uninstall", post(parity::hub_uninstall))
+        .route("/api/skills/hub/update", post(parity::hub_update))
+        .route("/api/tools/toolsets", get(parity::toolsets_list))
+        .route("/api/tools/toolsets/:name", put(parity::toolset_update))
+        .route("/api/tools/toolsets/:name/config", get(parity::toolset_config))
+        .route("/api/tools/toolsets/:name/models", get(parity::toolset_models))
+        .route("/api/tools/toolsets/:name/model", put(parity::toolset_noop))
+        .route("/api/tools/toolsets/:name/provider", put(parity::toolset_noop))
+        .route("/api/tools/toolsets/:name/env", put(parity::toolset_noop))
+        .route("/api/tools/toolsets/:name/post-setup", post(parity::toolset_noop))
+        .route("/api/tools/terminal/backends", get(parity::terminal_backends))
+        .route("/api/tools/terminal/backend", put(parity::terminal_backend_set))
+        .route("/api/tools/computer-use/status", get(parity::computer_use_status))
+        .route(
+            "/api/tools/computer-use/permissions/grant",
+            post(parity::computer_use_grant),
+        )
+        .route("/api/cron/blueprints", get(parity::cron_blueprints))
+        .route(
+            "/api/cron/blueprints/instantiate",
+            post(parity::cron_blueprints_instantiate),
+        )
+        .route("/api/cron/delivery-targets", get(parity::cron_delivery_targets))
+        .route("/api/ops/doctor", post(parity::ops_doctor))
+        .route("/api/ops/backup", post(parity::ops_backup))
+        .route("/api/ops/debug-share", post(parity::ops_debug_share))
+        .route(
+            "/api/memory/providers/:provider/config",
+            get(parity::memory_provider_config),
+        )
+        .route(
+            "/api/memory/providers/:provider/oauth/status",
+            get(parity::memory_provider_oauth_status),
+        )
+        .route(
+            "/api/memory/providers/:provider/oauth/start",
+            post(parity::memory_provider_oauth_start),
+        )
+        .route("/api/webhooks/enable", post(parity::webhooks_enable))
+        .route("/api/ulnclaw/update/check", get(parity::update_check))
+        .route("/api/ulnclaw/update", post(parity::update_run))
+        // cron path aliases — the renderer uses /api/cron/jobs while the
+        // legacy surface is /api/jobs.
+        .route("/api/cron/jobs", post(create_job))
+        .route(
+            "/api/cron/jobs/:id",
+            get(get_job).patch(update_job).delete(delete_job),
+        )
+        .route("/api/cron/jobs/:id/pause", post(pause_job))
+        .route("/api/cron/jobs/:id/resume", post(resume_job))
+        .route("/api/cron/jobs/:id/trigger", post(run_job_now))
+        .route("/api/cron/jobs/:id/runs", get(job_runs))
+        .route("/api/cron/jobs", get(list_jobs))
         .route("/api/sessions/search", get(search_sessions))
         .route("/api/sessions/prune", post(prune_sessions))
         .route("/api/sessions/archive", post(archive_sessions))
@@ -13923,6 +13997,7 @@ async fn delete_response(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[derive(Default)]
 struct SessionsQuery {
     limit: Option<usize>,
     /// P509: `?preview=true` attaches a `last_message` snippet to each
@@ -13936,6 +14011,21 @@ struct SessionsQuery {
     /// P628: attach per-row context_percent/context_used (conversation
     /// estimate + one shared static-payload snapshot vs the budget).
     context: Option<bool>,
+    /// hermes desktop parity: `archived=exclude|include|only` over the
+    /// end_reason column (exclude = open sessions only).
+    archived: Option<String>,
+    /// hermes desktop parity: `order=recent|created`.
+    order: Option<String>,
+    /// hermes desktop parity: pagination offset.
+    offset: Option<usize>,
+    /// hermes desktop parity: comma list of sources to drop.
+    exclude_sources: Option<String>,
+    /// hermes desktop parity: profile scope (single-profile gateway
+    /// tags rows "default"; `all` is the unified view).
+    profile: Option<String>,
+    /// hermes desktop parity: drop sessions with fewer messages than
+    /// this (the sidebar slices pass 1 to hide never-used sessions).
+    min_messages: Option<i64>,
 }
 
 /// Attach the owning project slug (longest-prefix folder match on the
@@ -13954,6 +14044,10 @@ fn enrich_sessions_with_projects(
     let mapping = crate::projects_db::connect(None)
         .ok()
         .and_then(|conn| crate::projects_db::projects_for_paths(&conn, &cwds).ok());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0);
     rows.into_iter()
         .map(|row| {
             let mut value = serde_json::to_value(&row).unwrap_or(Value::Null);
@@ -13962,11 +14056,20 @@ fn enrich_sessions_with_projects(
                 .as_ref()
                 .and_then(|cwd| mapping.as_ref().and_then(|m| m.get(cwd)))
                 .map(|project| project.slug.clone());
+            let is_active = row.ended_at.is_none() && now - row.last_activity_at < 300.0;
             if let Some(object) = value.as_object_mut() {
                 object.insert(
                     "project".to_string(),
                     slug.map(Value::String).unwrap_or(Value::Null),
                 );
+                // hermes desktop parity: the renderer sorts on
+                // `last_active` and renders the live dot from
+                // `is_active` (300s heuristic, same as the python
+                // gateway's list_sessions_rich rows).
+                object.insert("last_active".to_string(), json!(row.last_activity_at));
+                object.insert("is_active".to_string(), json!(is_active));
+                object.insert("profile".to_string(), json!("default"));
+                object.insert("is_default_profile".to_string(), json!(true));
             }
             value
         })
@@ -13998,6 +14101,50 @@ async fn list_sessions(
                     Some("none") | Some("") => row.end_reason.is_none(),
                     Some(reason) => row.end_reason.as_deref() == Some(reason),
                 })
+                .filter(|row| match query.archived.as_deref() {
+                    Some("only") => row.end_reason.is_some(),
+                    Some("include") | None => true,
+                    _ => row.end_reason.is_none(),
+                })
+                .filter(|row| {
+                    query
+                        .exclude_sources
+                        .as_deref()
+                        .map(|list| {
+                            !list
+                                .split(',')
+                                .map(str::trim)
+                                .any(|ex| !ex.is_empty() && ex == row.source)
+                        })
+                        .unwrap_or(true)
+                })
+                .filter(|row| {
+                    query
+                        .min_messages
+                        .map(|min| row.message_count >= min)
+                        .unwrap_or(true)
+                })
+                .collect();
+            let rows = if matches!(query.order.as_deref(), Some("created")) {
+                let mut sorted = rows;
+                sorted.sort_by(|a, b| {
+                    b.started_at
+                        .partial_cmp(&a.started_at)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                sorted
+            } else {
+                let mut sorted = rows;
+                sorted.sort_by(|a, b| {
+                    b.last_activity_at
+                        .partial_cmp(&a.last_activity_at)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                sorted
+            };
+            let rows: Vec<crate::session::sqlite::SessionRow> = rows
+                .into_iter()
+                .skip(query.offset.unwrap_or(0))
                 .take(limit)
                 .collect();
             let mut data = enrich_sessions_with_projects(rows);
@@ -14051,10 +14198,152 @@ async fn list_sessions(
                     }
                 }
             }
-            Json(json!({"object": "list", "data": data})).into_response()
+            Json(json!({
+                "object": "list",
+                "data": data,
+                "sessions": data,
+                "limit": limit,
+                "offset": query.offset.unwrap_or(0),
+                "total": data.len(),
+            }))
+            .into_response()
         }
         Err(e) => server_error(&e.to_string()),
     }
+}
+
+/// `GET /api/profiles/sessions` — hermes desktop's unified cross-profile
+/// session list. The standalone gateway is single-profile, so this is the
+/// normal list with every row tagged `profile="default"` (the multiplex
+/// mirror covers real multi-profile deployments).
+async fn profiles_sessions(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<SessionsQuery>,
+) -> Response {
+    let response = list_sessions(State(state), Query(query)).await;
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        return (parts.status, parts.headers).into_response();
+    };
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return (parts.status, parts.headers).into_response();
+    };
+    for key in ["data", "sessions"] {
+        if let Some(rows) = value.get_mut(key).and_then(|v| v.as_array_mut()) {
+            for row in rows {
+                if let Some(obj) = row.as_object_mut() {
+                    obj.entry("profile".to_string())
+                        .or_insert_with(|| serde_json::Value::String("default".to_string()));
+                }
+            }
+        }
+    }
+    Json(value).into_response()
+}
+
+/** hermes desktop parity: `GET /api/profiles/active` — the sticky active
+profile plus the profile this gateway process serves. ulnclaw runs one
+home/profile per gateway, so both are always "default"; the desktop's
+profile pill just needs the shape. */
+async fn profiles_active() -> Response {
+    Json(json!({"active": "default", "current": "default"})).into_response()
+}
+
+/** One sidebar slice via the shared list_sessions machinery. */
+async fn session_slice_rows(state: Arc<GatewayState>, query: SessionsQuery) -> Vec<Value> {
+    let response = list_sessions(State(state), Query(query)).await;
+    let (_, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Vec::new();
+    };
+    value
+        .get("data")
+        .and_then(|rows| rows.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/** hermes desktop parity query for `GET /api/profiles/sessions/sidebar`. */
+#[derive(Debug, Deserialize)]
+struct SidebarQuery {
+    recents_profile: Option<String>,
+    recents_limit: Option<usize>,
+    recents_exclude: Option<String>,
+    cron_limit: Option<usize>,
+    messaging_limit: Option<usize>,
+    messaging_exclude: Option<String>,
+}
+
+/** hermes desktop parity: `GET /api/profiles/sessions/sidebar` — the three
+sidebar windows (recents scoped to the active profile, cron and messaging
+cross-source) batched into one payload so the sidebar refresh is a single
+round-trip. Same row projection and 300s active heuristic as
+`/api/profiles/sessions`; single-profile gateway, so "profiles_truncated"
+only ever carries the default profile. */
+async fn profiles_sessions_sidebar(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<SidebarQuery>,
+) -> Response {
+    let clamp_limit = |limit: Option<usize>, default: usize| limit.unwrap_or(default).clamp(1, 500);
+    let recents_cap = clamp_limit(query.recents_limit, 20);
+    let cron_cap = clamp_limit(query.cron_limit, 50);
+    let messaging_cap = clamp_limit(query.messaging_limit, 100);
+
+    let recents_rows = session_slice_rows(
+        state.clone(),
+        SessionsQuery {
+            limit: Some(recents_cap),
+            offset: Some(0),
+            archived: Some("exclude".to_string()),
+            order: Some("recent".to_string()),
+            min_messages: Some(1),
+            exclude_sources: query.recents_exclude,
+            profile: Some(query.recents_profile.unwrap_or_else(|| "all".to_string())),
+            ..Default::default()
+        },
+    )
+    .await;
+    let cron_rows = session_slice_rows(
+        state.clone(),
+        SessionsQuery {
+            limit: Some(cron_cap),
+            offset: Some(0),
+            archived: Some("exclude".to_string()),
+            order: Some("recent".to_string()),
+            min_messages: Some(1),
+            source: Some("cron".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let messaging_rows = session_slice_rows(
+        state.clone(),
+        SessionsQuery {
+            limit: Some(messaging_cap),
+            offset: Some(0),
+            archived: Some("exclude".to_string()),
+            order: Some("recent".to_string()),
+            min_messages: Some(1),
+            exclude_sources: query.messaging_exclude,
+            ..Default::default()
+        },
+    )
+    .await;
+    let messaging_total = messaging_rows.len();
+
+    Json(json!({
+        "recents": {
+            "sessions": recents_rows,
+            "profiles_truncated": {"default": recents_rows.len() >= recents_cap},
+        },
+        "cron": {"sessions": cron_rows},
+        "messaging": {"sessions": messaging_rows, "total": messaging_total},
+        "errors": []
+    }))
+    .into_response()
 }
 
 /// Body for `POST /api/sessions` — every field optional (P426; hermes
@@ -17662,7 +17951,7 @@ async fn list_jobs(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct CreateJobRequest {
     #[serde(default)]
     name: Option<String>,

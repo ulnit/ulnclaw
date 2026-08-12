@@ -132,6 +132,11 @@ pub struct SessionRow {
     /// archive flow; distinct from the `end_reason = "archived"` the
     /// desktop PATCH flow writes).
     pub archived: bool,
+    /// hermes desktop parity: durable server-side pin flag — the sidebar
+    /// Pinned section and the auto-archive sweep both honour it.
+    pub pinned: bool,
+    /// hermes desktop parity: tool-call tally surfaced on session rows.
+    pub tool_call_count: i64,
 }
 
 /// Per-model usage aggregate (hermes `_get_models_analytics` row).
@@ -1468,7 +1473,7 @@ impl SqliteSessionStore {
             "SELECT id, source, model, title, cwd, parent_session_id, started_at,
                     COALESCE(last_activity_at, started_at),
                     ended_at, end_reason, message_count, input_tokens, output_tokens,
-                    archived
+                    archived, pinned, tool_call_count
              FROM sessions WHERE id = ?1",
             params![session_id],
             |row| {
@@ -1487,6 +1492,8 @@ impl SqliteSessionStore {
                     input_tokens: row.get(11)?,
                     output_tokens: row.get(12)?,
                     archived: row.get::<_, i64>(13)? != 0,
+                    pinned: row.get::<_, i64>(14)? != 0,
+                    tool_call_count: row.get(15)?,
                 })
             },
         )
@@ -1520,7 +1527,7 @@ impl SqliteSessionStore {
                 "SELECT id, source, model, title, cwd, parent_session_id, started_at,
                         COALESCE(last_activity_at, started_at),
                         ended_at, end_reason, message_count, input_tokens, output_tokens,
-                        archived
+                        archived, pinned, tool_call_count
                  FROM sessions ORDER BY started_at DESC LIMIT ?1",
             )
             .map_err(|e| AgentError::session(e.to_string()))?;
@@ -1541,6 +1548,8 @@ impl SqliteSessionStore {
                     input_tokens: row.get(11)?,
                     output_tokens: row.get(12)?,
                     archived: row.get::<_, i64>(13)? != 0,
+                    pinned: row.get::<_, i64>(14)? != 0,
+                    tool_call_count: row.get(15)?,
                 })
             })
             .map_err(|e| AgentError::session(e.to_string()))?;
