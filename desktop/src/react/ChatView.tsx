@@ -25,6 +25,43 @@ interface ToolCard {
 const md = (text: string): string =>
   DOMPurify.sanitize(marked.parse(text, { async: false }) as string);
 
+const SLASH_COMMANDS: { name: string; key: string }[] = [
+  { name: "help", key: "help" },
+  { name: "skills", key: "skills" },
+  { name: "tools", key: "tools" },
+  { name: "recap", key: "recap" },
+  { name: "title", key: "retitle" },
+  { name: "usage", key: "usage" },
+  { name: "insights", key: "insights" },
+  { name: "kanban", key: "kanban" },
+  { name: "new", key: "newSession" },
+  { name: "clear", key: "clear" },
+  { name: "compress", key: "compress" },
+  { name: "doctor", key: "doctor" },
+  { name: "runs", key: "runs" },
+  { name: "projects", key: "projects" },
+  { name: "config", key: "config" },
+  { name: "webhooks", key: "webhooks" },
+  { name: "models", key: "models" },
+  { name: "plugins", key: "plugins" },
+  { name: "status", key: "status" },
+  { name: "context", key: "context" },
+  { name: "whoami", key: "whoami" },
+  { name: "version", key: "version" },
+  { name: "stop", key: "stop" },
+  { name: "retry", key: "retry" },
+  { name: "undo", key: "undo" },
+  { name: "verbose", key: "verbose" },
+  { name: "yolo", key: "yolo" },
+  { name: "reasoning", key: "reasoning" },
+  { name: "memory", key: "memory" },
+  { name: "sessions", key: "sessions" },
+  { name: "diff", key: "diff" },
+  { name: "rollback", key: "rollback" },
+  { name: "cron", key: "cron" },
+  { name: "goal", key: "goal" },
+];
+
 function dayKey(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleDateString();
 }
@@ -38,6 +75,7 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
   const t = useT();
   const [model, setModel] = useState("");
   const [attach, setAttach] = useState<{ name: string; dataUrl: string }[]>([]);
+  const [slashIdx, setSlashIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -155,6 +193,18 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
     return out;
   }, [visible]);
 
+  const slashQuery = draft.startsWith("/") && !draft.includes(" ") ? draft.slice(1) : null;
+  const slashList =
+    slashQuery === null
+      ? []
+      : SLASH_COMMANDS.filter((c) => c.name.startsWith(slashQuery.toLowerCase())).slice(0, 9);
+  const slashCatalog = t.slash as unknown as Record<string, string>;
+
+  const applySlash = (name: string) => {
+    setDraft(`/${name} `);
+    setSlashIdx(0);
+  };
+
   return (
     <main className="flex min-h-0 flex-col">
       <header className="flex items-center justify-between border-b border-[color-mix(in_srgb,var(--seed-fg)_4%,transparent)] px-4 py-2.5">
@@ -228,7 +278,26 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
         </div>
       </div>
 
-      <div className="px-4 pb-4 pt-1">
+      <div className="relative px-4 pb-4 pt-1">
+        {slashList.length > 0 && (
+          <div className="absolute bottom-full left-1/2 z-40 mb-1 w-[26rem] -translate-x-1/2 overflow-hidden rounded-lg border border-(--border) bg-(--seed-card) py-1 shadow-[var(--shadow-composer)]">
+            {slashList.map((c, i) => (
+              <button
+                key={c.name}
+                onMouseEnter={() => setSlashIdx(i)}
+                onClick={() => applySlash(c.name)}
+                className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left ${
+                  i === slashIdx ? "bg-(--hover-strong)" : ""
+                }`}
+              >
+                <span className="font-mono text-[12.5px] font-semibold text-(--accent)">/{c.name}</span>
+                <span className="truncate text-[11.5px] text-(--dim)">
+                  {slashCatalog[c.key] ?? ""}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="mx-auto flex w-full max-w-[48rem] flex-wrap items-center gap-1.5 rounded-2xl border border-[color-mix(in_srgb,var(--ring)_18%,var(--border))] bg-(--panel-2) p-3 shadow-[var(--shadow-composer)] focus-within:border-[color-mix(in_srgb,var(--accent)_40%,var(--border))]">
           {attach.length > 0 && (
             <div className="flex w-full flex-wrap gap-1.5 pb-1">
@@ -252,6 +321,28 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              if (slashList.length > 0) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSlashIdx((i) => (i + 1) % slashList.length);
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSlashIdx((i) => (i - 1 + slashList.length) % slashList.length);
+                  return;
+                }
+                if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                  e.preventDefault();
+                  applySlash(slashList[Math.min(slashIdx, slashList.length - 1)].name);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setDraft("");
+                  return;
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void send();
