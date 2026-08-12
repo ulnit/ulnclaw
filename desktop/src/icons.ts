@@ -36,6 +36,7 @@ export const ICON = {
   warn: s16('<path d="M8 2.8 14.2 13.4H1.8Z"/><path d="M8 7v3.2M8 12v.01"/>'),
   info: s24('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
   cpu: s16('<rect x="4.5" y="4.5" width="7" height="7" rx="1.2"/><rect x="6.8" y="6.8" width="2.4" height="2.4" rx="0.5"/><path d="M6.2 4.5V2.5M9.8 4.5V2.5M6.2 13.5v-2M9.8 13.5v-2M4.5 6.2h-2M4.5 9.8h-2M13.5 6.2h-2M13.5 9.8h-2"/>'),
+  search: s16('<circle cx="7" cy="7" r="4.2"/><path d="m10.2 10.2 3.2 3.2"/>'),
   volume: s16('<path d="M2.5 6.2v3.6h2.4l3.1 2.7V3.5L4.9 6.2Z"/><path d="M10.2 5.6a3.4 3.4 0 0 1 0 4.8"/><path d="M11.8 4a5.6 5.6 0 0 1 0 8"/>'),
   stopSpeak: s16('<path d="M2.5 6.2v3.6h2.4l3.1 2.7V3.5L4.9 6.2Z"/><path d="m10.5 6 3.5 4m0-4-3.5 4"/>'),
   chevronDown: s16('<path d="m4 6.2 4 4 4-4"/>'),

@@ -5,6 +5,7 @@ import type { GatewayClient, MessageRow, ToolCardEvent } from "../gateway";
 import { Button } from "../hermes/button";
 import { Loader } from "../hermes/loader";
 import { Icon } from "./Icon";
+import { FileTree } from "./FileTree";
 import { ModelPicker } from "./ModelPicker";
 import { useT } from "./util";
 
@@ -77,6 +78,10 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
   const [attach, setAttach] = useState<{ name: string; dataUrl: string }[]>([]);
   const [slashIdx, setSlashIdx] = useState(0);
   const [speakingKey, setSpeakingKey] = useState<string | null>(null);
+  const [treeOpen, setTreeOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findIdx, setFindIdx] = useState(0);
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("ulnclaw:busy", { detail: busy }));
@@ -198,6 +203,39 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
     return out;
   }, [visible]);
 
+  const matches = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [] as number[];
+    const out: number[] = [];
+    visible.forEach((m, i) => {
+      if ((m.content ?? "").toLowerCase().includes(q)) out.push(i);
+    });
+    return out;
+  }, [visible, findQuery]);
+
+  useEffect(() => {
+    if (matches.length === 0) return;
+    const idx = matches[Math.min(findIdx, matches.length - 1)];
+    document
+      .querySelector(`[data-msg-idx="${idx}"]`)
+      ?.scrollIntoView({ block: "center" });
+  }, [matches, findIdx]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        setTreeOpen((v) => !v);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setFindOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const speak = (key: string, text: string) => {
     try {
       const synth = window.speechSynthesis;
@@ -235,11 +273,55 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
   };
 
   return (
-    <main className="flex min-h-0 flex-col">
+    <main className="flex min-h-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex items-center justify-between border-b border-[color-mix(in_srgb,var(--seed-fg)_4%,transparent)] px-4 py-2.5">
         <span className="text-[13px] font-semibold">{t.chrome.chatTab}</span>
-        <ModelPicker client={client} onChanged={setModel} />
+        <div className="flex items-center gap-0.5">
+          <button
+            className="inline-flex size-7 items-center justify-center rounded-md text-(--dim) hover:bg-(--hover) hover:text-(--text)"
+            title={t.palette.fileTree}
+            onClick={() => setTreeOpen((v) => !v)}
+          >
+            <Icon name="folder" className="size-3.5" />
+          </button>
+          <button
+            className="inline-flex size-7 items-center justify-center rounded-md text-(--dim) hover:bg-(--hover) hover:text-(--text)"
+            title={t.find.placeholder}
+            onClick={() => setFindOpen((v) => !v)}
+          >
+            <Icon name="search" className="size-3.5" />
+          </button>
+          <ModelPicker client={client} onChanged={setModel} />
+        </div>
       </header>
+      {findOpen && (
+        <div className="flex items-center gap-2 border-b border-(--border) px-4 py-1.5">
+          <Icon name="search" className="size-3 text-(--dim)" />
+          <input
+            autoFocus
+            value={findQuery}
+            onChange={(e) => {
+              setFindQuery(e.target.value);
+              setFindIdx(0);
+            }}
+            placeholder={t.find.placeholder}
+            className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-(--dim-faint)"
+          />
+          <span className="text-[11px] tabular-nums text-(--dim)">
+            {matches.length === 0 ? "0/0" : `${Math.min(findIdx, matches.length - 1) + 1}/${matches.length}`}
+          </span>
+          <Button variant="ghost" size="icon-xs" title={t.find.prevTitle} onClick={() => setFindIdx((i) => (i - 1 + Math.max(matches.length, 1)) % Math.max(matches.length, 1))}>
+            <Icon name="arrowUp" className="size-3" />
+          </Button>
+          <Button variant="ghost" size="icon-xs" title={t.find.nextTitle} onClick={() => setFindIdx((i) => (i + 1) % Math.max(matches.length, 1))}>
+            <Icon name="chevronDown" className="size-3" />
+          </Button>
+          <Button variant="ghost" size="icon-xs" title={t.find.closeTitle} onClick={() => setFindOpen(false)}>
+            <Icon name="x" className="size-3" />
+          </Button>
+        </div>
+      )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-4 px-[clamp(1.25rem,4vw,3rem)] py-6">
@@ -261,17 +343,17 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
                 <span aria-hidden="true" className="h-px flex-1 bg-(--border)" />
               </div>
             ) : msg?.role === "user" ? (
-              <div key={key} className="flex justify-end">
+              <div key={key} data-msg-idx={msg ? visible.indexOf(msg) : -1} className="flex justify-end">
                 <div className="max-w-[75%] rounded-xl border border-(--border) bg-[color-mix(in_srgb,var(--accent)_6%,var(--seed-card))] px-3.5 py-2.5 text-[14px] leading-[1.5] whitespace-pre-wrap">
                   {msg.content}
                 </div>
               </div>
             ) : msg?.role === "system" ? (
-              <div key={key} className="text-center text-xs text-(--dim)">
+              <div key={key} data-msg-idx={msg ? visible.indexOf(msg) : -1} className="text-center text-xs text-(--dim)">
                 {msg.content}
               </div>
             ) : (
-              <div key={key} className="group relative">
+              <div key={key} data-msg-idx={msg ? visible.indexOf(msg) : -1} className="group relative">
                 <button
                   className="absolute -top-2.5 right-0 inline-flex size-6 items-center justify-center rounded-md text-(--dim) opacity-0 hover:bg-(--hover) hover:text-(--text) group-hover:opacity-100"
                   title={t.session.speakTitle}
@@ -416,6 +498,8 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
           </div>
         </div>
       </div>
+      </div>
+      {treeOpen && <FileTree client={client} onClose={() => setTreeOpen(false)} />}
     </main>
   );
 }
