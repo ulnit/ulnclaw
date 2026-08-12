@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Command } from "cmdk";
 import type { ShellView } from "./Sidebar";
-import { switchShell } from "./util";
 
 export interface PaletteAction {
   id: string;
@@ -49,7 +48,6 @@ export function Palette({ open, onOpenChange, onView, onNewSession }: Props) {
     ).map(
       (v) => ({ id: `view-${v}`, label: `Go to ${v[0].toUpperCase()}${v.slice(1)}`, run: () => onView(v) }),
     ),
-    { id: "classic", label: "Switch to classic shell", run: () => switchShell("vanilla") },
   ];
 
   return (

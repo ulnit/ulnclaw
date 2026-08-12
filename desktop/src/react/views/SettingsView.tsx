@@ -3,7 +3,6 @@ import type { GatewayClient } from "../../gateway";
 import { Button } from "../../hermes/button";
 import { LOCALE_OPTIONS, currentLocale, setLocale } from "../../i18n";
 import { useT } from "../util";
-import { switchShell } from "../util";
 
 interface ThemeRow {
   name: string;
@@ -17,7 +16,6 @@ export function SettingsView({ client }: { client: GatewayClient }) {
   const [fonts, setFonts] = useState<string[]>([]);
   const [font, setFont] = useState("theme");
   const locale = useT() && currentLocale();
-  const [shell, setShell] = useState(localStorage.getItem("ulnclaw.shell") || "vanilla");
 
   useEffect(() => {
     client
@@ -48,11 +46,6 @@ export function SettingsView({ client }: { client: GatewayClient }) {
     if (id === "theme") delete document.documentElement.dataset.font;
     else document.documentElement.dataset.font = id;
     client.dashboardSetFont(id).catch(() => undefined);
-  };
-
-  const pickShell = (next: string) => {
-    setShell(next);
-    localStorage.setItem("ulnclaw.shell", next);
   };
 
   return (
@@ -110,36 +103,7 @@ export function SettingsView({ client }: { client: GatewayClient }) {
         </div>
       </section>
 
-      <section className="pb-6">
-        <h3 className="pb-2 text-[0.64rem] font-semibold uppercase tracking-[0.12em] text-(--dim-faint)">
-          Shell
-        </h3>
-        <div className="flex items-center gap-2">
-          {(
-            [
-              ["react", "React shell (beta)"],
-              ["vanilla", "Classic shell"],
-            ] as const
-          ).map(([id, label]) => (
-            <Button
-              key={id}
-              variant={shell === id ? "secondary" : "ghost"}
-              size="xs"
-              onClick={() => pickShell(id)}
-            >
-              {label}
-            </Button>
-          ))}
-          <span className="pl-2 text-[11px] text-(--dim)">applies on next launch</span>
-        </div>
-        <p className="pt-3 text-[11px] leading-4 text-(--dim)">
-          Provider keys, approvals and gateway knobs still live in the classic
-          settings dialog while the migration completes.
-        </p>
-        <Button variant="outline" size="xs" className="mt-2" onClick={() => switchShell("vanilla")}>
-          Open classic settings
-        </Button>
-      </section>
+
     </div>
   );
 }

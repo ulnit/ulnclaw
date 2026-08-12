@@ -16,8 +16,3 @@ export function relTime(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleDateString();
 }
 
-export function switchShell(shell: "vanilla" | "react"): void {
-  localStorage.setItem("ulnclaw.shell", shell);
-  location.search = "";
-  location.reload();
-}

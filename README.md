@@ -97,8 +97,12 @@ Since v0.5.0 the desktop UI runs the React hermes-parity shell by default:
 all sixteen views (chat, sessions, jobs, usage, models, skills, kanban,
 projects, runs, webhooks, plugins, pairing, profiles, config, doctor,
 settings) plus the Ctrl/Cmd+K command palette, dashboard themes/fonts and
-a five-locale language picker (Settings › Language). The classic shell
-remains available behind `?shell=classic` for one more release.
+a five-locale language picker (Settings › Language). v0.6.0 retired the
+classic shell and moved its desktop bridge into the React shell: managed
+gateway spawn/respawn, tray health + tooltip, menu/tray events (new
+session, reload, fullscreen, restart gateway, gateway log viewer), boot
+diagnostics expander on the offline banner and TTS read-aloud on
+assistant messages.
 
 ### CLI Quick Start
 
@@ -442,7 +446,10 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
 v0.5.0 起桌面 UI 默认运行 React 高保真外壳：全部 16 个视图（聊天、会话、
 任务、用量、模型、技能、看板、项目、运行、Webhooks、插件、配对、配置
 文件、配置、诊断、设置）+ Ctrl/Cmd+K 命令面板、主题/字体与五语言切换
-（设置 › Language）。经典外壳本版本仍可经 `?shell=classic` 访问。
+（设置 › Language）。v0.6.0 起经典外壳退役，桌面桥接能力迁入 React
+外壳：托管网关拉起/重生、托盘健康与提示、菜单/托盘事件（新会话、重载、
+全屏、重启网关、网关日志查看器）、离线横幅上的启动诊断展开项，以及
+助手消息的 TTS 朗读。
 
 ### CLI 快速开始
 

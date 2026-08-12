@@ -76,6 +76,11 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
   const [model, setModel] = useState("");
   const [attach, setAttach] = useState<{ name: string; dataUrl: string }[]>([]);
   const [slashIdx, setSlashIdx] = useState(0);
+  const [speakingKey, setSpeakingKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("ulnclaw:busy", { detail: busy }));
+  }, [busy]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -193,6 +198,30 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
     return out;
   }, [visible]);
 
+  const speak = (key: string, text: string) => {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) return;
+      if (speakingKey === key) {
+        synth.cancel();
+        setSpeakingKey(null);
+        return;
+      }
+      const holder = document.createElement("div");
+      holder.innerHTML = md(text);
+      const plain = (holder.textContent ?? "").trim();
+      if (!plain) return;
+      synth.cancel();
+      const utter = new SpeechSynthesisUtterance(plain);
+      utter.onend = () => setSpeakingKey(null);
+      utter.onerror = () => setSpeakingKey(null);
+      setSpeakingKey(key);
+      synth.speak(utter);
+    } catch {
+      /* TTS unavailable */
+    }
+  };
+
   const slashQuery = draft.startsWith("/") && !draft.includes(" ") ? draft.slice(1) : null;
   const slashList =
     slashQuery === null
@@ -242,11 +271,19 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
                 {msg.content}
               </div>
             ) : (
-              <div
-                key={key}
-                className="md-body text-[14px] leading-[1.6]"
-                dangerouslySetInnerHTML={{ __html: md(msg?.content ?? "") }}
-              />
+              <div key={key} className="group relative">
+                <button
+                  className="absolute -top-2.5 right-0 inline-flex size-6 items-center justify-center rounded-md text-(--dim) opacity-0 hover:bg-(--hover) hover:text-(--text) group-hover:opacity-100"
+                  title={t.session.speakTitle}
+                  onClick={() => speak(key, msg?.content ?? "")}
+                >
+                  <Icon name={speakingKey === key ? "stopSpeak" : "volume"} className="size-3.5" />
+                </button>
+                <div
+                  className="md-body text-[14px] leading-[1.6]"
+                  dangerouslySetInnerHTML={{ __html: md(msg?.content ?? "") }}
+                />
+              </div>
             ),
           )}
           {cards.length > 0 && (

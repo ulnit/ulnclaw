@@ -79,10 +79,19 @@ submit path so the gateway agent loop executes it.
 These are tracked for a follow-up release; none blocks the classic
 shell's retirement.
 
-## Retirement plan (v0.6.0)
+## Retirement (shipped in v0.6.0)
 
-1. Port the missing chrome (TTS, file tree, diagnostics expander) or
-   explicitly drop them;
-2. delete `src/main.ts`, `style.css` and vanilla-only modules
-   (keep `i18n.ts`, `gateway.ts`, `icons.ts`);
-3. slim `index.html` to the React entry and drop the boot selector.
+1. Desktop bridge ported into the React shell (`react/bridge.ts` +
+   `App.tsx`): managed gateway spawn/respawn with health polling, tray
+   health/tooltip sync, `ulnclaw://` menu/tray event listeners (new
+   session, reload, fullscreen toggle, restart gateway, gateway log
+   viewer modal), quit-guard busy reporting and boot diagnostics
+   expander on the offline banner; TTS read-aloud (browser
+   `speechSynthesis`) added to assistant messages.
+2. Dropped from the React shell by design: per-session popout windows,
+   the file-tree side panel and the find bar (transcript search can be
+   added later on the React tree without the vanilla DOM).
+3. Deleted `src/main.ts`, `src/style.css` and 36 vanilla-only modules;
+   `index.html` slimmed to the React entry; `boot.ts` selector removed
+   (`?shell=classic` is ignored). Shared modules kept: `gateway.ts`,
+   `i18n.ts`, `icons.ts`, `hermes/`.

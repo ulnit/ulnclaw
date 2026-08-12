@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { SessionRow } from "../gateway";
 import { Button } from "../hermes/button";
-import { relTime, switchShell, useT } from "./util";
+import { relTime, useT } from "./util";
 
 export type ShellView =
   | "chat"
@@ -166,12 +166,9 @@ export function Sidebar({ sessions, activeId, online, view, onView, onSelect, on
         })}
       </div>
 
-      <div className="flex items-center justify-between border-t border-(--border) pt-2">
-        <Button variant="text" size="micro" onClick={() => switchShell("vanilla")}>
-          Classic shell
-        </Button>
+      <div className="flex items-center justify-end border-t border-(--border) pt-2">
         <Button variant="ghost" size="micro" onClick={() => void onRefresh()}>
-          Refresh
+          {t.kanban.refresh}
         </Button>
       </div>
     </aside>
