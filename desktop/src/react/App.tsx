@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { GatewayClient, loadSettings } from "../gateway";
 import type { SessionRow } from "../gateway";
 import { Sidebar, type ShellView } from "./Sidebar";
+import { Button } from "../hermes/button";
+import { useT } from "./util";
 import { ChatView } from "./ChatView";
 import { SessionsView } from "./views/SessionsView";
 import { JobsView } from "./views/JobsView";
@@ -27,6 +29,7 @@ export function App() {
   const [view, setView] = useState<ShellView>("chat");
   const [online, setOnline] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const t = useT();
 
   const refresh = useCallback(async () => {
     try {
@@ -70,6 +73,16 @@ export function App() {
         onSelect={openSession}
         onRefresh={refresh}
       />
+      <div className="relative min-h-0">
+        {!online && (
+          <div className="absolute left-1/2 top-3 z-40 flex -translate-x-1/2 items-center gap-2.5 rounded-lg border border-(--border) bg-(--seed-card) px-3.5 py-2 shadow-[var(--shadow-composer)]">
+            <span className="size-2 shrink-0 rounded-full bg-(--bad)" />
+            <span className="text-xs text-(--dim)">{t.boot.unreachable}</span>
+            <Button variant="ghost" size="micro" onClick={() => void refresh()}>
+              {t.boot.retry}
+            </Button>
+          </div>
+        )}
       {view === "chat" && (
         <ChatView
           client={client}
@@ -155,6 +168,7 @@ export function App() {
           <SettingsView client={client} />
         </div>
       )}
+      </div>
       <Palette
         open={paletteOpen}
         onOpenChange={setPaletteOpen}

@@ -88,6 +88,62 @@ pub fn process_state(pid: u32) -> Option<char> {
     stat.get(close + 2..)?.chars().next()
 }
 
+/// Best-effort process image name (`ulnclaw`, `python`, …) used as a
+/// PID-reuse fallback when a legacy pidfile carries no start token: a
+/// live pid whose executable is not ulnclaw means the kernel recycled
+/// the pid for an unrelated process (hermes start_time spirit).
+#[cfg(unix)]
+pub fn process_image_name(pid: u32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .ok()
+        .map(|comm| comm.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+/// Windows image name via `QueryFullProcessImageNameW` (works with
+/// `PROCESS_QUERY_LIMITED_INFORMATION`), reduced to the file stem.
+#[cfg(windows)]
+pub fn process_image_name(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_NAME_WIN32,
+    };
+    if pid == 0 {
+        return None;
+    }
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return None;
+        }
+        let mut buf = [0u16; 512];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            buf.as_mut_ptr(),
+            &mut len,
+        ) != 0;
+        CloseHandle(handle);
+        if !ok {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        let stem = path
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(&path)
+            .trim_end_matches(".exe")
+            .trim_end_matches(".EXE");
+        if stem.is_empty() {
+            None
+        } else {
+            Some(stem.to_string())
+        }
+    }
+}
+
 /// True iff `pid` refers to a live process. Zombies count as dead —
 /// `/proc` state wins when available; otherwise `kill(pid, 0)` probes
 /// (EPERM means "exists but owned by someone else", i.e. alive).
@@ -130,6 +186,14 @@ pub fn running_gateway_pid(home: &Path) -> Option<u32> {
     {
         if recorded != current {
             // The pid was recycled by the kernel for another process.
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+    } else if let Some(name) = process_image_name(record.pid) {
+        // Legacy record without a usable start token: only trust it
+        // when the live process is actually ulnclaw. A reused pid
+        // running python.exe / anything else is stale, not a gateway.
+        if !name.to_ascii_lowercase().contains("ulnclaw") {
             let _ = std::fs::remove_file(&path);
             return None;
         }
@@ -203,6 +267,31 @@ mod tests {
         .unwrap();
         assert_eq!(running_gateway_pid(home.path()), None);
         assert!(!pidfile_path(home.path()).exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn legacy_record_pointing_at_foreign_process_is_stale() {
+        let home = temp_home();
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn sleep");
+        let foreign_pid = child.id();
+        let record = PidRecord {
+            pid: foreign_pid,
+            started_at: None,
+        };
+        std::fs::write(
+            pidfile_path(home.path()),
+            serde_json::to_string(&record).unwrap(),
+        )
+        .unwrap();
+        // alive but not ulnclaw -> recycled pid, record is stale
+        assert_eq!(running_gateway_pid(home.path()), None);
+        assert!(!pidfile_path(home.path()).exists());
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[cfg(target_os = "linux")]
