@@ -3,7 +3,7 @@ import type { SessionRow } from "../gateway";
 import { Button } from "../hermes/button";
 import { relTime, switchShell } from "./util";
 
-export type ShellView = "chat" | "sessions" | "jobs" | "usage" | "models";
+export type ShellView = "chat" | "sessions" | "jobs" | "usage" | "models" | "settings";
 
 interface Props {
   sessions: SessionRow[];
@@ -67,9 +67,12 @@ export function Sidebar({ sessions, activeId, online, view, onView, onSelect, on
           </button>
         ))}
         <button
-          className="rounded-md px-2 py-1 text-xs font-medium text-(--dim) hover:bg-(--hover) hover:text-(--text)"
-          title="Settings live in the classic shell for now"
-          onClick={() => switchShell("vanilla")}
+          onClick={() => onView("settings")}
+          className={`rounded-md px-2 py-1 text-xs ${
+            view === "settings"
+              ? "bg-(--hover-strong) font-semibold text-(--text)"
+              : "font-medium text-(--dim) hover:bg-(--hover) hover:text-(--text)"
+          }`}
         >
           Settings
         </button>

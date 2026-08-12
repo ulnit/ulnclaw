@@ -7,6 +7,7 @@ import { SessionsView } from "./views/SessionsView";
 import { JobsView } from "./views/JobsView";
 import { UsageView } from "./views/UsageView";
 import { ModelsView } from "./views/ModelsView";
+import { SettingsView } from "./views/SettingsView";
 
 export function App() {
   const [client] = useState(() => new GatewayClient(loadSettings()));
@@ -74,6 +75,11 @@ export function App() {
       {view === "models" && (
         <div className="min-h-0 overflow-y-auto">
           <ModelsView client={client} />
+        </div>
+      )}
+      {view === "settings" && (
+        <div className="min-h-0 overflow-y-auto">
+          <SettingsView client={client} />
         </div>
       )}
     </div>

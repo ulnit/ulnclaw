@@ -41,3 +41,31 @@ body { background: var(--bg); color: var(--text); font-family: var(--font-stack)
 * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--seed-fg) 22%, transparent) transparent; }
 ::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* theme seeds (parity with vanilla style.css v0.3.2 blocks) */
+:root[data-theme="nous-blue"] {
+  --seed-bg: #fdf8f1; --seed-sidebar: #faf3e9; --seed-card: #fffdf9;
+  --seed-fg: #1c2733; --accent: #1540b1;
+}
+:root[data-theme="midnight"] {
+  --seed-bg: #0d2f86; --seed-sidebar: #0b2a78; --seed-card: #12378f;
+  --seed-fg: #ffe6cb; --accent: #ffe6cb;
+  --ok: #7fd6b2; --warn: #e5c07b; --bad: #ff8fa8;
+  color-scheme: dark;
+}
+:root[data-theme="ember"] {
+  --seed-bg: #150d0b; --seed-sidebar: #120a08; --seed-card: #1d1310;
+  --seed-fg: #f0dcd2; --accent: #e0513f; color-scheme: dark;
+}
+:root[data-theme="mono"] {
+  --seed-bg: #111; --seed-sidebar: #0d0d0d; --seed-card: #171717;
+  --seed-fg: #e4e4e4; --accent: #d4d4d4; color-scheme: dark;
+}
+:root[data-theme="cyberpunk"] {
+  --seed-bg: #030803; --seed-sidebar: #020602; --seed-card: #06120b;
+  --seed-fg: #b8ffd8; --accent: #00ff66; color-scheme: dark;
+}
+:root[data-theme="rose"] {
+  --seed-bg: #180f14; --seed-sidebar: #140c10; --seed-card: #211620;
+  --seed-fg: #f2e4e8; --accent: #f2a0b8; color-scheme: dark;
+}
