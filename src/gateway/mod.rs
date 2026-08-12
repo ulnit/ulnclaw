@@ -29324,6 +29324,99 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
     }
 
     #[tokio::test]
+    async fn test_desktop_parity_endpoints_and_archived_filter() {
+        let state = test_state();
+        let app = router(state.clone());
+
+        // Status / updater / profile-active shapes the renderer boots on.
+        let (status, body) = get_json(app.clone(), "/api/status", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["gateway_running"], true);
+        assert!(body["version"].as_str().is_some());
+
+        let (status, body) = get_json(app.clone(), "/api/profiles/active", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["current"], "default");
+
+        let (status, body) =
+            get_json(app.clone(), "/api/ulnclaw/update/check", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["update_available"], false);
+
+        // View surfaces return arrays / expected keys.
+        let (status, body) = get_json(app.clone(), "/api/skills", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.as_array().is_some());
+
+        let (status, body) = get_json(app.clone(), "/api/tools/toolsets", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.as_array().map(|a| !a.is_empty()).unwrap_or(false));
+
+        let (status, body) =
+            get_json(app.clone(), "/api/tools/terminal/backends", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["backends"].as_array().is_some());
+
+        let (status, body) =
+            get_json(app.clone(), "/api/tools/computer-use/status", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["platform"].as_str().is_some());
+
+        let (status, body) = get_json(app.clone(), "/api/cron/blueprints", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["blueprints"].as_array().is_some());
+
+        let (status, body) =
+            get_json(app.clone(), "/api/cron/delivery-targets", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["targets"].as_array().is_some());
+
+        // Batched sidebar payload carries the three windows.
+        let (status, body) = get_json(
+            app.clone(),
+            "/api/profiles/sessions/sidebar?recents_profile=default",
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["recents"]["sessions"].as_array().is_some());
+        assert!(body["cron"]["sessions"].as_array().is_some());
+        assert!(body["messaging"]["sessions"].as_array().is_some());
+
+        // Archived filter uses the sessions archived column (not end_reason):
+        // a completed session stays in `exclude` until explicitly archived.
+        let id = state
+            .store
+            .create_session("desktop", Some("test-model"), None)
+            .unwrap();
+        state.store.end_session(&id, "complete").unwrap();
+        let (status, body) =
+            get_json(app.clone(), "/api/sessions?archived=exclude", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == id));
+
+        state.store.set_session_archived(&id, true).unwrap();
+        let (_, body) =
+            get_json(app.clone(), "/api/sessions?archived=exclude", Some("sekret")).await;
+        assert!(!body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == id));
+        let (_, body) =
+            get_json(app, "/api/sessions?archived=only", Some("sekret")).await;
+        assert!(body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == id));
+    }
+
+    #[tokio::test]
     async fn test_fs_endpoints_list_read_write() {
         let _guard = crate::models_dev::test_env_lock();
         let dir = tempfile::tempdir().expect("tempdir");
