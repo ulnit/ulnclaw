@@ -70,6 +70,17 @@ async fn serve_socket(socket: WebSocket, state: Arc<GatewayState>) {
     if !send_frame(&sink, ready).await {
         return;
     }
+    // Pre-existing sessions never fire a live `sessions.changed`; nudge the
+    // renderer to pull the sidebar once on connect so history shows up.
+    for change in ["sessions.changed", "cron.changed", "platforms.changed"] {
+        let frame = json!({
+            "method": "event",
+            "params": {"type": change, "payload": {}},
+        });
+        if !send_frame(&sink, frame).await {
+            return;
+        }
+    }
     let mut bus = crate::desktop_bridge::subscribe();
     let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(15));
     keepalive.tick().await; // first tick is immediate; drop it
