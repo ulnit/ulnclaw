@@ -3,16 +3,19 @@ import type { SessionRow } from "../gateway";
 import { Button } from "../hermes/button";
 import { relTime, switchShell } from "./util";
 
+export type ShellView = "chat" | "sessions" | "jobs" | "usage" | "models";
+
 interface Props {
   sessions: SessionRow[];
   activeId: string | null;
   online: boolean;
+  view: ShellView;
+  onView: (view: ShellView) => void;
   onSelect: (id: string) => void;
-  onCreated: (id: string) => void;
   onRefresh: () => Promise<void>;
 }
 
-export function Sidebar({ sessions, activeId, online, onSelect, onCreated, onRefresh }: Props) {
+export function Sidebar({ sessions, activeId, online, view, onView, onSelect, onRefresh }: Props) {
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -26,15 +29,9 @@ export function Sidebar({ sessions, activeId, online, onSelect, onCreated, onRef
     return [...rows].sort((a, b) => b.last_activity_at - a.last_activity_at);
   }, [sessions, filter]);
 
-  const newSession = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      // Deferred: created lazily on first send in ChatView; here just clear.
-      onCreated("");
-    } finally {
-      setBusy(false);
-    }
+  const newSession = () => {
+    onView("chat");
+    onSelect("");
   };
 
   return (
@@ -48,19 +45,34 @@ export function Sidebar({ sessions, activeId, online, onSelect, onCreated, onRef
       </div>
 
       <div className="flex flex-wrap gap-0.5 px-0.5 pb-2">
-        <button className="rounded-md bg-(--hover-strong) px-2 py-1 text-xs font-semibold text-(--text)">
-          Chat
-        </button>
-        {["Sessions", "Jobs", "Usage", "Settings"].map((label) => (
+        {(
+          [
+            ["chat", "Chat"],
+            ["sessions", "Sessions"],
+            ["jobs", "Jobs"],
+            ["usage", "Usage"],
+            ["models", "Models"],
+          ] as [ShellView, string][]
+        ).map(([id, label]) => (
           <button
-            key={label}
-            className="rounded-md px-2 py-1 text-xs font-medium text-(--dim) hover:bg-(--hover) hover:text-(--text)"
-            title="Opens the classic shell for now"
-            onClick={() => switchShell("vanilla")}
+            key={id}
+            onClick={() => onView(id)}
+            className={`rounded-md px-2 py-1 text-xs ${
+              view === id
+                ? "bg-(--hover-strong) font-semibold text-(--text)"
+                : "font-medium text-(--dim) hover:bg-(--hover) hover:text-(--text)"
+            }`}
           >
             {label}
           </button>
         ))}
+        <button
+          className="rounded-md px-2 py-1 text-xs font-medium text-(--dim) hover:bg-(--hover) hover:text-(--text)"
+          title="Settings live in the classic shell for now"
+          onClick={() => switchShell("vanilla")}
+        >
+          Settings
+        </button>
       </div>
 
       <Button variant="default" className="w-full" disabled={busy} onClick={() => void newSession()}>
