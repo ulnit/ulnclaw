@@ -58,6 +58,18 @@ async fn serve_socket(socket: WebSocket, state: Arc<GatewayState>) {
     if !send_frame(&sink, hello).await {
         return;
     }
+    // hermes parity: the renderer seeds live-sync (and demotes its legacy
+    // polls) only after a `gateway.ready` event; advertise change events.
+    let ready = json!({
+        "method": "event",
+        "params": {
+            "type": "gateway.ready",
+            "payload": {"change_events": true, "server": "ulnclaw"},
+        },
+    });
+    if !send_frame(&sink, ready).await {
+        return;
+    }
     let mut bus = crate::desktop_bridge::subscribe();
     let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(15));
     keepalive.tick().await; // first tick is immediate; drop it
