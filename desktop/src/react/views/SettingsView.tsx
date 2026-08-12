@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { GatewayClient } from "../../gateway";
 import { Button } from "../../hermes/button";
 import { LOCALE_OPTIONS, currentLocale, setLocale } from "../../i18n";
+import { loadBridge, type DesktopBridge } from "../bridge";
 import { useT } from "../util";
 
 interface ThemeRow {
@@ -15,7 +16,19 @@ export function SettingsView({ client }: { client: GatewayClient }) {
   const [active, setActive] = useState("");
   const [fonts, setFonts] = useState<string[]>([]);
   const [font, setFont] = useState("theme");
-  const locale = useT() && currentLocale();
+  const t = useT();
+  const locale = currentLocale();
+  const [bridge, setBridge] = useState<DesktopBridge | null>(null);
+  const [autostart, setAutostart] = useState(false);
+  const [closeToTray, setCloseToTray] = useState(false);
+
+  useEffect(() => {
+    void loadBridge().then((b) => {
+      setBridge(b);
+      if (!b) return;
+      b.autostartEnabled().then(setAutostart).catch(() => undefined);
+    });
+  }, []);
 
   useEffect(() => {
     client
@@ -104,6 +117,38 @@ export function SettingsView({ client }: { client: GatewayClient }) {
       </section>
 
 
+
+      {bridge && (
+        <section className="pb-6">
+          <h3 className="pb-2 text-[0.64rem] font-semibold uppercase tracking-[0.12em] text-(--dim-faint)">
+            Desktop
+          </h3>
+          <div className="flex flex-col gap-2">
+            <label className="grid grid-cols-[10rem_1fr] items-center gap-3 text-[13px]">
+              <span className="text-(--dim-strong,--dim)">{t.chrome.autostart}</span>
+              <input
+                type="checkbox"
+                checked={autostart}
+                onChange={(e) => {
+                  setAutostart(e.target.checked);
+                  bridge.setAutostart(e.target.checked).catch(() => undefined);
+                }}
+              />
+            </label>
+            <label className="grid grid-cols-[10rem_1fr] items-center gap-3 text-[13px]">
+              <span className="text-(--dim-strong,--dim)">{t.chrome.hideToTray}</span>
+              <input
+                type="checkbox"
+                checked={closeToTray}
+                onChange={(e) => {
+                  setCloseToTray(e.target.checked);
+                  bridge.setCloseToTray(e.target.checked).catch(() => undefined);
+                }}
+              />
+            </label>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

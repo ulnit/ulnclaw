@@ -83,8 +83,13 @@ export function ChatView({ client, sessionId, onCreated }: Props) {
   const [findQuery, setFindQuery] = useState("");
   const [findIdx, setFindIdx] = useState(0);
 
+  const prevBusy = useRef(false);
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("ulnclaw:busy", { detail: busy }));
+    if (prevBusy.current && !busy) {
+      window.dispatchEvent(new CustomEvent("ulnclaw:turn-done"));
+    }
+    prevBusy.current = busy;
   }, [busy]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);

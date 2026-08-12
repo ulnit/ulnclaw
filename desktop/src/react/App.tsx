@@ -151,8 +151,32 @@ export function App() {
       const busy = (e as CustomEvent<boolean>).detail;
       bridgeRef.current?.setActiveWork(busy ? 1 : 0).catch(() => undefined);
     };
+    const onTurnDone = () => {
+      try {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.55);
+      } catch {
+        /* audio unavailable */
+      }
+      bridgeRef.current
+        ?.notifyNative("ulnclaw", "turn complete")
+        .catch(() => undefined);
+    };
     window.addEventListener("ulnclaw:busy", onBusy);
-    return () => window.removeEventListener("ulnclaw:busy", onBusy);
+    window.addEventListener("ulnclaw:turn-done", onTurnDone);
+    return () => {
+      window.removeEventListener("ulnclaw:busy", onBusy);
+      window.removeEventListener("ulnclaw:turn-done", onTurnDone);
+    };
   }, []);
 
   const openSession = (id: string) => {
