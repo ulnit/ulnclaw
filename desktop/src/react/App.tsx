@@ -34,6 +34,7 @@ export function App() {
   const [diag, setDiag] = useState<BootDiagnostics | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
+  const [info, setInfo] = useState<{ title: string; lines: string[] } | null>(null);
   const managedPid = useRef<number | null>(null);
   const bridgeRef = useRef<DesktopBridge | null>(null);
   const onlineRef = useRef(false);
@@ -91,6 +92,40 @@ export function App() {
     }
   }, [client, refresh]);
 
+  const showAbout = useCallback(async () => {
+    const b = bridgeRef.current;
+    const diag = await b?.diagnostics().catch(() => null);
+    const version = await client
+      .updateCheck()
+      .then((u) => u.current_version)
+      .catch(() => "unknown");
+    setInfo({
+      title: "ulnclaw",
+      lines: [
+        `shell: react v${version}`,
+        `gateway port: ${diag?.port ?? 8642}`,
+        `binary: ${diag?.binary ?? diag?.bundled ?? "external gateway"}`,
+      ],
+    });
+  }, [client]);
+
+  const showUpdateCheck = useCallback(async () => {
+    try {
+      const u = await client.updateCheck();
+      setInfo({
+        title: t.palette.updateCheck,
+        lines: [
+          `current: ${u.current_version}`,
+          u.update_available
+            ? `update available (${u.behind} release(s) behind) — ${u.update_command}`
+            : "up to date",
+        ],
+      });
+    } catch {
+      setInfo({ title: "Check for updates", lines: ["gateway unreachable"] });
+    }
+  }, [client, t]);
+
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -136,6 +171,8 @@ export function App() {
           },
           "ulnclaw://restart-gateway": () => void restartGateway(),
           "ulnclaw://gateway-log": () => void showGatewayLog(),
+          "ulnclaw://about": () => void showAbout(),
+          "ulnclaw://update-check": () => void showUpdateCheck(),
           "ulnclaw://window-shown": () => window.focus(),
         });
       }
@@ -144,7 +181,7 @@ export function App() {
       cancelled = true;
       unlisten?.();
     };
-  }, [client, refresh, restartGateway, showGatewayLog]);
+  }, [client, refresh, restartGateway, showGatewayLog, showAbout, showUpdateCheck]);
 
   useEffect(() => {
     const onBusy = (e: Event) => {
@@ -332,6 +369,26 @@ export function App() {
         </div>
       )}
       </div>
+      {info && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setInfo(null)}>
+          <div
+            className="w-[26rem] rounded-xl border border-(--border) bg-(--seed-card) p-4 shadow-[var(--shadow-composer)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-2">
+              <span className="text-sm font-semibold">{info.title}</span>
+              <Button variant="ghost" size="xs" onClick={() => setInfo(null)}>
+                {t.chrome.gatewayLogClose}
+              </Button>
+            </div>
+            <div className="flex flex-col gap-1 text-xs text-(--dim)">
+              {info.lines.map((l) => (
+                <p key={l} className="break-all">{l}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {logOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setLogOpen(false)}>
           <div
