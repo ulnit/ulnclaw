@@ -4,7 +4,7 @@
 //! → `cargo build --release` for the apply path.
 //!
 //! Hermes-specific machinery that has no ulnclaw counterpart (venv/pip
-//! refresh, npm lockfiles, Windows exe locking, Tauri/desktop hand-off,
+//! refresh, npm lockfiles, Windows exe locking, desktop (Electron) hand-off,
 //! docker/nix install methods, systemd gateway restarts) is intentionally
 //! out of scope; the git core is ported faithfully:
 //! - upstream-preferred fetch for the default branch, origin otherwise

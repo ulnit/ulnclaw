@@ -19792,7 +19792,7 @@ fn spawn_tracked_run(
         drop(runs);
         runner.router.unregister(&spawn_run_id);
         // Desktop shell notification (P433): surface the settled run on the
-        // UI bridge so the Tauri webview can toast it. Inert unless a
+        // UI bridge so the desktop webview can toast it. Inert unless a
         // desktop consumer is subscribed to /api/desktop/events.
         if let Some((succeeded, snippet)) = settle {
             crate::desktop_bridge::publish(
@@ -33521,7 +33521,7 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let request = axum::http::Request::builder()
             .uri("/api/sessions")
             .method("OPTIONS")
-            .header("origin", "tauri://localhost")
+            .header("origin", "http://127.0.0.1:5174")
             .header("access-control-request-method", "POST")
             .body(axum::body::Body::empty())
             .unwrap();
@@ -33530,7 +33530,7 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         let headers = response.headers();
         assert_eq!(
             headers.get("access-control-allow-origin").unwrap().to_str().unwrap(),
-            "tauri://localhost"
+            "http://127.0.0.1:5174"
         );
         assert!(headers
             .get("access-control-allow-methods")

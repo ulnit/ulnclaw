@@ -414,13 +414,13 @@ enum Commands {
         #[command(subcommand)]
         action: Option<WebhookAction>,
     },
-    /// Launch the desktop GUI — Tauri app in `desktop/` (hermes gui/desktop)
+    /// Launch the desktop GUI — Electron "ulnclaw desktop" (hermes gui/desktop)
     #[command(visible_alias = "desktop")]
     Gui {
-        /// Explicit path to the ulnclaw-desktop binary
+        /// Explicit path to the ulnclaw-desktop executable
         #[arg(long)]
         binary: Option<std::path::PathBuf>,
-        /// Run the frontend dev server (`npm run tauri dev`) instead
+        /// Run the unpackaged app (`npm start` in desktop-electron) instead
         #[arg(long)]
         dev: bool,
     },
