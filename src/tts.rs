@@ -11,6 +11,7 @@
 //! model providers (piper/neutts/kittentts) stay out of scope.
 
 use serde::{Deserialize, Serialize};
+use futures::StreamExt;
 
 fn default_provider() -> String {
     "openai".into()
@@ -243,6 +244,136 @@ async fn synthesize_elevenlabs(
         mime: "audio/mpeg",
         provider: "elevenlabs".into(),
     })
+}
+
+// ── Streaming PCM (speak-stream WebSocket; hermes tts_streaming parity) ───
+
+/// Streaming PCM provider sample rate (hermes
+/// `StreamingTTSProvider.sample_rate`): 24 kHz mono int16, which both
+/// OpenAI `response_format=pcm` and ElevenLabs `output_format=pcm_24000`
+/// emit natively.
+pub const STREAMING_PCM_SAMPLE_RATE: u32 = 24000;
+
+/// Upper bound on the PCM bytes accepted from one provider stream for one
+/// sentence (hermes `_STREAM_SENTENCE_BYTE_CAP`): a buggy or hostile
+/// endpoint must not be able to feed us unbounded audio.
+const STREAM_SENTENCE_BYTE_CAP: usize = 16 * 1024 * 1024;
+
+/// Chunked PCM stream for one sentence: raw int16 little-endian mono at
+/// [`STREAMING_PCM_SAMPLE_RATE`], chunks arriving as the provider
+/// synthesizes them.
+pub type PcmChunkStream = std::pin::Pin<
+    Box<dyn futures::Stream<Item = Result<bytes::Bytes, String>> + Send>,
+>;
+
+/// Whether the configured provider has a chunked PCM API (hermes
+/// `resolve_streaming_provider`: ElevenLabs pcm_24000 + OpenAI pcm).
+/// `edge` (the free default) has no streamable API and a custom
+/// `ULNCLAW_TTS_ENDPOINT` answers opaque audio, so both fall back — the
+/// desktop speak-stream surface then degrades to `POST /api/audio/speak`.
+pub fn has_streaming_provider(cfg: &TtsConfig) -> bool {
+    match cfg.provider.as_str() {
+        "openai" => {
+            crate::config::get_env_value("ULNCLAW_TTS_ENDPOINT").is_none()
+                && crate::config::get_env_value("OPENAI_API_KEY").is_some()
+        }
+        "elevenlabs" => crate::config::get_env_value("ELEVENLABS_API_KEY").is_some(),
+        _ => false,
+    }
+}
+
+/// Open a streaming PCM synthesis for one sentence of `text`; the returned
+/// stream yields audio chunks the moment the provider produces them (hermes
+/// `StreamingTTSProvider.stream` contract).
+pub async fn open_pcm_stream(cfg: &TtsConfig, text: &str) -> Result<PcmChunkStream, String> {
+    let response = match cfg.provider.as_str() {
+        "openai" => open_openai_pcm_response(&cfg.openai, text).await?,
+        "elevenlabs" => open_elevenlabs_pcm_response(&cfg.elevenlabs, text).await?,
+        other => return Err(format!("provider '{other}' has no chunked pcm api")),
+    };
+    let mut seen = 0usize;
+    let stream = response.bytes_stream().map(move |chunk| {
+        let chunk = chunk.map_err(|e| format!("tts stream chunk failed: {e}"))?;
+        seen += chunk.len();
+        if seen > STREAM_SENTENCE_BYTE_CAP {
+            return Err(format!(
+                "tts stream exceeded the {} byte per-sentence cap",
+                STREAM_SENTENCE_BYTE_CAP
+            ));
+        }
+        Ok(chunk)
+    });
+    Ok(Box::pin(stream))
+}
+
+async fn open_openai_pcm_response(
+    config: &TtsOpenaiConfig,
+    text: &str,
+) -> Result<reqwest::Response, String> {
+    let Some(key) = crate::config::get_env_value("OPENAI_API_KEY") else {
+        return Err("OPENAI_API_KEY not set".into());
+    };
+    let base = crate::config::get_env_value("OPENAI_BASE_URL")
+        .unwrap_or_else(|| "https://api.openai.com/v1".into());
+    let url = format!("{}/audio/speech", base.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(60))
+        .bearer_auth(&key)
+        .json(&serde_json::json!({
+            "model": config.model,
+            "voice": config.voice,
+            "input": text,
+            // 24 kHz mono int16, no header — the speak-stream wire format.
+            "response_format": "pcm",
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("openai tts stream request failed: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "openai tts stream failed ({}): {}",
+            status,
+            truncate_for_error(&body)
+        ));
+    }
+    Ok(response)
+}
+
+async fn open_elevenlabs_pcm_response(
+    config: &TtsElevenlabsConfig,
+    text: &str,
+) -> Result<reqwest::Response, String> {
+    let Some(key) = crate::config::get_env_value("ELEVENLABS_API_KEY") else {
+        return Err("ELEVENLABS_API_KEY not set".into());
+    };
+    let url = format!(
+        "https://api.elevenlabs.io/v1/text-to-speech/{}?output_format=pcm_24000",
+        urlencoding(&config.voice_id)
+    );
+    let response = reqwest::Client::new()
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(60))
+        .header("xi-api-key", &key)
+        .json(&serde_json::json!({
+            "text": text,
+            "model_id": config.model_id,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("elevenlabs tts stream request failed: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "elevenlabs tts stream failed ({}): {}",
+            status,
+            truncate_for_error(&body)
+        ));
+    }
+    Ok(response)
 }
 
 // ── edge (Microsoft read-aloud websocket protocol; P349) ──────────────────
@@ -669,5 +800,48 @@ mod tests {
                 .unwrap();
         assert_eq!(parsed.provider, "edge");
         assert_eq!(parsed.edge.voice, "zh-CN-XiaoxiaoNeural");
+    }
+
+    #[tokio::test]
+    async fn open_pcm_stream_rejects_unstreamable_providers() {
+        // edge's read-aloud protocol and local providers have no chunked
+        // PCM API — speak-stream demotes them to the batch endpoint.
+        let mut config = TtsConfig::default();
+        config.provider = "edge".into();
+        let Err(error) = open_pcm_stream(&config, "hello").await else {
+            panic!("edge must not stream")
+        };
+        assert!(error.contains("no chunked pcm api"), "{error}");
+
+        config.provider = "piper".into();
+        let Err(error) = open_pcm_stream(&config, "hello").await else {
+            panic!("piper must not stream")
+        };
+        assert!(error.contains("no chunked pcm api"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn open_pcm_stream_openai_without_key_fails_clean() {
+        let _guard = crate::models_dev::test_env_lock();
+        let saved = std::env::var("OPENAI_API_KEY").ok();
+        std::env::remove_var("OPENAI_API_KEY");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let config = TtsConfig::default(); // provider = openai
+        let Err(error) = open_pcm_stream(&config, "hello").await else {
+            panic!("openai without key must not stream")
+        };
+        assert!(error.contains("OPENAI_API_KEY"), "{error}");
+
+        match saved {
+            Some(v) => std::env::set_var("OPENAI_API_KEY", v),
+            None => {}
+        }
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
     }
 }

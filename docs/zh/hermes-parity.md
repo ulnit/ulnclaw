@@ -196,8 +196,10 @@
   粘错令牌不会弄坏可用的旧令牌，并清除旧令牌指纹缓存）；bws 自动安装的
   Windows 资产路径未测试。
 - Computer-use：驱动载荷（SOM 截图 b64、AX 树）直接透传，不含 hermes 的 PNG
-  后处理/多模态驱逐层；macOS TCC `permissions` 授权流程与嵌入式守护进程
-  socket 模式未移植；`install` 直接调用上游 trycua 安装脚本。
+  后处理/多模态驱逐层；macOS TCC 授权流程已暴露给桌面端
+  （`/api/tools/computer-use/permissions/grant` 以可轮询后台动作拉起
+  `cua-driver permissions grant`，仅 macOS）；嵌入式守护进程 socket 模式
+  未移植；`install` 直接调用上游 trycua 安装脚本。
 - 插件：ulnclaw 插件是讲 hermes shell-hook JSON 协议的子进程（目录插件 +
   `[hooks]` 配置），不是 Python 导入；核心触发 hermes v2026.8.3 运行期
   实际发出的全部钩子（23 个中的 13 个 —— 其余 10 个在 hermes 中也仅存于
@@ -532,7 +534,7 @@
 | `/api/providers/oauth*` | 同路径（P350——精简设备码目录：基于 `[oauth]` 流程的 list/start/poll/submit/cancel/disconnect） |
 | `/api/dashboard/plugins*`、`/api/dashboard/agent-plugins*`、`/api/dashboard/plugin-providers` | 同路径（P351——精简插件市场：活动清单 + 重新扫描、基于精选 `plugin-hub/index.json` + 本地目录候选的合并市场载荷（安装/更新/移除/启用/禁用）、持久化到 `[plugins]` 的记忆/上下文 provider 选择、`dashboard.hidden_plugins` 可见性开关） |
 | `/api/media` | `/api/media`（P338） |
-| `/api/audio/speak`、`/api/audio/elevenlabs/voices` | 同路径（P344——精简 openai/elevenlabs `[tts]` provider；P349 新增免费 `edge` provider） |
+| `/api/audio/speak`、`/api/audio/speak-stream`、`/api/audio/elevenlabs/voices` | 同路径（P344——精简 openai/elevenlabs `[tts]` provider；P349 新增免费 `edge` provider；`speak-stream` 为流式 TTS WebSocket——文本进、24 kHz int16 PCM 帧出，走 openai/elevenlabs 分块 API，带断句、空闲冲刷与打断（barge-in）；无分块 API 的 provider 回单帧 `fallback`，客户端降级到 `/api/audio/speak`） |
 | `/api/messaging/platforms` | `/api/messaging/platforms`（另含 `PUT :id`、`POST :id/test`；P337） |
 | `/api/webhooks`、`/api/webhooks/{name}`、`/api/webhooks/enable`、`/api/webhooks/{name}/enabled` | 配置驱动：webhook 平台在 `[messaging.*]` 配置中声明；入站走开放的 `/webhooks/*` 路由 |
 | `/api/model/auxiliary` | 配置驱动：config.toml 的 `[auxiliary.<task>]` 覆盖（无仪表盘面） |
@@ -596,7 +598,7 @@ Python 插件导入/entry-point 包及其携带的
 provider 注册（ulnclaw 插件体系改用 shell 钩子线协议 + 目录插件，并含 git
 install/update/remove 生命周期）；Nous 门户专属的订阅门控与组织提案审批流程（OAuth/同步为
 provider 无关）；xAI 凭证池代理适配器（凭证池存储已精简移植——见凭证池行——但 xAI 适配器本身仍未移植）；
-macOS TCC 权限授予、cua-driver 内嵌守护/套接字模式，以及上下文级截图驱逐
+cua-driver 内嵌守护/套接字模式，以及上下文级截图驱逐
 （P228 已移植视觉后处理一半——对返回截图按 `max_image_dimension` 做客户端
 最长边强制限制；驱逐一半在 v2026.8.3 检出中无参考实现）。
 

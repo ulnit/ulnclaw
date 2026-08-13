@@ -195,6 +195,13 @@ impl SentenceChunker {
         }
     }
 
+    /// The not-yet-emitted buffer (hermes `chunker.buf` peek) — the
+    /// speak-stream idle flush uses it to decide when a trailing clause
+    /// has waited long enough to be spoken.
+    pub fn pending(&self) -> &str {
+        &self.buffer
+    }
+
     /// Find the byte index just past a boundary (+ optional closers)
     /// that terminates a clause, if any.
     fn find_split(&self) -> Option<usize> {

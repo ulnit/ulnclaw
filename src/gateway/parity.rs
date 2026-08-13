@@ -743,7 +743,7 @@ pub async fn computer_use_status(State(_state): State<Arc<GatewayState>>) -> Res
         "installed": driver.is_some(),
         "version": version.map(|version| format!("cua-driver {version}")),
         "ready": driver.is_some(),
-        "can_grant": false,
+        "can_grant": platform == "macos",
         "checks": [],
         "accessibility": null,
         "screen_recording": null,
@@ -754,9 +754,55 @@ pub async fn computer_use_status(State(_state): State<Arc<GatewayState>>) -> Res
     .into_response()
 }
 
-/// `POST /api/tools/computer-use/permissions/grant` — no TCC off macOS.
+/// `POST /api/tools/computer-use/permissions/grant` — spawn
+/// `cua-driver permissions grant` as a background action (hermes
+/// `grant_computer_use_permissions` parity). macOS-only: the driver
+/// launches CuaDriver via LaunchServices so the TCC dialog is attributed
+/// to com.trycua.driver, then waits for approval. The frontend polls
+/// `GET /api/actions/computer-use-grant/status` and re-reads
+/// `/api/tools/computer-use/status` once it exits. Off macOS there is no
+/// TCC model to grant, so the route answers 400 there.
 pub async fn computer_use_grant(State(_state): State<Arc<GatewayState>>) -> Response {
-    Json(json!({"ok": false, "error": "permission grants are macOS-only (TCC)"})).into_response()
+    if std::env::consts::OS != "macos" {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "Computer Use permission grants are a macOS concept."
+            })),
+        )
+            .into_response();
+    }
+    let outcome = start_action("computer-use-grant", || {
+        let Some(driver) = crate::computer_use::resolve_cua_driver_cmd() else {
+            return Err("cua-driver: not installed. Run: ulnclaw computer-use install".into());
+        };
+        let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+        let mut cmd = std::process::Command::new(&driver);
+        cmd.args(["permissions", "grant"])
+            .stdin(std::process::Stdio::null());
+        for (key, value) in crate::computer_use::cua_driver_child_env(&config.computer_use) {
+            cmd.env(key, value);
+        }
+        let output = cmd
+            .output()
+            .map_err(|err| format!("cua-driver permissions grant failed: {err}"))?;
+        let mut lines = Vec::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            lines.push(line.to_string());
+        }
+        for line in String::from_utf8_lossy(&output.stderr).lines() {
+            lines.push(line.to_string());
+        }
+        if output.status.success() {
+            Ok(lines)
+        } else {
+            Err(format!(
+                "cua-driver permissions grant exited with code {}",
+                output.status.code().unwrap_or(-1)
+            ))
+        }
+    });
+    Json(outcome).into_response()
 }
 
 // ---------------------------------------------------------------------------

@@ -2886,6 +2886,260 @@ async fn audio_speak(Json(body): Json<Value>) -> Response {
     }
 }
 
+/// `GET /api/audio/speak-stream` — streaming TTS for the desktop: text in,
+/// raw int16 PCM frames out (hermes `speak_stream_ws` parity). The socket
+/// is a per-reply speech session: the renderer feeds text as LLM deltas
+/// arrive, the gateway cuts sentences (the shared `SentenceChunker`) and
+/// streams each sentence's PCM from the provider's chunked API the moment
+/// it's ready, so speech overlaps generation. Providers without a chunked
+/// API (edge default, custom endpoint, missing key) answer one
+/// `{"type":"fallback"}` frame and the client demotes to
+/// `POST /api/audio/speak`.
+async fn audio_speak_stream(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<Arc<GatewayState>>,
+) -> Response {
+    let token = params.get("token").cloned();
+    if let Some(key) = state.key.as_ref() {
+        if token.as_deref() != Some(key.as_str()) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "unauthorized"})),
+            )
+                .into_response();
+        }
+    }
+    ws.on_upgrade(serve_speak_stream)
+}
+
+enum SpeakClientFrame {
+    Text(String),
+    Gone,
+}
+
+struct SpeakSession {
+    /// Deltas received while the gateway was busy synthesizing.
+    queue: VecDeque<String>,
+    /// `{"done": true}` seen — flush the chunker tail after the queue
+    /// drains, then send the end frame.
+    text_done: bool,
+}
+
+async fn serve_speak_stream(socket: axum::extract::ws::WebSocket) {
+    use futures::{SinkExt, StreamExt};
+
+    let config = crate::config::UlncLawConfig::load(None).unwrap_or_default();
+    let (mut sink, mut stream) = socket.split();
+
+    // No chunked provider: one fallback frame and the client uses the
+    // batch endpoint instead (hermes `resolve_streaming_provider` -> None).
+    if !crate::tts::has_streaming_provider(&config.tts) {
+        let _ = sink
+            .send(axum::extract::ws::Message::Text(
+                json!({"type": "fallback"}).to_string(),
+            ))
+            .await;
+        let _ = sink.close().await;
+        return;
+    }
+
+    let start = json!({
+        "type": "start",
+        "sample_rate": crate::tts::STREAMING_PCM_SAMPLE_RATE,
+        "channels": 1,
+    });
+    if sink
+        .send(axum::extract::ws::Message::Text(start.to_string()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // Reader task: socket frames become SpeakClientFrame events so a
+    // barge-in (`stop` / disconnect) lands even mid-synthesis.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SpeakClientFrame>();
+    let reader = tokio::spawn(async move {
+        while let Some(frame) = stream.next().await {
+            match frame {
+                Ok(axum::extract::ws::Message::Text(text)) => {
+                    if tx.send(SpeakClientFrame::Text(text)).is_err() {
+                        return;
+                    }
+                }
+                Ok(axum::extract::ws::Message::Ping(_))
+                | Ok(axum::extract::ws::Message::Pong(_)) => {}
+                _ => {
+                    let _ = tx.send(SpeakClientFrame::Gone);
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(SpeakClientFrame::Gone);
+    });
+
+    speak_stream_session(&mut sink, &mut rx, &config.tts).await;
+    reader.abort();
+}
+
+async fn speak_stream_session(
+    sink: &mut futures::stream::SplitSink<
+        axum::extract::ws::WebSocket,
+        axum::extract::ws::Message,
+    >,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<SpeakClientFrame>,
+    tts: &crate::tts::TtsConfig,
+) {
+    use futures::SinkExt;
+
+    let mut chunker = crate::streaming_tts::SentenceChunker::new();
+    let mut session = SpeakSession {
+        queue: VecDeque::new(),
+        text_done: false,
+    };
+    let mut idle_polls: u32 = 0;
+
+    loop {
+        // Drain queued deltas into the chunker, speaking every sentence the
+        // moment it completes (synthesis itself keeps polling for barge-in).
+        while let Some(delta) = session.queue.pop_front() {
+            idle_polls = 0;
+            for sentence in chunker.feed(&delta) {
+                if !speak_sentence_pcm(sink, rx, &mut session, tts, &sentence).await {
+                    return;
+                }
+            }
+        }
+        if session.text_done {
+            for sentence in chunker.flush() {
+                if !speak_sentence_pcm(sink, rx, &mut session, tts, &sentence).await {
+                    return;
+                }
+            }
+            let _ = sink
+                .send(axum::extract::ws::Message::Text(
+                    json!({"type": "end"}).to_string(),
+                ))
+                .await;
+            return;
+        }
+
+        match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+            Ok(Some(SpeakClientFrame::Text(frame))) => {
+                if !apply_speak_frame(&frame, &mut session) {
+                    return;
+                }
+            }
+            Ok(Some(SpeakClientFrame::Gone)) | Ok(None) => return,
+            Err(_) => {
+                // Idle: mirror hermes' idle flush — a trailing clause that
+                // ends on sentence punctuation speaks after the first quiet
+                // poll, anything else after ~2s of silence (4 polls).
+                idle_polls += 1;
+                let pending = chunker.pending().trim().to_string();
+                if pending.is_empty() {
+                    continue;
+                }
+                let ends_sentence = pending
+                    .chars()
+                    .last()
+                    .map(|c| matches!(c, '.' | '!' | '?' | '…' | ':' | '。' | '！' | '？'))
+                    .unwrap_or(false);
+                if ends_sentence || idle_polls >= 4 {
+                    idle_polls = 0;
+                    for sentence in chunker.flush() {
+                        if !speak_sentence_pcm(sink, rx, &mut session, tts, &sentence).await {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Parse one client frame into the session (hermes `_pump_client`): text
+/// deltas queue for synthesis, `stop` barges in (no end frame), `done`
+/// marks end-of-text. Unparseable frames barge in, same as hermes.
+fn apply_speak_frame(frame: &str, session: &mut SpeakSession) -> bool {
+    let Ok(parsed) = serde_json::from_str::<Value>(frame) else {
+        return false;
+    };
+    if let Some(delta) = parsed.get("text").and_then(Value::as_str) {
+        if !delta.is_empty() {
+            session.queue.push_back(delta.to_string());
+        }
+    }
+    if parsed.get("stop").and_then(Value::as_bool).unwrap_or(false) {
+        return false;
+    }
+    if parsed.get("done").and_then(Value::as_bool).unwrap_or(false) {
+        session.text_done = true;
+    }
+    true
+}
+
+/// Synthesize one sentence and pump its PCM chunks to the socket while
+/// watching for barge-in between chunks. False = session over
+/// (stop/disconnect) — the caller must not send the end frame.
+async fn speak_sentence_pcm(
+    sink: &mut futures::stream::SplitSink<
+        axum::extract::ws::WebSocket,
+        axum::extract::ws::Message,
+    >,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<SpeakClientFrame>,
+    session: &mut SpeakSession,
+    tts: &crate::tts::TtsConfig,
+    sentence: &str,
+) -> bool {
+    use futures::{SinkExt, StreamExt};
+    let cleaned = crate::streaming_tts::strip_markdown_for_tts(sentence);
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let mut stream = match crate::tts::open_pcm_stream(tts, trimmed).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            tracing::warn!("speak-stream synthesis failed: {err}");
+            return true;
+        }
+    };
+    loop {
+        tokio::select! {
+            chunk = stream.next() => {
+                match chunk {
+                    Some(Ok(bytes)) => {
+                        if sink
+                            .send(axum::extract::ws::Message::Binary(bytes.to_vec()))
+                            .await
+                            .is_err()
+                        {
+                            return false;
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("speak-stream synthesis failed: {err}");
+                        return true;
+                    }
+                    None => return true,
+                }
+            }
+            frame = rx.recv() => {
+                match frame {
+                    Some(SpeakClientFrame::Text(text)) => {
+                        if !apply_speak_frame(&text, session) {
+                            return false;
+                        }
+                    }
+                    Some(SpeakClientFrame::Gone) | None => return false,
+                }
+            }
+        }
+    }
+}
+
 /// `GET /api/audio/elevenlabs/voices` — non-secret ElevenLabs voice
 /// metadata for the desktop voice picker (hermes parity; P344). No key
 /// configured -> `{available: false}`; a bad key answers 200 +
@@ -11183,6 +11437,7 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/uploads", post(upload_media))
         .route("/api/audio/transcribe", post(audio_transcribe))
         .route("/api/audio/speak", post(audio_speak))
+        .route("/api/audio/speak-stream", get(audio_speak_stream))
         .route("/api/audio/elevenlabs/voices", get(elevenlabs_voices_list))
         .route("/api/learning/graph", get(learning_graph))
         .route(
@@ -12515,9 +12770,16 @@ async fn auth_middleware(
             constant_time_eq(token, expected)
         })
         .unwrap_or(false);
-    // Hermes precedent: browser-opened downloads can't set the bearer
-    // header, so /api/fs/download also accepts ?token= query auth.
-    if !authorized && path == "/api/fs/download" {
+    // Hermes precedent: browser-opened surfaces can't set the bearer
+    // header — /api/fs/download (download links) and the WebSocket routes
+    // (the renderer's `new WebSocket(url)` can't attach headers; hermes'
+    // `_ws_auth_ok` reads the same ?token= query param) fall back to
+    // ?token= query auth.
+    let query_token_path = matches!(
+        path.as_str(),
+        "/api/fs/download" | "/api/ws" | "/api/audio/speak-stream"
+    );
+    if !authorized && query_token_path {
         if let Some(query) = request.uri().query() {
             authorized = url::form_urlencoded::parse(query.as_bytes())
                 .find(|(key, _)| key == "token")
@@ -31168,6 +31430,197 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         match saved_eleven {
             Some(v) => std::env::set_var("ELEVENLABS_API_KEY", v),
             None => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn test_speak_stream_ws_protocol() {
+        // speak-stream end-to-end over a real socket: fallback frame with
+        // no streamable provider, start/binary/end against a mock chunked
+        // OpenAI endpoint, barge-in on stop — plus ?token= query auth the
+        // renderer relies on (browser WebSockets can't set headers).
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+        let saved_openai = std::env::var("OPENAI_API_KEY").ok();
+        std::env::remove_var("OPENAI_API_KEY");
+        let saved_base = std::env::var("OPENAI_BASE_URL").ok();
+        std::env::remove_var("OPENAI_BASE_URL");
+        let saved_eleven = std::env::var("ELEVENLABS_API_KEY").ok();
+        std::env::remove_var("ELEVENLABS_API_KEY");
+        let saved_endpoint = std::env::var("ULNCLAW_TTS_ENDPOINT").ok();
+        std::env::remove_var("ULNCLAW_TTS_ENDPOINT");
+
+        // Serve the real router on an ephemeral port for real handshakes.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, router(test_state())).await.unwrap();
+        });
+
+        // Mock chunked OpenAI endpoint: every /audio/speech POST answers
+        // raw PCM bytes immediately.
+        let mock = Router::new().route(
+            "/v1/audio/speech",
+            post(|| async { (StatusCode::OK, "PCMPCM") }),
+        );
+        let mock_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mock_addr = mock_listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(mock_listener, mock).await.unwrap();
+        });
+
+        use futures::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+        type WsConn =
+            tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+        async fn next_data_frame(ws: &mut WsConn) -> WsMessage {
+            loop {
+                match ws.next().await {
+                    Some(Ok(frame @ WsMessage::Text(_)))
+                    | Some(Ok(frame @ WsMessage::Binary(_)))
+                    | Some(Ok(frame @ WsMessage::Close(_))) => return frame,
+                    Some(Ok(_)) => continue, // ping/pong
+                    other => panic!("unexpected ws frame: {other:?}"),
+                }
+            }
+        }
+
+        // 1) Bad token -> HTTP 401, no upgrade.
+        let bad = format!("ws://{addr}/api/audio/speak-stream?token=wrong");
+        assert!(tokio_tungstenite::connect_async(&bad).await.is_err());
+
+        // 2) No streaming provider (no keys anywhere) -> one fallback frame.
+        let url = format!("ws://{addr}/api/audio/speak-stream?token=sekret");
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.expect("ws connects");
+        match next_data_frame(&mut ws).await {
+            WsMessage::Text(text) => {
+                let frame: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(frame["type"], "fallback");
+            }
+            other => panic!("expected fallback frame, got {other:?}"),
+        }
+
+        // 3) /api/ws also passes ?token= query auth (middleware WS paths).
+        let (mut ws_main, _) =
+            tokio_tungstenite::connect_async(format!("ws://{addr}/api/ws?token=sekret"))
+                .await
+                .expect("dashboard ws connects");
+        match next_data_frame(&mut ws_main).await {
+            WsMessage::Text(text) => {
+                let frame: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(frame["type"], "hello");
+            }
+            other => panic!("expected hello frame, got {other:?}"),
+        }
+        let _ = ws_main.close(None).await;
+
+        // 4) Chunked provider present: start -> per-sentence PCM -> end.
+        std::env::set_var("OPENAI_API_KEY", "mock-key");
+        std::env::set_var("OPENAI_BASE_URL", format!("http://{mock_addr}/v1"));
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.expect("ws connects");
+        match next_data_frame(&mut ws).await {
+            WsMessage::Text(text) => {
+                let frame: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(frame["type"], "start");
+                assert_eq!(frame["sample_rate"], crate::tts::STREAMING_PCM_SAMPLE_RATE);
+                assert_eq!(frame["channels"], 1);
+            }
+            other => panic!("expected start frame, got {other:?}"),
+        }
+        ws.send(WsMessage::Text(json!({"text": "Hello world. "}).to_string()))
+            .await
+            .unwrap();
+        match next_data_frame(&mut ws).await {
+            WsMessage::Binary(bytes) => assert_eq!(bytes, b"PCMPCM"),
+            other => panic!("expected pcm frame, got {other:?}"),
+        }
+        ws.send(WsMessage::Text(
+            json!({"text": "More.", "done": true}).to_string(),
+        ))
+        .await
+        .unwrap();
+        match next_data_frame(&mut ws).await {
+            WsMessage::Binary(bytes) => assert_eq!(bytes, b"PCMPCM"),
+            other => panic!("expected flushed pcm frame, got {other:?}"),
+        }
+        match next_data_frame(&mut ws).await {
+            WsMessage::Text(text) => {
+                let frame: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(frame["type"], "end");
+            }
+            other => panic!("expected end frame, got {other:?}"),
+        }
+
+        // 5) Barge-in: stop cuts the session without an end frame.
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.expect("ws connects");
+        assert!(matches!(next_data_frame(&mut ws).await, WsMessage::Text(_)));
+        ws.send(WsMessage::Text(json!({"stop": true}).to_string()))
+            .await
+            .unwrap();
+        let mut saw_end = false;
+        while let Some(frame) = ws.next().await {
+            if let Ok(WsMessage::Text(text)) = &frame {
+                if serde_json::from_str::<Value>(text)
+                    .map(|f| f["type"] == "end")
+                    .unwrap_or(false)
+                {
+                    saw_end = true;
+                }
+            }
+            if matches!(frame, Ok(WsMessage::Close(_)) | Err(_)) {
+                break;
+            }
+        }
+        assert!(!saw_end, "stop must not produce an end frame");
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
+        }
+        match saved_openai {
+            Some(v) => std::env::set_var("OPENAI_API_KEY", v),
+            None => std::env::remove_var("OPENAI_API_KEY"),
+        }
+        match saved_base {
+            Some(v) => std::env::set_var("OPENAI_BASE_URL", v),
+            None => std::env::remove_var("OPENAI_BASE_URL"),
+        }
+        match saved_eleven {
+            Some(v) => std::env::set_var("ELEVENLABS_API_KEY", v),
+            None => std::env::remove_var("ELEVENLABS_API_KEY"),
+        }
+        match saved_endpoint {
+            Some(v) => std::env::set_var("ULNCLAW_TTS_ENDPOINT", v),
+            None => std::env::remove_var("ULNCLAW_TTS_ENDPOINT"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_computer_use_grant_route_matches_platform() {
+        let app = router(test_state());
+        // Status card: can_grant is a macOS-only concept (hermes parity).
+        let (status, body) =
+            get_json(app.clone(), "/api/tools/computer-use/status", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["can_grant"], std::env::consts::OS == "macos");
+
+        if std::env::consts::OS != "macos" {
+            // Off macOS there is no TCC model -> hermes' 400 semantics.
+            let (status, body) = post_json(
+                app,
+                "/api/tools/computer-use/permissions/grant",
+                "{}",
+                "sekret",
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(
+                body["error"],
+                "Computer Use permission grants are a macOS concept."
+            );
         }
     }
 
