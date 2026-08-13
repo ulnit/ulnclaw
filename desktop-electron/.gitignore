@@ -4,3 +4,4 @@ release/
 *.log
 build/electron-types/
 build/install-stamp.json
+resources/binaries/
