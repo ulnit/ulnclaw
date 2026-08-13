@@ -5,6 +5,7 @@
   "version": "0.7.0",
   "description": "Native desktop shell for the ulnclaw gateway.",
   "author": "ulnclaw",
+  "homepage": "https://github.com/ulnit/ulnclaw",
   "type": "module",
   "main": "dist/electron-main.mjs",
   "engines": {
