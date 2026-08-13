@@ -82,8 +82,17 @@ the `release-desktop` workflow from the Electron shell in `desktop-electron/`
   `ulnclaw-<ver>-mac-x64.dmg` (Intel). Drag to Applications; the bundle is
   unsigned, so if Gatekeeper blocks the first launch run
   `xattr -cr "/Applications/ulnclaw desktop.app"`.
-- **Linux** — `ulnclaw-<ver>-linux-x64.AppImage` (deb/rpm also build).
-- Verify with `SHA256SUMS.txt` attached to each release.
+- **Linux** — `ulnclaw-<ver>-linux-x86_64.AppImage` (deb/rpm also build).
+
+**Silent whole-shell auto-update (v0.7.1+)** — the packaged shell embeds
+electron-updater on the GitHub release channel (generic provider over the
+release assets): it checks for a new release shortly after launch and every
+4 hours, downloads the installer in the background, and applies it the next
+time the app quits — replacing the entire shell (Electron app plus the
+bundled statically linked gateway binary) in one silent restart. Windows
+NSIS, macOS (zip transport) and Linux AppImage participate; Linux deb/rpm
+installs and dev builds skip the channel. Every step logs to
+`~/.ulnclaw/logs/desktop.log` under `[shell-update]`.
 
 First launch needs no pre-configured API key: the gateway boots keyless and
 the onboarding / Models view walk you through adding a provider key

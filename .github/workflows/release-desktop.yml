@@ -58,7 +58,8 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             desktop-electron/release/*.exe
-            desktop-electron/dist/*.exe
+            desktop-electron/release/*.blockmap
+            desktop-electron/release/latest.yml
 
   build-macos:
     runs-on: macos-latest
@@ -89,15 +90,17 @@ jobs:
       - name: Install desktop deps
         working-directory: desktop-electron
         run: npm ci
-      - name: Package dmg
+      - name: Package dmg + zip (zip is the electron-updater transport on macOS)
         working-directory: desktop-electron
-        run: npm run dist:mac:dmg
+        run: npm run build && npm run builder -- --mac dmg zip --x64 --arm64
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             desktop-electron/release/*.dmg
-            desktop-electron/dist/*.dmg
+            desktop-electron/release/*.zip
+            desktop-electron/release/*.blockmap
+            desktop-electron/release/latest-mac.yml
 
   build-linux:
     runs-on: ubuntu-latest
@@ -134,3 +137,5 @@ jobs:
             desktop-electron/release/*.AppImage
             desktop-electron/release/*.deb
             desktop-electron/release/*.rpm
+            desktop-electron/release/*.blockmap
+            desktop-electron/release/latest-linux.yml

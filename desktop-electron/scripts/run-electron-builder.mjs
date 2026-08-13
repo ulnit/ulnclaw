@@ -48,6 +48,15 @@ if (dist && fs.existsSync(distBinary(dist))) {
 }
 args.push(...process.argv.slice(2))
 
+// The shell auto-update channel (electron-updater, generic provider) needs
+// the latest*.yml + blockmap artifacts that electron-builder only emits when
+// a publish config exists — but uploading is the CI release job's business
+// (softprops), not electron-builder's. Default to `--publish never` so the
+// metadata is generated without an upload attempt; explicit CLI flags win.
+if (!args.some(arg => arg === "--publish" || arg.startsWith("--publish="))) {
+  args.push("--publish", "never")
+}
+
 const result = spawnSync(process.execPath, [electronBuilderCli(), ...args], {
   stdio: "inherit",
 })

@@ -2,7 +2,7 @@
   "name": "ulnclaw-desktop",
   "productName": "ulnclaw desktop",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Native desktop shell for the ulnclaw gateway.",
   "author": "ulnclaw",
   "homepage": "https://github.com/ulnit/ulnclaw",
@@ -13,7 +13,7 @@
   },
   "scripts": {
     "clean": "npm run clean:e2e && npm run clean:renderer && npm run clean:electron",
-    "clean:e2e": "tsc --build tsconfig.e2e.json --clean",
+    "clean:e2e": "node -e \"0\" # e2e project not vendored (sync-from-hermes excludes it)",
     "clean:renderer": "tsc --build tsconfig.json --clean ",
     "clean:electron": "tsc --build tsconfig.electron.json --clean",
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
@@ -46,7 +46,7 @@
     "test:desktop:nsis": "node scripts/test-desktop.mjs nsis",
     "test:desktop:existing": "node scripts/test-desktop.mjs existing",
     "test:desktop:fresh": "node scripts/test-desktop.mjs fresh",
-    "typecheck": "tsc -p . --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.e2e.json --noEmit",
+    "typecheck": "tsc -p . --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "lint": "eslint src/ electron/",
     "lint:fix": "eslint src/ electron/ --fix",
     "fmt": "prettier --write 'src/**/*.{ts,tsx}' 'electron/**/*.ts' 'vite.config.ts'",
@@ -78,7 +78,6 @@
     "@dnd-kit/core": "6.3.1",
     "@dnd-kit/sortable": "10.0.0",
     "@dnd-kit/utilities": "3.2.2",
-    "@ulnclaw/shared": "file:./shared",
     "@icons-pack/react-simple-icons": "13.11.1",
     "@lezer/highlight": "1.2.3",
     "@nanostores/react": "1.1.0",
@@ -89,6 +88,7 @@
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-query": "5.101.2",
     "@tanstack/react-virtual": "3.14.6",
+    "@ulnclaw/shared": "file:./shared",
     "@vscode/codicons": "0.0.45",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-serialize": "0.14.0",
@@ -102,6 +102,7 @@
     "d3-force": "3.0.0",
     "dnd-core": "14.0.1",
     "dompurify": "3.4.12",
+    "electron-updater": "^6.8.9",
     "emojibase-data": "16.0.3",
     "fflate": "0.8.3",
     "frimousse": "0.3.0",
@@ -275,6 +276,10 @@
       "shortcutName": "ulnclaw",
       "uninstallDisplayName": "ulnclaw",
       "warningsAsErrors": false
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://github.com/ulnit/ulnclaw/releases/latest/download"
     }
   }
 }

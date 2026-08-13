@@ -248,6 +248,7 @@ import { readWindowsUserEnvVar } from './windows-user-env'
 import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './workspace-cwd'
 import { readWslWindowsClipboardImage } from './wsl-clipboard-image'
 import { resolvePickerDefaultPath } from './wsl-path-bridge'
+import { startShellUpdater } from './shell-updater'
 
 const USER_DATA_OVERRIDE = process.env.ULNCLAW_DESKTOP_USER_DATA_DIR
 
@@ -11866,6 +11867,16 @@ app.whenReady().then(() => {
   }
 
   createWindow()
+
+  // Silent whole-shell auto-update (shell-updater.ts): checks the GitHub
+  // release channel in the background, downloads the new installer, and
+  // applies it on quit. Skips dev builds and Linux deb/rpm installs.
+  startShellUpdater({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    isAppImage: Boolean(process.env.APPIMAGE),
+    log: rememberLog
+  })
 
   // Win/Linux cold start: the launching ulnclaw:// URL is in our own argv.
   const _coldStartLink = _extractDeepLink(process.argv)
