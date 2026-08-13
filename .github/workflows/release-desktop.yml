@@ -131,5 +131,6 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
-            desktop-electron/release/*
-            desktop-electron/dist/*
+            desktop-electron/release/*.AppImage
+            desktop-electron/release/*.deb
+            desktop-electron/release/*.rpm
