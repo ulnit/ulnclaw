@@ -593,9 +593,10 @@ performance and a single static binary.
 ## HTTP route parity appendix (P339)
 
 Route-level audit of hermes `web_server.py` (v2026.8.3, 112 routes) against
-the ulnclaw gateway router (198 routes as of P351). Every hermes route is
-either covered — possibly under a different path — or resolved by design;
-nothing is silently missing.
+the ulnclaw gateway router (217 routes as of v0.7.0-rc13: the 198 core
+routes of P351 plus the 19-route plugin REST namespace below). Every hermes
+route is either covered — possibly under a different path — or resolved by
+design; nothing is silently missing.
 
 ### Covered under ulnclaw paths
 
@@ -617,6 +618,7 @@ nothing is silently missing.
 | `/api/sessions/import` | same path (P348 — portable JSON round-trip via `GET /api/sessions/:id/export?format=json`) |
 | `/api/providers/oauth*` | same paths (P350 — lean device-code catalog: list/start/poll/submit/cancel/disconnect over the `[oauth]` flow) |
 | `/api/dashboard/plugins*`, `/api/dashboard/agent-plugins*`, `/api/dashboard/plugin-providers` | same paths (P351 — lean plugin hub: active list + rescan, merged hub payload over a curated `plugin-hub/index.json` + local-dir candidates with install/update/remove/enable/disable, memory/context provider selection persisted to `[plugins]`, `dashboard.hidden_plugins` visibility toggles) |
+| `/api/plugins/kanban/*` (hermes mounts the kanban plugin's FastAPI router into the web server) | same paths (v0.7.0-rc13 — the desktop kanban plugin's REST namespace served natively over `KanbanStore`: `board` with hermes column order + card rollups, boards CRUD, task detail (comments/events/attachments/links/runs/diagnostics), PATCH status semantics (`done`→complete, `blocked`→block, `scheduled`→schedule, `ready`→unblock, `archived`→archive, `running`→400), bulk ops, task log tail, multipart attachments, reassign/reclaim, aux-model estimate with a 20 s timeout guard (`{ok,est_tokens,complexity,rationale,model}` contract, never an HTTP error), profiles roster (config assignees ∪ stored descriptions) + PATCH, projects, orchestration GET/PUT over `[kanban.*]` config, dispatch delegation, assignees. Hermes mounts Python plugin routers; ulnclaw serves the identical contract from the engine. The achievements plugin is not ported — only the kanban plugin ships in the vendored desktop) |
 | `/api/media` | `/api/media` (P338) |
 | `/api/audio/speak`, `/api/audio/speak-stream`, `/api/audio/elevenlabs/voices` | same paths (P344 — lean openai/elevenlabs `[tts]` providers; P349 adds the free `edge` provider; `speak-stream` is the streaming-TTS WebSocket — text in, 24 kHz int16 PCM frames out over the chunked openai/elevenlabs APIs with sentence cutting, idle flush and barge-in; providers without a chunked API answer one `fallback` frame and the client demotes to `/api/audio/speak`) |
 | `/api/messaging/platforms` | `/api/messaging/platforms` (+ `PUT :id`, `POST :id/test`; P337) |

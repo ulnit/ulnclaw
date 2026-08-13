@@ -510,7 +510,8 @@
 ## HTTP 路由对标附录（P339）
 
 对 hermes `web_server.py`（v2026.8.3，112 条路由）与 ulnclaw 网关路由表
-（P351 时点 198 条）做逐路由审计：每条 hermes 路由要么已被覆盖（可能路径
+（v0.7.0-rc13 时点 217 条：P351 的 198 条核心路由 + 下表的 19 条插件
+REST 命名空间路由）做逐路由审计：每条 hermes 路由要么已被覆盖（可能路径
 不同），要么属设计性决议不迁移——不存在无声缺漏。
 
 ### 以 ulnclaw 路径覆盖
@@ -533,6 +534,7 @@
 | `/api/sessions/import` | 同路径（P348——经 `GET /api/sessions/:id/export?format=json` 的可移植 JSON 往返） |
 | `/api/providers/oauth*` | 同路径（P350——精简设备码目录：基于 `[oauth]` 流程的 list/start/poll/submit/cancel/disconnect） |
 | `/api/dashboard/plugins*`、`/api/dashboard/agent-plugins*`、`/api/dashboard/plugin-providers` | 同路径（P351——精简插件市场：活动清单 + 重新扫描、基于精选 `plugin-hub/index.json` + 本地目录候选的合并市场载荷（安装/更新/移除/启用/禁用）、持久化到 `[plugins]` 的记忆/上下文 provider 选择、`dashboard.hidden_plugins` 可见性开关） |
+| `/api/plugins/kanban/*`（hermes 将 kanban 插件的 FastAPI 路由挂载进 web server） | 同路径（v0.7.0-rc13——桌面 kanban 插件 REST 命名空间由 `KanbanStore` 原生承载：`board` 按 hermes 列序输出 + 卡片聚合字段、boards 增删改、任务详情（comments/events/attachments/links/runs/diagnostics）、PATCH 状态语义（`done`→complete、`blocked`→block、`scheduled`→schedule、`ready`→unblock、`archived`→archive、`running`→400）、批量操作、任务日志 tail、multipart 附件、reassign/reclaim、辅助模型估算（20 秒超时保护，契约 `{ok,est_tokens,complexity,rationale,model}`，绝不抛 HTTP 错误）、profiles 名册（config assignees ∪ 已存描述）+ PATCH、projects、orchestration GET/PUT（读写 `[kanban.*]` 配置）、dispatch 委派、assignees。hermes 挂载 Python 插件路由，ulnclaw 由引擎直接提供同一契约。achievements 插件不迁移——vendored 桌面只内置 kanban 插件） |
 | `/api/media` | `/api/media`（P338） |
 | `/api/audio/speak`、`/api/audio/speak-stream`、`/api/audio/elevenlabs/voices` | 同路径（P344——精简 openai/elevenlabs `[tts]` provider；P349 新增免费 `edge` provider；`speak-stream` 为流式 TTS WebSocket——文本进、24 kHz int16 PCM 帧出，走 openai/elevenlabs 分块 API，带断句、空闲冲刷与打断（barge-in）；无分块 API 的 provider 回单帧 `fallback`，客户端降级到 `/api/audio/speak`） |
 | `/api/messaging/platforms` | `/api/messaging/platforms`（另含 `PUT :id`、`POST :id/test`；P337） |

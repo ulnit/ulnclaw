@@ -62,7 +62,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use serde::Deserialize;
@@ -73,6 +73,7 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 
 mod kanban;
+pub mod kanban_plugin;
 mod parity;
 mod pets;
 mod projects;
@@ -11533,6 +11534,26 @@ pub fn router(state: Arc<GatewayState>) -> Router {
         .route("/api/kanban/tasks/:id/runs", get(kanban::task_runs))
         .route("/api/kanban/tasks/:id/diagnostics", get(kanban::task_diagnostics))
         .route("/api/kanban/attachments/:aid", delete(kanban::remove_attachment))
+        // Desktop kanban plugin REST namespace (hermes plugin_api mount).
+        .route("/api/plugins/kanban/board", get(kanban_plugin::board))
+        .route("/api/plugins/kanban/boards", get(kanban_plugin::list_boards).post(kanban_plugin::create_board))
+        .route("/api/plugins/kanban/boards/:slug", patch(kanban_plugin::update_board))
+        .route("/api/plugins/kanban/tasks", post(kanban_plugin::create_task))
+        .route("/api/plugins/kanban/tasks/bulk", post(kanban_plugin::bulk_tasks))
+        .route("/api/plugins/kanban/tasks/:id", get(kanban_plugin::task_detail).patch(kanban_plugin::update_task).delete(kanban_plugin::delete_task))
+        .route("/api/plugins/kanban/tasks/:id/log", get(kanban_plugin::task_log))
+        .route("/api/plugins/kanban/tasks/:id/comments", post(kanban_plugin::add_comment))
+        .route("/api/plugins/kanban/tasks/:id/reassign", post(kanban_plugin::reassign))
+        .route("/api/plugins/kanban/tasks/:id/reclaim", post(kanban_plugin::reclaim))
+        .route("/api/plugins/kanban/tasks/:id/estimate", post(kanban_plugin::estimate_task))
+        .route("/api/plugins/kanban/tasks/:id/attachments", get(kanban_plugin::list_attachments).post(kanban_plugin::upload_attachment))
+        .route("/api/plugins/kanban/estimate", post(kanban_plugin::estimate_text))
+        .route("/api/plugins/kanban/profiles", get(kanban_plugin::profiles))
+        .route("/api/plugins/kanban/profiles/:name", patch(kanban_plugin::update_profile))
+        .route("/api/plugins/kanban/projects", get(kanban_plugin::projects))
+        .route("/api/plugins/kanban/orchestration", get(kanban_plugin::orchestration_get).put(kanban_plugin::orchestration_put))
+        .route("/api/plugins/kanban/dispatch", post(kanban_plugin::dispatch))
+        .route("/api/plugins/kanban/assignees", get(kanban_plugin::assignees))
         .route("/api/jobs/:id/pause", post(pause_job))
         .route("/api/jobs/:id/resume", post(resume_job))
         .route("/api/jobs/:id/run", post(run_job_now))
@@ -31430,6 +31451,211 @@ iQ1Jvuo5E1/jLi2hE0FmBV0laMZHtsQ/6bC/bAyXFmTmMCi+nf3pVpA9T5Qh4iRz
         match saved_eleven {
             Some(v) => std::env::set_var("ELEVENLABS_API_KEY", v),
             None => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kanban_plugin_namespace_desktop_contract() {
+        // The vendored desktop's kanban plugin UI speaks /api/plugins/kanban/*
+        // (hermes plugin_api.py mount). Lock the full renderer contract:
+        // board columns, card creation, detail siblings, PATCH lifecycle,
+        // bulk edits, profiles/orchestration/projects/log shapes.
+        let _guard = crate::models_dev::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let saved_home = std::env::var("ULNCLAW_HOME").ok();
+        std::env::set_var("ULNCLAW_HOME", dir.path());
+
+        let app = router(test_state());
+
+        // Boards: the default board exists and is current.
+        let (status, body) =
+            get_json(app.clone(), "/api/plugins/kanban/boards", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["current"], "default");
+        assert!(body["boards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["slug"] == "default"));
+
+        // Board view: hermes BOARD_COLUMNS order + event cursor.
+        let (status, body) =
+            get_json(app.clone(), "/api/plugins/kanban/board", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        let names: Vec<&str> = body["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done"
+            ]
+        );
+        assert_eq!(body["latest_event_id"], 0);
+
+        // Create a card through the plugin namespace.
+        let (status, body) = send_json(
+            app.clone(),
+            "POST",
+            "/api/plugins/kanban/tasks",
+            Some("sekret"),
+            json!({ "title": "desktop task", "body": "created from the desktop", "priority": 3 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let task_id = body["task"]["id"].as_str().unwrap().to_string();
+        assert_eq!(body["task"]["status"], "todo");
+
+        // The board carries the card in todo with link/progress nulls.
+        let (_, body) =
+            get_json(app.clone(), "/api/plugins/kanban/board", Some("sekret")).await;
+        let todo = body["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "todo")
+            .unwrap()
+            .clone();
+        let cards = todo["tasks"].as_array().unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0]["id"], task_id);
+        assert_eq!(cards[0]["progress"], Value::Null);
+
+        // Detail: task + sibling collections.
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("/api/plugins/kanban/tasks/{task_id}"),
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["task"]["title"], "desktop task");
+        assert!(body["comments"].as_array().unwrap().is_empty());
+        assert!(body["runs"].as_array().unwrap().is_empty());
+        assert!(body["events"].as_array().unwrap().len() >= 1);
+        assert!(body["links"]["parents"].as_array().unwrap().is_empty());
+
+        // Comment round-trip.
+        let (status, _) = send_json(
+            app.clone(),
+            "POST",
+            &format!("/api/plugins/kanban/tasks/{task_id}/comments"),
+            Some("sekret"),
+            json!({ "author": "desktop", "body": "looks good" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/plugins/kanban/tasks/{task_id}"),
+            Some("sekret"),
+        )
+        .await;
+        let comments = body["comments"].as_array().unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0]["author"], "desktop");
+
+        // PATCH status -> done goes through the lifecycle primitive.
+        let (status, _) = send_json(
+            app.clone(),
+            "PATCH",
+            &format!("/api/plugins/kanban/tasks/{task_id}"),
+            Some("sekret"),
+            json!({ "status": "done" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = get_json(
+            app.clone(),
+            &format!("/api/plugins/kanban/tasks/{task_id}"),
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(body["task"]["status"], "done");
+
+        // Bulk patch answers per-id outcomes.
+        let (status, body) = send_json(
+            app.clone(),
+            "POST",
+            "/api/plugins/kanban/tasks/bulk",
+            Some("sekret"),
+            json!({ "ids": [task_id, "ghost"], "priority": 5 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| r["ok"] == true));
+        assert!(results.iter().any(|r| r["ok"] == false));
+
+        // Profiles / orchestration / projects / assignees posture.
+        let (status, body) =
+            get_json(app.clone(), "/api/plugins/kanban/profiles", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body["profiles"].as_array().unwrap().is_empty());
+
+        let (status, body) =
+            get_json(app.clone(), "/api/plugins/kanban/orchestration", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["auto_decompose"], true);
+        assert!(body["resolved_orchestrator_profile"].is_string());
+
+        let (status, body) =
+            get_json(app.clone(), "/api/plugins/kanban/projects", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["projects"].is_array());
+
+        let (status, body) =
+            get_json(app.clone(), "/api/plugins/kanban/assignees", Some("sekret")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["assignees"].is_array());
+
+        // Worker log: nothing spawned yet.
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("/api/plugins/kanban/tasks/{task_id}/log"),
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["exists"], false);
+
+        // PATCH running is rejected (dispatcher/claim only).
+        let (status, _) = send_json(
+            app.clone(),
+            "PATCH",
+            &format!("/api/plugins/kanban/tasks/{task_id}"),
+            Some("sekret"),
+            json!({ "status": "running" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // DELETE archives + removes the card.
+        let (status, _) = send_json(
+            app.clone(),
+            "DELETE",
+            &format!("/api/plugins/kanban/tasks/{task_id}"),
+            Some("sekret"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = get_json(
+            app.clone(),
+            &format!("/api/plugins/kanban/tasks/{task_id}"),
+            Some("sekret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        match saved_home {
+            Some(v) => std::env::set_var("ULNCLAW_HOME", v),
+            None => std::env::remove_var("ULNCLAW_HOME"),
         }
     }
 

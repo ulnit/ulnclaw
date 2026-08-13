@@ -3670,6 +3670,36 @@ impl KanbanStore {
         )
     }
 
+    /// Direct status write for dashboard drag-drop (hermes plugin_api
+    /// `_set_status_direct`): columns without a dedicated transition
+    /// primitive (todo/triage/review/ready/scheduled) are set as-is.
+    /// `running` is never settable — workers start via dispatch/claim —
+    /// and terminal rows (done/archived) are immutable.
+    pub fn set_status_direct(&self, id: &str, status: &str) -> Result<Task> {
+        const ALLOWED: &[&str] = &["todo", "triage", "ready", "scheduled", "review"];
+        if !ALLOWED.contains(&status) {
+            return Err(AgentError::session(format!(
+                "kanban: cannot set status '{status}' directly"
+            )));
+        }
+        let conn = self.conn.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE tasks SET status = ?2 WHERE id = ?1 AND status NOT IN ('done', 'archived', 'running')",
+                params![id, status],
+            )
+            .map_err(db_error("set status"))?;
+        drop(conn);
+        if updated == 0 {
+            return Err(AgentError::session(format!(
+                "kanban: task {id} not found or not movable"
+            )));
+        }
+        self.append_event(id, "status_set", serde_json::json!({ "status": status }))?;
+        self.get_task(id)?
+            .ok_or_else(|| AgentError::session("kanban: task vanished"))
+    }
+
     pub fn assign_task(&self, id: &str, assignee: &str) -> Result<Task> {
         let conn = self.conn.lock().unwrap();
         let updated = conn
@@ -3690,6 +3720,27 @@ impl KanbanStore {
             serde_json::json!({ "assignee": assignee }),
         )?;
         self.get_task(id)?.ok_or_else(|| AgentError::session("kanban: task vanished"))
+    }
+
+    /// Priority update for dashboard drag/patch (hermes `kanban edit
+    /// --priority` parity); higher numbers sort first.
+    pub fn set_priority(&self, id: &str, priority: i64) -> Result<Task> {
+        let conn = self.conn.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE tasks SET priority = ?2 WHERE id = ?1 AND status NOT IN ('archived')",
+                params![id, priority],
+            )
+            .map_err(db_error("set priority"))?;
+        drop(conn);
+        if updated == 0 {
+            return Err(AgentError::session(format!(
+                "kanban: task {id} not found or archived"
+            )));
+        }
+        self.append_event(id, "priority_set", serde_json::json!({ "priority": priority }))?;
+        self.get_task(id)?
+            .ok_or_else(|| AgentError::session("kanban: task vanished"))
     }
 
     /// Atomically claim a ready task (or take over a running task whose

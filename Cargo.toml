@@ -43,7 +43,7 @@ url = "2"
 percent-encoding = "2"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tower = { version = "0.4", features = ["util"] }
 libc = "0.2"
