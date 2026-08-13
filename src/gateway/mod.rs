@@ -12991,7 +12991,7 @@ async fn model_options(
 
 /// The model a session is locked to, when it differs from the gateway's
 /// configured model (session rows stamp the configured model at creation).
-fn session_model_override(state: &GatewayState, session_id: &str) -> Option<String> {
+pub(crate) fn session_model_override(state: &GatewayState, session_id: &str) -> Option<String> {
     let row = state.store.get_session_row(session_id).ok().flatten()?;
     let model = row.model.filter(|m| !m.is_empty())?;
     if model == state.model_name {

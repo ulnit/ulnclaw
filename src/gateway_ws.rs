@@ -167,6 +167,7 @@ fn publish(session_id: &str, event: &str, payload: Value) {
 async fn dispatch(state: Arc<GatewayState>, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "prompt.submit" => prompt_submit(state, params).await,
+        "session.create" => session_create(state, params),
         "session.interrupt" => session_interrupt(params),
         "session.resume" => session_resume(state, params),
         "session.close" => session_close(state, params),
@@ -243,6 +244,9 @@ async fn prompt_submit(state: Arc<GatewayState>, params: Value) -> Result<Value,
     let runner = state.agent.clone();
     let sid_emit = session_id.clone();
     let sid_run = session_id.clone();
+    // Enforce the session model lock (session.create / POST
+    // /api/sessions/:id/model) on WS turns exactly like the HTTP chat path.
+    let override_model = crate::gateway::session_model_override(&state, &session_id);
     let task = tokio::spawn(crate::agent::stream_scope(
         Arc::new(move |event: crate::agent::StreamEvent| {
             match event {
@@ -273,9 +277,11 @@ async fn prompt_submit(state: Arc<GatewayState>, params: Value) -> Result<Value,
             }
         }),
         async move {
-            runner
-                .run_with_session_images(&text, vec![], history_arg, Some(&sid_run))
-                .await
+            let turn = runner.run_with_session_images(&text, vec![], history_arg, Some(&sid_run));
+            match override_model {
+                Some(model) => crate::agent::model_override_scope(model, turn).await,
+                None => turn.await,
+            }
         },
     ));
     let abort = task.abort_handle();
@@ -324,6 +330,141 @@ async fn prompt_submit(state: Arc<GatewayState>, params: Value) -> Result<Value,
     });
 
     Ok(json!({"ok": true, "session_id": session_id}))
+}
+
+fn session_create(state: Arc<GatewayState>, params: Value) -> Result<Value, String> {
+    // hermes tui_gateway session.create parity (methods_session.py): the
+    // gateway mints the session id and answers immediately with a lightweight
+    // payload so the desktop can paint the composer. No DB row is written for
+    // a bare create — prompt.submit's ensure_session persists the row on the
+    // first turn (hermes lazy-row contract), so launches and draft tabs that
+    // never send a message don't leave empty sessions in the list. A create
+    // carrying a model override / explicit cwd / title persists a row so the
+    // per-session state survives into the turn path.
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    // Workspace: only an explicit, existing directory wins; otherwise the
+    // gateway's launch directory (hermes explicit_cwd semantics).
+    let raw_cwd = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let expanded = if raw_cwd == "~" {
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default()
+    } else if let Some(rest) = raw_cwd.strip_prefix("~/") {
+        std::env::var_os("HOME")
+            .map(|home| std::path::PathBuf::from(home).join(rest))
+            .unwrap_or_default()
+    } else {
+        std::path::PathBuf::from(&raw_cwd)
+    };
+    let explicit_cwd = !raw_cwd.is_empty() && expanded.is_dir();
+    let cwd = if explicit_cwd {
+        expanded
+    } else {
+        std::env::current_dir().unwrap_or_default()
+    };
+    let cwd_str = cwd.display().to_string();
+
+    // Per-session model override (desktop composer pick): persisted on the
+    // session row so WS turns enforce it via model_override_scope, and
+    // reflected in info so the composer doesn't briefly clobber its sticky
+    // pick with the global default.
+    let create_model = params
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string);
+    let create_provider = create_model.as_ref().and_then(|_| {
+        params
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+    });
+    let title = params
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let source = params
+        .get("source")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("desktop");
+
+    if create_model.is_some() || explicit_cwd || !title.is_empty() {
+        state
+            .store
+            .ensure_session(
+                &session_id,
+                source,
+                create_model.as_deref(),
+                explicit_cwd.then_some(cwd_str.as_str()),
+            )
+            .map_err(|e| e.to_string())?;
+        if !title.is_empty() {
+            state
+                .store
+                .set_session_title(&session_id, &title)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    let model = create_model.unwrap_or_else(|| state.model_name.clone());
+    let provider = create_provider.unwrap_or_else(|| state.provider_name.clone());
+
+    let mut info = json!({
+        "model": model,
+        "provider": provider,
+        "tools": {},
+        "skills": {},
+        "cwd": cwd_str,
+        "branch": git_branch_for_cwd(&cwd),
+        "lazy": true,
+        "desktop_contract": 5,
+        "version": env!("CARGO_PKG_VERSION"),
+        "running": false,
+    });
+    if let Some(effort) = params
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        info["reasoning_effort"] = json!(effort);
+    }
+    if let Some(fast) = params.get("fast").and_then(Value::as_bool) {
+        info["fast"] = json!(fast);
+        info["service_tier"] = json!(if fast { "priority" } else { "" });
+    }
+
+    Ok(json!({
+        "session_id": session_id,
+        "stored_session_id": session_id,
+        "message_count": 0,
+        "messages": [],
+        "info": info,
+    }))
+}
+
+fn git_branch_for_cwd(cwd: &std::path::Path) -> String {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 fn session_interrupt(params: Value) -> Result<Value, String> {
@@ -1438,5 +1579,63 @@ mod tests {
         let result = dispatch(state, "reload.env", json!({})).await.unwrap();
         assert_eq!(result["ok"], true);
         assert!(result["applied"].is_u64());
+    }
+
+    #[tokio::test]
+    async fn session_create_desktop_contract() {
+        let state = test_state();
+
+        // Desktop composer create: model override + sticky picks persist and
+        // reflect back in info (use-session-actions contract).
+        let created = dispatch(
+            state.clone(),
+            "session.create",
+            json!({
+                "cols": 96,
+                "source": "desktop",
+                "model": "gpt-test-deluxe",
+                "provider": "test",
+                "reasoning_effort": "high",
+                "fast": true
+            }),
+        )
+        .await
+        .unwrap();
+        let session_id = created["session_id"].as_str().expect("session_id").to_string();
+        assert!(!session_id.is_empty());
+        assert_eq!(created["stored_session_id"], created["session_id"]);
+        assert_eq!(created["message_count"], 0);
+        assert!(created["messages"].as_array().unwrap().is_empty());
+        let info = &created["info"];
+        assert_eq!(info["model"], "gpt-test-deluxe");
+        assert_eq!(info["provider"], "test");
+        assert_eq!(info["desktop_contract"], 5);
+        assert_eq!(info["lazy"], true);
+        assert_eq!(info["reasoning_effort"], "high");
+        assert_eq!(info["fast"], true);
+        // Override persisted on the row so prompt turns enforce it.
+        let row = state
+            .store
+            .get_session_row(&session_id)
+            .unwrap()
+            .expect("row persisted for create with model override");
+        assert_eq!(row.model.as_deref(), Some("gpt-test-deluxe"));
+
+        // Bare create stays rowless (hermes lazy-row contract: no empty
+        // sessions for launches that never type) and falls back to the
+        // gateway's global model/provider.
+        let bare = dispatch(state.clone(), "session.create", json!({"source": "desktop"}))
+            .await
+            .unwrap();
+        let bare_id = bare["session_id"].as_str().unwrap().to_string();
+        assert!(state.store.get_session_row(&bare_id).unwrap().is_none());
+        assert_eq!(bare["info"]["model"], "test-model");
+        assert_eq!(bare["info"]["provider"], "test");
+
+        // session.close on a rowless draft is a clean no-op (drift abort path).
+        let closed = dispatch(state.clone(), "session.close", json!({"session_id": bare_id}))
+            .await
+            .unwrap();
+        assert_eq!(closed["ok"], true);
     }
 }
