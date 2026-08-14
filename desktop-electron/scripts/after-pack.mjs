@@ -19,11 +19,94 @@
  *   - packager.appInfo.productFilename: the exe basename (e.g. 'ulnclaw')
  */
 
+import { execFile } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 
 import { stampExeIdentity } from './set-exe-identity.mjs'
 
+function run(command, args) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`${command} ${args.join(' ')} failed: ${stderr?.trim() || stdout?.trim() || error.message}`))
+        return
+      }
+      resolve({ stdout, stderr })
+    })
+  })
+}
+
+/**
+ * Ad-hoc sign the packed macOS app bundle (no Apple Developer certificate in
+ * CI). An UNSIGNED quarantined app opens with the dead-end "is damaged and
+ * can't be opened — move to Trash" Gatekeeper verdict; an ad-hoc signed one
+ * degrades to the "unidentified developer" dialog the user can approve via
+ * right-click › Open or System Settings › Privacy & Security › Open Anyway.
+ *
+ * Signing order mirrors @electron/osx-sign: nested frameworks/helpers first
+ * (each with the inherited entitlements), then the top-level bundle with the
+ * main entitlements — signing the app last WITHOUT --deep so the nested
+ * signatures survive.
+ */
+async function adhocSignMac(context) {
+  const productName = context.packager?.appInfo?.productFilename || 'ulnclaw desktop'
+  const appPath = path.join(context.appOutDir, `${productName}.app`)
+  if (!fs.existsSync(appPath)) {
+    console.warn(`[after-pack] skipping ad-hoc sign; missing bundle: ${appPath}`)
+    return
+  }
+
+  const desktopRoot = path.resolve(import.meta.dirname, '..')
+  const entitlements = path.join(desktopRoot, 'electron', 'entitlements.mac.plist')
+  const entitlementsInherit = path.join(desktopRoot, 'electron', 'entitlements.mac.inherit.plist')
+  const signNested = [
+    '--force',
+    '--deep',
+    '--sign',
+    '-',
+    '--options',
+    'runtime',
+    '--entitlements',
+    entitlementsInherit
+  ]
+
+  const frameworksDir = path.join(appPath, 'Contents', 'Frameworks')
+  if (fs.existsSync(frameworksDir)) {
+    for (const entry of fs.readdirSync(frameworksDir).sort()) {
+      const nested = path.join(frameworksDir, entry)
+      if (entry.endsWith('.framework') || entry.endsWith('.app')) {
+        await run('codesign', [...signNested, nested])
+      }
+    }
+  }
+
+  await run('codesign', [
+    '--force',
+    '--sign',
+    '-',
+    '--options',
+    'runtime',
+    '--entitlements',
+    entitlements,
+    appPath
+  ])
+  await run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath])
+  console.log(`[after-pack] ad-hoc signed ${productName}.app (unidentified-developer flow instead of "damaged")`)
+}
+
 export default async function afterPack(context) {
+  if (context.electronPlatformName === 'darwin') {
+    // A signing failure must never brick an otherwise-good mac build: fall
+    // back to the unsigned artifact (users xattr -cr, as before).
+    try {
+      await adhocSignMac(context)
+    } catch (err) {
+      console.warn(`[after-pack] ad-hoc codesign failed (${err.message}); shipping unsigned`)
+    }
+    return
+  }
+
   if (context.electronPlatformName !== 'win32') {
     return
   }

@@ -79,9 +79,11 @@ the `release-desktop` workflow from the Electron shell in `desktop-electron/`
   expander shows the resolved binary, the child pid state and the tail of
   `%USERPROFILE%\.ulnclaw\gateway.log`.
 - **macOS** — `ulnclaw-<ver>-mac-arm64.dmg` (Apple Silicon) and
-  `ulnclaw-<ver>-mac-x64.dmg` (Intel). Drag to Applications; the bundle is
-  unsigned, so if Gatekeeper blocks the first launch run
-  `xattr -cr "/Applications/ulnclaw desktop.app"`.
+  `ulnclaw-<ver>-mac-x64.dmg` (Intel). Drag to Applications. The bundle is
+  ad-hoc signed (no paid Apple Developer certificate), so Gatekeeper shows
+  "unidentified developer" on first launch — right-click › Open, or System
+  Settings › Privacy & Security › Open Anyway. If you still see "is damaged
+  and can't be opened", run `xattr -cr "/Applications/ulnclaw desktop.app"`.
 - **Linux** — `ulnclaw-<ver>-linux-x86_64.AppImage` (deb/rpm also build).
 
 **Silent whole-shell auto-update (v0.7.1+)** — the packaged shell embeds
@@ -436,8 +438,10 @@ ulnclaw 用 Rust 重新实现了 Hermes Agent 引擎：相同的工具面（50+ 
   `/health` 直到就绪。若网关启动失败，启动失败卡片的**诊断信息**展开项会给出解析到
   的二进制、子进程状态与 `%USERPROFILE%\.ulnclaw\gateway.log` 日志尾部。
 - **macOS** — `ulnclaw-<ver>-mac-arm64.dmg`（Apple Silicon）与
-  `ulnclaw-<ver>-mac-x64.dmg`（Intel）。拖入 Applications 即可；包未签名，
-  首次启动若被 Gatekeeper 拦截，执行 `xattr -cr "/Applications/ulnclaw desktop.app"`。
+  `ulnclaw-<ver>-mac-x64.dmg`（Intel）。拖入 Applications 即可。包为 ad-hoc 签名
+  （无付费 Apple 开发者证书），首次启动 Gatekeeper 会提示"未验证的开发者"——
+  右键 › 打开，或系统设置 › 隐私与安全性 › 仍要打开。若仍提示"已损坏，无法打开"，
+  执行 `xattr -cr "/Applications/ulnclaw desktop.app"`。
 - **Linux** — `ulnclaw-<ver>-linux-x64.AppImage`（另可构建 deb/rpm）。
 - 每个 release 附 `SHA256SUMS.txt` 供校验。
 
